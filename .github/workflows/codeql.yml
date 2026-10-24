@@ -24,14 +24,11 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (javascript-typescript)
-    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
-    # PR, a bot PR and a PR into any other branch run it in full.
-    if: >-
-      github.event_name != 'pull_request'
-      || github.base_ref != 'main'
-      || github.event.pull_request.head.repo.full_name != github.repository
-      || github.event.pull_request.user.type == 'Bot'
-    runs-on: ubuntu-latest
+    # The one job a team PR into `main` runs (AGENTS.md, "When CI runs"): a new
+    # alert shows on the PR that introduces it instead of after the merge, and
+    # Scorecard's SAST check counts only merged PRs that carried a scan. It is
+    # not a required check, so it never holds the merge button.
+    runs-on: ubuntu-24.04
     permissions:
       security-events: write # upload results to code scanning
     steps:

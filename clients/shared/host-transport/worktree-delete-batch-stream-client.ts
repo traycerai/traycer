@@ -1,11 +1,12 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
   worktreeDeleteBatchTargetSchemaV11,
-  worktreeDeleteBatchByPathServerFrameSchemaV12,
+  worktreeDeleteBatchByPathServerFrameSchemaV13,
   type WorktreeDeleteBatchByPathOpenRequestV11,
-  type WorktreeDeleteBatchByPathServerFrameV12,
+  type WorktreeDeleteBatchByPathServerFrameV13,
   type WorktreeDeleteBatchOutputChannel,
   type WorktreeDeleteBatchPhase,
+  type WorktreeDeleteDeclinedKind,
   type WorktreeDeletionSource,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { z } from "zod";
@@ -40,8 +41,16 @@ export interface WorktreeDeleteBatchStreamCallbacks {
     channel: WorktreeDeleteBatchOutputChannel,
     chunk: string,
   ) => void;
-  /** Terminal for one target; `deleted` is its outcome. */
-  readonly onTargetComplete: (worktreePath: string, deleted: boolean) => void;
+  /**
+   * Terminal for one target; `deleted` is its outcome. `declined` says why a
+   * `deleted: false` target was left in place, and is `undefined` for a
+   * deletion and for a host older than `@1.3`.
+   */
+  readonly onTargetComplete: (
+    worktreePath: string,
+    deleted: boolean,
+    declined: WorktreeDeleteDeclinedKind | undefined,
+  ) => void;
   /** Terminal for one target; the host declined or the removal threw. */
   readonly onTargetFailed: (
     worktreePath: string,
@@ -182,6 +191,9 @@ export class WorktreeDeleteBatchStreamClient {
       if (this.wsStreamClient.subscribeAtVersion === undefined) {
         throw new Error("This stream transport cannot pin a schema version");
       }
+      // `{1,1}` is the FLOOR consent needs (`stopOwners` on the wire), not the
+      // declared version: the transport declares the newest minor both sides
+      // share, so `@1.2`/`@1.3` frame keys still reach this session.
       session = this.wsStreamClient.subscribeAtVersion(
         "worktree.deleteBatchByPath",
         { major: 1, minor: 1 },
@@ -283,13 +295,14 @@ export class WorktreeDeleteBatchStreamClient {
     _binaryPayload: Uint8Array | null,
   ): void {
     // Parse with the newest frame shape so a `chatTier` on a `target.failed`
-    // holder reaches the caller; an older host simply never sends the key.
+    // holder and a `declined` on a `target.complete` reach the caller; an
+    // older host simply never sends the keys.
     const parsed =
-      worktreeDeleteBatchByPathServerFrameSchemaV12.safeParse(envelope);
+      worktreeDeleteBatchByPathServerFrameSchemaV13.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: WorktreeDeleteBatchByPathServerFrameV12 = parsed.data;
+    const frame: WorktreeDeleteBatchByPathServerFrameV13 = parsed.data;
     switch (frame.kind) {
       case "target.started": {
         this.callbacks.onTargetStarted(frame.worktreePath, frame.hasTeardown);
@@ -308,7 +321,11 @@ export class WorktreeDeleteBatchStreamClient {
         return;
       }
       case "target.complete": {
-        this.callbacks.onTargetComplete(frame.worktreePath, frame.deleted);
+        this.callbacks.onTargetComplete(
+          frame.worktreePath,
+          frame.deleted,
+          frame.declined,
+        );
         return;
       }
       case "target.failed": {

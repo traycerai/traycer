@@ -44,7 +44,11 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
-import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
+import {
+  accountContextValue,
+  isCreditBasedPricing,
+} from "@/lib/auth/traycer-subscription-content";
 import { setMobileApp } from "@/lib/mobile-app";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -373,6 +377,8 @@ function envelopeFor(
       lastGood: providerRateLimits,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: null,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
     };
   }
   return {
@@ -380,6 +386,8 @@ function envelopeFor(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    credentialGeneration: null,
+    episode: NO_EPISODE,
   };
 }
 
@@ -410,6 +418,8 @@ function degradedRetainedResult(
       lastGood,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: NOW - 1_000,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
     },
     isPending: false,
     isFetching: false,
@@ -561,7 +571,8 @@ function authUserFixture(overrides: {
       ...baseSubscription(),
       subscriptionStatus: overrides.status,
       isInTrial: false,
-      totalPlanCredits: 100,
+      // The server reports no plan credits for a rate-limit plan.
+      totalPlanCredits: isCreditBasedPricing(overrides.status) ? 100 : 0,
       credit: {
         id: "c1",
         userId: "u1",
@@ -608,6 +619,8 @@ function authUserFixture(overrides: {
           },
         ]
       : [],
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
 
@@ -2620,6 +2633,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
           lastGood: codexReady(),
           lastGoodAt: NOW - 90_000,
           lastFailureAt: NOW - 1_000,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
         },
         isPending: false,
         isFetching: false,
@@ -3111,7 +3126,9 @@ describe("<RateLimitPopover /> Refresh all", () => {
     const team = fixture.teamSubscriptions[0];
     mocks.authUser = readyAuthUser({
       ...fixture,
-      teamSubscriptions: [{ ...team, subscriptionStatus: "PRO" }],
+      teamSubscriptions: [
+        { ...team, subscriptionStatus: "PRO", totalPlanCredits: 0 },
+      ],
     });
     const { client } = renderPopover();
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
@@ -3167,7 +3184,9 @@ describe("<RateLimitPopover /> Refresh all", () => {
     const team = fixture.teamSubscriptions[0];
     mocks.authUser = readyAuthUser({
       ...fixture,
-      teamSubscriptions: [{ ...team, subscriptionStatus: "PRO" }],
+      teamSubscriptions: [
+        { ...team, subscriptionStatus: "PRO", totalPlanCredits: 0 },
+      ],
     });
     mocks.traycerUsageUpdatedAt = {
       [accountContextValue(DEFAULT_ACCOUNT_CONTEXT)]: NOW - 1_000,
@@ -3959,6 +3978,8 @@ describe("<RateLimitPopover /> limited profiles", () => {
       hidden: false,
       state: "live",
       reason: null,
+      fetching: false,
+      retryOffered: false,
       windows: [window],
       shown: [window],
       tightest: window,

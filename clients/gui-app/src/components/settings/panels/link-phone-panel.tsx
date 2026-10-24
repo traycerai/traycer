@@ -230,8 +230,8 @@ function ConfirmClaimCard(props: {
           className="text-center text-ui-xs text-destructive"
           data-testid="link-phone-respond-failed"
         >
-          That didn&apos;t reach the sign-in service. The phone is still waiting
-          — check your connection and answer again.
+          That didn&apos;t reach the sign-in service. The phone is still
+          waiting. Check your connection and answer again.
         </p>
       ) : null}
       <div className="flex w-full items-center justify-center gap-3">
@@ -374,7 +374,7 @@ const DEAD_CARD_COPY: Record<
     testId: "link-phone-expired",
     title: "This sign-in request expired.",
     detail:
-      "No approval was given in time — the phone will need to scan a new code.",
+      "No approval was given in time. The phone needs to scan a new code.",
   },
 };
 
@@ -455,22 +455,16 @@ function CodeSurface(props: {
     <>
       {props.tile}
       <div className="flex w-full max-w-md flex-col items-center gap-2">
-        <p className="text-ui-sm text-muted-foreground">
-          In the mobile app, choose{" "}
-          <span className="font-medium text-foreground">Scan QR code</span> — or
-          type this code in:
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="link-phone-instructions"
+        >
+          In the mobile app, tap{" "}
+          <span className="font-medium text-foreground">Scan QR code</span>, or
+          enter this code:
         </p>
         {props.codeSlot}
-        <div className="flex flex-col items-center gap-0.5">
-          {props.statusLine}
-          <p
-            className="text-ui-xs text-muted-foreground"
-            data-testid="link-phone-single-use-hint"
-          >
-            Each code signs in one phone, expires in about a minute, and only
-            takes effect once you approve it here.
-          </p>
-        </div>
+        {props.statusLine}
       </div>
     </>
   );
@@ -725,7 +719,7 @@ export function LinkPhonePanel() {
   return (
     <SettingsPanelShell
       title="Link mobile app"
-      description="Sign the Traycer mobile app in by scanning this code. A scan on its own signs nothing in — every phone waits here for your approval first."
+      description="Sign in to the mobile app by scanning this QR code."
     >
       <div className="flex flex-col items-center gap-6 p-6">
         <LinkPhonePanelBody
@@ -786,7 +780,7 @@ function LinkPhonePanelBody(props: {
   if (!props.signedIn) {
     return (
       <p className="text-ui-sm text-muted-foreground">
-        Sign in on this device first — a linked phone signs in to this account.
+        Sign in on this device first. A linked phone signs in to this account.
       </p>
     );
   }

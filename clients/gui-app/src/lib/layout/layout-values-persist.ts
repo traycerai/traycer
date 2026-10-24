@@ -91,7 +91,6 @@ function resolveOverrides(
     railTerminals: railPatch(stored.railTerminals),
     railBrowsers: railPatch(stored.railBrowsers),
     railArtifacts: railPatch(stored.railArtifacts),
-    railFiles: railPatch(stored.railFiles),
     railGitDiff: railPatch(stored.railGitDiff),
     railPullRequests: autoRailPatch(stored.railPullRequests),
     railFileTree: railPatch(stored.railFileTree),

@@ -4,6 +4,7 @@ import {
   type UninstallHostResult,
 } from "../installer";
 import type { ILogger } from "../logger";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
@@ -29,7 +30,7 @@ import {
   discardAttemptRecordWithCapability,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
-import { readHostPidMetadata } from "../host/pid-metadata";
+import { readHostPidMetadataEvidence } from "../host/pid-metadata";
 import {
   readServiceRegistrationOwnership,
   serviceTaskLeftInPlaceWarning,
@@ -43,14 +44,12 @@ import {
 } from "../store/process-identity";
 
 // `traycer host uninstall [--all]`:
-//   default → remove the installed + staged host bytes and the install
-//             record, and NOTHING else. The OS service stays registered, and
-//             a host that is already running keeps running until it exits -
-//             after which the surviving registration has no valid install to
-//             launch. That end state is legal (it is how a
-//             remove-then-reinstall is expressed) but it is not what
-//             "optionally removes the OS service" suggests, so both the help
-//             text and this command's own output name it explicitly.
+//   default → cooperatively stop a running host, then remove the installed +
+//             staged host bytes and the install record. The OS service stays
+//             registered (it has no install left to launch until the next
+//             `host install`, which is how a remove-then-reinstall is
+//             expressed). A host is never left running from removed bytes: a
+//             host that refuses the stop keeps its install, as under `--all`.
 //   --all   → deregister the OS service first, then cooperatively stop the
 //             host, then remove the bytes. Runtime
 //             state (pid metadata, log) is NEVER purged here: a `host start`
@@ -62,14 +61,20 @@ import {
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
   readonly all: boolean;
+  /**
+   * `--force`: stop the host with the forced stop, which escalates to SIGKILL,
+   * and remove the install even if it is still running. Without it a stop
+   * that did not take effect keeps the install.
+   */
+  readonly force: boolean;
 }
 
 /** The command's own arguments: who asked, beside what to remove. */
 export interface HostUninstallCommandArgs extends HostUninstallArgs {
   /**
-   * `--lifecycle-origin`. `desktop` refuses `--all` over a host a person
+   * `--lifecycle-origin`. `desktop` refuses an uninstall over a host a person
    * started in a terminal (`refuseDesktopDisruptionOfForegroundRun`); a
-   * terminal's `--all` stops that host as it always has.
+   * terminal's uninstall stops that host as `--all` always has.
    */
   readonly lifecycleOrigin: HostStartOrigin;
 }
@@ -193,14 +198,12 @@ export function buildHostUninstallCommand(
         // First under the lock, before the deregister, the stop and its
         // intent, and the byte removal: the desktop's Remove Traycer leaves a
         // host a person started in a terminal running and changes nothing.
-        // The bare form never stops a host, so only `--all` asks.
-        if (args.all) {
-          await refuseDesktopDisruptionOfForegroundRun(
-            "host uninstall",
-            ctx.runtime.environment,
-            args.lifecycleOrigin,
-          );
-        }
+        // Both forms stop a running host, so both ask.
+        await refuseDesktopDisruptionOfForegroundRun(
+          "host uninstall",
+          ctx.runtime.environment,
+          args.lifecycleOrigin,
+        );
         return runHostUninstallWithAttempt(
           args,
           {
@@ -212,11 +215,18 @@ export function buildHostUninstallCommand(
             createServiceController,
             uninstallHost,
             readPublishedHost: async (environment) => {
-              const metadata = await readHostPidMetadata(environment);
-              if (metadata === null) return null;
+              // An unreadable record is not "nothing published": it throws, so
+              // the read reports that it did not answer.
+              const evidence = await readHostPidMetadataEvidence(environment);
+              if (evidence.kind === "absent") return null;
+              if (evidence.kind === "unreadable") {
+                throw new Error(
+                  `host pid metadata is unreadable: ${evidence.cause}`,
+                );
+              }
               return {
-                pid: metadata.pid,
-                startIdentity: metadata.processStartIdentity,
+                pid: evidence.metadata.pid,
+                startIdentity: evidence.metadata.processStartIdentity,
               };
             },
             probeProcessExited: getPublishedProcessIdentityVerdict,
@@ -304,15 +314,11 @@ async function runHostUninstallWithActuators(
   // confirming process scan finds the slot empty, so a probe that runs
   // afterwards is guaranteed to find nothing and would read a surviving host
   // as gone.
-  //
-  // Only `--all` needs the pre-teardown capture; the default path tears
-  // nothing down and reads at the boundary instead, so reading here too was
-  // wasted work whose result was discarded - and on Windows it cost seconds
-  // (a `tasklist` sweep plus an identity read) of extra window in which a
-  // relaunch loop could produce a successor.
-  const published = args.all
-    ? await readPublishedHostBestEffort(deps, ctx)
-    : null;
+  // Its outcome is kept, not only its host: a read that did not answer is no
+  // evidence that nothing was published, so it keeps the install below even
+  // when the boundary read later finds nothing.
+  const entryRead = await readPublishedHostReadOutcome(deps, ctx);
+  const published = entryRead.host;
   let liveness: LivenessObservation = "unknown";
   // Observed BEFORE anything is removed, on the default path: it is the only
   // way this command can say what it is about to leave behind. `--all` reads
@@ -321,9 +327,20 @@ async function runHostUninstallWithActuators(
   const retainedService = args.all
     ? null
     : await readServiceStateBestEffort(deps, ctx);
-  if (args.all) {
+  // The default path stops a host only when one may be running: the record
+  // could not be read, or it names a process not proven gone. With nothing
+  // running it removes the bytes and nothing else, as it always has, so a
+  // stale record cannot fail the removal on a stop with nothing to stop.
+  const stopsHost =
+    args.all ||
+    !entryRead.answered ||
+    (published !== null &&
+      (await observeLiveness(deps, ctx, published)) !== "gone");
+  if (stopsHost) {
     ctx.logger.warn(
-      "Host uninstall command will deregister service and stop the host",
+      args.all
+        ? "Host uninstall command will deregister service and stop the host"
+        : "Host uninstall command will stop the host",
       {
         environment: ctx.environment,
       },
@@ -338,21 +355,26 @@ async function runHostUninstallWithActuators(
     });
     const controller = deps.createServiceController();
     const label = serviceLabelFor(ctx.environment);
-    // Deregister BEFORE waiting for the process to exit. On macOS the
-    // running job stays under launchd's `KeepAlive` supervision until
-    // its registration is torn down (`uninstall` -> `launchctl
-    // bootout`); stopping first and deregistering after leaves a
-    // window where a non-clean SIGTERM exit gets treated as a
-    // failed/crashed exit and launchd respawns the host before we
-    // ever reach `uninstall`. Deregistering first removes that
-    // supervision so no exit outcome can trigger a respawn.
-    // `--all` stops the host itself next, whoever started it.
-    await actuators.uninstall(controller, { label, leaveForegroundRun: null });
-    serviceUninstalled = true;
-    ctx.logger.info("Host uninstall service deregistered", {
-      environment: ctx.environment,
-      label: label.id,
-    });
+    if (args.all) {
+      // Deregister BEFORE waiting for the process to exit. On macOS the
+      // running job stays under launchd's `KeepAlive` supervision until
+      // its registration is torn down (`uninstall` -> `launchctl
+      // bootout`); stopping first and deregistering after leaves a
+      // window where a non-clean SIGTERM exit gets treated as a
+      // failed/crashed exit and launchd respawns the host before we
+      // ever reach `uninstall`. Deregistering first removes that
+      // supervision so no exit outcome can trigger a respawn.
+      // `--all` stops the host itself next, whoever started it.
+      await actuators.uninstall(controller, {
+        label,
+        leaveForegroundRun: null,
+      });
+      serviceUninstalled = true;
+      ctx.logger.info("Host uninstall service deregistered", {
+        environment: ctx.environment,
+        label: label.id,
+      });
+    }
     // Install removal stays best-effort, but runtime files are preserved
     // unless the process is confirmed GONE. A host that is still serving is
     // still writing its pid metadata and rotating its log.
@@ -361,39 +383,69 @@ async function runHostUninstallWithActuators(
       label,
       logger: ctx.logger,
     };
-    const stopResolved = await stopServiceBeforeRuntimePurge(stopArgs, () =>
-      actuators.stop(controller, label, { force: false }),
+    // Kept so a refused stop can say WHY below: a host that declined
+    // because it has work in progress is not one that stopped responding.
+    let stopError: unknown = null;
+    const stopResolved = await stopServiceBeforeRuntimePurge(
+      stopArgs,
+      async () => {
+        try {
+          await actuators.stop(controller, label, { force: args.force });
+        } catch (err) {
+          stopError = err;
+          throw err;
+        }
+      },
     );
     // The resolved `stop()` is necessary but NOT sufficient - see
     // `findLiveHost`. Both halves are required: a stop that threw means the
     // host was never asked/consented to die, and a probe that still finds one
     // means the kill did not land. Only "asked, and nothing answers" earns the
     // purge that deletes pid metadata and rotates the active log.
-    liveness = await observeLiveness(deps, ctx, published);
+    // Every process this decision observes, by identity, with what is known
+    // of its exit. The install may go only once EACH is proven gone: a
+    // verdict about one process never stands in for another's, so a dead
+    // successor read at the boundary cannot clear a captured host that was
+    // still running, or whose exit could not be established. A later probe
+    // of the SAME process (same pid and start identity) replaces its earlier
+    // verdict, since it is newer evidence about that process.
+    const observed = new Map<string, LivenessObservation>();
+    if (published !== null) {
+      observed.set(
+        publishedProcessKey(published),
+        await observeLiveness(deps, ctx, published),
+      );
+    }
     // Registration is verified too, for the same reason: on Linux the unit
     // file is removed even when `disable --now` timed out, and on Windows
     // `/Delete` tolerates failure. Ask the controller what is actually
-    // registered now rather than inferring it from a resolved call.
-    retainedAfterAll = await readServiceStateBestEffort(deps, ctx);
+    // registered now rather than inferring it from a resolved call. The
+    // default path deregistered nothing and keeps its pre-removal read.
+    if (args.all) {
+      retainedAfterAll = await readServiceStateBestEffort(deps, ctx);
+    }
     // Re-read at the PURGE BOUNDARY, after every probe above has had its
     // chance to take time. `published` describes the child we captured; this
     // asks whether anything is publishing NOW - a supervisor relaunch loop can
     // produce a successor while these probes are running.
-    // `readPublishedHostBestEffort` returns null both for "nothing published"
-    // and for "the record was unreadable or malformed". The second is not
+    // A null host means either "nothing published" or "the record was
+    // unreadable or malformed"; `answered` tells them apart. The second is not
     // evidence of absence, so it must not leave the captured child's `gone`
-    // standing - `observeLiveness` reports unknown for a null input, which is
-    // exactly the right answer here too.
+    // standing.
     const successorRead = await readPublishedHostReadOutcome(deps, ctx);
     const successor = successorRead.host;
-    if (!successorRead.answered) {
-      liveness = "unknown";
-    } else if (successor !== null) {
+    if (successor !== null) {
       // Identity-probe B rather than inheriting A's verdict. A successor
       // record is not proof of life either - it can be stale - so it gets the
-      // same treatment A got.
-      liveness = await observeLiveness(deps, ctx, successor);
+      // same treatment A got, and is added beside A's verdict, not over it.
+      observed.set(
+        publishedProcessKey(successor),
+        await observeLiveness(deps, ctx, successor),
+      );
     }
+    liveness = successorRead.answered
+      ? foldObservedLiveness(observed.values())
+      : "unknown";
     registrationClear = retainedAfterAll?.state === "not-installed";
     // THE RUNTIME PURGE IS WITHHELD UNCONDITIONALLY, and that is a deliberate
     // retreat from what this command used to do.
@@ -427,6 +479,56 @@ async function runHostUninstallWithActuators(
       successorPublished: successor !== null,
       reason: "supervisor-quiescence-unproven",
     });
+    // A stop that did not take effect keeps the install. A wedged host
+    // ignores the stop request, and removing its install directory left it
+    // running from deleted bytes, still holding the lifecycle lock and the
+    // pid record, so every reinstall deferred to it and nothing could replace
+    // it. The deregistration above stands; the bytes go once the host is
+    // stopped, or now with `--force`.
+    // An unreadable record at entry or at the boundary is no evidence the host
+    // is gone (it may be mid-write by a live one), so it keeps the install as
+    // well, and so does any published process whose exit could not be
+    // established:
+    // a probe that threw or could not tell is not a dead host. Only every
+    // published process seen proven gone, or nothing published at all, lets
+    // a stopped host uninstall.
+    if (
+      !args.force &&
+      (!stopResolved ||
+        liveness === "live" ||
+        !entryRead.answered ||
+        !successorRead.answered ||
+        (observed.size > 0 && liveness !== "gone"))
+    ) {
+      ctx.logger.warn(
+        "Host uninstall kept the install because the host did not stop",
+        {
+          environment: ctx.environment,
+          stopResolved,
+          liveness,
+          publishedRecordReadable: entryRead.answered && successorRead.answered,
+        },
+      );
+      // The host answered and declined: it is busy, not wedged. Its own
+      // refusal names the work and the `--force` that would end it.
+      if (
+        stopError instanceof CliError &&
+        stopError.code === CLI_ERROR_CODES.HOST_BUSY
+      ) {
+        throw stopError;
+      }
+      throw cliError({
+        code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+        message: `host uninstall: the host did not stop, so its install was kept. If it is not responding, run ${args.all ? "'traycer host uninstall --all --force'" : "'traycer host uninstall --force'"} to stop it and remove the install (running terminal sessions and in-flight agent work will be killed).`,
+        details: {
+          environment: ctx.environment,
+          hostStillRunning: liveness === "live" ? true : null,
+          removedInstallDir: false,
+          serviceDeregistrationRequested: serviceUninstalled,
+        },
+        exitCode: 1,
+      });
+    }
   }
   // The boundary re-read, on BOTH paths now: `published` describes the child
   // captured at entry; this asks what is publishing at the moment the bytes go.
@@ -446,11 +548,11 @@ async function runHostUninstallWithActuators(
     discardAttemptRecord: actuators.discardAttemptRecord,
   });
   if (!args.all) {
-    // AFTER the removal, deliberately. The default path stops nothing, so a
-    // still-registered service or a foreground supervisor can publish a
-    // successor while the install and staged directories are being deleted -
-    // and a read taken before that would report the machine clean while the
-    // successor serves the install just removed.
+    // AFTER the removal, deliberately. The default path keeps the service
+    // registered, so it or a foreground supervisor can publish a successor
+    // while the install and staged directories are being deleted - and a read
+    // taken before that would report the machine clean while the successor
+    // serves the install just removed.
     const boundary = await readPublishedHostReadOutcome(deps, ctx);
     liveness = boundary.answered
       ? await observeLiveness(deps, ctx, boundary.host)
@@ -607,16 +709,6 @@ async function readServiceTaskLeftInPlaceWarning(
   }
 }
 
-// Best-effort like the status probe, and for the same reason: this exists to
-// DESCRIBE the end state, so an unreachable endpoint degrades to "unknown"
-// rather than failing a removal that already happened.
-async function readPublishedHostBestEffort(
-  deps: RunHostUninstallDeps,
-  ctx: RunHostUninstallContext,
-): Promise<PublishedHost | null> {
-  return (await readPublishedHostReadOutcome(deps, ctx)).host;
-}
-
 /**
  * Distinguishes "nothing is published" from "the read did not answer" -
  * `readHostPidMetadata` collapses both to null, and only the first is evidence.
@@ -641,6 +733,29 @@ async function readPublishedHostReadOutcome(
     });
     return { answered: false, host: null };
   }
+}
+
+/** One published process: its pid and the start identity it was published with. */
+function publishedProcessKey(host: PublishedHost): string {
+  return `${String(host.pid)} ${host.startIdentity ?? ""}`;
+}
+
+/**
+ * The verdict for a set of processes: `live` if any still runs, `gone` only
+ * when every one is proven gone, `unknown` otherwise - and `unknown` for an
+ * empty set, since observing nothing is not evidence of an exit.
+ */
+function foldObservedLiveness(
+  verdicts: Iterable<LivenessObservation>,
+): LivenessObservation {
+  let sawAny = false;
+  let allGone = true;
+  for (const verdict of verdicts) {
+    if (verdict === "live") return "live";
+    sawAny = true;
+    if (verdict !== "gone") allGone = false;
+  }
+  return sawAny && allGone ? "gone" : "unknown";
 }
 
 /**

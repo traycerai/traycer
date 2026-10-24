@@ -9,7 +9,12 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
-import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
+} from "../../../ipc-contracts/host-types";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
   IpcHostLifecycle,
@@ -34,7 +39,25 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import type {
+  getSandboxAutomationViaHttp,
+  openSandboxAutomationViaHttp,
+  runSandboxVerbViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  decideSecretRequestViaHttp,
+  fetchEnvironmentProvidersViaHttp,
+  fetchSandboxGrantsViaHttp,
+  fetchTeamEnvironmentViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import { config } from "../../../config";
 import { FakeHostController } from "./fake-host-controller";
+import type {
+  ActivateInstalledOk,
+  GuardedMutationOutcome,
+  HostRespawnMode,
+  LocalHostMutationIntent,
+} from "../../host/host-controller-types";
 import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
   createSigningKey,
@@ -43,6 +66,71 @@ import {
 } from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+/** The control-plane call the `runSandboxVerb` handler makes, observed. */
+const runSandboxVerbViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
+    kind: "ok",
+    settled: true,
+    state: "awake",
+  })),
+);
+/** The Automations read and open the two new handlers make, observed. */
+const getSandboxAutomationViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof getSandboxAutomationViaHttp>(async () => ({
+    kind: "ok",
+    automation: { available: true, sandbox: null, pods: [] },
+  })),
+);
+const openSandboxAutomationViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof openSandboxAutomationViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+/** The secrets broker's grants read and decide the two handlers make, observed. */
+const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
+    kind: "ok",
+    summary: { version: 3, grants: [], github: null },
+  })),
+);
+const decideSecretRequestViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof decideSecretRequestViaHttp>(async () => ({
+    kind: "ok",
+    status: "approved",
+    decidedBy: null,
+  })),
+);
+/** The team environment and provider counts the two handlers read, observed. */
+const fetchTeamEnvironmentViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchTeamEnvironmentViaHttp>(async () => ({
+    kind: "ok",
+    environmentId: "env-acme",
+  })),
+);
+const fetchEnvironmentProvidersViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchEnvironmentProvidersViaHttp>(async () => ({
+    kind: "ok",
+    counts: { providerSecretCount: 2, connectedPlanCount: 1 },
+  })),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/sandbox-control",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/sandbox-control")
+    >()),
+    runSandboxVerbViaHttp: runSandboxVerbViaHttpMock,
+    getSandboxAutomationViaHttp: getSandboxAutomationViaHttpMock,
+    openSandboxAutomationViaHttp: openSandboxAutomationViaHttpMock,
+  }),
+);
+vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
+  fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
+  fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
+  fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
+  decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
+}));
 /**
  * `app`-level event listeners, recorded rather than discarded so a test can
  * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
@@ -436,11 +524,17 @@ async function replyFreshSnapshot(
 }
 
 function sender(webContentsId: number): {
-  readonly sender: { readonly id: number };
+  // A real `WebContents` is an `EventEmitter` - `sandbox-artifact-ipc.ts`
+  // attaches `render-process-gone` / `did-start-navigation` / `destroyed`
+  // listeners directly to `event.sender` on first mount registration, so
+  // this double has to support `.on`/`.removeListener` too, not just carry
+  // an `id`. Every existing call site still gets exactly the `{id}` shape
+  // it type-checked against before - this only adds capability.
+  readonly sender: EventEmitter & { readonly id: number };
   readonly senderFrame: { readonly parent: null };
 } {
   return {
-    sender: { id: webContentsId },
+    sender: Object.assign(new EventEmitter(), { id: webContentsId }),
     // The bridge's IPC trust check rejects requests without a top-frame
     // `senderFrame`. Real Electron events always populate this; tests
     // must too so the same code path runs unmodified across dev / prod
@@ -579,6 +673,9 @@ describe("RunnerIpcBridge", () => {
       const channels = Array.from(ipcMainState.handlers.keys()).sort();
       expect(channels).toEqual(
         [
+          RunnerHostInvoke.sandboxArtifactRegister,
+          RunnerHostInvoke.sandboxArtifactUnregister,
+          RunnerHostInvoke.sandboxArtifactRespond,
           RunnerHostInvoke.workspaceFoldersPick,
           RunnerHostInvoke.validateAuthTokenIdentity,
           RunnerHostInvoke.deviceFlowStart,
@@ -598,6 +695,23 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.deregisterHostFromAccount,
           RunnerHostInvoke.listRegisteredHosts,
           RunnerHostInvoke.updateHostVersionPolicy,
+          // The sandbox control plane, for traycer-server's CORS reason.
+          RunnerHostInvoke.listSandboxes,
+          RunnerHostInvoke.getSandboxCosts,
+          RunnerHostInvoke.getSandboxCatalogue,
+          RunnerHostInvoke.createSandbox,
+          RunnerHostInvoke.destroySandbox,
+          RunnerHostInvoke.patchSandbox,
+          RunnerHostInvoke.keepSandbox,
+          RunnerHostInvoke.runSandboxVerb,
+          RunnerHostInvoke.getSandboxAutomation,
+          RunnerHostInvoke.openSandboxAutomation,
+          // The secrets broker, on authn.
+          RunnerHostInvoke.getSandboxGrants,
+          RunnerHostInvoke.getTeamEnvironment,
+          RunnerHostInvoke.getEnvironmentProviders,
+          RunnerHostInvoke.decideSecretRequest,
+          RunnerHostInvoke.mintExecutableWriteGrant,
           RunnerHostInvoke.listUserSessions,
           RunnerHostInvoke.revokeUserSession,
           RunnerHostInvoke.revokeAllSessions,
@@ -614,6 +728,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.requestHostRespawn,
           RunnerHostInvoke.lastKnownLocalHostId,
           RunnerHostInvoke.localHostSnapshot,
+          RunnerHostInvoke.localHostUnresponsive,
+          RunnerHostInvoke.forceRestartUnresponsiveHost,
           RunnerHostInvoke.traySetIndicator,
           RunnerHostInvoke.traySetEpics,
           RunnerHostInvoke.setUnsyncedEditsSnapshot,
@@ -737,6 +853,7 @@ describe("RunnerIpcBridge", () => {
           // wired by the host. They cover recent docs, window effects, GPU,
           // proxies, certificates, diagnostics, displays, and TouchID.
           RunnerHostInvoke.recentDocumentAdd,
+          RunnerHostInvoke.windowCaptureRegion,
           RunnerHostInvoke.windowFlashFrame,
           RunnerHostInvoke.windowSetProgressBar,
           RunnerHostInvoke.windowSetBadge,
@@ -884,6 +1001,297 @@ describe("RunnerIpcBridge", () => {
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("forwards the runSandboxVerb timeout to the control-plane call, and rejects a timeout that is not a number before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.runSandboxVerb);
+    if (handler === undefined) {
+      throw new Error("runSandboxVerb handler missing");
+    }
+
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
+    ).resolves.toEqual({ kind: "ok", settled: true, state: "awake" });
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "sbx_1",
+      "resume",
+      119_000,
+    );
+
+    for (const bad of ["119000", null, undefined, {}]) {
+      await expect(
+        handler(bareEvent(), "bearer-1", "sbx_1", "resume", bad),
+      ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    }
+    // The old four-argument call, from a renderer that predates the field.
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume"),
+    ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("routes the Automations read and open to the control plane with the bearer, and rejects a bearer that is not a string before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const read = ipcMainState.handlers.get(
+      RunnerHostInvoke.getSandboxAutomation,
+    );
+    const open = ipcMainState.handlers.get(
+      RunnerHostInvoke.openSandboxAutomation,
+    );
+    if (read === undefined || open === undefined) {
+      throw new Error("an Automations handler is missing");
+    }
+
+    await expect(read(bareEvent(), "bearer-1", null)).resolves.toEqual({
+      kind: "ok",
+      automation: { available: true, sandbox: null, pods: [] },
+    });
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      null,
+    );
+    expect(openSandboxAutomationViaHttpMock).not.toHaveBeenCalled();
+
+    await read(bareEvent(), "bearer-1", "env-team");
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "env-team",
+    );
+
+    await expect(open(bareEvent(), "bearer-2", null)).resolves.toEqual({
+      kind: "network-error",
+      detail: "unscripted",
+    });
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-2",
+      null,
+    );
+
+    await open(bareEvent(), "bearer-2", {
+      environmentId: "env-team",
+      ordinal: 1,
+    });
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-2",
+      { environmentId: "env-team", ordinal: 1 },
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(read(bareEvent(), bad, null)).rejects.toThrow(
+        "getSandboxAutomation.bearerToken",
+      );
+      await expect(open(bareEvent(), bad, null)).rejects.toThrow(
+        "openSandboxAutomation.bearerToken",
+      );
+    }
+    for (const bad of ["", undefined, 7, {}]) {
+      await expect(read(bareEvent(), "bearer-1", bad)).rejects.toThrow(
+        "getSandboxAutomation.environmentId",
+      );
+    }
+    for (const bad of [undefined, 7, "env-team", { ordinal: 1 }]) {
+      await expect(open(bareEvent(), "bearer-2", bad)).rejects.toThrow(
+        "openSandboxAutomation.target",
+      );
+    }
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenCalledTimes(2);
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("routes the grants read and the grant decision to the secrets broker on authn with the bearer, and rejects a malformed argument before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const grants = ipcMainState.handlers.get(RunnerHostInvoke.getSandboxGrants);
+    const decide = ipcMainState.handlers.get(
+      RunnerHostInvoke.decideSecretRequest,
+    );
+    if (grants === undefined || decide === undefined) {
+      throw new Error("a secrets handler is missing");
+    }
+
+    await expect(
+      grants(bareEvent(), "bearer-1", "env-1", "host-1"),
+    ).resolves.toEqual({
+      kind: "ok",
+      summary: { version: 3, grants: [], github: null },
+    });
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      "env-1",
+      "host-1",
+    );
+
+    await expect(
+      decide(bareEvent(), "bearer-2", "env-1", "request-1", "approve_default"),
+    ).resolves.toEqual({ kind: "ok", status: "approved", decidedBy: null });
+    expect(decideSecretRequestViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      "env-1",
+      "request-1",
+      "approve_default",
+    );
+
+    // A null environment (a server that predates environments) crosses as null.
+    await grants(bareEvent(), "bearer-1", null, "host-1");
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      null,
+      "host-1",
+    );
+    await decide(bareEvent(), "bearer-2", null, "request-1", "approve");
+    expect(decideSecretRequestViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      null,
+      "request-1",
+      "approve",
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(grants(bareEvent(), bad, "env-1", "host-1")).rejects.toThrow(
+        "getSandboxGrants.bearerToken",
+      );
+      await expect(
+        grants(bareEvent(), "bearer-1", "env-1", bad),
+      ).rejects.toThrow("getSandboxGrants.hostId");
+      await expect(
+        decide(bareEvent(), bad, "env-1", "request-1", "approve"),
+      ).rejects.toThrow("decideSecretRequest.bearerToken");
+      await expect(
+        decide(bareEvent(), "bearer-2", "env-1", bad, "approve"),
+      ).rejects.toThrow("decideSecretRequest.requestId");
+    }
+    // An environment that is neither a string nor null is refused in the
+    // main process, before any request.
+    for (const bad of [undefined, 7, {}, true]) {
+      await expect(
+        grants(bareEvent(), "bearer-1", bad, "host-1"),
+      ).rejects.toThrow("getSandboxGrants.environmentId");
+      await expect(
+        decide(bareEvent(), "bearer-2", bad, "request-1", "approve"),
+      ).rejects.toThrow("decideSecretRequest.environmentId");
+    }
+    // A decision outside the three is refused in the main process.
+    await expect(
+      decide(bareEvent(), "bearer-2", "env-1", "request-1", "approve_once"),
+    ).rejects.toThrow();
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenCalledTimes(2);
+    expect(decideSecretRequestViaHttpMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("routes the team environment and provider reads to authn with the bearer, and rejects a malformed argument before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const teamEnvironment = ipcMainState.handlers.get(
+      RunnerHostInvoke.getTeamEnvironment,
+    );
+    const providers = ipcMainState.handlers.get(
+      RunnerHostInvoke.getEnvironmentProviders,
+    );
+    if (teamEnvironment === undefined || providers === undefined) {
+      throw new Error("an environment handler is missing");
+    }
+    fetchTeamEnvironmentViaHttpMock.mockClear();
+    fetchEnvironmentProvidersViaHttpMock.mockClear();
+
+    await expect(
+      teamEnvironment(bareEvent(), "bearer-1", "team-acme"),
+    ).resolves.toEqual({ kind: "ok", environmentId: "env-acme" });
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      "team-acme",
+    );
+
+    await expect(
+      providers(bareEvent(), "bearer-2", "env-acme"),
+    ).resolves.toEqual({
+      kind: "ok",
+      counts: { providerSecretCount: 2, connectedPlanCount: 1 },
+    });
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      "env-acme",
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(
+        teamEnvironment(bareEvent(), bad, "team-acme"),
+      ).rejects.toThrow("getTeamEnvironment.bearerToken");
+      await expect(providers(bareEvent(), bad, "env-acme")).rejects.toThrow(
+        "getEnvironmentProviders.bearerToken",
+      );
+    }
+    for (const bad of ["", null, undefined, 7, {}]) {
+      await expect(
+        teamEnvironment(bareEvent(), "bearer-1", bad),
+      ).rejects.toThrow("getTeamEnvironment.teamId");
+      await expect(providers(bareEvent(), "bearer-1", bad)).rejects.toThrow(
+        "getEnvironmentProviders.environmentId",
+      );
+    }
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 
@@ -3320,6 +3728,114 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  describe("authSessionRevoke", () => {
+    /**
+     * A bridge with two windows and the auth-session handlers registered, the
+     * install-time fan-out already drained. The revoke handler needs no signed
+     * session: the fan-out it owes the other windows does not depend on main
+     * holding the bearer (an unordered revoke is fenced by the receivers).
+     */
+    async function installRevokeHarness(): Promise<{
+      readonly bridge: { dispose(): void };
+      readonly windowA: CapturingWindow;
+      readonly windowB: CapturingWindow;
+      readonly revoke: InvokeHandler;
+    }> {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      const windowA = buildWindow();
+      const windowB = buildWindow();
+      registry.add("window-a", 101, windowA);
+      registry.add("window-b", 202, windowB);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      const revoke = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionRevoke,
+      );
+      if (revoke === undefined) {
+        throw new Error("authSession revoke handler missing");
+      }
+      windowA.sentMessages.length = 0;
+      windowB.sentMessages.length = 0;
+      return { bridge, windowA, windowB, revoke };
+    }
+
+    it.each([
+      {
+        label: "a user-epoch revocation",
+        scope: ["user-epoch"],
+        revocation: "user-epoch",
+      },
+      {
+        label: "an unrecognised scope",
+        scope: ["junk"],
+        revocation: null,
+      },
+      {
+        label: "an explicit null scope",
+        scope: [null],
+        revocation: null,
+      },
+      {
+        label: "no scope at all, as a shell that predates it sends",
+        scope: [],
+        revocation: null,
+      },
+    ])(
+      "fans the revoked bearer out to every window with $label",
+      async ({ scope, revocation }) => {
+        const { bridge, windowA, windowB, revoke } =
+          await installRevokeHarness();
+
+        await revoke(sender(101), "bearer-a", ...scope);
+
+        // The originating window is told too: its own demotion has already
+        // run, and the receivers fence on the bearer they hold.
+        const expected = [
+          {
+            channel: RunnerHostEvent.authVerificationRevoked,
+            payload: { token: "bearer-a", revocation },
+          },
+        ];
+        expect(windowA.sentMessages).toEqual(expected);
+        expect(windowB.sentMessages).toEqual(expected);
+        bridge.dispose();
+      },
+    );
+
+    it.each([
+      { label: "a number", token: 42 },
+      { label: "null", token: null },
+      { label: "nothing", token: undefined },
+      { label: "an object", token: { token: "bearer-a" } },
+    ])(
+      "drops a revoke whose bearer is $label, fanning out nothing",
+      async ({ token }) => {
+        const { bridge, windowA, windowB, revoke } =
+          await installRevokeHarness();
+
+        await revoke(sender(101), token, "user-epoch");
+
+        expect(windowA.sentMessages).toEqual([]);
+        expect(windowB.sentMessages).toEqual([]);
+        bridge.dispose();
+      },
+    );
+  });
+
   it("retains step-up credentials in main and returns only expiry metadata to the renderer", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
       const url = input.toString();
@@ -4027,6 +4543,301 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  // The force restart offered for an unresponsive host is about ONE host. The
+  // restart can queue behind another mutation, so the question "is it still
+  // that host, and still silent?" is the intent's guard, asked by the lane once
+  // the job owns it - never by this handler beforehand (traycer#1563 D3a).
+  describe("forceRestartUnresponsiveHost", () => {
+    const UNRESPONSIVE = {
+      pid: 4242,
+      offerId: 1,
+      unreachableForMs: 12 * 60_000,
+    };
+    const OFFER = { pid: 4242, offerId: 1 };
+    // What the monitor's check answers for the offer: the host it confirmed.
+    const OFFERED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    const STILL_RUNNING_MESSAGE =
+      "The host started responding again or was replaced, so it was not restarted.";
+
+    /**
+     * A controller whose `respawn` queues the job instead of running it, as a
+     * lane busy with another mutation would. `runQueued` is the lane reaching
+     * the head: it asks the intent's guard then, and only a `proceed` acts.
+     */
+    class QueueingHostController extends FakeHostController {
+      readonly queued: Array<{
+        readonly intent: LocalHostMutationIntent;
+        readonly settle: (
+          outcome: GuardedMutationOutcome<ActivateInstalledOk>,
+        ) => void;
+      }> = [];
+      killed = 0;
+      /** The host each restart that proceeded was confirmed for, if any. */
+      readonly stoppedHosts: Array<RestartTargetHost | null> = [];
+
+      override respawn(
+        intent: LocalHostMutationIntent,
+        mode: HostRespawnMode,
+      ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+        this.respawnCalls += 1;
+        this.respawnCallArgs.push({ intent, mode });
+        return new Promise((resolve) => {
+          this.queued.push({ intent, settle: resolve });
+        });
+      }
+
+      async runQueued(): Promise<void> {
+        for (const job of this.queued.splice(0)) {
+          if (job.intent.kind === "user-repair") {
+            const verdict = await job.intent.guard();
+            if (verdict.kind === "abandon") {
+              job.settle({ kind: "abandoned", message: verdict.message });
+              continue;
+            }
+            this.stoppedHosts.push(
+              verdict.kind === "proceed-for-host" ? verdict.host : null,
+            );
+          }
+          this.killed += 1;
+          job.settle({ kind: "ok", value: { activated: true } });
+        }
+      }
+    }
+
+    async function installBridge(
+      confirm:
+        | ((
+            offer: LocalHostUnresponsiveOffer,
+          ) => Promise<RestartTargetHost | null>)
+        | null,
+      verdict: LocalHostUnresponsive | null,
+    ) {
+      const mod = await import("../register-runner-ipc");
+      const unresponsive = await import("../../host/local-host-unresponsive");
+      unresponsive.setLocalHostStillUnresponsiveCheck(confirm);
+      unresponsive.publishLocalHostUnresponsive(verdict);
+      const hostController = new QueueingHostController();
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+      const handler = ipcMainState.handlers.get(
+        RunnerHostInvoke.forceRestartUnresponsiveHost,
+      );
+      if (handler === undefined) {
+        throw new Error("forceRestartUnresponsiveHost handler missing");
+      }
+      return {
+        hostController,
+        invoke: (offer: unknown) => handler(bareEvent(), offer),
+        dispose: () => {
+          bridge.dispose();
+          unresponsive.setLocalHostStillUnresponsiveCheck(null);
+          unresponsive.publishLocalHostUnresponsive(null);
+        },
+      };
+    }
+
+    it("hands the lane a forced user-repair intent keyed by the offer, and asks nothing itself", async () => {
+      const confirm = vi.fn(async () => OFFERED_HOST);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(1);
+      });
+
+      const call = harness.hostController.respawnCallArgs[0];
+      expect(call?.mode).toBe("force");
+      expect(call?.intent).toMatchObject({
+        kind: "user-repair",
+        targetHostId: "unresponsive-offer:1:4242",
+      });
+      // The handler is not the one who asks: the lane does, at its head.
+      expect(confirm).not.toHaveBeenCalled();
+
+      await harness.hostController.runQueued();
+      await expect(result).resolves.toEqual({ kind: "restarted" });
+      expect(confirm).toHaveBeenCalledWith(OFFER);
+      expect(harness.hostController.killed).toBe(1);
+      harness.dispose();
+    });
+
+    it("carries the host the check confirmed to the step that stops it", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({ kind: "restarted" });
+      expect(harness.hostController.stoppedHosts).toEqual([OFFERED_HOST]);
+      harness.dispose();
+    });
+
+    it("declines, and kills nothing, when the host recovers while the restart waits for the lane", async () => {
+      let stillUnresponsive = true;
+      const harness = await installBridge(
+        async () => (stillUnresponsive ? OFFERED_HOST : null),
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      // Queued behind another mutation; the host answers again meanwhile.
+      stillUnresponsive = false;
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it("keys two pids apart, so one restart never joins the other's", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      void harness.invoke({ pid: 1, offerId: 1 });
+      void harness.invoke({ pid: 2, offerId: 1 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(2);
+      });
+
+      expect(
+        harness.hostController.respawnCallArgs.map((call) =>
+          call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
+        ),
+      ).toEqual(["unresponsive-offer:1:1", "unresponsive-offer:1:2"]);
+      harness.dispose();
+    });
+
+    it("keys two offers for the same pid apart, so a restart for a later host never joins the earlier one's", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      void harness.invoke({ pid: 7, offerId: 1 });
+      void harness.invoke({ pid: 7, offerId: 2 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(2);
+      });
+
+      const keys = harness.hostController.respawnCallArgs.map((call) =>
+        call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
+      );
+      expect(keys).toEqual([
+        "unresponsive-offer:1:7",
+        "unresponsive-offer:2:7",
+      ]);
+      expect(new Set(keys).size).toBe(2);
+      harness.dispose();
+    });
+
+    // The review schedule, end to end through the real verdict store: the
+    // offer is out for A, the restart waits for the lane, and B replaces A
+    // under the same pid and does not answer either. The check mimics the
+    // monitor's: it holds the offer to the host recorded when it was made.
+    it("abandons the restart, killing nothing, when a host that reuses the pid replaced the offered one while it waited", async () => {
+      const offered = { offerId: 1, pid: 4242, websocketUrl: "ws://a/rpc" };
+      let published = { pid: 4242, websocketUrl: "ws://a/rpc" };
+      const harness = await installBridge(
+        async (offer) =>
+          offer.offerId === offered.offerId &&
+          offer.pid === offered.pid &&
+          published.pid === offered.pid &&
+          published.websocketUrl === offered.websocketUrl
+            ? OFFERED_HOST
+            : null,
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      // B, same pid, another endpoint, published with no tick in between: the
+      // verdict store still holds A's offer.
+      published = { pid: 4242, websocketUrl: "ws://b/rpc" };
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it("abandons an offer id other than the verdict's without asking the monitor's check", async () => {
+      const confirm = vi.fn(async () => OFFERED_HOST);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      const result = harness.invoke({ pid: 4242, offerId: 2 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it.each([
+      ["a bare pid, the old form", 4242],
+      ["a string", "4242"],
+      ["undefined", undefined],
+      ["null", null],
+      ["an empty object", {}],
+      ["a missing offerId", { pid: 4242 }],
+      ["a missing pid", { offerId: 1 }],
+      ["a zero offerId", { pid: 4242, offerId: 0 }],
+      ["a negative offerId", { pid: 4242, offerId: -1 }],
+      ["a fractional offerId", { pid: 4242, offerId: 1.5 }],
+      ["a string offerId", { pid: 4242, offerId: "1" }],
+      ["an unsafe offerId", { pid: 4242, offerId: 2 ** 53 }],
+      ["a zero pid", { pid: 0, offerId: 1 }],
+      ["a negative pid", { pid: -1, offerId: 1 }],
+      ["a fractional pid", { pid: 1.5, offerId: 1 }],
+      ["a string pid", { pid: "4242", offerId: 1 }],
+    ])("declines %s without calling respawn", async (_name, rawOffer) => {
+      const confirm = vi.fn(async () => OFFERED_HOST);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      await expect(harness.invoke(rawOffer)).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.respawnCalls).toBe(0);
+      expect(confirm).not.toHaveBeenCalled();
+      harness.dispose();
+    });
+  });
+
   // The renderer's host directory seeds "which id is THIS machine" from this
   // handler, and then persists the answer and neutralizes the matching registry
   // row. A wrong answer therefore does not degrade - it neutralizes the wrong
@@ -4338,6 +5149,10 @@ describe("RunnerIpcBridge", () => {
 
     expect(windowA.sentMessages).toEqual([
       { channel: RunnerHostEvent.localHostChange, payload: null },
+      {
+        channel: RunnerHostEvent.localHostUnresponsiveChange,
+        payload: null,
+      },
       {
         channel: RunnerHostEvent.windowsChange,
         payload: [
@@ -5486,3 +6301,503 @@ class DeferredPerWindowState implements IpcPerWindowState {
     this.events.off(event, listener);
   }
 }
+
+/**
+ * Finds the sandbox artifact IPC handlers `registerSandboxArtifactIpc`
+ * installed via `bridge.install()`, reusing the same real `RunnerIpcBridge`
+ * and mocked `ipcMain` this whole suite already builds - no second set of
+ * fixtures, so the sender-trust check in `handleInvoke` is the REAL one, not
+ * a double that skips it.
+ */
+function sandboxArtifactHandlers(): {
+  readonly register: InvokeHandler;
+  readonly unregister: InvokeHandler;
+  readonly respond: InvokeHandler;
+} {
+  const register = ipcMainState.handlers.get(
+    RunnerHostInvoke.sandboxArtifactRegister,
+  );
+  const unregister = ipcMainState.handlers.get(
+    RunnerHostInvoke.sandboxArtifactUnregister,
+  );
+  const respond = ipcMainState.handlers.get(
+    RunnerHostInvoke.sandboxArtifactRespond,
+  );
+  if (
+    register === undefined ||
+    unregister === undefined ||
+    respond === undefined
+  ) {
+    throw new Error("sandbox artifact IPC handlers missing");
+  }
+  return { register, unregister, respond };
+}
+
+function sandboxArtifactRequestIdSentTo(window: CapturingWindow): string {
+  const sent = window.sentMessages.find(
+    (m) => m.channel === RunnerHostEvent.sandboxArtifactRequest,
+  );
+  if (sent === undefined) {
+    throw new Error("no sandboxArtifactRequest was sent to this window");
+  }
+  return (sent.payload as { readonly requestId: string }).requestId;
+}
+
+describe("RunnerIpcBridge: sandbox artifact IPC", () => {
+  it("register/respond: a trusted sender registers a mount and its reply settles the pending fetch", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, respond } = sandboxArtifactHandlers();
+
+    await Promise.resolve(register(sender(101), "mount1"));
+    expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(true);
+
+    const pending = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+    );
+    const requestId = sandboxArtifactRequestIdSentTo(windowA);
+
+    await Promise.resolve(
+      respond(sender(101), {
+        requestId,
+        kind: "bytes",
+        bytes: new Uint8Array(10),
+        offset: 0,
+        totalBytes: 10,
+        mediaType: "text/html",
+      }),
+    );
+
+    const response = await pending;
+    expect(response.status).toBe(200);
+    bridge.dispose();
+  });
+
+  it("unregister no-ops for a sender that does not own the mount, removes it for the owner", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, unregister } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mount1"));
+
+    await Promise.resolve(unregister(sender(202), "mount1"));
+    expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(true);
+
+    await Promise.resolve(unregister(sender(101), "mount1"));
+    expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(false);
+    bridge.dispose();
+  });
+
+  it("respond: a reply attributed to the wrong window is dropped; the owning window's reply settles the fetch", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, respond } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mount1"));
+
+    const pending = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+    );
+    const requestId = sandboxArtifactRequestIdSentTo(windowA);
+
+    // A registered window still cannot answer another window's request.
+    registry.add("window-b", 202, buildWindow());
+    await Promise.resolve(
+      respond(sender(202), {
+        requestId,
+        kind: "bytes",
+        bytes: new Uint8Array(999),
+        offset: 0,
+        totalBytes: 999,
+        mediaType: "text/html",
+      }),
+    );
+
+    await Promise.resolve(
+      respond(sender(101), {
+        requestId,
+        kind: "bytes",
+        bytes: new Uint8Array(10),
+        offset: 0,
+        totalBytes: 10,
+        mediaType: "text/html",
+      }),
+    );
+
+    const response = await pending;
+    expect(response.status).toBe(200);
+    // Proves the wrong-window reply (totalBytes 999) never took effect.
+    expect(response.headers.get("Content-Length")).toBe("10");
+    bridge.dispose();
+  });
+
+  it("respond: a malformed payload is ignored rather than thrown", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { respond } = sandboxArtifactHandlers();
+
+    await expect(
+      Promise.resolve(respond(sender(101), { nonsense: true })),
+    ).resolves.toBeUndefined();
+    bridge.dispose();
+  });
+
+  it("refuses a reply from an untrusted (subframe) sender", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, respond } = sandboxArtifactHandlers();
+
+    const subframeEvent = {
+      sender: { id: 101 },
+      // A non-null frame parent means the call came from a subframe, never
+      // the top frame `isTrustedIpcSender` requires.
+      senderFrame: { parent: {} },
+    };
+    expect(() => register(subframeEvent, "mount1")).toThrow(
+      "IPC sender not trusted for channel " +
+        RunnerHostInvoke.sandboxArtifactRegister,
+    );
+    expect(() => respond(subframeEvent, { requestId: "x" })).toThrow(
+      "IPC sender not trusted for channel " +
+        RunnerHostInvoke.sandboxArtifactRespond,
+    );
+    bridge.dispose();
+  });
+
+  it("markRendererUnavailable fails that window's pending sandbox artifact request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mount1"));
+
+    const pending = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+    );
+
+    bridge.markRendererUnavailable("window-a");
+
+    const response = await pending;
+    expect(response.status).toBe(503);
+    bridge.dispose();
+  });
+
+  it("closing a window prunes its sandbox artifact mounts and fails its pending request, leaving another window's untouched", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mounta"));
+    await Promise.resolve(register(sender(202), "mountb"));
+
+    const pendingA = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mounta/index.html"),
+    );
+
+    // The real registry-change wiring (`windows-ipc.ts`), not a direct call -
+    // this is what proves `pruneClosedWindowState` is actually reached when a
+    // window closes, not only that the method does the right thing in
+    // isolation.
+    await registry.closeById("window-a");
+
+    const response = await pendingA;
+    expect(response.status).toBe(503);
+    expect(bridge.sandboxArtifacts.ownsMount("mountb", "window-b")).toBe(true);
+    bridge.dispose();
+  });
+
+  /**
+   * The artifact-only-window lifecycle: on the FIRST mount registration for a
+   * window, `registerSandboxArtifactIpc` attaches `render-process-gone` /
+   * `did-start-navigation` / `destroyed` listeners directly to that window's
+   * `event.sender` (a real `WebContents` is an `EventEmitter`), because an
+   * artifact-only window may hold no browser session and so has no other
+   * lifecycle observer that would otherwise clean up its mounts. These tests
+   * drive that `EventEmitter` directly - no browser-sessions machinery
+   * involved - matching "artifact-only window, no browser sessions".
+   */
+  describe("direct window-lifecycle observation (artifact-only window)", () => {
+    async function setUp() {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      const windowA = buildWindow();
+      registry.add("window-a", 101, windowA);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      const { register } = sandboxArtifactHandlers();
+      const event = sender(101);
+      await Promise.resolve(register(event, "mount1"));
+      return { bridge, registry, windowA, event };
+    }
+
+    it("a crashed renderer (render-process-gone) drops its pending request", async () => {
+      const { bridge, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit("render-process-gone");
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        false,
+      );
+      bridge.dispose();
+    });
+
+    it("a real top-level navigation (did-start-navigation, not in-place) drops the pending request", async () => {
+      const { bridge, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      // (_event, url, isInPlace, isMainFrame)
+      event.sender.emit(
+        "did-start-navigation",
+        {},
+        "https://example.com/",
+        false,
+        true,
+      );
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        false,
+      );
+      bridge.dispose();
+    });
+
+    it("ignores a subframe navigation - the mount and pending request survive", async () => {
+      const { bridge, windowA, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit(
+        "did-start-navigation",
+        {},
+        "https://example.com/",
+        false,
+        false, // isMainFrame: false
+      );
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+      const requestId = sandboxArtifactRequestIdSentTo(windowA);
+      await Promise.resolve(
+        bridge.sandboxArtifacts.respond(
+          {
+            requestId,
+            kind: "bytes",
+            bytes: new Uint8Array(10),
+            offset: 0,
+            totalBytes: 10,
+            mediaType: "text/html",
+          },
+          "window-a",
+        ),
+      );
+      const response = await pending;
+      expect(response.status).toBe(200);
+      bridge.dispose();
+    });
+
+    it("ignores an in-page (same-document) navigation - the mount and pending request survive", async () => {
+      const { bridge, windowA, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit(
+        "did-start-navigation",
+        {},
+        "https://example.com/#anchor",
+        true, // isInPlace: true
+        true,
+      );
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+      const requestId = sandboxArtifactRequestIdSentTo(windowA);
+      await Promise.resolve(
+        bridge.sandboxArtifacts.respond(
+          {
+            requestId,
+            kind: "bytes",
+            bytes: new Uint8Array(10),
+            offset: 0,
+            totalBytes: 10,
+            mediaType: "text/html",
+          },
+          "window-a",
+        ),
+      );
+      const response = await pending;
+      expect(response.status).toBe(200);
+      bridge.dispose();
+    });
+
+    it("destroyed drops the pending request and detaches the listeners", async () => {
+      const { bridge, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit("destroyed");
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        false,
+      );
+
+      // The listeners were removed on "destroyed" - a later crash emit on
+      // the SAME sender must not reach a mount re-registered after it, since
+      // nothing is listening on it any more.
+      bridge.sandboxArtifacts.register("mount1", "window-a");
+      event.sender.emit("render-process-gone");
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+      bridge.dispose();
+    });
+
+    it("bridge.dispose() detaches the listeners - a later crash emit does not reach a mount registered after dispose", async () => {
+      const { bridge, event } = await setUp();
+      bridge.dispose();
+
+      // Started fresh after dispose, as `registerSandboxArtifactIpc`'s own
+      // teardown left it: the same `SandboxArtifactServer` is reused here
+      // only to prove the OLD listeners are gone, not to exercise a second
+      // `install()`.
+      bridge.sandboxArtifacts.register("mount1", "window-a");
+      event.sender.emit("render-process-gone");
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+    });
+  });
+});

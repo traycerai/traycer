@@ -14,6 +14,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
 const textFrameFields = {
   hasBinaryPayload: lazySchema(() => z.literal(false)),
@@ -46,6 +47,21 @@ export const hostNotificationKindSchema = lazySchema(() =>
     "interview.requested",
     "host.operation.finished",
     "browser.human.needed",
+    "secret.grant.requested",
+    "secret.export.minted",
+    "secret.rotated",
+    "team.member.removed",
+    "team.member.joined",
+    "team.policy.unapplied",
+    "team.policy.authority_expired",
+    "team.installing_admin.gone",
+    "team.plan.unlinked",
+    "team.pods.full",
+    "environment.move.stalled",
+    "environment.apply.failed",
+    "team.role.changed",
+    "team.host.returned",
+    "secret.removed",
   ]),
 );
 export type HostNotificationKind = z.infer<typeof hostNotificationKindSchema>;
@@ -262,14 +278,249 @@ export type HostNotificationEntryV22 = z.infer<
 >;
 
 /**
- * Narrows a `@2.2` entry to the released union. Derived from
+ * An agent on a sandbox asked for a secret the sandbox has no grant for
+ * (`traycer_secret_request`): the secret, the destination and protocol it
+ * would be bound to, and the agent's reason. Only the user can decide, so the
+ * row carries the approval card and the agent's tool long-polls the decision.
+ *
+ * Shaped exactly like the released `needs_action` arms (`outcome: null` plus a
+ * `resolvedAt` lifecycle), as `browser.human.needed` is: the generic prompt
+ * branch already carries it, and recording the decision resolves it.
+ */
+const secretGrantRequestedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("secret.grant.requested"),
+    outcome: z.null(),
+    resolvedAt: z.number().int().nonnegative().nullable(),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/**
+ * An agent minted a short-lived export of a secret (`traycer_secret_export`):
+ * a presigned URL or a short-lived credential set that works until its expiry
+ * wherever it is copied. Informational - the user's export policy already
+ * allowed it - so it is a completed event with nothing to resolve.
+ */
+const secretExportMintedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("secret.export.minted"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/**
+ * A secret's value was replaced and its rotation reached a state the owner
+ * (or, for a team, every admin) is told about: stalled with Stop offered,
+ * enforced with what each producer proved, or failed. `failure`/`errored` for
+ * a failed rotation, `done`/`completed` otherwise; the state itself is in the
+ * payload, so a state newer than this build still renders.
+ */
+const secretRotatedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("secret.rotated"),
+    outcome: z.enum(["completed", "errored"]),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/**
+ * The team kinds, addressed to a team's admins (and `team.member.joined`
+ * also to the newcomer): informational, nothing to resolve. Every fact the
+ * row shows is in the payload.
+ */
+const teamMemberRemovedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.member.removed"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamMemberJoinedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.member.joined"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamPolicyUnappliedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.policy.unapplied"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamPolicyAuthorityExpiredEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.policy.authority_expired"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamInstallingAdminGoneEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.installing_admin.gone"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamPlanUnlinkedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.plan.unlinked"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamPodsFullEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.pods.full"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/**
+ * `@2.2`'s arms plus `secret.grant.requested`, `secret.export.minted`,
+ * `secret.rotated` and the seven team kinds; list `@2.3` / feed `@1.4` /
+ * cloudFeed `@1.3`.
+ *
+ * A NEW minor on all three surfaces, for the reason `@2.2` was one: list
+ * `@2.2`, feed `@1.2` and `@1.3`, and cloudFeed `@1.1` and `@1.2` have all
+ * shipped (`host-v1.5.1`), and a released client cannot absorb an unknown ARM.
+ */
+export const hostNotificationEntrySchemaV23 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...releasedHostNotificationEntryArms,
+    hostOperationFinishedEntryArm,
+    browserHumanNeededEntryArm,
+    secretGrantRequestedEntryArm,
+    secretExportMintedEntryArm,
+    secretRotatedEntryArm,
+    teamMemberRemovedEntryArm,
+    teamMemberJoinedEntryArm,
+    teamPolicyUnappliedEntryArm,
+    teamPolicyAuthorityExpiredEntryArm,
+    teamInstallingAdminGoneEntryArm,
+    teamPlanUnlinkedEntryArm,
+    teamPodsFullEntryArm,
+  ]),
+);
+export type HostNotificationEntryV23 = z.infer<
+  typeof hostNotificationEntrySchemaV23
+>;
+
+/**
+ * The environments redesign's kinds, informational with nothing to resolve:
+ * a computer's move stalled, a host could not apply an item, the reader's
+ * team role changed, a computer went back from a team, a secret was removed.
+ * `failure`/`errored` for the two failures, `completed` otherwise; every fact
+ * the row shows is in the payload.
+ */
+const environmentMoveStalledEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("environment.move.stalled"),
+    outcome: z.literal("errored"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const environmentApplyFailedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("environment.apply.failed"),
+    outcome: z.literal("errored"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamRoleChangedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.role.changed"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const teamHostReturnedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("team.host.returned"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+const secretRemovedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("secret.removed"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/**
+ * `@2.3`'s arms plus the five environments-redesign kinds; list `@2.4` / feed
+ * `@1.6` / cloudFeed `@1.4`.
+ *
+ * A NEW minor on all three surfaces: list `@2.3`, feed `@1.4` and `@1.5`, and
+ * cloudFeed `@1.3` are on staging hosts, and a GUI that negotiated them
+ * cannot absorb an unknown ARM.
+ */
+export const hostNotificationEntrySchemaV24 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...releasedHostNotificationEntryArms,
+    hostOperationFinishedEntryArm,
+    browserHumanNeededEntryArm,
+    secretGrantRequestedEntryArm,
+    secretExportMintedEntryArm,
+    secretRotatedEntryArm,
+    teamMemberRemovedEntryArm,
+    teamMemberJoinedEntryArm,
+    teamPolicyUnappliedEntryArm,
+    teamPolicyAuthorityExpiredEntryArm,
+    teamInstallingAdminGoneEntryArm,
+    teamPlanUnlinkedEntryArm,
+    teamPodsFullEntryArm,
+    environmentMoveStalledEntryArm,
+    environmentApplyFailedEntryArm,
+    teamRoleChangedEntryArm,
+    teamHostReturnedEntryArm,
+    secretRemovedEntryArm,
+  ]),
+);
+export type HostNotificationEntryV24 = z.infer<
+  typeof hostNotificationEntrySchemaV24
+>;
+
+/**
+ * Narrows a widest-union entry to the released union. Derived from
  * {@link RELEASED_HOST_NOTIFICATION_KINDS} rather than listing the exclusions:
  * this predicate is the downgrade bridge's last guard against an
  * unrepresentable arm reaching a released client, so a new arm has to be
  * excluded by DEFAULT, not by remembering to name it here.
  */
 export function isReleasedHostNotificationEntry(
-  entry: HostNotificationEntryV22,
+  entry: HostNotificationEntryV24,
 ): entry is HostNotificationEntry {
   return RELEASED_HOST_NOTIFICATION_KINDS.includes(entry.kind);
 }
@@ -284,7 +535,34 @@ export function isReleasedHostNotificationEntry(
  * kind is added here.
  */
 export const HOST_NOTIFICATION_PENDING_PROMPT_KINDS: readonly HostNotificationKind[] =
-  ["approval.requested", "interview.requested", "browser.human.needed"];
+  [
+    "approval.requested",
+    "interview.requested",
+    "browser.human.needed",
+    "secret.grant.requested",
+  ];
+
+/** The kinds addressed to a team's admins (and, joined, to its newcomer). */
+export const TEAM_HOST_NOTIFICATION_KINDS = [
+  "team.member.removed",
+  "team.member.joined",
+  "team.policy.unapplied",
+  "team.policy.authority_expired",
+  "team.installing_admin.gone",
+  "team.plan.unlinked",
+  "team.pods.full",
+] as const satisfies readonly HostNotificationKind[];
+export type TeamHostNotificationKind =
+  (typeof TEAM_HOST_NOTIFICATION_KINDS)[number];
+
+const TEAM_HOST_NOTIFICATION_KIND_SET: ReadonlySet<HostNotificationKind> =
+  new Set(TEAM_HOST_NOTIFICATION_KINDS);
+
+export function isTeamHostNotificationKind(
+  kind: HostNotificationKind,
+): kind is TeamHostNotificationKind {
+  return TEAM_HOST_NOTIFICATION_KIND_SET.has(kind);
+}
 
 /** The kinds every released contract version can carry. FROZEN. */
 export const RELEASED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
@@ -302,10 +580,41 @@ export const V21_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   "host.operation.finished",
 ];
 
-/** Every kind this build can carry, on the newest version of each surface. */
-export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+/**
+ * The kinds list `@2.2` / feed `@1.2` and `@1.3` / cloudFeed `@1.1` and `@1.2`
+ * carry. FROZEN with those minors.
+ */
+export const V22_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   ...V21_HOST_NOTIFICATION_KINDS,
   "browser.human.needed",
+];
+
+/**
+ * The kinds list `@2.3` / feed `@1.4` and `@1.5` / cloudFeed `@1.3` carry.
+ * FROZEN with those minors.
+ */
+export const V23_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+  ...V22_HOST_NOTIFICATION_KINDS,
+  "secret.grant.requested",
+  "secret.export.minted",
+  "secret.rotated",
+  "team.member.removed",
+  "team.member.joined",
+  "team.policy.unapplied",
+  "team.policy.authority_expired",
+  "team.installing_admin.gone",
+  "team.plan.unlinked",
+  "team.pods.full",
+];
+
+/** Every kind this build can carry, on the newest version of each surface. */
+export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+  ...V23_HOST_NOTIFICATION_KINDS,
+  "environment.move.stalled",
+  "environment.apply.failed",
+  "team.role.changed",
+  "team.host.returned",
+  "secret.removed",
 ];
 
 /**
@@ -345,7 +654,9 @@ export function visibleHostNotificationKinds(
     case "host.notifications.list":
       if (schemaVersion.major === 1) return RELEASED_HOST_NOTIFICATION_KINDS;
       if (schemaVersion.major === 2) {
-        if (schemaVersion.minor >= 2) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor >= 4) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor === 3) return V23_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor === 2) return V22_HOST_NOTIFICATION_KINDS;
         return schemaVersion.minor === 1
           ? V21_HOST_NOTIFICATION_KINDS
           : RELEASED_HOST_NOTIFICATION_KINDS;
@@ -353,7 +664,11 @@ export function visibleHostNotificationKinds(
       return RELEASED_HOST_NOTIFICATION_KINDS;
     case "host.notifications.feed.subscribe":
       if (schemaVersion.major === 1) {
-        if (schemaVersion.minor >= 2) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor >= 6) return ALL_HOST_NOTIFICATION_KINDS;
+        // `@1.4` and `@1.5` share one entry union; `@1.5` added a client frame.
+        if (schemaVersion.minor >= 4) return V23_HOST_NOTIFICATION_KINDS;
+        // `@1.2` and `@1.3` share one entry union; `@1.3` added a frame kind.
+        if (schemaVersion.minor >= 2) return V22_HOST_NOTIFICATION_KINDS;
         return schemaVersion.minor === 1
           ? V21_HOST_NOTIFICATION_KINDS
           : RELEASED_HOST_NOTIFICATION_KINDS;
@@ -368,8 +683,11 @@ export function visibleHostNotificationKinds(
     // compatibility buckets from here rather than re-deciding `minor >= 1`.
     case "host.notifications.cloudFeed.subscribe":
       if (schemaVersion.major === 1) {
+        if (schemaVersion.minor >= 4) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor === 3) return V23_HOST_NOTIFICATION_KINDS;
+        // `@1.1` and `@1.2` share one entry union; `@1.2` added a frame kind.
         return schemaVersion.minor >= 1
-          ? ALL_HOST_NOTIFICATION_KINDS
+          ? V22_HOST_NOTIFICATION_KINDS
           : RELEASED_HOST_NOTIFICATION_KINDS;
       }
       return RELEASED_HOST_NOTIFICATION_KINDS;
@@ -391,7 +709,7 @@ export function streamCarriesChannelEmissionFrame(
   schemaVersion: { readonly major: number; readonly minor: number },
 ): boolean {
   switch (surface.method) {
-    // Every installed minor of the feed (`@1.0`, `@1.1`) declares the frame.
+    // Every installed minor of the feed (`@1.0` to `@1.6`) declares the frame.
     case "host.notifications.feed.subscribe":
       return schemaVersion.major === 1;
     // The frozen released stream declares it at its only version.
@@ -401,7 +719,7 @@ export function streamCarriesChannelEmissionFrame(
     case "host.notifications.list":
       return false;
     // Snapshot/partitionSnapshot/connectionState/pong only, on every installed
-    // minor (`@1.0`, `@1.1`, `@1.2`).
+    // minor (`@1.0` to `@1.4`).
     case "host.notifications.cloudFeed.subscribe":
       return false;
   }
@@ -645,6 +963,30 @@ export const hostNotificationsListResponseSchemaV22 = lazySchema(() =>
 );
 export type HostNotificationsListResponseV22 = z.infer<
   typeof hostNotificationsListResponseSchemaV22
+>;
+
+/** `@2.3` response: identical projection, entry union widened by the two
+ * secrets arms. */
+export const hostNotificationsListResponseSchemaV23 = lazySchema(() =>
+  z.object({
+    entries: z.array(hostNotificationEntrySchemaV23),
+    nextCursor: hostNotificationsCursorSchema.nullable(),
+  }),
+);
+export type HostNotificationsListResponseV23 = z.infer<
+  typeof hostNotificationsListResponseSchemaV23
+>;
+
+/** `@2.4` response: identical projection, entry union widened by the five
+ * environments-redesign arms. */
+export const hostNotificationsListResponseSchemaV24 = lazySchema(() =>
+  z.object({
+    entries: z.array(hostNotificationEntrySchemaV24),
+    nextCursor: hostNotificationsCursorSchema.nullable(),
+  }),
+);
+export type HostNotificationsListResponseV24 = z.infer<
+  typeof hostNotificationsListResponseSchemaV24
 >;
 
 export const hostNotificationsEntityRefSchema = lazySchema(() =>
@@ -1175,6 +1517,168 @@ export type HostNotificationsSubscribeServerFrameV13 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV13
 >;
 
+/**
+ * Feed `@1.4` server frames: `@1.3`'s frame kinds, every entry-carrying slot
+ * widened to `hostNotificationEntrySchemaV23`.
+ *
+ * Written out in full rather than composed from `@1.3`: every slot that
+ * carries an entry changes, so there is nothing of `@1.3` to reuse but the
+ * frames with no entry, and a full union is the shape a later freeze of this
+ * minor has to keep byte-identical anyway.
+ */
+const hostNotificationsSnapshotSchemaV14 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    attention: z.object({
+      entries: z.array(hostNotificationEntrySchemaV23),
+      nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+    }),
+    recent: z.object({
+      entries: z.array(hostNotificationEntrySchemaV23),
+      nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+    }),
+    summary: hostNotificationsSummarySchema,
+  }),
+);
+const hostNotificationsLocalPartitionSnapshotSchemaV14 = lazySchema(() =>
+  hostNotificationsSnapshotSchemaV14.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsLocalPartitionSchema,
+  }),
+);
+export const hostNotificationsSubscribeServerFrameSchemaV14 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    hostNotificationsLocalPartitionSnapshotSchemaV14,
+    hostNotificationsSnapshotSchemaV14,
+    z.object({
+      kind: z.literal("upserted"),
+      ...textFrameFields,
+      entry: hostNotificationEntrySchemaV23,
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("readStateChanged"),
+      ...textFrameFields,
+      ids: z.array(z.string()).min(1),
+      entityRefs: z.array(hostNotificationsEntityRefSchema),
+      readAt: z.number().int().nonnegative().nullable(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("removed"),
+      ...textFrameFields,
+      removedIds: nonDuplicateIdArraySchema(1),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("cleared"),
+      ...textFrameFields,
+      beforeUpdatedAt: z.number().int().nonnegative(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("channelEmission"),
+      ...textFrameFields,
+      emissionId: z.string(),
+      channelId: hostNotificationChannelIdSchema,
+      severity: hostNotificationSeveritySchema,
+      rows: z.array(hostNotificationEntrySchemaV23).min(1),
+      reason: hostNotificationsChannelEmissionReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]),
+);
+export type HostNotificationsSubscribeServerFrameV14 = z.infer<
+  typeof hostNotificationsSubscribeServerFrameSchemaV14
+>;
+
+/**
+ * Feed `@1.6` server frames: `@1.4`'s frame kinds, every entry-carrying slot
+ * widened to `hostNotificationEntrySchemaV24`. Written out in full for the
+ * reason `@1.4` is.
+ */
+const hostNotificationsSnapshotSchemaV16 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    attention: z.object({
+      entries: z.array(hostNotificationEntrySchemaV24),
+      nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+    }),
+    recent: z.object({
+      entries: z.array(hostNotificationEntrySchemaV24),
+      nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+    }),
+    summary: hostNotificationsSummarySchema,
+  }),
+);
+const hostNotificationsLocalPartitionSnapshotSchemaV16 = lazySchema(() =>
+  hostNotificationsSnapshotSchemaV16.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsLocalPartitionSchema,
+  }),
+);
+export const hostNotificationsSubscribeServerFrameSchemaV16 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    hostNotificationsLocalPartitionSnapshotSchemaV16,
+    hostNotificationsSnapshotSchemaV16,
+    z.object({
+      kind: z.literal("upserted"),
+      ...textFrameFields,
+      entry: hostNotificationEntrySchemaV24,
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("readStateChanged"),
+      ...textFrameFields,
+      ids: z.array(z.string()).min(1),
+      entityRefs: z.array(hostNotificationsEntityRefSchema),
+      readAt: z.number().int().nonnegative().nullable(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("removed"),
+      ...textFrameFields,
+      removedIds: nonDuplicateIdArraySchema(1),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("cleared"),
+      ...textFrameFields,
+      beforeUpdatedAt: z.number().int().nonnegative(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("channelEmission"),
+      ...textFrameFields,
+      emissionId: z.string(),
+      channelId: hostNotificationChannelIdSchema,
+      severity: hostNotificationSeveritySchema,
+      rows: z.array(hostNotificationEntrySchemaV24).min(1),
+      reason: hostNotificationsChannelEmissionReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]),
+);
+export type HostNotificationsSubscribeServerFrameV16 = z.infer<
+  typeof hostNotificationsSubscribeServerFrameSchemaV16
+>;
+
 export const hostNotificationsSubscribeClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1193,6 +1697,36 @@ export const hostNotificationsSubscribeClientFrameSchema = lazySchema(() =>
 );
 export type HostNotificationsSubscribeClientFrame = z.infer<
   typeof hostNotificationsSubscribeClientFrameSchema
+>;
+
+/**
+ * `host.notifications.feed.subscribe@1.5` client frames: `@1.4`'s, plus
+ * `cloudLanePresence`. A client whose cloud notification lane is served by
+ * a peer other than this host (the server pool) tells the host whether that
+ * lane is delivering, so the host's local view serves the empty partition
+ * only while some lane really carries the user's cloud rows. Sent on change
+ * and on subscribe; a host that never receives one keeps its own answer.
+ */
+export const hostNotificationsSubscribeClientFrameSchemaV15 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("ping"), ...textFrameFields }),
+    z.object({
+      kind: z.literal("presence"),
+      ...textFrameFields,
+      windowId: z.string(),
+      focused: z.boolean(),
+      entity: hostNotificationsPresenceEntitySchema.nullable(),
+      at: z.number().int().nonnegative(),
+    }),
+    z.object({
+      kind: z.literal("cloudLanePresence"),
+      ...textFrameFields,
+      serving: z.boolean(),
+    }),
+  ]),
+);
+export type HostNotificationsSubscribeClientFrameV15 = z.infer<
+  typeof hostNotificationsSubscribeClientFrameSchemaV15
 >;
 
 /** Released `indicatorState@1.0` entity flags. FROZEN. */
@@ -1391,6 +1925,30 @@ export const hostNotificationsListV22 = defineRpcContract({
   responseSchema: hostNotificationsListResponseSchemaV22,
 });
 
+/**
+ * `@2.3`: the response entry union widened with `secret.grant.requested` and
+ * `secret.export.minted`. Its own minor because `@2.2` has shipped; the
+ * request is `@2.2`'s unchanged.
+ */
+export const hostNotificationsListV23 = defineRpcContract({
+  method: "host.notifications.list",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: hostNotificationsListRequestSchemaV22,
+  responseSchema: hostNotificationsListResponseSchemaV23,
+});
+
+/**
+ * `@2.4`: the response entry union widened with the five
+ * environments-redesign arms. Its own minor because `@2.3` is on staging; the
+ * request is `@2.2`'s unchanged.
+ */
+export const hostNotificationsListV24 = defineRpcContract({
+  method: "host.notifications.list",
+  schemaVersion: { major: 2, minor: 4 } as const,
+  requestSchema: hostNotificationsListRequestSchemaV22,
+  responseSchema: hostNotificationsListResponseSchemaV24,
+});
+
 export const hostNotificationsListUpgradeV10ToV20 = defineUpgradePath<
   typeof hostNotificationsListV10,
   typeof hostNotificationsListV20
@@ -1443,6 +2001,28 @@ export const hostNotificationsListUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+export const hostNotificationsListUpgradeV22ToV23 = defineUpgradePath<
+  typeof hostNotificationsListV22,
+  typeof hostNotificationsListV23
+>({
+  from: hostNotificationsListV22.schemaVersion,
+  to: hostNotificationsListV23.schemaVersion,
+  // A `@2.2` response is a valid `@2.3` response: the union only gains arms.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const hostNotificationsListUpgradeV23ToV24 = defineUpgradePath<
+  typeof hostNotificationsListV23,
+  typeof hostNotificationsListV24
+>({
+  from: hostNotificationsListV23.schemaVersion,
+  to: hostNotificationsListV24.schemaVersion,
+  // A `@2.3` response is a valid `@2.4` response: the union only gains arms.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 /**
  * A released v1 host has no durable-home selector, so the exact local
  * partition has no representation below `@2.2`.
@@ -1455,11 +2035,11 @@ export const hostNotificationsListUpgradeV21ToV22 = defineUpgradePath<
  * scoped to a set the caller never asked for. A short-circuit the caller can
  * see beats a plausible answer it cannot distinguish from the real one.
  */
-export const hostNotificationsListDowngradeV22ToV10 = defineDowngradePath<
-  typeof hostNotificationsListV22,
+export const hostNotificationsListDowngradeV24ToV10 = defineDowngradePath<
+  typeof hostNotificationsListV24,
   typeof hostNotificationsListV10
 >({
-  from: hostNotificationsListV22.schemaVersion,
+  from: hostNotificationsListV24.schemaVersion,
   to: hostNotificationsListV10.schemaVersion,
   downgradeRequest: (request) => {
     if ("home" in request) {
@@ -1831,6 +2411,117 @@ export const hostNotificationsCloudFeedSubscribeV12 = defineStreamRpcContract({
 });
 
 /**
+ * `@1.3` of the cloud feed row: identical envelope, entry slot widened to
+ * `hostNotificationEntrySchemaV23` so a secret grant request or a minted
+ * export is representable. Its own minor, unlike `@1.1` in its day, because
+ * `@1.1` and `@1.2` have shipped.
+ *
+ * A V13 frame is a strict superset of a V12 frame, so one client-side parser
+ * (this one) reads every minor; which ROWS it receives is decided host-side by
+ * `visibleHostNotificationKinds` for the negotiated version.
+ */
+export const hostNotificationsCloudFeedRowSchemaV13 = lazySchema(() =>
+  z.object({
+    ...hostNotificationsCloudFeedRowSchema.shape,
+    entry: hostNotificationEntrySchemaV23,
+  }),
+);
+export type HostNotificationsCloudFeedRowV13 = z.infer<
+  typeof hostNotificationsCloudFeedRowSchemaV13
+>;
+
+const hostNotificationsCloudFeedSnapshotSchemaV13 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    connectionState: z.literal("connected"),
+    version: z.number().int().nonnegative(),
+    rows: z.array(hostNotificationsCloudFeedRowSchemaV13),
+    summary: hostNotificationsCloudFeedSummarySchema,
+  }),
+);
+const hostNotificationsCloudFeedPartitionSnapshotSchemaV13 = lazySchema(() =>
+  hostNotificationsCloudFeedSnapshotSchemaV13.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsCloudPartitionSchema,
+  }),
+);
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV13 =
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedPartitionSnapshotSchemaV13,
+      hostNotificationsCloudFeedSnapshotSchemaV13,
+      hostNotificationsCloudFeedConnectionStateSchemaV10,
+      hostNotificationsCloudFeedPongSchemaV10,
+    ]),
+  );
+export type HostNotificationsCloudFeedSubscribeServerFrameV13 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV13
+>;
+
+/** Additive minor: same open request and client frames, widened entry union. */
+export const hostNotificationsCloudFeedSubscribeV13 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV13,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * `@1.4` of the cloud feed row: identical envelope, entry slot widened to
+ * `hostNotificationEntrySchemaV24`. Its own minor because `@1.3` is on
+ * staging. A V14 frame is a strict superset of a V13 frame.
+ */
+export const hostNotificationsCloudFeedRowSchemaV14 = lazySchema(() =>
+  z.object({
+    ...hostNotificationsCloudFeedRowSchema.shape,
+    entry: hostNotificationEntrySchemaV24,
+  }),
+);
+export type HostNotificationsCloudFeedRowV14 = z.infer<
+  typeof hostNotificationsCloudFeedRowSchemaV14
+>;
+
+const hostNotificationsCloudFeedSnapshotSchemaV14 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    connectionState: z.literal("connected"),
+    version: z.number().int().nonnegative(),
+    rows: z.array(hostNotificationsCloudFeedRowSchemaV14),
+    summary: hostNotificationsCloudFeedSummarySchema,
+  }),
+);
+const hostNotificationsCloudFeedPartitionSnapshotSchemaV14 = lazySchema(() =>
+  hostNotificationsCloudFeedSnapshotSchemaV14.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsCloudPartitionSchema,
+  }),
+);
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV14 =
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedPartitionSnapshotSchemaV14,
+      hostNotificationsCloudFeedSnapshotSchemaV14,
+      hostNotificationsCloudFeedConnectionStateSchemaV10,
+      hostNotificationsCloudFeedPongSchemaV10,
+    ]),
+  );
+export type HostNotificationsCloudFeedSubscribeServerFrameV14 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV14
+>;
+
+/** Additive minor: same open request and client frames, widened entry union. */
+export const hostNotificationsCloudFeedSubscribeV14 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV14,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
+/**
  * The whole of a per-entry mutation: WHICH entry.
  *
  * A marker is set once and merged by "first time it happened", so the write is
@@ -1994,6 +2685,39 @@ export const hostNotificationsFeedSubscribeV13 = defineStreamRpcContract({
   openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
   serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV13,
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
+});
+
+/** Additive minor: same open request, client frames and frame kinds as
+ * `@1.3`; the entry union widens by the two secrets arms, which cannot join
+ * the shipped `@1.3`. */
+export const hostNotificationsFeedSubscribeV14 = defineStreamRpcContract({
+  method: "host.notifications.feed.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
+  serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV14,
+  clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
+});
+
+/** Additive minor: `@1.4`'s open request and server frames; the client may
+ * send `cloudLanePresence`. Negotiated, so a client sends it only to a host
+ * that offers `@1.5`. */
+export const hostNotificationsFeedSubscribeV15 = defineStreamRpcContract({
+  method: "host.notifications.feed.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
+  serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV14,
+  clientFrameSchema: hostNotificationsSubscribeClientFrameSchemaV15,
+});
+
+/** Additive minor: `@1.5`'s open request and client frames; the entry union
+ * widens by the five environments-redesign arms, which cannot join `@1.4` or
+ * `@1.5`, both on staging. */
+export const hostNotificationsFeedSubscribeV16 = defineStreamRpcContract({
+  method: "host.notifications.feed.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
+  serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV16,
+  clientFrameSchema: hostNotificationsSubscribeClientFrameSchemaV15,
 });
 
 export const hostNotificationsGetConfig = defineRpcContract({
@@ -2165,8 +2889,27 @@ export type NotificationHookStatusEntry = z.infer<
   typeof notificationHookStatusEntrySchema
 >;
 
-export const notificationHooksSaveRequestSchema = lazySchema(() =>
+/** The v1.0 request, FROZEN as released (`host-v1.5.1`). */
+export const notificationHooksSaveRequestSchemaV10 = lazySchema(() =>
   z.object({ hooks: z.array(notificationHookConfigSchema) }).strict(),
+);
+export type NotificationHooksSaveRequestV10 = z.infer<
+  typeof notificationHooksSaveRequestSchemaV10
+>;
+
+/**
+ * v2.0: the saved list can hold a `command` action, which the
+ * host runs, so the save carries the executable-write grant. A whole-list
+ * save with no per-hook write, so the grant matters when the list holds a
+ * command; `null` otherwise.
+ */
+export const notificationHooksSaveRequestSchema = lazySchema(() =>
+  z
+    .object({
+      hooks: z.array(notificationHookConfigSchema),
+      executableWriteGrant: executableWriteGrantSchema,
+    })
+    .strict(),
 );
 export type NotificationHooksSaveRequest = z.infer<
   typeof notificationHooksSaveRequestSchema
@@ -2234,6 +2977,45 @@ export const hostNotificationHooksTest = defineRpcContract({
 export const hostNotificationHooksSave = defineRpcContract({
   method: "host.notificationHooks.save",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: notificationHooksSaveRequestSchemaV10,
+  responseSchema: notificationHooksStatusResponseSchema,
+});
+
+/**
+ * `host.notificationHooks.save@2.0`: the executable-write grant.
+ * A MAJOR, not a minor: within a major the client re-parses a newer request
+ * with the host's own minor schema, and v1.0's request is `.strict()`, so a
+ * v1.1 request carrying the grant would fail `DOWNGRADE_UNSUPPORTED` against
+ * every released host and no hook could be saved there. Across a major the
+ * downgrade below strips the grant (a v1.0 host checks none), and a v1.0
+ * caller's request is upgraded with `null`. The response is unchanged.
+ */
+export const hostNotificationHooksSaveV20 = defineRpcContract({
+  method: "host.notificationHooks.save",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: notificationHooksSaveRequestSchema,
   responseSchema: notificationHooksStatusResponseSchema,
+});
+
+export const hostNotificationHooksSaveUpgradeV1ToV2 = defineUpgradePath<
+  typeof hostNotificationHooksSave,
+  typeof hostNotificationHooksSaveV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const hostNotificationHooksSaveDowngradeV20ToV10 = defineDowngradePath<
+  typeof hostNotificationHooksSaveV20,
+  typeof hostNotificationHooksSave
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: { hooks: request.hooks },
+  }),
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });

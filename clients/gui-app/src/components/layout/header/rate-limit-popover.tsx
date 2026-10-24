@@ -116,11 +116,11 @@ import {
 } from "@/stores/auth/account-context-store";
 import {
   accountContextValue,
-  isCreditBasedPricing,
   isTraycerEligible,
   resolveTraycerSubscriptionState,
   selectSubscription,
   subscriptionPlanLabel,
+  usesCreditView,
   type TraycerSubscription,
   type TraycerSubscriptionState,
 } from "@/lib/auth/traycer-subscription-content";
@@ -364,8 +364,7 @@ function useTraycerSubscription() {
   const rateLimitAccountContexts = accountSubscriptions
     .filter(
       (account) =>
-        account.subscription !== null &&
-        !isCreditBasedPricing(account.subscription.subscriptionStatus),
+        account.subscription !== null && !usesCreditView(account.subscription),
     )
     .map((account) => account.accountContext);
   return {
@@ -833,6 +832,9 @@ function RateLimitPopoverScopedBody({
     mode: "passive",
     editing: false,
     sample: false,
+    // The panel's own per-account control is the retry here, so a segment in
+    // this reading offers none of its own.
+    retryHostId: null,
   });
   const limitedProviders = limitedProviderIds(cluster);
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
@@ -1051,6 +1053,8 @@ function RateLimitHostPickerRow({
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />
     </div>
   );

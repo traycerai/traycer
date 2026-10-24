@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { log } from "../../app/logger";
+import { DEFAULT_DEVICE_REQUEST_TIMEOUT_MS } from "@traycer-clients/shared/auth/device-auth";
 import {
   DeviceFlowController,
   type DeviceFlowResultPayload,
 } from "../device-flow-controller";
+
+vi.mock("../../app/logger", () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 /**
  * Drives the main-process device-flow controller against a mocked global
@@ -294,6 +300,227 @@ describe("DeviceFlowController", () => {
     const outcome = await controller.start({ onResult: () => undefined });
 
     expect(outcome.ok).toBe(false);
+  });
+
+  describe("when /device/authorize fails, the desktop log names the cause", () => {
+    const AUTHORIZE_FAILED = "[device-flow] authorize failed";
+
+    beforeEach(() => {
+      vi.mocked(log.warn).mockClear();
+    });
+
+    it("logs transport with the errno word of a nested cause.code", async () => {
+      const original: unknown = (globalThis as { fetch?: unknown }).fetch;
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        writable: true,
+        value: (): Promise<Response> =>
+          Promise.reject(
+            Object.assign(new TypeError("fetch failed"), {
+              cause: Object.assign(new Error("getaddrinfo authn.test"), {
+                code: "ENOTFOUND",
+              }),
+            }),
+          ),
+      });
+      restoreFetch = () =>
+        Object.defineProperty(globalThis, "fetch", {
+          configurable: true,
+          writable: true,
+          value: original,
+        });
+
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      const outcome = await controller.start({ onResult: () => undefined });
+
+      expect(outcome).toEqual({ ok: false });
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${AUTHORIZE_FAILED} cause=transport code=ENOTFOUND`,
+      );
+    });
+
+    it("logs transport when the request itself throws", async () => {
+      const original: unknown = (globalThis as { fetch?: unknown }).fetch;
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        writable: true,
+        value: (): Promise<Response> =>
+          Promise.reject(new TypeError("fetch failed")),
+      });
+      restoreFetch = () =>
+        Object.defineProperty(globalThis, "fetch", {
+          configurable: true,
+          writable: true,
+          value: original,
+        });
+
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      const outcome = await controller.start({ onResult: () => undefined });
+
+      expect(outcome).toEqual({ ok: false });
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${AUTHORIZE_FAILED} cause=transport code=other`,
+      );
+    });
+
+    it("logs timeout when the request is still unanswered at its deadline", async () => {
+      const original: unknown = (globalThis as { fetch?: unknown }).fetch;
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        writable: true,
+        value: (_input: unknown, init: RequestInit | undefined) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      });
+      restoreFetch = () =>
+        Object.defineProperty(globalThis, "fetch", {
+          configurable: true,
+          writable: true,
+          value: original,
+        });
+
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      const started = controller.start({ onResult: () => undefined });
+      await vi.advanceTimersByTimeAsync(DEFAULT_DEVICE_REQUEST_TIMEOUT_MS);
+      const outcome = await started;
+
+      expect(outcome).toEqual({ ok: false });
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${AUTHORIZE_FAILED} cause=timeout`,
+      );
+    });
+
+    it("logs http-status with the numeric status for a non-200", async () => {
+      restoreFetch = installFetch(
+        () => new Response("<html>blocked</html>", { status: 503 }),
+      );
+
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      const outcome = await controller.start({ onResult: () => undefined });
+
+      expect(outcome).toEqual({ ok: false });
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${AUTHORIZE_FAILED} cause=http-status status=503`,
+      );
+    });
+
+    it("logs bad-body when a 200 body is not a device authorization", async () => {
+      restoreFetch = installFetch(
+        () => new Response("not json at all", { status: 200 }),
+      );
+
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      const outcome = await controller.start({ onResult: () => undefined });
+
+      expect(outcome).toEqual({ ok: false });
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        `${AUTHORIZE_FAILED} cause=bad-body`,
+      );
+    });
+
+    it("never puts the url, the body or a header into the line", async () => {
+      restoreFetch = installFetch(
+        () =>
+          new Response("secret-body-token", {
+            status: 500,
+            headers: { "X-Secret": "secret-header-token" },
+          }),
+      );
+
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      await controller.start({ onResult: () => undefined });
+
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      const lines = JSON.stringify(vi.mocked(log.warn).mock.calls);
+      expect(lines).not.toContain("secret-body-token");
+      expect(lines).not.toContain("secret-header-token");
+      expect(lines).not.toContain("authn.test");
+    });
+  });
+
+  describe("when a /device/token poll fails, the desktop log names the cause", () => {
+    const POLL_FAILED = "[device-flow] poll failed";
+
+    beforeEach(() => {
+      vi.mocked(log.warn).mockClear();
+    });
+
+    it("logs each new cause once, again after a recovery, and never the url or the device code", async () => {
+      // 503, 503, refused, 428 (recovered), 503, then authorized.
+      const tokenAnswers: Array<"503" | "refused" | "428" | "ok"> = [
+        "503",
+        "503",
+        "refused",
+        "428",
+        "503",
+        "ok",
+      ];
+      let tokenCalls = 0;
+      const original: unknown = (globalThis as { fetch?: unknown }).fetch;
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        writable: true,
+        value: (input: unknown): Promise<Response> => {
+          const url = typeof input === "string" ? input : String(input);
+          if (url.endsWith("/device/authorize")) {
+            return Promise.resolve(authorizeOk());
+          }
+          const answer = tokenAnswers[tokenCalls] ?? "ok";
+          tokenCalls += 1;
+          switch (answer) {
+            case "503":
+              return Promise.resolve(new Response(null, { status: 503 }));
+            case "refused":
+              return Promise.reject(
+                Object.assign(new TypeError("fetch failed"), {
+                  cause: Object.assign(new Error("connect authn.test"), {
+                    code: "ECONNREFUSED",
+                  }),
+                }),
+              );
+            case "428":
+              return Promise.resolve(new Response(null, { status: 428 }));
+            case "ok":
+              return Promise.resolve(tokenAuthorized());
+          }
+        },
+      });
+      restoreFetch = () =>
+        Object.defineProperty(globalThis, "fetch", {
+          configurable: true,
+          writable: true,
+          value: original,
+        });
+
+      const results: DeviceFlowResultPayload[] = [];
+      const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+      const outcome = await controller.start({
+        onResult: (_attemptId, result) => results.push(result),
+      });
+      expect(outcome.ok).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(results).toEqual([
+        { kind: "authorized", token: "tok", refreshToken: "tok-refresh" },
+      ]);
+      expect(vi.mocked(log.warn).mock.calls).toEqual([
+        [`${POLL_FAILED} cause=http-status status=503`],
+        [`${POLL_FAILED} cause=transport code=ECONNREFUSED`],
+        [`${POLL_FAILED} cause=http-status status=503`],
+      ]);
+      const lines = JSON.stringify(vi.mocked(log.warn).mock.calls);
+      expect(lines).not.toContain("authn.test");
+      expect(lines).not.toContain("device-code-123");
+    });
   });
 
   it("delivers a denied result terminally", async () => {

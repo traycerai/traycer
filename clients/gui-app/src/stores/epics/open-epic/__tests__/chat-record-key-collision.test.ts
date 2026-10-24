@@ -245,12 +245,15 @@ describe("createChatRecordTable - a delta reads the home of its OWN row", () => 
           docResident: false,
           revision: 1,
         }),
+        // A stranger's row reaches this table as a replica: a host serves
+        // `own` rows only to the identity they are its viewer's.
         record({
           chatId: SHARED_ID,
           ownerUserId: DOC_OWNER,
           title: "Doc-homed",
           docResident: true,
           revision: 1,
+          origin: "foreign",
         }),
       ],
       null,

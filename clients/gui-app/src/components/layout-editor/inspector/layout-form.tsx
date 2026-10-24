@@ -30,6 +30,7 @@ import {
 } from "@/components/layout-editor/inspector/layout-areas";
 import { LAYOUT_REGION_LIST } from "@/components/layout-editor/regions/region-facts";
 import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import type { RegionId } from "@/lib/layout/region-id";
 import {
@@ -91,16 +92,17 @@ export function LayoutAllSettings(): ReactNode {
   }
 
   function handleRowKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const navigationKey = listNavigationKey(event);
+    if (navigationKey !== "ArrowDown" && navigationKey !== "ArrowUp") return;
     const all = rows();
     const index = all.findIndex((row) => row === document.activeElement);
     if (index < 0) return;
     event.preventDefault();
-    if (event.key === "ArrowUp" && index === 0) {
+    if (navigationKey === "ArrowUp" && index === 0) {
       filterRef.current?.focus();
       return;
     }
-    all[index + (event.key === "ArrowDown" ? 1 : -1)]?.focus();
+    all[index + (navigationKey === "ArrowDown" ? 1 : -1)]?.focus();
   }
 
   return (

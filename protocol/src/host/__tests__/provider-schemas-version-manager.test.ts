@@ -30,6 +30,7 @@ import {
   providersSetPackPolicyResponseSchema,
   providersUsePackVersionRequestSchema,
   providersUsePackVersionResponseSchema,
+  providersUsePackVersionResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
 
 function providerState(providerId: string) {
@@ -280,26 +281,33 @@ describe("per-pack RPC contracts", () => {
   const contracts = [
     {
       method: "providers.installPackVersion",
+      latestMinor: 0,
       requestSchema: providersInstallPackVersionRequestSchema,
       responseSchema: providersInstallPackVersionResponseSchema,
     },
     {
       method: "providers.removePackVersion",
+      latestMinor: 0,
       requestSchema: providersRemovePackVersionRequestSchema,
       responseSchema: providersRemovePackVersionResponseSchema,
     },
     {
       method: "providers.usePackVersion",
+      // 1.1 opened for the typed `macos-ineligible` arm; 1.0 is frozen at the
+      // three-code response and stays registered unchanged.
+      latestMinor: 1,
       requestSchema: providersUsePackVersionRequestSchema,
-      responseSchema: providersUsePackVersionResponseSchema,
+      responseSchema: providersUsePackVersionResponseSchemaV10,
     },
     {
       method: "providers.setPackPolicy",
+      latestMinor: 0,
       requestSchema: providersSetPackPolicyRequestSchema,
       responseSchema: providersSetPackPolicyResponseSchema,
     },
     {
       method: "providers.refreshPackDiscovery",
+      latestMinor: 0,
       requestSchema: providersRefreshPackDiscoveryRequestSchema,
       responseSchema: providersRefreshPackDiscoveryResponseSchema,
     },
@@ -310,7 +318,7 @@ describe("per-pack RPC contracts", () => {
       const entry = hostRpcRegistry[expected.method];
       expect(entry).toBeDefined();
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(entry[1].latestMinor).toBe(0);
+      expect(entry[1].latestMinor).toBe(expected.latestMinor);
       expect(entry[1].versions[0].contract.method).toBe(expected.method);
       expect(entry[1].versions[0].contract.schemaVersion).toEqual({
         major: 1,

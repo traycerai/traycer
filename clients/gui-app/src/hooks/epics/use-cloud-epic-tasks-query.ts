@@ -52,6 +52,7 @@ import {
   type LocalFirstRevalidationLease,
 } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { queryKeys, uiQueryKeys } from "@/lib/query-keys";
+import { useHistoryReplicaPage } from "@/lib/view-replica/history-replica";
 
 /**
  * Variables for the next-page mutation. `identity`/`generation` are captured
@@ -64,6 +65,8 @@ interface NextPageVariables {
   readonly request: ListCloudTasksRequest;
   readonly cursor: string;
   readonly scope: CloudEpicTasksRequestScope;
+  readonly signal: AbortSignal | undefined;
+  readonly visitedCursors: ReadonlySet<string> | null;
 }
 
 /** Captured History authority for a page request and its cache destination. */
@@ -94,8 +97,29 @@ export interface CloudEpicTasksQueryResult {
   readonly currentUserId: string | null;
   readonly tasks: readonly ListTaskLight[];
   readonly query: CloudEpicTasksFirstPageQuery;
+  /**
+   * The first page `tasks` was assembled from: `query.data`, or the replica
+   * tier's cached page while the query has none ({@link presentsCachedPage}).
+   */
+  readonly firstPage: ListTasksResponse | undefined;
+  /**
+   * The first page is the replica's cached copy, not an answer: the query is
+   * still waiting, or it failed. A surface shows it, with its own statement
+   * that it is cached, in place of a spinner or the query's error.
+   */
+  readonly presentsCachedPage: boolean;
+  /** `query.isPending`, except while the cached page is shown in its place. */
+  readonly firstPagePending: boolean;
+  /** `query.error`, except while the cached page is shown in its place. */
+  readonly firstPageError: Error | null;
   readonly fetchNextPage: () => void;
+  /** Fetch every remaining cursor page for an explicit bulk-selection action. */
+  readonly fetchAllPages: (
+    signal: AbortSignal,
+  ) => Promise<readonly ListTaskLight[] | null>;
   readonly hasNextPage: boolean;
+  /** Rows remain even if their cursor is unusable or cloud access is refused. */
+  readonly hasUnloadedItems: boolean;
   readonly isFetchingNextPage: boolean;
   /**
    * The manual refresh (refresh button, pull-to-refresh, retry). Consult THIS,
@@ -161,7 +185,7 @@ function localFirstRevalidationQueryOptions(
       variables.request,
       variables.lease.generation,
     ),
-    queryFn: () =>
+    queryFn: ({ client }) =>
       fetchCloudEpicTasksFirstPageByHostId(
         variables.scope.hostId,
         variables.scope.userId,
@@ -170,6 +194,7 @@ function localFirstRevalidationQueryOptions(
           abortSignal: undefined,
           localFirstPhase: "revalidate",
           requestContextPolicy: "require-current",
+          queryClient: client,
         },
       ),
     retry: false,
@@ -276,6 +301,14 @@ export function useCloudEpicTasksQuery(
     );
   }, [hostId]);
 
+  // What History paints while nothing fresher is in hand, including before
+  // the host's request context exists.
+  const replicaPage = useHistoryReplicaPage(
+    authIdentity,
+    hostId,
+    effectiveRequest,
+  );
+
   const query = useQuery<ListTasksResponse>(
     // The null re-checks are redundant with `dispatchable` and kept anyway:
     // they are what narrows both ids to `string` for the enabled arm below.
@@ -317,6 +350,14 @@ export function useCloudEpicTasksQuery(
   const queryData = query.data;
   const queryRefetch = query.refetch;
   const isPlaceholderData = query.isPlaceholderData;
+  // The first page this hook presents: the query's, or - while the query has
+  // nothing for this request, whether it is still waiting or the serving tier
+  // failed - the replica's, which states itself as cached
+  // (`completeness.cloudPage: "unavailable"`). Kept off `query` on purpose:
+  // it is not the serving tier's answer, so nothing written from `query.data`
+  // (the last-known page, the revalidation) ever sees it.
+  const { firstPage, presentsCachedPage, firstPagePending, firstPageError } =
+    presentFirstPage(query, replicaPage);
 
   // Record settled (non-placeholder, non-pending) first pages as the shared
   // last-known fallback read above. A local-first page is renderable but has
@@ -357,20 +398,44 @@ export function useCloudEpicTasksQuery(
     unknown,
     NextPageVariables
   >({
-    mutationFn: (variables) =>
-      fetchCloudEpicTasksCursorPageByHostId(
+    mutationFn: async (variables) => {
+      const page = await fetchCloudEpicTasksCursorPageByHostId(
         variables.scope.hostId,
         variables.scope.userId,
         {
           request: variables.request,
           cursor: variables.cursor,
-          abortSignal: undefined,
+          abortSignal: variables.signal,
+          queryClient,
         },
-      ),
+      );
+      const cursor = resolveNextCursor(page);
+      if (
+        variables.visitedCursors !== null &&
+        page.hasMore &&
+        (cursor === null || variables.visitedCursors.has(cursor))
+      ) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "History pagination did not return a new cursor.",
+          requestId: "history-select-all",
+          method: "epic.listTasks",
+          fatalDetails: null,
+        });
+      }
+      return page;
+    },
     onSuccess: (page, variables) => {
+      if (
+        variables.signal?.aborted ||
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       appendPage(variables.identity, variables.generation, page);
     },
-    onError: (error) => {
+    onError: (error, variables) => {
+      if (variables.signal?.aborted) return;
       // A stale RequestContext is expected during an identity transition. It
       // failed before any host dispatch, so it must not surface as a user
       // gesture failure; actual host errors retain the established toast.
@@ -387,6 +452,7 @@ export function useCloudEpicTasksQuery(
     nextPageMutation.isPending &&
     nextPageMutation.variables.identity === identity;
   const mutateNextPage = nextPageMutation.mutate;
+  const mutateNextPageAsync = nextPageMutation.mutateAsync;
 
   const startLocalFirstRevalidation = useCallback(
     (variables: LocalFirstRevalidationVariables): void => {
@@ -539,35 +605,40 @@ export function useCloudEpicTasksQuery(
   }, [authorizesCloudLeg, queryClient, userId]);
 
   const tasks = useMemo<readonly ListTaskLight[]>(() => {
-    if (queryData === undefined) return EMPTY_TASKS;
+    if (firstPage === undefined) return EMPTY_TASKS;
     // Dedupe by task id, first occurrence wins (the first page outranks the
     // tails): a personal pin moves a row across server page boundaries, so
     // after a pin lands, a refetched first page or a still-in-flight tail
     // can both carry a row the other already has. A task with no id (neither
     // epic nor phase) is always retained.
-    const seenTaskIds = new Set<string>();
-    return [queryData, ...extraPages]
-      .flatMap((page) => page.tasks)
-      .filter((task) => {
-        const taskId = task.epic?.light?.id ?? task.phase?.light?.id;
-        if (taskId === undefined) return true;
-        if (seenTaskIds.has(taskId)) return false;
-        seenTaskIds.add(taskId);
-        return true;
-      });
-  }, [queryData, extraPages]);
+    return collectPageTasks([firstPage, ...extraPages]);
+  }, [firstPage, extraPages]);
 
   // The union's own statement, over exactly the pages `tasks` was assembled
   // from. A placeholder page describes a DIFFERENT request than the one being
   // rendered, so it states nothing - the same suppression the server facets
-  // already apply one layer up.
+  // already apply one layer up. The cached page is THIS request's, so its
+  // statement is the one to show: its cloud half is still pending while the
+  // request is in flight, and unavailable once the request has failed - the
+  // list states reduced coverage then, not during render-before-confirm.
+  const queryError = query.error;
   const completeness = useMemo<ListTasksCompleteness | null>(() => {
-    if (isPlaceholderData || queryData === undefined) return null;
-    return unionCompleteness([queryData, ...extraPages]);
-  }, [extraPages, isPlaceholderData, queryData]);
+    if (isPlaceholderData || firstPage === undefined) return null;
+    const statedFirstPage =
+      presentsCachedPage && queryError === null
+        ? reopenLocalFirstCloudPage(firstPage)
+        : firstPage;
+    return unionCompleteness([statedFirstPage ?? firstPage, ...extraPages]);
+  }, [
+    extraPages,
+    firstPage,
+    isPlaceholderData,
+    presentsCachedPage,
+    queryError,
+  ]);
 
   const lastPage: ListTasksResponse | undefined =
-    extraPages.length > 0 ? extraPages[extraPages.length - 1] : queryData;
+    extraPages.length > 0 ? extraPages[extraPages.length - 1] : firstPage;
   const lastNextCursor = resolveNextCursor(lastPage);
   // Cursor pagination is a CLOUD-ONLY leg, and the identity that keeps this
   // query alive is deliberately wider than the one that authorizes it: History
@@ -608,6 +679,8 @@ export function useCloudEpicTasksQuery(
       request: effectiveRequest,
       cursor: lastNextCursor,
       scope: { hostId, userId },
+      signal: undefined,
+      visitedCursors: null,
     });
   }, [
     authorizesCloudLeg,
@@ -619,6 +692,64 @@ export function useCloudEpicTasksQuery(
     mutateNextPage,
     userId,
   ]);
+
+  const fetchAllPages = useCallback(
+    async (signal: AbortSignal): Promise<readonly ListTaskLight[] | null> => {
+      if (
+        isFetchingNextPage ||
+        isPlaceholderData ||
+        queryData === undefined ||
+        hostId === null ||
+        userId === null
+      )
+        return null;
+      registerCloudEpicTasksPageIdentity(identity);
+      const generation = cloudEpicTasksPageGeneration(identity);
+      const isCurrent = () =>
+        !signal.aborted &&
+        cloudEpicTasksPageGeneration(identity) === generation &&
+        authorizesCloudCapability(useAuthStore.getState().status);
+      let page = lastPage;
+      const seenCursors = new Set<string>();
+      while (page?.hasMore) {
+        const cursor = resolveNextCursor(page);
+        if (!isCurrent() || cursor === null || seenCursors.has(cursor)) {
+          return null;
+        }
+        seenCursors.add(cursor);
+        try {
+          page = await mutateNextPageAsync({
+            identity,
+            generation,
+            request: effectiveRequest,
+            cursor,
+            scope: { hostId, userId },
+            signal,
+            visitedCursors: seenCursors,
+          });
+        } catch {
+          return null;
+        }
+      }
+      if (!isCurrent()) return null;
+      return collectPageTasks([
+        queryData,
+        ...(useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity] ??
+          []),
+      ]);
+    },
+    [
+      effectiveRequest,
+      hostId,
+      identity,
+      isFetchingNextPage,
+      isPlaceholderData,
+      lastPage,
+      mutateNextPageAsync,
+      queryData,
+      userId,
+    ],
+  );
 
   const refetch = useCallback(() => {
     // `refetch()` is a caller OVERRIDE of `enabled` in TanStack v5 -
@@ -646,8 +777,14 @@ export function useCloudEpicTasksQuery(
     currentUserId: userId,
     tasks,
     query,
+    firstPage,
+    presentsCachedPage,
+    firstPagePending,
+    firstPageError,
     fetchNextPage,
+    fetchAllPages,
     hasNextPage,
+    hasUnloadedItems: lastPage?.hasMore === true,
     isFetchingNextPage,
     refetch,
     isCloudPagePending:
@@ -655,6 +792,42 @@ export function useCloudEpicTasksQuery(
     completeness,
     initialLegRefused,
   };
+}
+
+function presentFirstPage(
+  query: CloudEpicTasksFirstPageQuery,
+  replicaPage: ListTasksResponse | undefined,
+): Pick<
+  CloudEpicTasksQueryResult,
+  "firstPage" | "presentsCachedPage" | "firstPagePending" | "firstPageError"
+> {
+  // An empty cached page has nothing to stand in with: presenting it would
+  // claim an empty account (and a zero count) before the request answers.
+  const presentsCachedPage =
+    query.data === undefined &&
+    replicaPage !== undefined &&
+    replicaPage.tasks.length > 0;
+  return {
+    firstPage: query.data ?? (presentsCachedPage ? replicaPage : undefined),
+    presentsCachedPage,
+    firstPagePending: query.isPending && !presentsCachedPage,
+    firstPageError: presentsCachedPage ? null : query.error,
+  };
+}
+
+function collectPageTasks(
+  pages: readonly ListTasksResponse[],
+): readonly ListTaskLight[] {
+  const seen = new Set<string>();
+  return pages
+    .flatMap((page) => page.tasks)
+    .filter((task) => {
+      const id = task.epic?.light?.id ?? task.phase?.light?.id;
+      if (id === undefined) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
 }
 
 /**

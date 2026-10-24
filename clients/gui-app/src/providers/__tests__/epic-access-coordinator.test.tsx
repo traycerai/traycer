@@ -14,11 +14,17 @@ import type {
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import { DELETED_EPIC_NOTIFICATION_STORAGE_KEY } from "@/lib/epics/deleted-epic-events";
+import {
+  deletedCloudEpicTasksPageEpicIdsForScope,
+  useCloudEpicTasksPagesStore,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   clearSessionCreatedEpics,
   CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
@@ -37,6 +43,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { flattenLayoutRefs } from "@/stores/tabs/layout";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { TabRef } from "@/stores/tabs/types";
@@ -156,6 +163,53 @@ function seedSplitOfEpics(
   });
 }
 
+/**
+ * The key `useEpicChatRecords` reads an epic's chat records under: the host
+ * method key plus the viewer and session-generation identity elements the hook
+ * appends after it.
+ */
+function chatRecordsQueryKey(epicId: string) {
+  return [
+    ...hostQueryKeys.method<HostRpcRegistry, "epic.listChatRecords">(
+      TEST_HOST_ID,
+      "epic.listChatRecords",
+      { epicId, hasDocReplica: false, knownRevision: null },
+    ),
+    "user-1",
+    1,
+  ] as const;
+}
+
+const FORBIDDEN_ERROR = {
+  code: "FORBIDDEN" as const,
+  message: "access to this epic was removed",
+  upgradeGuidance: null,
+};
+
+async function failChatRecordsRead(
+  queryClient: QueryClient,
+  epicId: string,
+): Promise<void> {
+  await expect(
+    queryClient.fetchQuery({
+      queryKey: chatRecordsQueryKey(epicId),
+      queryFn: () => Promise.reject(new Error("host unreachable")),
+      retry: false,
+    }),
+  ).rejects.toThrow("host unreachable");
+}
+
+async function succeedChatRecordsRead(
+  queryClient: QueryClient,
+  epicId: string,
+): Promise<void> {
+  await queryClient.fetchQuery({
+    queryKey: chatRecordsQueryKey(epicId),
+    queryFn: () => Promise.resolve([]),
+    retry: false,
+  });
+}
+
 function renderCoordinatorAt(pathname: string) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -217,6 +271,7 @@ describe("EpicAccessCoordinator", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useComposerRunSettingsStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
     clearSessionCreatedEpics();
     vi.restoreAllMocks();
   });
@@ -454,6 +509,93 @@ describe("EpicAccessCoordinator", () => {
     );
   });
 
+  it("scopes a broadcast's host-scoped deletion to the host that deleted it: caches, settings, announcement, teardown and navigation", async () => {
+    // Codex thread 4303240636 on d74e2198 and the round-7 cold review: a
+    // local-homed Task deleted on one host must stay open, announced as
+    // nothing and with its settings, where this window holds it on another.
+    useCloudEpicTasksPagesStore.setState({ deletedEpicIdsByScope: {} });
+    // This window holds its epics on "test-host" (`openStoreForTest`'s).
+    useSelectionAuthorityStore.setState({ effectiveHostId: "test-host" });
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    registerSession("epic-local");
+    seedTabs(
+      [{ tabId: "tab-local", epicId: "epic-local", name: "Local Epic" }],
+      "tab-local",
+    );
+    const settings = useComposerRunSettingsStore.getState();
+    settings.setEpicRunSettings("epic-local", "test-host", TEST_SETTINGS, 1);
+    settings.setEpicRunSettings("epic-local", "host-source", TEST_SETTINGS, 1);
+    settings.setEpicRunSettings("epic-cloud", "test-host", TEST_SETTINGS, 1);
+    const { router } = renderCoordinatorAt("/epics/epic-local/tab-local");
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(
+        "/epics/epic-local/tab-local",
+      ),
+    );
+
+    dispatchScopedDeletedEpicStorageEvent({
+      hostId: "host-source",
+      epicIds: ["epic-local", "epic-cloud"],
+      hostScopedEpicIds: ["epic-local"],
+      sequence: 41,
+    });
+
+    await waitFor(() =>
+      expect([
+        ...deletedCloudEpicTasksPageEpicIdsForScope("host-source", "user-1"),
+      ]).toEqual(expect.arrayContaining(["epic-local", "epic-cloud"])),
+    );
+    expect([
+      ...deletedCloudEpicTasksPageEpicIdsForScope("host-sibling", "user-1"),
+    ]).toEqual(["epic-cloud"]);
+    // The account-wide one is gone everywhere; the host-scoped one only on
+    // the host that deleted it.
+    const after = useComposerRunSettingsStore.getState();
+    expect(after.getEpicRunSettings("epic-cloud", "test-host")).toBeNull();
+    expect(after.getEpicRunSettings("epic-local", "host-source")).toBeNull();
+    expect(after.getEpicRunSettings("epic-local", "test-host")).toEqual(
+      TEST_SETTINGS,
+    );
+    // This window's copy is on "test-host", which did not delete it.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-local"]);
+    expect(router.state.location.pathname).toBe("/epics/epic-local/tab-local");
+    expect(toastInfo).not.toHaveBeenCalledWith(
+      expect.stringContaining("was deleted"),
+      { id: "epic-access:epic-local", cancel: null },
+    );
+
+    // The same scoped deletion by the host this window holds it on is this
+    // window's loss.
+    dispatchScopedDeletedEpicStorageEvent({
+      hostId: "test-host",
+      epicIds: ["epic-local"],
+      hostScopedEpicIds: ["epic-local"],
+      sequence: 42,
+    });
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(toastInfo).toHaveBeenCalledWith(
+      expect.stringContaining("was deleted"),
+      { id: "epic-access:epic-local", cancel: null },
+    );
+    expect(
+      useComposerRunSettingsStore
+        .getState()
+        .getEpicRunSettings("epic-local", "test-host"),
+    ).toBeNull();
+  });
+
   it("T10: routes a multi-epic delete notification through ONE coordinated handleEpicAccessLoss call, not a per-epic loop", async () => {
     useAuthStore.getState().setSignedIn(
       {
@@ -512,6 +654,71 @@ describe("EpicAccessCoordinator", () => {
       "epic-left",
       "epic-right",
     ]);
+  });
+
+  it("removes a split whole when its sides fall in different deletion scopes of one batch", async () => {
+    // This window holds its epics on "test-host" (`openStoreForTest`'s).
+    useSelectionAuthorityStore.setState({ effectiveHostId: "test-host" });
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    registerSession("epic-left");
+    registerSession("epic-right");
+    seedTabs(
+      [
+        { tabId: "tab-left", epicId: "epic-left", name: "Left" },
+        { tabId: "tab-right", epicId: "epic-right", name: "Right" },
+      ],
+      "tab-left",
+    );
+    const left: TabRef = { kind: "epic", id: "tab-left" };
+    const right: TabRef = { kind: "epic", id: "tab-right" };
+    seedSplitOfEpics(left, right, left);
+
+    const { router } = renderCoordinatorAt("/");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    const handleEpicAccessLossSpy = vi.spyOn(
+      tabCommandCoordinator,
+      "handleEpicAccessLoss",
+    );
+
+    // One batch, deleted on this window's host: the left Task from the
+    // account, the right one on this host alone. Published as the deleting
+    // window does, a version 2 for this window and a version 1 copy.
+    dispatchScopedDeletedEpicStorageEvent({
+      hostId: "test-host",
+      epicIds: ["epic-left", "epic-right"],
+      hostScopedEpicIds: ["epic-right"],
+      sequence: 51,
+    });
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    // One transaction over both sides, so the split goes, not two
+    // placeholders.
+    expect(useTabsStore.getState().items).toEqual([]);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledTimes(1);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith([
+      "epic-left",
+      "epic-right",
+    ]);
+  });
+
+  it("starts the next test from the selection-authority store's initial state", () => {
+    // The test above sets `effectiveHostId` and leaves it set; the suite's
+    // `afterEach` resets it, so a later deletion notice is not scoped
+    // against a window host leaked from an earlier test.
+    expect(useSelectionAuthorityStore.getState()).toEqual(
+      useSelectionAuthorityStore.getInitialState(),
+    );
   });
 
   it("T10: clears composer run settings for every batch epicId, including one without a resident tab", async () => {
@@ -901,6 +1108,117 @@ describe("EpicAccessCoordinator", () => {
       vi.useRealTimers();
     }
   });
+
+  describe("FORBIDDEN recovery", () => {
+    async function openForbiddenEpic(workState: {
+      isDirty: boolean;
+      unsyncedQueueSize: number;
+    }) {
+      const handle = registerSession("epic-1");
+      handle.store.setState(workState);
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+      const { queryClient, router } = renderCoordinatorAt(
+        "/epics/epic-1/tab-1",
+      );
+      await waitFor(() =>
+        expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
+      );
+      act(() => {
+        handle.store.setState({ snapshotFetchError: FORBIDDEN_ERROR });
+      });
+      // Flush the coordinator's store subscription.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      return { queryClient, requestFreshSnapshotSpy };
+    }
+
+    it("re-opens the session once when the epic's chat-records read succeeds after failing", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: false,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-1");
+      });
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+      await act(async () => {
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      // Flush the microtask the coordinator defers the re-open to.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(1);
+
+      // The watch disarmed on that first recovery: a later fail-then-succeed
+      // cycle does not re-open again.
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-1");
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-open when the read succeeds without having failed since the error landed", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: false,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not re-open a replica that holds unsynced work", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: true,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-1");
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not re-open on another epic's chat-records recovery", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: false,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-2");
+        await succeedChatRecordsRead(queryClient, "epic-2");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    });
+  });
 });
 
 function dispatchDeletedEpicStorageEvent(
@@ -925,6 +1243,56 @@ function dispatchDeletedEpicStorageEvent(
       }),
     }),
   );
+}
+
+function dispatchScopedDeletedEpicStorageEvent(notice: {
+  readonly hostId: string;
+  readonly epicIds: ReadonlyArray<string>;
+  readonly hostScopedEpicIds: ReadonlyArray<string>;
+  readonly sequence: number;
+}): void {
+  // As the deleting window publishes it: the whole batch as version 2, then
+  // the account-wide ids as a version 1 tagged with the same batch, for
+  // windows that predate version 2 (this window skips it).
+  const hostScoped = new Set(notice.hostScopedEpicIds);
+  const batchId = `other-window:batch:${String(notice.sequence)}`;
+  const common = {
+    type: "epic-deleted",
+    originId: "other-window",
+    createdAt: Date.now(),
+    hostId: notice.hostId,
+    userId: "user-1",
+    batchId,
+    epicTitlesById: {},
+  };
+  const accountWideIds = notice.epicIds.filter((id) => !hostScoped.has(id));
+  const messages = [
+    {
+      ...common,
+      version: 2,
+      sequence: notice.sequence,
+      epicIds: notice.epicIds,
+      hostScopedEpicIds: [...hostScoped],
+    },
+    ...(accountWideIds.length > 0
+      ? [
+          {
+            ...common,
+            version: 1,
+            sequence: notice.sequence + 1000,
+            epicIds: accountWideIds,
+          },
+        ]
+      : []),
+  ];
+  for (const message of messages) {
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: DELETED_EPIC_NOTIFICATION_STORAGE_KEY,
+        newValue: JSON.stringify(message),
+      }),
+    );
+  }
 }
 
 function taskLight(id: string, title: string, repo: string): TaskLight {

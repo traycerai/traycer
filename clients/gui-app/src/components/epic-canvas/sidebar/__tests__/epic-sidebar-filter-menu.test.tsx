@@ -294,7 +294,9 @@ describe("<ArtifactFilterMenu />", () => {
     );
   });
 
-  it("uses the create menu icon language in the Type filter detail", () => {
+  // HTML, Canvas and File are not in the create menu (they need a source file),
+  // but they share the same per-kind icons the artifact rows draw.
+  it("uses the artifact icon language in the Type filter detail", () => {
     renderMenu();
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Filter artifacts" }),
@@ -308,6 +310,9 @@ describe("<ArtifactFilterMenu />", () => {
       "Ticket",
       "Story",
       "Review",
+      "HTML",
+      "Canvas",
+      "File",
     ]);
     expect(typeItems.every((item) => item.querySelector("svg") !== null)).toBe(
       true,

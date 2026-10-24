@@ -13,6 +13,10 @@ import {
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
   HostRpcError,
   toHostRpcError,
   type RequestOfMethod,
@@ -24,6 +28,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
@@ -128,6 +133,8 @@ export interface UseHostQueryWithResponseMapOptions<
    * on the retained host credential.
    */
   readonly preflight?: () => void;
+  /** Version floor checked by the connection carrying this dispatch. */
+  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
   /**
    * Transforms the raw RPC response into what TanStack caches/returns for
    * this query. Runs inside the queryFn, so its return value - not the raw
@@ -217,6 +224,7 @@ export function useHostQueryWithResponseMap<
   const conditionPollCoordinator =
     getConditionPollEpisodeCoordinator(queryClient);
   const readiness = useReactiveHostReadiness(client);
+  const effectiveHostId = useEffectiveHostId();
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
@@ -245,8 +253,19 @@ export function useHostQueryWithResponseMap<
       refetchIntervalInBackground: false,
     };
   }
+  // Keyed by the tier that ANSWERS, not the host the caller named: the client
+  // routes a pool-only method to the pool and an input-device method to the
+  // selected host whatever requester carried it, so keying by the caller
+  // would file one answer under every host and miss the serving tier's
+  // recovery sweeps.
+  const servingHostId = hostRpcServingTierHostId(
+    method,
+    readiness.hostId,
+    readProcessHostRpcTierPlan(),
+    effectiveHostId,
+  );
   const queryKey: QueryKey = [
-    ...queryKeys.hostMethod<Registry, Method>(readiness.hostId, method, params),
+    ...queryKeys.hostMethod<Registry, Method>(servingHostId, method, params),
     ...(args.cacheKeyIdentity ?? []),
   ];
 
@@ -265,17 +284,27 @@ export function useHostQueryWithResponseMap<
       const buildRequest = args.buildRequest;
       const payload =
         buildRequest === undefined ? params : buildRequest(params);
+      const requirement = args.requiredHostMethodVersion?.() ?? null;
       const requestContext = args.captureRequestContext?.();
       const responseTimeoutMs = args.responseTimeoutMs;
-      const response =
-        responseTimeoutMs === undefined
-          ? await client.requestWithSignal(method, payload, signal)
-          : await client.requestWithOptions(method, payload, {
-              responseTimeoutMs,
-              idempotencyKey: null,
-              requiredHostMethodVersion: null,
-              signal,
-            });
+      let response: ResponseOfMethod<Registry, Method>;
+      if (responseTimeoutMs !== undefined) {
+        response = await client.requestWithOptions(method, payload, {
+          responseTimeoutMs,
+          idempotencyKey: null,
+          requiredHostMethodVersion: requirement,
+          signal,
+        });
+      } else if (requirement !== null) {
+        response = await client.requestWithSignalRequiringHostMethodVersion(
+          method,
+          payload,
+          signal,
+          requirement,
+        );
+      } else {
+        response = await client.requestWithSignal(method, payload, signal);
+      }
       return mapResponse({
         response,
         queryClient,
@@ -345,6 +374,20 @@ export interface UseHostMutationOptions<
   readonly mapVariables: (
     variables: TVariables,
   ) => RequestOfMethod<Registry, Method>;
+  /**
+   * Completes the mapped request asynchronously, at DISPATCH, on the client
+   * the request is about to be sent on. The one caller is the executable-write
+   * grant (`lib/environment/executable-write-grant.ts`): a grant is minted for
+   * one host and expires, so it has to be read when the write goes, not when
+   * the variables were built. Inside the dispatch boundary, so a throw here
+   * surfaces as the declared `HostRpcError` like a `mapVariables` throw does.
+   */
+  readonly prepareRequest?:
+    | ((
+        request: RequestOfMethod<Registry, Method>,
+        client: HostRequester<Registry>,
+      ) => Promise<RequestOfMethod<Registry, Method>>)
+    | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
     response: ResponseOfMethod<Registry, Method>,
@@ -464,7 +507,11 @@ export function useHostMutation<
             hostClientUnavailableError(args.method),
           );
         }
-        const params = args.mapVariables(variables);
+        const mapped = args.mapVariables(variables);
+        const params =
+          args.prepareRequest === undefined
+            ? mapped
+            : await args.prepareRequest(mapped, client);
         const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
         const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
         // THREE branches, and the third is the only one that can carry two

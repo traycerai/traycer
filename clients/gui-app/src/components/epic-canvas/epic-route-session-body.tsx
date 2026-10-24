@@ -7,6 +7,7 @@ import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { useEpicSyncTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
 import { useEpicRouteSynchronization } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
 import { NewConversationModalHost } from "@/components/epic-canvas/sidebar/new-conversation-modal";
+import { NewTerminalStagedHandoff } from "@/components/epic-canvas/sidebar/new-terminal-staged-handoff";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 
@@ -65,6 +66,15 @@ function EpicRouteSessionEffects(props: EpicRouteSessionBodyProps) {
     <>
       {parked ? null : <EpicRecordSyncEffects epicId={props.epicId} />}
       {props.active ? <EpicRouteActiveEffects {...props} /> : null}
+      {/* Outside the `active` gate: a staged sandbox's send started in this
+          tab finishes though the tab goes to the background. The modal host
+          shows the modal only while the tab is active. */}
+      <NewConversationModalHost
+        epicId={props.epicId}
+        tabId={props.tabId}
+        active={props.active}
+      />
+      <NewTerminalStagedHandoff epicId={props.epicId} tabId={props.tabId} />
     </>
   );
 }
@@ -90,10 +100,5 @@ function EpicRouteActiveEffects(props: EpicRouteSessionBodyProps) {
     focusPaneId: props.focusPaneId,
     focusTileInstanceId: props.focusTileInstanceId,
   });
-  return (
-    <>
-      <EpicMigrationModal tabId={props.tabId} />
-      <NewConversationModalHost epicId={props.epicId} tabId={props.tabId} />
-    </>
-  );
+  return <EpicMigrationModal tabId={props.tabId} />;
 }

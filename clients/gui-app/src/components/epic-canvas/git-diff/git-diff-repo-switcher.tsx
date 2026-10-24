@@ -32,6 +32,7 @@ import {
   type GitDiffRepoSwitcherRootInput,
   type GitDiffRepoSwitcherRow,
 } from "@/lib/git/git-diff-repo-switcher";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -291,16 +292,17 @@ function RepoSwitcherRowButton(props: {
 function handleRepoSwitcherRowKeyDown(
   event: KeyboardEvent<HTMLButtonElement>,
 ): void {
+  const navigationKey = listNavigationKey(event);
   if (
-    event.key !== "ArrowDown" &&
-    event.key !== "ArrowUp" &&
-    event.key !== "Home" &&
-    event.key !== "End"
+    navigationKey !== "ArrowDown" &&
+    navigationKey !== "ArrowUp" &&
+    navigationKey !== "Home" &&
+    navigationKey !== "End"
   ) {
     return;
   }
   event.preventDefault();
-  focusRepoSwitcherOption(event.currentTarget, event.key);
+  focusRepoSwitcherOption(event.currentTarget, navigationKey);
 }
 
 function focusRepoSwitcherOption(

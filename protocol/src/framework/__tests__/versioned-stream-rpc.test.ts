@@ -132,13 +132,18 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // The Claude-parity surfaces took @1.20. The Command Code harness id took
     // @1.21 (the released minors froze the row context without it). The
     // open-harness-id line, which reopens every heard-from harness leaf to a
-    // string, took @1.22. A tool call's `page` / `mcpApp` stamps (agent pages
-    // and MCP Apps) took @1.23.
+    // string, took @1.22. A tool call's `mcpApp` stamp (an MCP App a tool
+    // rendered) took @1.23. The queued prompt's `signInParked` mark took
+    // @1.28. The html / canvas / file artifact operation kinds re-minted
+    // above it at @1.30. A tool call's `artifact` stamp (an inline
+    // `traycer_render_inline` artifact's manifest) took @1.31, canvas
+    // annotations @1.32, and every artifact kind on an accumulated-change
+    // tag @1.33.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(23);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(37);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame that restates it on a live stream.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
@@ -151,6 +156,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(1);
+    // The simulator domain's two streams opened at @1.0 together.
+    expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(0);
+    expect(hostStreamRpcRegistry["simulator.stream"][1].latestMinor).toBe(0);
   });
 
   it("rejects a minor that drops a server-frame field from an earlier minor", () => {
@@ -665,7 +673,6 @@ describe("stream compatibility", () => {
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
       minor: 7,
-      supportedMajors: [1],
     });
 
     const terminalAsHost = checkStreamMethodCompatibility(

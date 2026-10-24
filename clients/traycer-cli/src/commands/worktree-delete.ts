@@ -11,6 +11,7 @@ import type { WorktreeBusyHolders } from "@traycer/protocol/framework/worktree-b
 import type {
   WorktreeDeleteBatchOutputChannel,
   WorktreeDeleteBatchPhase,
+  WorktreeDeleteDeclinedKind,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
@@ -32,6 +33,7 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { worktreeDeleteDeclineMessage } from "@traycer-clients/shared/worktree/worktree-delete-decline-copy";
 import { CLI_CLIENT_IDENTITY } from "../cli-version";
 import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 
@@ -46,6 +48,12 @@ const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000;
+
+/** How a delete ended: removed, or left in place (with the host's reason when it gave one). */
+interface WorktreeDeleteOutcome {
+  readonly deleted: boolean;
+  readonly declined: WorktreeDeleteDeclinedKind | null;
+}
 
 export interface WorktreeDeleteCommandOpts {
   readonly worktreePath: string;
@@ -74,8 +82,10 @@ export function buildWorktreeDeleteCommand(
   opts: WorktreeDeleteCommandOpts,
 ): CommandFn {
   return async (ctx) => {
-    const worktreePath = opts.worktreePath.trim();
-    if (worktreePath.length === 0) {
+    // Sent as written: a folder name may end in whitespace, so only a blank
+    // value is refused here and nothing is trimmed off a real one.
+    const worktreePath = opts.worktreePath;
+    if (worktreePath.trim().length === 0) {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
         message: "traycer: worktree delete requires --path <worktree path>.",
@@ -83,14 +93,21 @@ export function buildWorktreeDeleteCommand(
         exitCode: 1,
       });
     }
-    const deleted = await runWorktreeDelete(worktreePath, ctx);
+    const { deleted, declined } = await runWorktreeDelete(worktreePath, ctx);
     return {
-      data: { worktreePath, deleted },
-      // Output already streamed; add a one-line confirmation for the human
-      // path (dropped in JSON mode, where `data` carries `deleted`).
+      // `declined` rides along only when the host named a reason, so the
+      // shape every caller already reads is unchanged otherwise.
+      data:
+        declined === null
+          ? { worktreePath, deleted }
+          : { worktreePath, deleted, declined },
+      // Output already streamed; add a confirmation for the human path
+      // (dropped in JSON mode, where `data` carries the outcome). A worktree
+      // left in place says why on the next line, in the approved wording the
+      // GUI uses; one path per invocation, so the singular form is right.
       human: deleted
         ? `Removed worktree ${worktreePath}.`
-        : `Host reported the worktree was not removed: ${worktreePath}.`,
+        : `Host reported the worktree was not removed: ${worktreePath}.\n${worktreeDeleteDeclineMessage(declined, 1)}`,
       exitCode: deleted ? 0 : 1,
     };
   };
@@ -113,7 +130,7 @@ export function buildWorktreeDeleteCommand(
 async function runWorktreeDelete(
   worktreePath: string,
   ctx: CommandContext,
-): Promise<boolean> {
+): Promise<WorktreeDeleteOutcome> {
   const auth = await resolveHostAuth();
   if (auth === null) {
     throw cliError({
@@ -171,7 +188,7 @@ async function runWorktreeDelete(
   if (attempt.kind === "settled") {
     client.close("worktree-delete-settled");
     if (attempt.error !== null) throw attempt.error;
-    return attempt.deleted;
+    return { deleted: attempt.deleted, declined: attempt.declined };
   }
   const deleted = await runLegacyDeleteStream(
     worktreePath,
@@ -180,13 +197,15 @@ async function runWorktreeDelete(
   ).finally(() => {
     client.close("worktree-delete-settled");
   });
-  return deleted;
+  // The released single-target stream cannot say why.
+  return { deleted, declined: null };
 }
 
 type DeleteAttempt =
   | {
       readonly kind: "settled";
       readonly deleted: boolean;
+      readonly declined: WorktreeDeleteDeclinedKind | null;
       readonly error: CliError | null;
     }
   /** This host has no `worktree.deleteBatchByPath`, and ran nothing. */
@@ -243,13 +262,19 @@ function runDeleteCommand(
           channel: WorktreeDeleteBatchOutputChannel,
           chunk,
         ) => relayOutput(ctx, channel, chunk),
-        onTargetComplete: (_worktreePath, deleted) =>
-          finish({ kind: "settled", deleted, error: null }),
-        onTargetFailed: (_worktreePath, reason) =>
+        onTargetComplete: (_worktreePath, deleted, declined) =>
+          finish({
+            kind: "settled",
+            deleted,
+            declined: declined ?? null,
+            error: null,
+          }),
+        onTargetFailed: (_worktreePath, reason, _holders, code) =>
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason, null),
+            declined: null,
+            error: deleteFailedCliError(reason, null, code),
           }),
         // With one target this normally arrives after its terminal frame and
         // is a no-op under the settled guard. It matters when it does NOT: an
@@ -259,13 +284,15 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: counts.deletedCount === 1,
+            declined: null,
             error: null,
           }),
         onCommandFailed: (reason) =>
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason, null),
+            declined: null,
+            error: deleteFailedCliError(reason, null, undefined),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
         onConnectionStatus: (
@@ -281,6 +308,7 @@ function runDeleteCommand(
             finish({
               kind: "settled",
               deleted: false,
+              declined: null,
               error: fatalCloseToCliError(reason.details),
             });
             return;
@@ -288,6 +316,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
+            declined: null,
             error: streamDroppedCliError(),
           });
         },
@@ -357,7 +386,13 @@ async function runLegacyDeleteStream(
           return;
         case "failed":
           finish(() =>
-            reject(deleteFailedCliError(frame.reason, frame.holders ?? null)),
+            reject(
+              deleteFailedCliError(
+                frame.reason,
+                frame.holders ?? null,
+                frame.code === "WORKTREE_BUSY" ? frame.code : undefined,
+              ),
+            ),
           );
           return;
         case "pong":
@@ -451,17 +486,25 @@ function relayOutput(
  * `details` so `--json` callers get the structured list, and the human message
  * names the holders rather than leaving "worktree is busy" for the user to
  * investigate by hand.
+ *
+ * `code` is the host's typed `WORKTREE_BUSY` refusal when it sent one. It, not
+ * the prose `reason` (which carries the person's absolute worktree path),
+ * decides that this is the expected busy outcome rather than a failure.
  */
 function deleteFailedCliError(
   reason: string,
   holders: WorktreeBusyHolders | null,
+  code: "WORKTREE_BUSY" | undefined,
 ): CliError {
   const named =
     holders === null || holders.length === 0
       ? ""
       : ` Held by ${holders.map((holder) => holder.label).join(", ")}.`;
   return cliError({
-    code: CLI_ERROR_CODES.UNEXPECTED,
+    code:
+      code === "WORKTREE_BUSY"
+        ? CLI_ERROR_CODES.WORKTREE_BUSY
+        : CLI_ERROR_CODES.UNEXPECTED,
     message: `traycer: worktree delete failed - ${reason}${named}`,
     details: holders === null ? null : { holders },
     exitCode: 1,

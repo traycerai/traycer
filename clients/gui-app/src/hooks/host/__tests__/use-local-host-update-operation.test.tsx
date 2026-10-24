@@ -254,6 +254,8 @@ function statusWith(
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
     install: null,
+    processMemory: null,
+    crossHostMessaging: null,
   };
 }
 

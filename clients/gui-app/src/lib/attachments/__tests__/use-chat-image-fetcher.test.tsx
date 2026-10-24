@@ -21,6 +21,10 @@ import {
   type ChatAttachmentReadClient,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
+import type {
+  EpicReadArtifactObjectRequest,
+  EpicReadArtifactObjectResponse,
+} from "@traycer/protocol/host/epic/artifact-objects";
 import type { ImageBytesResult } from "@/lib/attachments/image-blob-cache";
 import {
   READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,
@@ -108,28 +112,29 @@ const requestFloor =
     ) => Promise<ReadChatAttachmentResponse>
   >();
 
-/**
- * `ChatAttachmentReadClient` (production, `chat-attachment-scope-context.ts`)
- * declares only `requestWithSignal`; the fetcher now also calls
- * `requestWithSignalRequiringHostMethodVersion` on a selected plane, which
- * that interface does not (yet) declare - see the report back to the lane
- * owner. Widening the STUB's type here, rather than the production interface,
- * is what a test-only file may do; `stubClient` still satisfies
- * `ChatAttachmentReadClient` structurally, so every existing call site is
- * unchanged.
- */
-interface ChatAttachmentReadClientWithFloor extends ChatAttachmentReadClient {
-  requestWithSignalRequiringHostMethodVersion(
-    method: "epic.readChatAttachment",
-    params: ReadChatAttachmentRequest,
-    signal: AbortSignal | undefined,
-    requirement: RequiredHostMethodVersion,
-  ): Promise<ReadChatAttachmentResponse>;
+function requestWithSignal(
+  method: "epic.readChatAttachment",
+  params: ReadChatAttachmentRequest,
+  signal: AbortSignal | undefined,
+): Promise<ReadChatAttachmentResponse>;
+function requestWithSignal(
+  method: "epic.readArtifactObject",
+  params: EpicReadArtifactObjectRequest,
+  signal: AbortSignal | undefined,
+): Promise<EpicReadArtifactObjectResponse>;
+function requestWithSignal(
+  method: "epic.readChatAttachment" | "epic.readArtifactObject",
+  params: ReadChatAttachmentRequest | EpicReadArtifactObjectRequest,
+  signal: AbortSignal | undefined,
+): Promise<ReadChatAttachmentResponse | EpicReadArtifactObjectResponse> {
+  if (method === "epic.readChatAttachment" && "chatId" in params) {
+    return request(method, params, signal);
+  }
+  throw new Error("Unexpected artifact read in chat image test");
 }
 
-const stubClient: ChatAttachmentReadClientWithFloor = {
-  requestWithSignal: (method, params, signal) =>
-    request(method, params, signal),
+const stubClient: ChatAttachmentReadClient = {
+  requestWithSignal,
   requestWithSignalRequiringHostMethodVersion: (
     method,
     params,

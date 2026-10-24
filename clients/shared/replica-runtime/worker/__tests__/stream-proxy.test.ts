@@ -181,7 +181,10 @@ describe("the bridge vocabulary and its version", () => {
     // 14 since incremental replica-data settlements and provisional root
     // updates. The worker now reports retained task-row bytes separately, so
     // an older worker would leave that managed data invisible to main.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(14);
+    // 15 since the worker dispatches `expire-pending-chat-creation-for-cloud-row`.
+    // A v14 worker would drop that command, leaving a team host's stand-in in
+    // place after the environment arm serves the chat.
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(15);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",

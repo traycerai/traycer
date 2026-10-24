@@ -53,6 +53,8 @@ const mcpMocks = vi.hoisted(() => ({
   discoverMutate: vi.fn(),
   authMutate: vi.fn(),
   openLink: vi.fn(),
+  /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
+  credentialRefusal: null as string | null,
   listCalls: [] as Array<{
     providerId: string;
     scope: string;
@@ -113,6 +115,10 @@ vi.mock("@/lib/reportable-error-toast", () => ({
     toastMocks.errors.push(message);
     return 0;
   },
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mcpMocks.credentialRefusal,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -211,6 +217,10 @@ vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
     mutate: mcpMocks.mutate,
     mutateAsync: mcpMocks.mutateAsync,
     isPending: mcpMocks.mutateIsPending,
+  }),
+  useProvidersMcpApplyRemedy: () => ({
+    mutateAsync: mcpMocks.mutateAsync,
+    isPending: false,
   }),
 }));
 
@@ -414,6 +424,7 @@ describe("<ProviderMcpTab />", () => {
     mcpMocks.discoverMutate.mockReset();
     mcpMocks.authMutate.mockReset();
     mcpMocks.openLink.mockReset();
+    mcpMocks.credentialRefusal = null;
     mcpMocks.mutateIsPending = false;
     mcpMocks.listCalls = [];
     worktreeMocks.workspaces = [];
@@ -1250,6 +1261,55 @@ describe("<ProviderMcpTab />", () => {
     expect(mcpMocks.mutate).not.toHaveBeenCalled();
   });
 
+  it("renders no Sign in or Re-authenticate control, and shows the refusal, when the host takes no credentials", () => {
+    mcpMocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({
+          name: "needs-login",
+          status: "needs_auth",
+          tools: [],
+        }),
+        connectedServer({ name: "broken", status: "error", tools: [] }),
+      ],
+    };
+    renderTab(
+      { ...FULL_CAPS, authActions: ["login", "logout", "forceReauth"] },
+      "codex",
+    );
+
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Re-authenticate" }),
+    ).toBeNull();
+    expect(mcpMocks.authMutate).not.toHaveBeenCalled();
+  });
+
+  it("control: on a host that takes sign-ins the same servers offer Sign in and Re-authenticate, with no refusal", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({
+          name: "needs-login",
+          status: "needs_auth",
+          tools: [],
+        }),
+      ],
+    };
+    renderTab(
+      { ...FULL_CAPS, authActions: ["login", "logout", "forceReauth"] },
+      "codex",
+    );
+
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Re-authenticate" }),
+    ).toBeDefined();
+  });
+
   it("starts auth login and opens authorizationUrl via openLink", () => {
     mcpMocks.listResult.data = {
       servers: [
@@ -1488,17 +1548,39 @@ describe("<ProviderMcpTab />", () => {
     renderTab(FULL_CAPS, "codex");
 
     expect(screen.getByText("No MCP servers")).toBeDefined();
-    expect(
-      screen.getByText(
-        "Add an MCP server so codex can use external tools and context.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("MCP servers give agents tools.")).toBeDefined();
     // Search is still offered so an empty host does not hide the affordance,
     // but the empty-list copy must not be replaced by a "no match" state.
     expect(
       screen.getByRole("textbox", { name: "Search servers" }),
     ).toBeDefined();
     expect(screen.queryByText(/No servers match/)).toBeNull();
+  });
+
+  it("says what MCP servers are for when the list is empty, and offers the one way to add one", () => {
+    mcpMocks.listResult.data = { servers: [] };
+    renderTab(FULL_CAPS, "codex");
+
+    expect(screen.getByText("No MCP servers")).toBeDefined();
+    expect(screen.getByText("MCP servers give agents tools.")).toBeDefined();
+    expect(screen.queryByTestId("provider-mcp-add-dialog")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add a server" }));
+
+    expect(screen.getByTestId("provider-mcp-add-dialog")).toBeDefined();
+  });
+
+  it("offers no Add a server when the provider takes no additions in this scope", () => {
+    mcpMocks.listResult.data = { servers: [] };
+    const noAddCaps: ProviderMcpCapabilities = {
+      ...FULL_CAPS,
+      actionScopes: { ...FULL_CAPS.actionScopes, add: [] },
+    };
+    renderTab(noAddCaps, "codex");
+
+    expect(screen.getByText("No MCP servers")).toBeDefined();
+    expect(screen.getByText("MCP servers give agents tools.")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Add a server" })).toBeNull();
   });
 
   it("distinguishes an unmatched query from a truly empty server list", () => {

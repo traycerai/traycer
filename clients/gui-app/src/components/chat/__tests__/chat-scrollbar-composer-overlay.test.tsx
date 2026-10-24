@@ -507,7 +507,6 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
 function emptyRestore(): ChatRestoreContextValue {
   return {
     accessRole: "owner",
-    currentUserId: "owner-1",
     activeHostId: "host-1",
     activeTurnStatus: null,
     localSnapshotsClearedAt: null,
@@ -629,6 +628,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onSettingsChange: null,
     workspaceControls: null,
     workspaceAvailability: WORKSPACE_COMPOSER_READY,
+    onContinueOnTeamHosts: () => undefined,
     suggestedPrompt: undefined,
   };
 

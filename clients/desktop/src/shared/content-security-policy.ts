@@ -89,13 +89,11 @@ export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
     `connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173${devConnectSrcExtras(
       env,
     )}`,
-    // Agent pages, wireframes and MCP Apps, each in an opaque frame on the
+    // HTML artifacts, wireframes and MCP Apps, each in an opaque frame on the
     // sandbox scheme (`electron-main/app/sandbox-protocol.ts`). This is also
     // what stops such a frame navigating itself anywhere else.
     "frame-src traycer-sandbox:",
-    // Epic-file video: a Blob URL of bytes read over RPC, or a signed https
-    // URL once the file is published.
-    "media-src 'self' blob: https:",
+    "media-src 'self' https: blob: traycer-sandbox:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

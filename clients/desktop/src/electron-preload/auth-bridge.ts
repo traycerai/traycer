@@ -14,6 +14,24 @@ import type {
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
+  SandboxAutomationFetchResult,
+  ExecutableWriteGrantFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxPatchRequest,
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SandboxLifecycleVerb,
+  SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
+  SandboxVerbFetchResult,
+  SecretRequestDecideFetchResult,
+  SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../ipc-contracts/host-types";
@@ -28,6 +46,7 @@ import type {
 import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
+  DesktopAuthVerificationRevoked,
   DesktopLocalAuthSessionRestoreResult,
 } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
@@ -105,6 +124,69 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxLifecycleVerbFetchResult>;
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult>;
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult>;
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult>;
+  /**
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
+   */
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult>;
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult>;
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult>;
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -177,6 +259,114 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         hostId,
       ) as Promise<DeregisterHostFetchResult>,
+
+    listSandboxes: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listSandboxes,
+        bearerToken,
+      ) as Promise<SandboxListFetchResult>,
+
+    getSandboxCosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCosts,
+        bearerToken,
+      ) as Promise<SandboxCostsFetchResult>,
+
+    getSandboxCatalogue: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCatalogue,
+        bearerToken,
+      ) as Promise<SandboxCatalogueFetchResult>,
+
+    createSandbox: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.createSandbox,
+        bearerToken,
+        request,
+      ) as Promise<SandboxCreateFetchResult>,
+
+    destroySandbox: (bearerToken, sandboxId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.destroySandbox,
+        bearerToken,
+        sandboxId,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    patchSandbox: (bearerToken, sandboxId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.patchSandbox,
+        bearerToken,
+        sandboxId,
+        request,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    keepSandbox: (bearerToken, sandboxId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.keepSandbox,
+        bearerToken,
+        sandboxId,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    runSandboxVerb: (bearerToken, sandboxId, verb, timeoutMs) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.runSandboxVerb,
+        bearerToken,
+        sandboxId,
+        verb,
+        timeoutMs,
+      ) as Promise<SandboxLifecycleVerbFetchResult>,
+
+    getSandboxAutomation: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxAutomation,
+        bearerToken,
+        environmentId,
+      ) as Promise<SandboxAutomationFetchResult>,
+
+    openSandboxAutomation: (bearerToken, target) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.openSandboxAutomation,
+        bearerToken,
+        target,
+      ) as Promise<SandboxAutomationOpenFetchResult>,
+
+    getSandboxGrants: (bearerToken, environmentId, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxGrants,
+        bearerToken,
+        environmentId,
+        hostId,
+      ) as Promise<SandboxGrantsFetchResult>,
+
+    getTeamEnvironment: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamEnvironment,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamEnvironmentFetchResult>,
+
+    getEnvironmentProviders: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getEnvironmentProviders,
+        bearerToken,
+        environmentId,
+      ) as Promise<EnvironmentProvidersFetchResult>,
+
+    mintExecutableWriteGrant: (bearerToken, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintExecutableWriteGrant,
+        bearerToken,
+        hostId,
+      ) as Promise<ExecutableWriteGrantFetchResult>,
+
+    decideSecretRequest: (bearerToken, environmentId, requestId, decision) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.decideSecretRequest,
+        bearerToken,
+        environmentId,
+        requestId,
+        decision,
+      ) as Promise<SecretRequestDecideFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to
@@ -267,8 +457,9 @@ export interface AuthSessionBridgeSurface {
    * Withdraws main's verification of the held session without replacing it -
    * the renderer's terminal verdict loss, which `set` cannot carry: the
    * nearest status it flattens to would sign sibling windows out.
+   * `revocation` is passed on to the other windows (`onVerificationRevoked`).
    */
-  revoke(rejectedToken: string): Promise<void>;
+  revoke(rejectedToken: string, revocation: "user-epoch" | null): Promise<void>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
   /**
    * The verdict-loss edge, fanned to every window - including the one that
@@ -276,9 +467,12 @@ export interface AuthSessionBridgeSurface {
    * republishing the SAME snapshot, which every window's latch reads as an
    * echo; a sibling that only listens to `onChange` therefore never learns
    * its bearer was refused. Carries that bearer so each window fences the
-   * demotion to the session it actually holds.
+   * demotion to the session it actually holds, and the revocation scope so a
+   * "sign out everywhere" reaches every window as one.
    */
-  onVerificationRevoked(handler: Listener<string>): Disposable;
+  onVerificationRevoked(
+    handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
+  ): Disposable;
 }
 
 export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
@@ -297,10 +491,11 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostInvoke.authSessionSet,
         snapshot,
       ) as Promise<DesktopAuthSessionSetResult>,
-    revoke: (rejectedToken) =>
+    revoke: (rejectedToken, revocation) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authSessionRevoke,
         rejectedToken,
+        revocation,
       ) as Promise<void>,
     onChange: (handler) =>
       subscribe<DesktopAuthSessionSnapshot>(
@@ -308,6 +503,11 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         handler,
       ),
     onVerificationRevoked: (handler) =>
-      subscribe<string>(RunnerHostEvent.authVerificationRevoked, handler),
+      subscribe<DesktopAuthVerificationRevoked>(
+        RunnerHostEvent.authVerificationRevoked,
+        (revoked) => {
+          handler(revoked.token, revoked.revocation);
+        },
+      ),
   };
 }

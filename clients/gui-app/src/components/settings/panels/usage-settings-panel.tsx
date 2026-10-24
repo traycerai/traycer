@@ -3,7 +3,7 @@ import { LineChart } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useAccountHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
@@ -15,6 +15,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * The route / modal entry point. `host.usage.summary` is an OPTIONAL RPC
@@ -47,7 +48,7 @@ import {
  * hosts". `group: "account"` in `settings-sections.ts` is the statement that
  * this section is not host-scoped; the gate is for the sections that are.
  *
- * `useHostScope` stays, but only as the NAME DIRECTORY: `scope.hosts` is the
+ * `useAccountHostScope` stays, but only as the NAME DIRECTORY: `scope.hosts` is the
  * merged directory-plus-registry host model, which is what turns the host
  * ids in the summary into names for the filter and the by-host breakdown. No
  * client, no gating, no status - none of which this section's scope depends
@@ -56,7 +57,7 @@ import {
 export function UsageSettingsPanel(): ReactNode {
   const activeHostId = useAddressableHostId();
   const client = useHostClient();
-  const scope = useHostScope();
+  const scope = useAccountHostScope();
   // Names come from the scope's merged host model - the union of the runtime
   // directory and the account's registry (see SETTINGS.md's "One host
   // model"), so a host the account owns but this client cannot dial is still
@@ -207,7 +208,7 @@ function UsageSettingsPanelBody(props: {
 export function UsageSettingsPanelForClient(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
 }): ReactNode {
-  const hostId = props.client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(props.client);
   const supported = useUsageSummarySupported(hostId);
   const usageVersion = useHostNegotiatedMethodVersion(
     props.client,

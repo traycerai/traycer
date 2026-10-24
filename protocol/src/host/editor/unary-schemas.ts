@@ -19,6 +19,7 @@ export const EDITORS = [
   { id: "windsurf", label: "Windsurf", urlScheme: "windsurf" },
   { id: "zed", label: "Zed", urlScheme: "zed" },
   { id: "vscodium", label: "VSCodium", urlScheme: "vscodium" },
+  { id: "code-oss", label: "Code - OSS", urlScheme: "code-oss" },
 ] as const satisfies ReadonlyArray<EditorDefinition>;
 
 export type EditorEntry = (typeof EDITORS)[number];
@@ -55,7 +56,22 @@ export const openPathsRequestSchema = lazySchema(() =>
 );
 
 /**
- * Accepted from 1.1: every `EDITORS` id, plus two targets that are
+ * The 1.1 and 1.2 `editorId` ids, spelled out for the same reason as 1.0: the
+ * live registry grows, a released minor's request schema may not. `"code-oss"`
+ * joined `EDITORS` after 1.2 shipped and is legal from 1.3 only.
+ */
+const V11_EDITOR_IDS = [
+  "vscode",
+  "cursor",
+  "windsurf",
+  "zed",
+  "vscodium",
+] as const satisfies ReadonlyArray<EditorId>;
+
+/**
+ * The 1.1 / 1.2 target enum: the frozen editor set plus the two targets below.
+ *
+ * Accepted from 1.1: the editors above, plus two targets that are
  * deliberately not registry entries - they have no URL scheme and must never
  * appear in the default-editor picker, which iterates `EDITORS`:
  *
@@ -70,20 +86,38 @@ export const openPathsRequestSchema = lazySchema(() =>
  * only once the handshake negotiated `editor.openPaths >= 1.1` - and
  * `"finder"` only when that host is the local Mac.
  */
+export const openPathsTargetSchemaV11 = lazySchema(() =>
+  z.enum(V11_EDITOR_IDS).or(z.literal("system")).or(z.literal("finder")),
+);
+
+/**
+ * Accepted from 1.3: every live `EDITORS` id (`"code-oss"` is the first one
+ * outside the 1.1 set) plus `"system"` and `"finder"`. Built from the registry,
+ * so appending an editor widens THIS schema in place - which is why the next
+ * editor opens 1.4 and freezes this list the way 1.1's is frozen.
+ */
 export const openPathsTargetSchema = lazySchema(() =>
   editorIdSchema.or(z.literal("system")).or(z.literal("finder")),
 );
 export type OpenPathsTarget = z.infer<typeof openPathsTargetSchema>;
 
-/** v1.1 request: v1.0 with the `editorId` enum widened. */
+/** v1.1 / v1.2 request: v1.0 with the `editorId` enum widened. */
 export const openPathsRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    editorId: openPathsTargetSchemaV11,
+    paths: z.array(z.string()).nonempty(),
+  }),
+);
+
+/** v1.3 request: 1.1's with `"code-oss"` (and any later registry id) legal. */
+export const openPathsRequestSchemaV13 = lazySchema(() =>
   z.object({
     editorId: openPathsTargetSchema,
     paths: z.array(z.string()).nonempty(),
   }),
 );
 
-export type OpenPathsRequest = z.infer<typeof openPathsRequestSchemaV11>;
+export type OpenPathsRequest = z.infer<typeof openPathsRequestSchemaV13>;
 
 export const openPathsResponseSchema = lazySchema(() => z.object({}));
 export type OpenPathsResponse = z.infer<typeof openPathsResponseSchema>;

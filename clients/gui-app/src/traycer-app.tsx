@@ -41,11 +41,16 @@ import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/compose
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { ViewReplicaLifecycleMount } from "@/providers/view-replica-lifecycle-mount";
+import { HistoryLocalContributionMount } from "@/providers/history-local-contribution-mount";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-position-persist-lifecycle-bridge";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
+import { PoolSessionMount } from "@/providers/pool-session-mount";
+import { ChatServingWitnessProvider } from "@/providers/chat-serving-witness-provider";
+import { EnvironmentArmScopeMount } from "@/providers/environment-arm-scope-mount";
 import { EpicSessionControllerBridge } from "@/providers/epic-session-controller-bridge";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
@@ -58,6 +63,7 @@ import { ProvidersChangedStreamMount } from "@/providers/providers-changed-strea
 import { RateLimitPollProvider } from "@/providers/rate-limit-poll-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
+import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
@@ -266,6 +272,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
   return (
     <CommandPaletteProvider router={props.router}>
       <SupportContextRegistryBridge router={props.router} />
+      <SupportEnvironmentBridge />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
         <HostTrustAlertBridge />
@@ -282,6 +289,9 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <LandingTerminalTombstoneRecoveryBridge />
                             <EpicSessionControllerBridge />
                             <EpicTabExistenceReconciler />
+                            <PoolSessionMount />
+                            <ViewReplicaLifecycleMount />
+                            <HistoryLocalContributionMount />
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />
@@ -295,14 +305,17 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   with no run handle to call. This is the lowest node both
                                   shells share that still has the host stream. */}
                               <SessionImportRunController />
+                              <EnvironmentArmScopeMount />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider
                                     navigate={props.router.navigate}
                                   >
-                                    <TraycerAppRuntimeSurface
-                                      router={props.router}
-                                    />
+                                    <ChatServingWitnessProvider>
+                                      <TraycerAppRuntimeSurface
+                                        router={props.router}
+                                      />
+                                    </ChatServingWitnessProvider>
                                   </NotificationsSessionProvider>
                                 </ReadingPositionPersistLifecycleBridge>
                               </AppLocalNotificationsPersistLifecycleBridge>

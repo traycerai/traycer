@@ -16,8 +16,7 @@ import {
 import type { Editor } from "@tiptap/core";
 import type { Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
-import type { CreateCommentThreadResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import {
@@ -39,7 +38,7 @@ export interface FloatingDraftPopoverProps {
    *  created on the host that serves the artifact being annotated, not on
    *  whichever one the app is currently pointed at (D15). */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;
   readonly tileId: string;
   /** Tiptap editor backing the active tile. The popover anchors to its
@@ -169,7 +168,12 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
       if (!props.transaction.docChanged) return;
       const current =
         useCommentThreadsStore.getState().draftByEpicId[epicId] ?? null;
-      if (current === null) return;
+      if (
+        current === null ||
+        current.tileId !== tileId ||
+        current.artifactId !== artifactId
+      )
+        return;
       const from = props.transaction.mapping.map(current.from, 1);
       const to = props.transaction.mapping.map(current.to, -1);
       if (from === current.from && to === current.to) return;
@@ -183,33 +187,48 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     return () => {
       editor.off("transaction", handleTransaction);
     };
-  }, [draftActive, editor, epicId, setDraft]);
+  }, [draftActive, editor, epicId, setDraft, tileId, artifactId]);
 
   const handleSubmit = useCallback(
-    (content: JsonContent) => {
+    async (content: JsonContent) => {
       if (ownedDraft === null) return;
-      createThread.mutate(
-        {
+      // Track this submitted selection until its acknowledgement, including
+      // while the draft UI is dismissed. Its original offsets can be invalid
+      // by then, even though the thread has already been saved successfully.
+      let from = ownedDraft.from;
+      let to = ownedDraft.to;
+      const mapSubmittedRange = ({
+        transaction,
+      }: {
+        transaction: Transaction;
+      }) => {
+        from = transaction.mapping.map(from, 1);
+        to = transaction.mapping.map(to, -1);
+      };
+      editor.on("transaction", mapSubmittedRange);
+      // Anchor attachment belongs to this save's result. Per-call `mutate`
+      // callbacks can be dropped when the observer switches or unmounts.
+      const data = await createThread
+        .mutateAsync({
           epicId,
           artifactType,
           artifactId,
           content,
           quotedText: ownedDraft.quotedText,
-        },
-        {
-          onSuccess: (data: CreateCommentThreadResponse) => {
-            applyThreadAnchorMark(
-              editor,
-              ownedDraft.from,
-              ownedDraft.to,
-              data.threadId,
-            );
-            isDirtyRef.current = false;
-            setDraft(epicId, null);
-            onCreated(data.threadId);
-          },
-        },
-      );
+        })
+        .finally(() => editor.off("transaction", mapSubmittedRange));
+      // The thread is saved even if decorating the document fails. Retiring
+      // this draft first prevents an attachment failure from offering a retry
+      // that would create another thread.
+      const currentDraft =
+        useCommentThreadsStore.getState().draftByEpicId[epicId];
+      if (currentDraft?.draftId === ownedDraft.draftId) {
+        isDirtyRef.current = false;
+        setDraft(epicId, null);
+      }
+      if (editor.isDestroyed) return;
+      applyThreadAnchorMark(editor, from, to, data.threadId);
+      onCreated(data.threadId);
     },
     [
       ownedDraft,
@@ -237,12 +256,14 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
       )}
     >
       <CommentComposer
+        key={ownedDraft.draftId}
         epicId={epicId}
         hostClient={hostClient}
         initialContent={null}
         placeholder="Start a thread…"
         focusOnMount
         submitLabel="Comment"
+        isPending={createThread.isPending}
         onSubmit={handleSubmit}
         onCancel={(isDirty) => {
           isDirtyRef.current = isDirty;

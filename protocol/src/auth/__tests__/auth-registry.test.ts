@@ -22,11 +22,11 @@ describe("authRecordRegistry", () => {
     ).not.toThrow();
   });
 
-  it("bumps exactly the five records the plan names to major 2", () => {
+  it("carries majors 1 and 2 on the four records bumped for Apple sign-in and major 3 on authenticated-user-response", () => {
     expect(Object.keys(authRecordRegistry.user).sort()).toEqual(["1", "2"]);
     expect(
       Object.keys(authRecordRegistry["authenticated-user-response"]).sort(),
-    ).toEqual(["1", "2"]);
+    ).toEqual(["1", "2", "3"]);
     expect(
       Object.keys(authRecordRegistry["provider-login-response"]).sort(),
     ).toEqual(["1", "2"]);
@@ -45,6 +45,59 @@ describe("authRecordRegistry", () => {
         authRecordRegistry["legacy-authenticated-user-response"],
       ).sort(),
     ).toEqual(["1"]);
+  });
+
+  it("requires environments and actingAs on the latest authenticated-user-response schema", () => {
+    const schema = getRecordSchema(
+      authRecordRegistry,
+      "authenticated-user-response",
+      "latest",
+    );
+    const base = {
+      user: {
+        id: "user-1",
+        name: "Ada Lovelace",
+        providerId: "provider-id-1",
+        providerHandle: "ada",
+        providerType: "GITHUB",
+        email: "ada@example.com",
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: new Date("2024-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2024-01-01T00:00:00.000Z"),
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: "sub-1",
+        userID: "user-1",
+        orgID: null,
+        teamID: null,
+        customerId: "cus_1",
+        createdAt: new Date("2024-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2024-01-01T00:00:00.000Z"),
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "PRO",
+        hasPaymentMethod: true,
+        isInTrial: false,
+        rechargeRateSeconds: 3600,
+      },
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+      teamSubscriptions: [],
+    };
+    const environments = {
+      personal: "env-personal",
+      teams: [{ teamId: "team-1", environmentId: "env-team-1" }],
+    };
+    const actingAs = { environmentId: "env-team-1" };
+
+    expect(schema.safeParse({ ...base, environments, actingAs }).success).toBe(
+      true,
+    );
+    expect(schema.safeParse({ ...base, actingAs }).success).toBe(false);
+    expect(schema.safeParse({ ...base, environments }).success).toBe(false);
   });
 
   it("serves the major-2 user schema at 'latest', which accepts APPLE", () => {

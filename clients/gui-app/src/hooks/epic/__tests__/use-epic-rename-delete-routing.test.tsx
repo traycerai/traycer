@@ -18,6 +18,8 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { toast } from "sonner";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mockLocalHostEntry,
@@ -40,6 +42,7 @@ import type {
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
 import {
   useEpicDeleteTuiAgent,
+  useEpicDeleteTuiAgentInBatch,
   useEpicRenameTuiAgent,
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
@@ -61,7 +64,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { message: vi.fn(), error: vi.fn(), success: vi.fn() },
 }));
 
 const LOCAL = mockLocalHostEntry;
@@ -128,6 +131,8 @@ interface RoutingFixture {
    * (unlike a per-call one) survives that unmount.
    */
   holdDeleteTuiAgent: Promise<unknown> | null;
+  /** Thrown by the host's `epic.deleteTuiAgent` handler when set. */
+  failDeleteTuiAgent: Error | null;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly dispose: () => void;
 }
@@ -238,8 +243,12 @@ function createRoutingFixture(): RoutingFixture {
   const renameTuiCalls: MutationCall[] = [];
   const deleteTuiCalls: MutationCall[] = [];
   const listCallsByHost: Record<string, number> = {};
-  const mutable: { holdDeleteTuiAgent: Promise<unknown> | null } = {
+  const mutable: {
+    holdDeleteTuiAgent: Promise<unknown> | null;
+    failDeleteTuiAgent: Error | null;
+  } = {
     holdDeleteTuiAgent: null,
+    failDeleteTuiAgent: null,
   };
 
   const requestSeq = { value: 0 };
@@ -310,11 +319,17 @@ function createRoutingFixture(): RoutingFixture {
         const index = pool.findIndex(
           (row) => row.tuiAgentId === request.tuiAgentId,
         );
-        const respond = (): { deleted: boolean } => {
-          if (index < 0) return { deleted: false };
+        const respond = (): {
+          deleted: boolean;
+          outcome: "applied";
+        } => {
+          if (index < 0) return { deleted: false, outcome: "applied" };
           pool.splice(index, 1);
-          return { deleted: true };
+          return { deleted: true, outcome: "applied" };
         };
+        if (mutable.failDeleteTuiAgent !== null) {
+          throw mutable.failDeleteTuiAgent;
+        }
         if (mutable.holdDeleteTuiAgent !== null) {
           return mutable.holdDeleteTuiAgent.then(respond);
         }
@@ -380,6 +395,12 @@ function createRoutingFixture(): RoutingFixture {
     },
     set holdDeleteTuiAgent(value: Promise<unknown> | null) {
       mutable.holdDeleteTuiAgent = value;
+    },
+    get failDeleteTuiAgent() {
+      return mutable.failDeleteTuiAgent;
+    },
+    set failDeleteTuiAgent(value: Error | null) {
+      mutable.failDeleteTuiAgent = value;
     },
     wrapper: Wrapper,
     dispose,
@@ -738,6 +759,69 @@ describe("useEpicDeleteTuiAgent routing", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope(LOCAL.hostId, "epic.listTuiAgents"),
     });
+  });
+
+  it("says the owning host is unreachable when the delete never reached it", async () => {
+    seedRemoteTuiAgent();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.message).mockClear();
+    fixture.failDeleteTuiAgent = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "req-offline-tui",
+      method: "epic.deleteTuiAgent",
+      fatalDetails: null,
+    });
+    const { result } = renderHook(() => useEpicDeleteTuiAgent(), {
+      wrapper: fixture.wrapper,
+    });
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          epicId: EPIC_ID,
+          tuiAgentId: REMOTE_TUI_ID,
+          hostId: REMOTE.hostId,
+        })
+        .catch(() => undefined);
+    });
+
+    expect(toast.message).toHaveBeenCalledWith(
+      "Traycer can't reach that host right now, so nothing on it was changed. Try again once it is reachable.",
+      expect.anything(),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("leaves a batch member's failure to its caller", async () => {
+    seedRemoteTuiAgent();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.message).mockClear();
+    fixture.failDeleteTuiAgent = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "req-offline-tui-batch",
+      method: "epic.deleteTuiAgent",
+      fatalDetails: null,
+    });
+    const { result } = renderHook(() => useEpicDeleteTuiAgentInBatch(), {
+      wrapper: fixture.wrapper,
+    });
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          epicId: EPIC_ID,
+          tuiAgentId: REMOTE_TUI_ID,
+          hostId: REMOTE.hostId,
+        })
+        .catch(() => undefined);
+    });
+
+    expect(toast.message).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("fails closed for a null host without dispatching anywhere", async () => {

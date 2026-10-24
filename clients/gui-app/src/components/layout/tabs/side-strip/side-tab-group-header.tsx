@@ -61,9 +61,7 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
   const label = `${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`;
   const toggle = (event: MouseEvent<HTMLButtonElement>): void => {
     event.preventDefault();
-    useTabsStore
-      .getState()
-      .updateGroup(groupId, { collapsed: !group.collapsed });
+    useTabsStore.getState().setGroupCollapsed(groupId, !group.collapsed);
   };
   return (
     <GroupEditorAnchor

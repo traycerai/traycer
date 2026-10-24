@@ -7,6 +7,7 @@ import {
   dialogContentInertToPointer,
   interactionStartedOnOverlay,
 } from "@/components/layout/dialogs/dialog-outside-guard";
+import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
 
 interface PromotableModalFrameProps {
   readonly icon: ReactNode;
@@ -94,7 +95,9 @@ export function PromotableModalFrame(
             contentRef.current,
           );
         }}
-      />
+      >
+        <BackdropDimSource strength="30" />
+      </DialogPrimitive.Overlay>
       <DialogPrimitive.Content
         ref={contentRef}
         data-slot="dialog-content"

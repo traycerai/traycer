@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
@@ -20,10 +21,9 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
+import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import {
   acquireBrowserSessionsCoordinator,
   browserSessionsCoordinatorKey,
@@ -37,15 +37,6 @@ import {
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useRunnerHost } from "@/providers/use-runner-host";
-
-function browserSessionsOwnerIdentityKey(
-  hostClient: HostClient<HostRpcRegistry> | null,
-  hostEntry: HostDirectoryEntry | null,
-): string | null {
-  return hostClient === null
-    ? null
-    : authenticatedOwnerIdentityKey(hostClient, hostEntry);
-}
 
 /**
  * The browser inventory for an explicit host, sharing the same coordinator as
@@ -90,7 +81,7 @@ interface BrowserSessionsHookResult {
 export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, scope, browserView, localHostId } = args;
+  const { hostId, scope, localHostId } = args;
   const navigateNested = useEpicNestedFocusNavigation();
   const viewTabId = useEpicViewTabId();
   const surfaceVisible = usePaneVisible();
@@ -107,16 +98,12 @@ export function useBrowserSessions(
     [surfaceFocused, surfaceVisible, viewTabId],
   );
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
-  const transportReady =
-    args.hostClient !== null &&
-    authenticatedHostStreamKey(args.hostClient, hostEntry) !== null;
-  const ownerIdentityKey = browserSessionsOwnerIdentityKey(
-    args.hostClient,
-    hostEntry,
-  );
+  const browserView = jarBridgeForHost(args.browserView, hostEntry);
   // Not sent to main, which reads the signed-in user from the desktop auth
   // session it owns; it only decides whether asking is worth an IPC.
-  const userId = args.hostClient?.getRequestContextUserId() ?? null;
+  const userId = useRequestContextUserId(args.hostClient);
+  const transportReady = hostStreamTransportKeyFor(hostEntry, userId) !== null;
+  const ownerIdentityKey = remoteAwareOwnerIdentityKey(hostEntry, userId);
   const openTransport = useDurableStreamTransportFactory();
   const owner = useMemo<BrowserSessionsOwner | null>(
     () =>
@@ -198,6 +185,28 @@ export function useBrowserSessions(
     [hostId],
   );
   return { state: state ?? unavailableState, coordinatorKey };
+}
+
+/**
+ * The desktop bridge this host's `browser.sessions` stream may go through, or
+ * `null` for the jar-free stream the renderer opens itself.
+ *
+ * The bridge routes the stream through main, which carries the desktop's whole
+ * cookie jar on it (snapshots, deltas, host-requested captures). A sandbox
+ * must never receive that, so its stream takes the jar-free path every
+ * non-desktop shell already uses, and main refuses to build a jar transport
+ * for one as well (`openBrowserSessionsTransport`). A sandbox is never this
+ * machine's host, so it loses no native tab: a GUI on a remote host is a
+ * viewer either way.
+ */
+export function jarBridgeForHost(
+  browserView: BrowserViewBridge | null,
+  hostEntry: HostDirectoryEntry | null,
+): BrowserViewBridge | null {
+  if (hostEntry !== null && isSandboxHostDirectoryEntry(hostEntry)) {
+    return null;
+  }
+  return browserView;
 }
 
 function unavailableBrowserSessionsState(

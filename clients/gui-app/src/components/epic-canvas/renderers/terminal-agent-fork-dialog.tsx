@@ -768,6 +768,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 </div>
                 <div className="flex min-w-0 items-center gap-2 rounded-md">
                   <HarnessModelPicker
+                    maxModeContext={{ kind: "none" }}
                     labelDisplay="responsive"
                     key={terminalForkModelPickerKey(target)}
                     store={toolbarStore}
@@ -826,6 +827,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
               className="min-w-0 rounded-lg border border-border/60 bg-foreground/3 p-3"
             >
               <ActiveHostWorkspaceControls
+                sandboxStaging={null}
                 disabled={false}
                 stagingKey={stagingKey}
                 layout="stacked"

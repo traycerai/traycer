@@ -32,6 +32,7 @@ import {
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import {
+  autoJudgeMaxModeListedForRow,
   autoModeMidTurnLock,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
@@ -286,6 +287,12 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                   label={option.label}
                   experimental={option.id === "auto"}
                   description={description}
+                  maxModeListed={autoJudgeMaxModeListedForRow({
+                    isAuto: option.id === "auto",
+                    supported: isSupported,
+                    lockedMidTurn,
+                    billing: judgeBilling,
+                  })}
                   notice={
                     isSupported &&
                     !lockedMidTurn &&
@@ -323,6 +330,7 @@ function PermissionOptionBody(props: {
   readonly label: string;
   readonly experimental: boolean;
   readonly description: string;
+  readonly maxModeListed: boolean;
   readonly notice: string | null;
 }) {
   return (
@@ -339,6 +347,7 @@ function PermissionOptionBody(props: {
       </span>
       <span className="block leading-5 text-muted-foreground">
         {props.description}
+        {props.maxModeListed ? " · Max Mode" : null}
       </span>
       {props.notice !== null ? (
         <span

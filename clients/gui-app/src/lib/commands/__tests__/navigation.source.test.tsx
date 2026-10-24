@@ -132,14 +132,56 @@ describe("navigationSource", () => {
     expect(ids).toContain("nav:settings/general");
   });
 
-  it("distinguishes application Sounds from host Notifications", () => {
+  it("distinguishes application Sounds from account Notifications", () => {
     const items = captureSettingsSubpage("/");
     const app = items.find((i) => i.id === "nav:settings/app-notifications");
-    const host = items.find((i) => i.id === "nav:settings/notifications");
+    const account = items.find((i) => i.id === "nav:settings/notifications");
     expect(app?.label).toBe("Sounds");
     expect(app?.statusBadge).toBe("Application");
     expect(app?.keywords).toContain("notifications");
-    expect(host?.label).toBe("Notifications");
-    expect(host?.statusBadge).toBe("Host");
+    expect(account?.label).toBe("Notifications");
+    expect(account?.statusBadge).toBe("Account");
+  });
+
+  it("lists the Browser agent access and Secrets pages in the settings sub-page", () => {
+    const items = captureSettingsSubpage("/");
+    const ids = items.map((i) => i.id);
+    expect(ids).toContain("nav:settings/browser-agent-access");
+    expect(ids).toContain("nav:settings/secrets");
+    const access = items.find(
+      (i) => i.id === "nav:settings/browser-agent-access",
+    );
+    const secrets = items.find((i) => i.id === "nav:settings/secrets");
+    expect(access?.label).toBe("Browser agent access");
+    expect(access?.statusBadge).toBe("Environment");
+    expect(secrets?.label).toBe("Secrets");
+    expect(secrets?.statusBadge).toBe("Environment");
+  });
+
+  it("lists the MCP servers, Skills and Agent definitions pages, and not the retired Machine setup, in the settings sub-page", () => {
+    const items = captureSettingsSubpage("/");
+    for (const [id, label] of [
+      ["mcp-servers", "MCP servers"],
+      ["skills", "Skills"],
+      ["agent-definitions", "Agent definitions"],
+    ] as const) {
+      const item = items.find((i) => i.id === `nav:settings/${id}`);
+      expect(item?.label, id).toBe(label);
+      expect(item?.statusBadge, id).toBe("Environment");
+    }
+    expect(items.map((i) => i.id)).not.toContain("nav:settings/machine-setup");
+  });
+
+  it("badges the regrouped pages with the scope the sidebar now files them under", () => {
+    const items = captureSettingsSubpage("/");
+    const badgeOf = (id: string): string | undefined =>
+      items.find((i) => i.id === `nav:settings/${id}`)?.statusBadge;
+    expect(badgeOf("fallback")).toBe("Environment");
+    expect(badgeOf("permissions")).toBe("Environment");
+    expect(badgeOf("providers")).toBe("Environment");
+    expect(badgeOf("shell")).toBe("Environment");
+    expect(badgeOf("agents")).toBe("Environment");
+    expect(badgeOf("devices")).toBe("Account");
+    expect(badgeOf("worktrees")).toBe("Host");
   });
 });

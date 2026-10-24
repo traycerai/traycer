@@ -204,6 +204,19 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => TAB_HOST_ID,
 }));
 
+// The attachment before a fork onto a team's host: passed straight through,
+// so every fork here goes on to `epic.createChat` as it did before.
+vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
+  isAttachEnvironmentUnsupported: () => false,
+  toastAttachEnvironmentNeedsOwnHost: () => undefined,
+  useEpicAttachEnvironment: () => ({
+    isPending: false,
+    mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {
+      options.onSuccess();
+    },
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
     readonly method?: string;
@@ -512,6 +525,7 @@ function forkTarget(
     carriedInterviews: "settled",
     forkMode: "plain",
     initialHostId: null,
+    onlyHostIds: null,
     ...overrides,
   };
 }
@@ -1620,6 +1634,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const remoteLatestTarget = forkTarget({
       assistantMessageId: null,
       initialHostId: OTHER_HOST_ID,
+      onlyHostIds: null,
     });
     // Same mount-closed-then-open pattern as the initialHostId tests above:
     // the seeding branch only runs on an open TRANSITION.

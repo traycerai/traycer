@@ -36,13 +36,16 @@ Object.defineProperty(process.versions, "chrome", {
   configurable: true,
 });
 
+const ELECTRON_DEFAULT_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Traycer/1.2.3 Chrome/125.0.6422.0 Electron/30.0.0 Safari/537.36";
+
 describe("configureUserAgent", () => {
   beforeEach(() => {
-    electronState.app.userAgentFallback = "";
+    electronState.app.userAgentFallback = ELECTRON_DEFAULT_UA;
     electronState.defaultSessionUserAgent = "";
   });
 
-  it("sets a branded UA on the default session only, leaving the app-wide fallback untouched", async () => {
+  it("sets a branded UA on the default session and drops only the Electron token from the guest fallback", async () => {
     const { configureUserAgent } = await import("../network");
     configureUserAgent();
 
@@ -50,9 +53,11 @@ describe("configureUserAgent", () => {
       "TraycerDesktop/1.2.3 Electron/30.0.0 Chrome/125.0.6422.0",
     );
 
-    // Guests and popups keep Electron's own default UA - `configureUserAgent`
-    // must never set `app.userAgentFallback` (that was the spoof Google's
-    // sign-in rejected as "not secure").
-    expect(electronState.app.userAgentFallback).toBe("");
+    // Guests keep the product token and the rest of the default UA (a bare
+    // Chrome UA is what Google sign-in rejected). Only `Electron/<ver>` goes:
+    // GoHighLevel's login sniffs it.
+    expect(electronState.app.userAgentFallback).toBe(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Traycer/1.2.3 Chrome/125.0.6422.0 Safari/537.36",
+    );
   });
 });

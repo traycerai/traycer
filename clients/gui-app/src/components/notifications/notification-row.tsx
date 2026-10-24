@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   FolderX,
+  KeyRound,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -12,6 +13,7 @@ import {
   Trash2,
   UserMinus,
   UserPlus,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -21,6 +23,13 @@ import {
   TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  isTeamHostNotificationKind,
+  type TeamHostNotificationKind,
+} from "@traycer/protocol/host/notifications/host-notifications";
+import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
+import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
+import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostUnavailability,
@@ -44,6 +53,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
+  sandboxIdOfNotificationRow,
   useMergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import {
@@ -180,7 +190,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     hasLocalHost: runnerHost?.hasLocalHost ?? false,
     localHostId: localHost?.hostId ?? null,
     body: row.body,
-    hasPayload: row.payload !== null,
+    hasPayload: rowHasDestination(row),
   });
   const isRead = row.readAt !== null;
   const originUnavailability = originRefusal({
@@ -278,16 +288,18 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       >
         <Icon className={cn("size-4", glyph.colorClassName)} />
       </span>
-      <NotificationRowMain
-        row={row}
-        displayBody={packPresentation.displayBody}
-        isRead={isRead}
-        isNavigable={packPresentation.isNavigable}
-        originUnavailability={originUnavailability}
-        packRemote={packPresentation.packRemote}
-        remoteHostLabel={packPresentation.remoteHostLabel}
-        onActivate={props.onActivate}
-      />
+      <NotificationRowWithSecrets row={row}>
+        <NotificationRowMain
+          row={row}
+          displayBody={packPresentation.displayBody}
+          isRead={isRead}
+          isNavigable={packPresentation.isNavigable}
+          originUnavailability={originUnavailability}
+          packRemote={packPresentation.packRemote}
+          remoteHostLabel={packPresentation.remoteHostLabel}
+          onActivate={props.onActivate}
+        />
+      </NotificationRowWithSecrets>
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
         <NotificationTimestamp createdAt={row.createdAt} />
         <NotificationRowTrailingControl
@@ -299,6 +311,57 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       </div>
     </m.li>
   );
+}
+
+/**
+ * Extra content sits UNDER the row's main area and never inside it, because
+ * that area is one button when the row is navigable and the extra controls
+ * are buttons of their own. Secrets (grant / export) and P2's five
+ * environment rows share this wrapper.
+ *
+ * Every other row gets its main area back untouched, with no wrapper.
+ */
+function NotificationRowWithSecrets(props: {
+  readonly row: MergedNotificationRow;
+  readonly children: ReactNode;
+}): ReactNode {
+  const secrets = props.row.secrets ?? null;
+  const environmentDetail = props.row.environmentDetail ?? null;
+  if (secrets === null && environmentDetail === null) return props.children;
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+      {props.children}
+      <NotificationSecretsExtra
+        secrets={secrets}
+        resolved={props.row.resolvedAt !== null}
+      />
+      {environmentDetail === null ? null : (
+        <EnvironmentNotificationExtra detail={environmentDetail} />
+      )}
+    </div>
+  );
+}
+
+function NotificationSecretsExtra(props: {
+  readonly secrets: MergedNotificationRow["secrets"];
+  readonly resolved: boolean;
+}): ReactNode {
+  const secrets = props.secrets ?? null;
+  if (secrets === null) return null;
+  if (secrets.kind === "grant-request") {
+    return (
+      <SecretGrantRequestCard detail={secrets} resolved={props.resolved} />
+    );
+  }
+  return <SecretExportNoticeLine detail={secrets} />;
+}
+
+/**
+ * Whether activating the row goes somewhere: its payload, or for a sandbox
+ * push (which has none) the Sandboxes row its key names.
+ */
+function rowHasDestination(row: MergedNotificationRow): boolean {
+  return row.payload !== null || sandboxIdOfNotificationRow(row) !== null;
 }
 
 function resolvePackRowPresentation(options: {
@@ -550,30 +613,66 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
   if (semanticIcon !== null) {
     return { icon: semanticIcon, colorClassName: NEUTRAL_COLOR };
   }
-  switch (row.hostKind) {
-    case "agent.stopped":
-      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
-    case "agent.stalled":
-      return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
-    case "approval.requested":
-    case "interview.requested":
-      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
-    case "workspace.operation.failed":
-      return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
-    // Only reachable for an `info` row: the severity branches above already
-    // claim every `done`/`failure`/`needs_action` host-operation row, and the
-    // kind itself says nothing about how the operation ended.
-    case "host.operation.finished":
-      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
-    // Retain the browser glyph for resolved/informational browser rows too.
-    case "browser.human.needed":
-      return {
-        icon: NOTIFICATION_STATUS_TONES.browser.Icon,
-        colorClassName: NOTIFICATION_STATUS_TONES.browser.className,
-      };
-    case null:
-      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
-  }
+  return hostKindGlyph(row.hostKind);
+}
+
+const NEUTRAL_BELL: RowGlyph = { icon: Bell, colorClassName: NEUTRAL_COLOR };
+const FAILED_CHAT: RowGlyph = {
+  icon: MessageSquareX,
+  colorClassName: FAILURE_COLOR,
+};
+const SECRET_GLYPH: RowGlyph = {
+  icon: KeyRound,
+  colorClassName: NEUTRAL_COLOR,
+};
+const TEAM_GLYPH: RowGlyph = { icon: Users, colorClassName: NEUTRAL_COLOR };
+
+/**
+ * The fallback glyph of every non-team host kind. A record, so a new kind
+ * cannot compile without one.
+ */
+const HOST_KIND_GLYPHS: Record<
+  Exclude<
+    NonNullable<MergedNotificationRow["hostKind"]>,
+    TeamHostNotificationKind
+  >,
+  RowGlyph
+> = {
+  "agent.stopped": NEUTRAL_BELL,
+  "agent.stalled": FAILED_CHAT,
+  "approval.requested": NEUTRAL_BELL,
+  "interview.requested": NEUTRAL_BELL,
+  "workspace.operation.failed": FAILED_CHAT,
+  // Only reachable for an `info` row: the severity branches above already
+  // claim every `done`/`failure`/`needs_action` host-operation row, and the
+  // kind itself says nothing about how the operation ended.
+  "host.operation.finished": NEUTRAL_BELL,
+  // Retain the browser glyph for resolved/informational browser rows too.
+  "browser.human.needed": {
+    icon: NOTIFICATION_STATUS_TONES.browser.Icon,
+    colorClassName: NOTIFICATION_STATUS_TONES.browser.className,
+  },
+  // A secret is the subject of these rows, whatever the request's state.
+  "secret.grant.requested": SECRET_GLYPH,
+  "secret.export.minted": SECRET_GLYPH,
+  "secret.rotated": SECRET_GLYPH,
+  "secret.removed": SECRET_GLYPH,
+  // A change in a team the reader belongs to.
+  "team.role.changed": TEAM_GLYPH,
+  "team.host.returned": TEAM_GLYPH,
+  // Only reachable for an `info` row: the severity branches above claim a
+  // failed move or apply.
+  "environment.move.stalled": NEUTRAL_BELL,
+  "environment.apply.failed": NEUTRAL_BELL,
+};
+
+/** The glyph a host row falls back to once severity and subject have both
+ * declined to pick one. */
+function hostKindGlyph(hostKind: MergedNotificationRow["hostKind"]): RowGlyph {
+  if (hostKind === null) return NEUTRAL_BELL;
+  // A change in a team the reader administers or just joined.
+  if (isTeamHostNotificationKind(hostKind)) return TEAM_GLYPH;
+  return HOST_KIND_GLYPHS[hostKind];
 }
 
 /**

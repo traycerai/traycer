@@ -25,6 +25,7 @@ import {
   DEFAULT_REASONING,
   DEFAULT_SELECTION,
   DEFAULT_SERVICE_TIER,
+  normalizeProviderId,
   type PermissionMode,
   type ComposerMode,
   type HarnessModelSelection,
@@ -721,8 +722,11 @@ export const useSettingsStore = create<SettingsState>()(
       // because its vocabulary is a REGISTRY: a blob written by a build that
       // ships more office views than this one names a view nothing here can
       // plan, and it has to come back as Auto - which always has an answer -
-      // rather than as that name. Every other field keeps the default shallow
-      // merge behavior.
+      // rather than as that name. `defaultSelection` is re-derived because
+      // nothing writes it after first launch, so a blob saved before
+      // `profileId` existed keeps that older shape forever (see
+      // `resolvePersistedDefaultSelection`). Every other field keeps the
+      // default shallow merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -732,6 +736,9 @@ export const useSettingsStore = create<SettingsState>()(
           ...merged,
           startPageWallpaper: parseStartPageWallpaper(
             persisted.startPageWallpaper,
+          ),
+          defaultSelection: resolvePersistedDefaultSelection(
+            persisted.defaultSelection,
           ),
           showGreeting:
             typeof persisted.showGreeting === "boolean"
@@ -782,6 +789,32 @@ export const useSettingsStore = create<SettingsState>()(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The persisted `defaultSelection`, with `profileId` always a string or
+ * `null`. A blob written before profiles existed holds only
+ * `{ harnessId, modelSlug }`; spread as-is, that missing key reaches every
+ * surface seeded from this default as `undefined`, and a request schema that
+ * takes `string | null` refuses it (the bot create form did). A selection
+ * whose harness or model is unreadable falls back to `DEFAULT_SELECTION`.
+ */
+function resolvePersistedDefaultSelection(
+  value: unknown,
+): HarnessModelSelection {
+  if (!isRecord(value)) return DEFAULT_SELECTION;
+  const harnessId =
+    typeof value.harnessId === "string"
+      ? normalizeProviderId(value.harnessId)
+      : null;
+  if (harnessId === null || typeof value.modelSlug !== "string") {
+    return DEFAULT_SELECTION;
+  }
+  return {
+    harnessId,
+    modelSlug: value.modelSlug,
+    profileId: typeof value.profileId === "string" ? value.profileId : null,
+  };
 }
 
 function parseStartPageWallpaper(value: unknown): StartPageWallpaper | null {

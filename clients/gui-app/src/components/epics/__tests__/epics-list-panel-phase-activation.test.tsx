@@ -136,6 +136,7 @@ vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => {
     usePendingDeleteEpicIds: () => new Set<string>(),
     useIsEpicDeleteInFlight: nothingInFlight,
     useEpicDeleteInFlightReader: () => nothingInFlight,
+    useEpicDeleteRequestUserId: () => () => "user-test",
   };
 });
 

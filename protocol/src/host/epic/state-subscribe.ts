@@ -146,8 +146,21 @@ import {
   epicLaneRowRevisionFields,
   epicLaneTextFrameFields,
 } from "@traycer/protocol/host/epic/lane-cursor";
-import { commentThreadWireSchema } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  commentThreadWireSchema,
+  commentThreadWireSchemaPreAnchor,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  deletedHtmlArtifactSchema,
+  deletedCanvasArtifactSchema,
+  deletedFileArtifactSchema,
+  htmlArtifactSchema,
+  canvasArtifactSchema,
+  fileArtifactSchema,
+  specArtifactSchemaPreHtml,
+  ticketArtifactSchemaPreHtml,
+  storyArtifactSchemaPreHtml,
+  reviewArtifactSchemaPreHtml,
   deletedReviewArtifactSchema,
   deletedSpecArtifactSchema,
   deletedStoryArtifactSchema,
@@ -158,7 +171,6 @@ import {
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
-import { epicStateFilesArmSchema } from "@traycer/protocol/host/epic/files";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -190,6 +202,23 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * was never released - so this is the first line to carry it, and it is frozen
  * from here.
  */
+export const epicArtifactRecordSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    specArtifactSchemaPreHtml
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    ticketArtifactSchemaPreHtml
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    storyArtifactSchemaPreHtml
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    reviewArtifactSchemaPreHtml
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+  ]),
+);
+
 export const epicArtifactRecordSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     specArtifactSchema
@@ -204,6 +233,13 @@ export const epicArtifactRecordSchema = lazySchema(() =>
     reviewArtifactSchema
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
+    htmlArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    canvasArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    fileArtifactSchema.extend(epicLaneRowRevisionFields),
   ]),
 );
 export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
@@ -228,6 +264,23 @@ export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
  * delete-then-recreate from a recreate-then-delete). See
  * {@link epicLaneRowRevisionSchema} rule 2.
  */
+export const epicDeletedArtifactRecordSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    deletedSpecArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedTicketArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedStoryArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedReviewArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+  ]),
+);
+
 export const epicDeletedArtifactRecordSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     deletedSpecArtifactSchema
@@ -240,6 +293,15 @@ export const epicDeletedArtifactRecordSchema = lazySchema(() =>
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
     deletedReviewArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedHtmlArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedCanvasArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedFileArtifactSchema
       .omit({ artifactRoomId: true })
       .extend(epicLaneRowRevisionFields),
   ]),
@@ -434,13 +496,9 @@ export type EpicStateRoleClaimsProjection = z.infer<
 /**
  * One comment thread, as a ROW on the records lane.
  *
- * The thread body reuses `commentThreadWireSchema` verbatim - the same shape
- * `epic.listCommentThreads` returns - so the cold read and the push cannot
- * disagree about what a thread is. That shape is FROZEN by the released
- * `epic.listCommentThreads@1.0` line: a field added to it grows a released
- * response, so the next field forks a versioned copy for THIS lane (the
- * `chatRecordSummarySchema` / `hostNotificationEntrySchemaV21` pattern) rather
- * than being edited in place.
+ * Older minors retain the pre-anchor thread shape shared with the released
+ * unary responses. The current record adds optional HTML/canvas anchor data;
+ * only state.subscribe@1.4 and later carry it.
  *
  * Two fields are added around it:
  *
@@ -455,6 +513,12 @@ export type EpicStateRoleClaimsProjection = z.infer<
  *   can genuinely land after a newer push. Apply an upsert only when its
  *   revision strictly EXCEEDS the one held.
  */
+export const epicCommentThreadRecordSchemaPreAnchor = lazySchema(() =>
+  commentThreadWireSchemaPreAnchor.extend({
+    artifactId: z.string().min(1),
+    ...epicLaneRowRevisionFields,
+  }),
+);
 export const epicCommentThreadRecordSchema = lazySchema(() =>
   commentThreadWireSchema.extend({
     artifactId: z.string().min(1),
@@ -596,7 +660,7 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
      */
     reconciledWithCloud: z.boolean(),
     epicMeta: epicStateMetaProjectionSchema,
-    artifactRecords: z.array(epicArtifactRecordSchema),
+    artifactRecords: z.array(epicArtifactRecordSchemaPreHtml),
     /**
      * Tombstones ride the SNAPSHOT, unlike removed comment threads below, and
      * the asymmetry is not an oversight.
@@ -611,7 +675,7 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
     deletedArtifacts: z.array(epicDeletedArtifactRecordSchemaV10),
     roleClaims: epicStateRoleClaimsProjectionSchema,
     /** Every LIVE thread on this epic. Removed threads are simply absent. */
-    commentThreads: z.array(epicCommentThreadRecordSchema),
+    commentThreads: z.array(epicCommentThreadRecordSchemaPreAnchor),
     ...epicLaneTextFrameFields,
   }),
 );
@@ -728,14 +792,14 @@ const epicStateSubscribeDeltaFrameSchemaV10 = lazySchema(() =>
      * work it did not finish.
      */
     seq: epicLanePositionSchema,
-    artifactUpserts: z.array(epicArtifactRecordSchema),
+    artifactUpserts: z.array(epicArtifactRecordSchemaPreHtml),
     /**
      * Artifacts deleted by this commit. ABSORBING: a client that applies one of
      * these must not resurrect the artifact from a later upsert in the same
      * envelope or from a stale row it holds elsewhere.
      */
     artifactTombstones: z.array(epicDeletedArtifactRecordSchemaV10),
-    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchemaPreAnchor),
     commentThreadRemovals: z.array(epicCommentThreadRemovalSchema),
     /**
      * The epic metadata this commit changed, at the revision the record reached,
@@ -771,8 +835,6 @@ type EmptinessCheckedFrame =
       readonly commentThreadRemovals: readonly unknown[];
       readonly epicMeta: unknown;
       readonly roleClaims: unknown;
-      /** `@1.2` and later; absent on the older frames. */
-      readonly files?: unknown;
     }
   | { readonly kind: "snapshot" }
   | { readonly kind: "resumed" }
@@ -800,8 +862,7 @@ function refineDeltaCarriesChange(
     frame.commentThreadUpserts.length > 0 ||
     frame.commentThreadRemovals.length > 0 ||
     frame.epicMeta !== null ||
-    frame.roleClaims !== null ||
-    (frame.files !== undefined && frame.files !== null);
+    frame.roleClaims !== null;
   if (carriesChange) return;
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
@@ -873,12 +934,12 @@ export const epicStateSubscribeV10 = defineStreamRpcContract({
  */
 const epicStateSubscribeSnapshotFrameSchemaV11 = lazySchema(() =>
   epicStateSubscribeSnapshotFrameSchemaV10.extend({
-    deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
+    deletedArtifacts: z.array(epicDeletedArtifactRecordSchemaPreHtml),
   }),
 );
 const epicStateSubscribeDeltaFrameSchemaV11 = lazySchema(() =>
   epicStateSubscribeDeltaFrameSchemaV10.extend({
-    artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
+    artifactTombstones: z.array(epicDeletedArtifactRecordSchemaPreHtml),
   }),
 );
 export const epicStateSubscribeServerFrameSchemaV11 = lazySchema(() =>
@@ -908,41 +969,11 @@ export const epicStateSubscribeV11 = defineStreamRpcContract({
 });
 
 /**
- * `@1.2`: the `@1.1` frames plus the epic's FILES - the manifest of agent
- * pages, MCP App snapshots and drop-zone files, each with this host's
- * `localState` (whether its bytes are here, or downloading).
- *
- * Revisioned as a whole SET, like `roleClaims` (see
- * {@link epicStateFilesProjectionSchema}): the whole set on a snapshot, `null`
- * on a delta that did not touch files. A record or arm this reader cannot
- * parse is dropped, not fatal - see {@link epicStateFilesArmSchema}. The host gates the arm on the negotiated
- * minor, so an `@1.1` subscriber is never sent it; every other frame, the
- * open request and the client frames are `@1.1`'s by reference.
+ * 1.2 carried the files arm of the files plane, removed before any release
+ * shipped it. Keep this empty minor so 1.3 keeps its number across three branches.
  */
-const epicStateSubscribeSnapshotFrameSchemaV12 = lazySchema(() =>
-  epicStateSubscribeSnapshotFrameSchemaV11.extend({
-    files: epicStateFilesArmSchema,
-  }),
-);
-const epicStateSubscribeDeltaFrameSchemaV12 = lazySchema(() =>
-  epicStateSubscribeDeltaFrameSchemaV11.extend({
-    files: epicStateFilesArmSchema,
-  }),
-);
-export const epicStateSubscribeServerFrameSchemaV12 = lazySchema(() =>
-  z
-    .discriminatedUnion("kind", [
-      epicStateSubscribeSnapshotFrameSchemaV12,
-      epicStateSubscribeResumedFrameSchemaV10,
-      epicStateSubscribeDeltaFrameSchemaV12,
-      epicStateSubscribeTrustChangedFrameSchemaV10,
-      z.object({
-        kind: z.literal("pong"),
-        ...epicLaneTextFrameFields,
-      }),
-    ])
-    .superRefine(refineDeltaCarriesChange),
-);
+export const epicStateSubscribeServerFrameSchemaV12 =
+  epicStateSubscribeServerFrameSchemaV11;
 export type EpicStateSubscribeServerFrameV12 = z.infer<
   typeof epicStateSubscribeServerFrameSchemaV12
 >;
@@ -952,5 +983,73 @@ export const epicStateSubscribeV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV12,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/** 1.3 carries all seven artifact kinds; older frames keep their frozen unions. */
+const epicStateSubscribeSnapshotFrameSchemaV13 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV11.extend({
+    artifactRecords: z.array(epicArtifactRecordSchema),
+    deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV13 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV11.extend({
+    artifactUpserts: z.array(epicArtifactRecordSchema),
+    artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV13 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV13,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV13,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({ kind: z.literal("pong"), ...epicLaneTextFrameFields }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
+export type EpicStateSubscribeServerFrameV13 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV13
+>;
+export const epicStateSubscribeV13 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV13,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/** 1.4 carries HTML/canvas comment anchors; older minors strip these keys. */
+const epicStateSubscribeSnapshotFrameSchemaV14 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV13.extend({
+    commentThreads: z.array(epicCommentThreadRecordSchema),
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV14 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV13.extend({
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV14 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV14,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV14,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({ kind: z.literal("pong"), ...epicLaneTextFrameFields }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
+export type EpicStateSubscribeServerFrameV14 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV14
+>;
+export const epicStateSubscribeV14 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV14,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

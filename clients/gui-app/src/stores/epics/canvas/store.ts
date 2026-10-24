@@ -1,3 +1,4 @@
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { readTabStripLayout } from "@/stores/tabs/store";
 import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
 import {
@@ -99,6 +100,7 @@ import {
   toggleSnapshotDiffBundleFileCollapsed,
   rebindPendingBrowserTile,
   updateBrowserTileViewportPreset,
+  updateHtmlArtifactVersion,
   updateCommGraphTileCamera,
   updateCommGraphTileOfficeCamera,
   updateCommGraphTileView,
@@ -566,6 +568,11 @@ export interface EpicCanvasStore {
     requestId: string,
     opened: { readonly sessionId: string; readonly tabId: string },
   ) => boolean;
+  updateHtmlArtifactVersionInTab: (
+    tabId: string,
+    tileInstanceId: string,
+    selection: HtmlArtifactVersionSelection | null,
+  ) => void;
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
     tileInstanceId: string,
@@ -692,6 +699,12 @@ export interface EpicCanvasStore {
     hostId: string,
     agentType: "chat" | "terminal-agent",
   ) => void;
+  /**
+   * Closes every open tile bound to one of these hosts, in every tab, and
+   * retires their reopen and Back/Forward entries; returns how many closed.
+   * A removed team member's tiles on the team's hosts.
+   */
+  closeTilesOnHosts: (hostIds: ReadonlySet<string>) => number;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
     paneId: string,
@@ -808,6 +821,8 @@ export interface EpicCanvasStore {
 export { createEpicName } from "@/lib/epic-name";
 
 let localPersistenceEnabled = true;
+let browserPersistenceStorage: StateStorage | null = null;
+let browserPersistenceHydrating = false;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
 const serializedCanvasByReference = new WeakMap<
@@ -839,15 +854,38 @@ function serializeCanvasByTabIdForLocalPersist(
 }
 
 const epicCanvasStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
+  getItem: (name) =>
+    browserPersistenceStorage === null
+      ? window.localStorage.getItem(name)
+      : browserPersistenceStorage.getItem(name),
   setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
+    if (!localPersistenceEnabled || browserPersistenceHydrating) return;
+    if (browserPersistenceStorage === null) {
+      window.localStorage.setItem(name, value);
+    } else {
+      return browserPersistenceStorage.setItem(name, value);
+    }
   },
   removeItem: (name) => {
-    window.localStorage.removeItem(name);
+    if (browserPersistenceStorage === null) {
+      window.localStorage.removeItem(name);
+    } else {
+      return browserPersistenceStorage.removeItem(name);
+    }
   },
 };
+
+export function setEpicCanvasBrowserPersistenceStorage(
+  storage: StateStorage | null,
+): void {
+  browserPersistenceStorage = storage;
+}
+
+export function setEpicCanvasBrowserPersistenceHydrating(
+  hydrating: boolean,
+): void {
+  browserPersistenceHydrating = hydrating;
+}
 
 export function setEpicCanvasLocalPersistenceEnabled(enabled: boolean): void {
   localPersistenceEnabled = enabled;
@@ -857,6 +895,10 @@ export function setEpicCanvasDesktopProjectionBridge(
   bridge: DesktopPerWindowProjectionBridge | null,
 ): void {
   desktopProjectionBridge = bridge;
+  if (bridge !== null) {
+    browserPersistenceStorage = null;
+    browserPersistenceHydrating = false;
+  }
   setEpicCanvasLocalPersistenceEnabled(bridge === null);
 }
 
@@ -2182,6 +2224,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return rebound;
         },
 
+        updateHtmlArtifactVersionInTab: (tabId, tileInstanceId, selection) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateHtmlArtifactVersion(canvas, tileInstanceId, selection),
+            ),
+          );
+        },
+
         updateBrowserTileViewportPresetInTab: (
           tabId,
           tileInstanceId,
@@ -2723,6 +2773,47 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               }
             }
           }
+        },
+
+        closeTilesOnHosts: (hostIds) => {
+          if (hostIds.size === 0) return 0;
+          // Snapshot every target before closing any: a close can dissolve
+          // its pane and rewrite the surrounding tree.
+          const targets: Array<{
+            readonly tabId: string;
+            readonly paneId: string;
+            readonly instanceId: string;
+          }> = [];
+          const state = get();
+          Object.keys(state.tabsById).forEach((tabId) => {
+            const canvas = state.canvasByTabId[tabId];
+            if (canvas === undefined) return;
+            collectPanes(canvas.root).forEach((pane) => {
+              pane.tabInstanceIds.forEach((instanceId) => {
+                const tile = canvas.tilesByInstanceId[instanceId];
+                if (tile !== undefined && hostIds.has(tile.hostId)) {
+                  targets.push({ tabId, paneId: pane.id, instanceId });
+                }
+              });
+            });
+          });
+          pruneRecoveryTiles((tile) => hostIds.has(tile.hostId));
+          targets.forEach(({ tabId, paneId, instanceId }) => {
+            get().closeCanvasTab(tabId, paneId, instanceId);
+          });
+          // Closing captures Back/Forward payloads; none may reopen a tile on
+          // a host the person can no longer use.
+          const afterClose = get();
+          for (const tabId of Object.keys(afterClose.tabsById)) {
+            for (const [instanceId, payload] of Object.entries(
+              afterClose.closedTilePayloadsByTabId[tabId] ?? {},
+            )) {
+              if (payload !== undefined && hostIds.has(payload.node.hostId)) {
+                afterClose.discardClosedTilePayload(tabId, instanceId);
+              }
+            }
+          }
+          return targets.length;
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
@@ -3616,6 +3707,7 @@ export {
   isTileRefRecordLive,
   makeSelectActiveEpicArtifactId,
   makeSelectActiveEpicArtifactRef,
+  makeSelectActiveTileRef,
   makeSelectEpicArtifactRecords,
   makeSelectEpicCanvas,
   makeSelectEpicTab,
@@ -3628,6 +3720,7 @@ export {
   useActiveEpicArtifactRef,
   useActiveEpicId,
   useActiveTabId,
+  useActiveTileRef,
   useEpicArtifactRecords,
   useEpicCanvas,
   useEpicTab,

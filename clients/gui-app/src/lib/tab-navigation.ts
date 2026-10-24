@@ -4,6 +4,7 @@ import type {
   UseNavigateResult,
 } from "@tanstack/react-router";
 import {
+  readBotIdFromPath,
   draftPathname,
   readActiveEpicIdFromPath,
   readActiveEpicTabIdFromPath,
@@ -13,6 +14,7 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import {
+  botTabIntent,
   draftTabIntent,
   existingEpicTabIntent,
   existingEpicTabIntentWithNestedFocus,
@@ -45,6 +47,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
+import { isOpenBotTab } from "@/stores/tabs/kinds/bot";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
@@ -287,6 +290,8 @@ function intentRef(intent: TabNavigationIntent): TabRef {
       return { kind: "epic", id: intent.tabId };
     case "draft":
       return { kind: "draft", id: intent.draftId };
+    case "bot":
+      return { kind: "bot", id: intent.botId };
     case "history":
       return { kind: "history", id: "history" };
     case "settings":
@@ -428,6 +433,10 @@ function routedTabTarget(pathname: string): RoutedTabTarget | null {
   if (draftId !== null) {
     return { ref: { kind: "draft", id: draftId }, epicId: null };
   }
+  const botId = readBotIdFromPath(pathname);
+  if (botId !== null) {
+    return { ref: { kind: "bot", id: botId }, epicId: null };
+  }
   if (isSettingsPath(pathname)) {
     return { ref: { kind: "settings", id: "settings" }, epicId: null };
   }
@@ -473,6 +482,9 @@ function intentForRef(
   }
   if (ref.kind === "draft") {
     return isOpenLandingDraftId(ref.id) ? draftTabIntent(ref.id) : null;
+  }
+  if (ref.kind === "bot") {
+    return isOpenBotTab(ref.id) ? botTabIntent(ref.id) : null;
   }
   if (ref.kind === "history") return historyTabIntent();
   if (ref.kind === "sample-workspace") return { kind: "sample-workspace" };
@@ -531,6 +543,7 @@ function refIsMaterialized(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return isOpenLandingDraftId(ref.id);
   }
+  if (ref.kind === "bot") return isOpenBotTab(ref.id);
   // Home has no source record to materialize: the flag is the whole condition.
   if (ref.kind === "sample-workspace")
     return findStripItemForRef(currentLayout(), ref) !== null;
@@ -1588,13 +1601,25 @@ export class TabNavigationController {
       if (intent !== null) this.rememberRoute(ref, intent, location.search);
       return;
     }
+    this.resolveExternalRoutedRef(location, routed, navigate);
+  }
 
+  /** The per-kind arm of {@link resolveExternalLocation}. */
+  private resolveExternalRoutedRef(
+    location: TabNavigationLocation,
+    routed: RoutedTabTarget,
+    navigate: NavigateFn,
+  ): void {
+    const ref = routed.ref;
     switch (ref.kind) {
       case "epic":
         this.resolveExternalEpic(location, routed, navigate);
         return;
       case "draft":
         this.resolveExternalDraft(location, ref.id, navigate);
+        return;
+      case "bot":
+        this.resolveExternalBot(location, ref.id, navigate);
         return;
       case "history":
       case "settings":
@@ -1770,6 +1795,28 @@ export class TabNavigationController {
     const activation = this.activateExternalTarget({ kind: "ref", ref });
     if (activation === null) this.issueLandingCorrection(location, navigate);
     else this.rememberRoute(ref, draftTabIntent(draftId), location.search);
+  }
+
+  /**
+   * `/bot/{botId}` arrived from outside this controller. A bot tab exists only
+   * as a bot-tabs store record (the record is what carries the host the tab is
+   * bound to), so a path with no record behind it - a pasted link, a restored
+   * location after the tab was closed - corrects to the landing route rather
+   * than minting a tab bound to nothing.
+   */
+  private resolveExternalBot(
+    location: TabNavigationLocation,
+    botId: string,
+    navigate: NavigateFn,
+  ): void {
+    const ref: TabRef = { kind: "bot", id: botId };
+    if (!isOpenBotTab(botId)) {
+      this.issueLandingCorrection(location, navigate);
+      return;
+    }
+    const activation = this.activateExternalTarget({ kind: "ref", ref });
+    if (activation === null) this.issueLandingCorrection(location, navigate);
+    else this.rememberRoute(ref, botTabIntent(botId), location.search);
   }
 
   private resolveExternalSystem(

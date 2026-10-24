@@ -6,6 +6,7 @@ import type {
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostClient } from "@/lib/host";
 import {
   isProviderNativeRpcError,
@@ -61,6 +62,17 @@ interface McpMutateResult {
   readonly snapshot: McpMutateSnapshot;
 }
 
+function listChangedDuringMutation(
+  currentData: McpListData | undefined,
+  snapshot: McpMutateSnapshot,
+): boolean {
+  return (
+    currentData?.servers !== snapshot.listData?.servers ||
+    currentData?.notices !== snapshot.listData?.notices ||
+    currentData?.coverage !== snapshot.listData?.coverage
+  );
+}
+
 /**
  * Mutates MCP config via `providers.nativeMutate` and writes the
  * returned full server list into the semantic mcp list cache. Response-equals-
@@ -79,6 +91,8 @@ export function useProvidersMcpMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  // What this installs can run on the host, so it carries the grant.
+  const grant = useExecutableWriteGrant();
   return useMutation<
     McpMutateResult,
     HostRpcError,
@@ -109,15 +123,23 @@ export function useProvidersMcpMutate(): UseMutationResult<
         listParams,
         listData: queryClient.getQueryData<McpListData>(listKey),
       };
-      const response = await client.request("providers.nativeMutate", {
-        providerId: variables.providerId,
-        mutation: {
-          kind: "mcp",
-          scope: variables.scope,
-          workspaceRoot: variables.workspaceRoot,
-          mutation: variables.mutation,
-        },
-      });
+      const response = await client.request(
+        "providers.nativeMutate",
+        await grant(
+          {
+            providerId: variables.providerId,
+            executableWriteGrant: null,
+            expectedEnvironmentId: null,
+            mutation: {
+              kind: "mcp",
+              scope: variables.scope,
+              workspaceRoot: variables.workspaceRoot,
+              mutation: variables.mutation,
+            },
+          },
+          client,
+        ),
+      );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },
     onSuccess: ({ data, snapshot }, _variables, ctx) => {
@@ -161,7 +183,10 @@ export function useProvidersMcpMutate(): UseMutationResult<
       }
       if (
         fetchStatus === "fetching" ||
-        currentData?.servers !== snapshot.listData?.servers ||
+        data.coverage?.sources.some(
+          (source) => source.outcome === "unrefreshed",
+        ) === true ||
+        listChangedDuringMutation(currentData, snapshot) ||
         listQuery !== snapshot.listQuery ||
         mutationCompletionRevision !== snapshot.mutationCompletionRevision
       ) {
@@ -171,11 +196,36 @@ export function useProvidersMcpMutate(): UseMutationResult<
         void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
       }
     },
-    onError: (error, variables) => {
+    onError: (error, variables, ctx) => {
+      if (
+        isProviderNativeRpcError(error) &&
+        error.nativeCode === "server_not_found" &&
+        ctx !== undefined &&
+        ctx.hostId !== null
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: providersNativeQueryKeys.mcpList(ctx.hostId, {
+            providerId: variables.providerId,
+            scope: variables.scope,
+            workspaceRoot: variables.workspaceRoot,
+          }),
+          exact: true,
+        });
+      }
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
         return;
       }
       toastFromHostError(error, "Couldn't update MCP server.");
     },
   });
+}
+
+/** Give confirmations their own Query observer and pending state. */
+export function useProvidersMcpApplyRemedy(): UseMutationResult<
+  McpMutateResult,
+  HostRpcError,
+  McpMutateVariables,
+  McpMutateContext
+> {
+  return useProvidersMcpMutate();
 }

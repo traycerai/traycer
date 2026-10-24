@@ -28,12 +28,13 @@ const SYSTEM_TARGET_MINIMUM_MINOR: Record<DocumentAssetKind, number> = {
  * path behind it, so an older host gets today's exact behavior (the default
  * editor) instead - never a failed RPC. The unknown state (`null` before the
  * first handshake) also falls back, the same fails-closed reading every
- * optional-capability gate uses.
+ * optional-capability gate uses. `null` is that fallback finding no editor on
+ * this machine.
  */
 export function useDocumentOpenExternallyTarget(
   hostId: string | null,
   kind: DocumentAssetKind,
-): OpenPathsTarget {
+): OpenPathsTarget | null {
   const version = useEditorOpenPathsVersion(hostId);
   const systemSupported =
     version !== null &&

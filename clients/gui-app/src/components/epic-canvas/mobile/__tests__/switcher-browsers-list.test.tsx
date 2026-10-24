@@ -50,7 +50,9 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
-    hosts: [{ hostId: "host-1", name: "Home Mac", connectable: true }],
+    hosts: [
+      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+    ],
     activeHostId: "host-1",
     isLoading: false,
     listsFailed: false,
@@ -70,6 +72,17 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+// The Simulators section has its own suite; here it only has to be mounted for
+// the surface's host.
+vi.mock("@/components/epic-canvas/mobile/switcher-simulators-section", () => ({
+  SwitcherSimulatorsSection: (props: { readonly hostId: string | null }) => (
+    <div
+      data-testid="switcher-simulators-section-stub"
+      data-host-id={props.hostId}
+    />
+  ),
+}));
 
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: () => ({
@@ -256,6 +269,24 @@ describe("SwitcherBrowsersList", () => {
     renderList(() => undefined);
     expect(screen.getByRole("button", { name: /^Cart/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Guide/ })).toBeTruthy();
+  });
+
+  it("mounts the Simulators section for the surface's host under the rows and on an empty list", () => {
+    renderList(() => undefined);
+    expect(
+      screen
+        .getByTestId("switcher-simulators-section-stub")
+        .getAttribute("data-host-id"),
+    ).toBe("host-1");
+    cleanup();
+
+    replaceSessions([], "live");
+    renderList(() => undefined);
+    expect(
+      screen
+        .getByTestId("switcher-simulators-section-stub")
+        .getAttribute("data-host-id"),
+    ).toBe("host-1");
   });
 
   it("shows the URL on the row, where desktop only has a hover tooltip", () => {

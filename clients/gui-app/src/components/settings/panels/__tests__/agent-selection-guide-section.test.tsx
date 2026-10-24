@@ -23,6 +23,12 @@ type GuideData = {
   readonly generatedDefaultContent: string;
 };
 
+// A marker, so a mount of the section on this page is visible to the case
+// that says it has none.
+vi.mock("@/components/settings/panels/host-environment-section", () => ({
+  HostEnvironmentSection: () => <div data-testid="host-environment-section" />,
+}));
+
 type Deferred<T> = {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -113,58 +119,60 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return {
-    useHostScope: () => {
-      const hosts = guideMocks.directoryEntries.map((entry) =>
-        hostScopeOptionFixture({
-          hostId: entry.hostId,
-          name: entry.label,
-          isLocalMachine: entry.hostId === "local",
-          isActive: entry.hostId === guideMocks.activeHostId,
-        }),
-      );
-      const activeHost =
-        hosts.find((host) => host.hostId === guideMocks.activeHostId) ?? null;
-      const picked = guideMocks.pickedHostId;
-      if (picked === null) {
-        return hostScopeFixture({
-          hosts,
-          host: activeHost,
-          hostId: activeHost?.hostId ?? null,
-          hostLabel: activeHost?.name ?? "No host",
-          activeHost,
-          isViewingActive: true,
-          status: "following",
-          client: null,
-        });
-      }
-      const host = hosts.find((entry) => entry.hostId === picked) ?? null;
-      if (host === null) {
-        return hostScopeFixture({
-          hosts,
-          host: null,
-          hostId: null,
-          hostLabel: picked,
-          vanishedHostId: picked,
-          activeHost,
-          isViewingActive: false,
-          status: "vanished",
-          client: null,
-        });
-      }
+  const useHostScope = () => {
+    const hosts = guideMocks.directoryEntries.map((entry) =>
+      hostScopeOptionFixture({
+        hostId: entry.hostId,
+        name: entry.label,
+        isLocalMachine: entry.hostId === "local",
+        isActive: entry.hostId === guideMocks.activeHostId,
+      }),
+    );
+    const activeHost =
+      hosts.find((host) => host.hostId === guideMocks.activeHostId) ?? null;
+    const picked = guideMocks.pickedHostId;
+    if (picked === null) {
       return hostScopeFixture({
         hosts,
-        host,
-        hostId: host.hostId,
-        hostLabel: host.name,
+        host: activeHost,
+        hostId: activeHost?.hostId ?? null,
+        hostLabel: activeHost?.name ?? "No host",
         activeHost,
-        isViewingActive: host.hostId === guideMocks.activeHostId,
-        status: "ready",
-        // Only a resolved scope hands back a client, and it is the PICKED
-        // host's - never the ambient one.
-        client: { getActiveHostId: () => host.hostId } as never,
+        isViewingActive: true,
+        status: "following",
+        client: null,
       });
-    },
+    }
+    const host = hosts.find((entry) => entry.hostId === picked) ?? null;
+    if (host === null) {
+      return hostScopeFixture({
+        hosts,
+        host: null,
+        hostId: null,
+        hostLabel: picked,
+        vanishedHostId: picked,
+        activeHost,
+        isViewingActive: false,
+        status: "vanished",
+        client: null,
+      });
+    }
+    return hostScopeFixture({
+      hosts,
+      host,
+      hostId: host.hostId,
+      hostLabel: host.name,
+      activeHost,
+      isViewingActive: host.hostId === guideMocks.activeHostId,
+      status: "ready",
+      // Only a resolved scope hands back a client, and it is the PICKED
+      // host's - never the ambient one.
+      client: { getActiveHostId: () => host.hostId } as never,
+    });
+  };
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 
@@ -378,6 +386,14 @@ describe("AgentSelectionGuideSection", () => {
       screen.getByText("Couldn't load agent instructions for this host."),
     ).toBeTruthy();
     expect(screen.queryByTestId("agents-selection-guide-input")).toBeNull();
+  });
+
+  // The page follows the window's host, so a per-host bind control here
+  // bound the wrong machine; it lives on Host > Overview.
+  it("renders no environment section", () => {
+    renderPanel();
+
+    expect(screen.queryByTestId("host-environment-section")).toBeNull();
   });
 
   // Regression: the scope refactor wrapped the loaded state in a frame that

@@ -3,6 +3,9 @@ import { buildAgentSessionObservedFromHookCommand } from "../agent-session-obser
 import { callHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
+import { prepareRequestPayload } from "../../../../shared/host-transport/ws-rpc-client";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   makeCtx,
   restoreAgentIdentityEnv,
@@ -74,6 +77,9 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
       harnessId: "claude",
       event: "resync",
       observedHarnessSessionId: "sess-fresh-1",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({ accepted: true, reason: null });
@@ -98,6 +104,9 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
       harnessId: "claude",
       event: "resync",
       observedHarnessSessionId: "sess-flag",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
   });
 
@@ -147,6 +156,9 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
       harnessId: "opencode",
       event: "resync",
       observedHarnessSessionId: "ses-oc-fresh-1",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({ accepted: true, reason: null });
@@ -211,42 +223,48 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     });
   });
 
-  it("noops (host-too-old) when the request cannot project onto an older host", async () => {
-    // A newer CLI negotiated recordActivity@1.1, but the running host only
-    // speaks @1.0, whose event enum has no "resync": the transport fails to
-    // project the request locally (before sending) and raises this RPC_ERROR.
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true);
-    rpcMock.mockRejectedValueOnce(
-      new HostRpcError({
-        code: "RPC_ERROR",
-        message:
-          "Failed to project request params onto 1.0: Invalid enum value.",
-        requestId: "req-x",
-        method: "agent.tui.recordActivity",
-        fatalDetails: null,
-      }),
-    );
-    stubStdin({
-      isTTY: false,
-      chunks: [JSON.stringify({ session_id: "sess-x" })],
-    });
-    const fn = buildAgentSessionObservedFromHookCommand({
-      provider: "claude",
-      epicId: null,
-      agentId: null,
-    });
-    const result = await fn(makeCtx());
+  it.each([
+    ["directly", false],
+    [
+      "on the retry that ended an episode whose earlier attempt may have run",
+      true,
+    ],
+  ] as const)(
+    "noops (host-too-old) when the request cannot project onto an older host, raised %s",
+    async (_label, endedRetryEpisode) => {
+      // A newer CLI negotiated recordActivity@1.1, but the running host only
+      // speaks @1.0, whose event enum has no "resync": the transport fails to
+      // project the request locally (before sending). The error is the one the
+      // transport's own projection raises for this request.
+      const stderrSpy = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation(() => true);
+      const projectionMiss = resyncProjectionMissOnOlderHost();
+      rpcMock.mockRejectedValueOnce(
+        endedRetryEpisode
+          ? new RetryEpisodeOutcomeUnknownError(projectionMiss)
+          : projectionMiss,
+      );
+      stubStdin({
+        isTTY: false,
+        chunks: [JSON.stringify({ session_id: "sess-x" })],
+      });
+      const fn = buildAgentSessionObservedFromHookCommand({
+        provider: "claude",
+        epicId: null,
+        agentId: null,
+      });
+      const result = await fn(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledTimes(1);
-    expect(result.exitCode).toBe(0);
-    expect(result.data).toEqual({
-      accepted: false,
-      reason: "host-too-old",
-    });
-    expect(stderrSpy).not.toHaveBeenCalled();
-  });
+      expect(rpcMock).toHaveBeenCalledTimes(1);
+      expect(result.exitCode).toBe(0);
+      expect(result.data).toEqual({
+        accepted: false,
+        reason: "host-too-old",
+      });
+      expect(stderrSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("still surfaces a genuine host RPC_ERROR (distinct from a projection miss)", async () => {
     // A real host-side RPC_ERROR (e.g. resolver failure) must NOT be swallowed
@@ -325,3 +343,32 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     await expect(fn(makeCtx())).rejects.toThrow(/bearer rejected/);
   });
 });
+
+/**
+ * What the transport raises when this hook's resync request is prepared for a
+ * host on `agent.tui.recordActivity@1.0`, produced by the transport's real
+ * projection over the real registry rather than written by hand.
+ */
+function resyncProjectionMissOnOlderHost(): HostRpcError {
+  try {
+    prepareRequestPayload(
+      hostRpcRegistry["agent.tui.recordActivity"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 0 },
+      {
+        epicId: "epic-x",
+        tuiAgentId: "tui-x",
+        harnessSessionId: null,
+        harnessId: "claude",
+        event: "resync",
+        observedHarnessSessionId: "sess-x",
+      },
+      "req-x",
+      "agent.tui.recordActivity",
+    );
+  } catch (cause) {
+    if (cause instanceof HostRpcError) return cause;
+    throw cause;
+  }
+  throw new Error("the resync request projected onto 1.0 unexpectedly");
+}

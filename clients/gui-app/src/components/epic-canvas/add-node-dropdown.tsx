@@ -54,6 +54,8 @@ import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 
 export interface AddArtifactDropdownProps {
   children: ReactNode;
@@ -367,12 +369,21 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       pendingTerminalAgentStagingKey(memoryHostId, epicId),
     [overrideStagingKey, memoryHostId, epicId],
   );
-  const launchDisabled = terminalAgentLaunchDisabled({
-    modelSlug: selection.modelSlug,
-    selectedHarnessId,
-    selectionIsTuiCapable,
-    tuiAgentPending,
+  // A harness a team sandbox does not offer never launches there, and the
+  // launcher says so.
+  const teamSandboxHarnessBlocked = useTeamSandboxHarnessBlocked({
+    hostId: launchHostId,
+    client: launchHostClient,
+    harnessId: selectedHarnessId,
   });
+  const launchDisabled =
+    teamSandboxHarnessBlocked ||
+    terminalAgentLaunchDisabled({
+      modelSlug: selection.modelSlug,
+      selectedHarnessId,
+      selectionIsTuiCapable,
+      tuiAgentPending,
+    });
   const start = useCallback((): void => {
     if (launchDisabled) return;
     if (!isTuiHarnessId(selectedHarnessId)) return;
@@ -434,6 +445,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         <DropdownMenuLabel>Harness</DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
+            maxModeContext={{ kind: "none" }}
             labelDisplay="responsive"
             store={toolbarStore}
             withServiceTier={false}
@@ -485,6 +497,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       {/* Host list + Folders section (file-tree-style), staged here and read
           back at launch from the same pending staging key. */}
       <ActiveHostWorkspaceControls
+        sandboxStaging={null}
         disabled={false}
         stagingKey={stagingKey}
         layout="stacked"
@@ -493,6 +506,14 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         seedIntentOverride={null}
         hostScope={hostScope}
       />
+      {teamSandboxHarnessBlocked ? (
+        <p
+          className="px-1 text-ui-xs text-destructive"
+          data-testid="add-node-team-sandbox-unavailable"
+        >
+          {TEAM_SANDBOX_HARNESS_UNAVAILABLE}
+        </p>
+      ) : null}
       <div className="flex justify-end border-t border-border/60 px-1 pt-3">
         <Button
           type="button"

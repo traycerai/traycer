@@ -1,4 +1,8 @@
 import * as React from "react";
+import {
+  readIsNarrowWindowSnapshot,
+  subscribeToMobileQuery,
+} from "@/hooks/ui/use-narrow-window";
 import { isPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
@@ -25,42 +29,13 @@ import { isPhoneLayoutOnly } from "@/lib/mobile-app";
  *   mobile app.
  */
 
-const MOBILE_BREAKPOINT = 768;
-// Range syntax, because it is the exact complement of Tailwind's `md` and
-// `(max-width: 767px)` is not. `innerWidth` was an integer and `matches` is
-// not, so at 767.5px the prefixed form would have moved the shell.
-const MOBILE_QUERY = `(width < ${MOBILE_BREAKPOINT}px)`;
-
-function subscribeToMobileQuery(onChange: () => void): () => void {
-  const mql = window.matchMedia(MOBILE_QUERY);
-  mql.addEventListener("change", onChange);
-  // The self-heal: a `change` that WKWebView coalesces or drops cannot leave
-  // the app wedged in the wrong shell, because the resize accompanying it
-  // re-asks. Re-reading is idempotent - React drops the update when the
-  // snapshot is unchanged - so this costs a comparison, not a render.
-  window.addEventListener("resize", onChange);
-  return () => {
-    mql.removeEventListener("change", onChange);
-    window.removeEventListener("resize", onChange);
-  };
-}
-
-/**
- * Reads the QUERY, not `window.innerWidth`, and the two are not interchangeable
- * here.
- *
- * They used to disagree: the subscription was the query, the snapshot was
- * `innerWidth`. WKWebView updates the query BEFORE `innerWidth` settles, so
- * the `change` event arrived, React re-read the snapshot, and `innerWidth`
- * still described the previous size. `useSyncExternalStore` caches that
- * answer, the query does not fire twice, and the app stayed in the wrong shell
- * until something unrelated re-rendered it. Measured on an iPad mini: five of
- * six rotations delivered `change` against a stale width.
- */
 function readIsMobileSnapshot(): boolean {
   // Policy before measurement: the installed app has one layout at any width.
+  // The width half - the query, its subscription and why it is read instead
+  // of `innerWidth` - lives in `use-narrow-window.ts`, which surfaces keyed
+  // on pixels alone read directly.
   if (isPhoneLayoutOnly()) return true;
-  return window.matchMedia(MOBILE_QUERY).matches;
+  return readIsNarrowWindowSnapshot();
 }
 
 function readIsMobileServerSnapshot(): boolean {

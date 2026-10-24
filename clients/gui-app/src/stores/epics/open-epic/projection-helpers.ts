@@ -1,3 +1,10 @@
+import {
+  ARTIFACT_FILE_OBJECT_FIELD,
+  artifactHeadSchema,
+  artifactObjectRefSchema,
+  type ArtifactHead,
+  type ArtifactObjectRef,
+} from "@traycer/protocol/persistence/epic/artifacts";
 /**
  * Pure projection + Y.Doc-mutation helpers shared between the projector
  * and the store's mutation actions. No React, no zustand, no module
@@ -23,6 +30,7 @@
  *   }
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { ChatRecordOrigin } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
@@ -190,7 +198,10 @@ export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
     value === "spec" ||
     value === "ticket" ||
     value === "story" ||
-    value === "review"
+    value === "review" ||
+    value === "html" ||
+    value === "canvas" ||
+    value === "file"
   ) {
     return value;
   }
@@ -245,6 +256,55 @@ function isString(value: unknown): value is string {
 
 // ─── Per-entry projectors ─────────────────────────────────────────────────
 
+function projectArtifactObjectFields(
+  entry: Y.Map<unknown>,
+): Partial<ArtifactProjection> | null {
+  const layout = entry.get("layout");
+  const relativePath = entry.get("relativePath");
+  const rawHead = entry.get("head");
+  const head = artifactHeadSchema.safeParse(
+    rawHead instanceof Y.Map ? rawHead.toJSON() : rawHead,
+  );
+  const rawObject = entry.get(ARTIFACT_FILE_OBJECT_FIELD);
+  const object = artifactObjectRefSchema.safeParse(
+    rawObject instanceof Y.Map ? rawObject.toJSON() : rawObject,
+  );
+  const kind = entry.get("kind");
+  if ((kind === "html" || kind === "canvas") && !head.success) return null;
+  if (kind === "file" && !object.success) return null;
+  return {
+    layout:
+      layout === "file" || entry.get("kind") === "file" ? "file" : "folder",
+    ...(typeof relativePath === "string" ? { relativePath } : {}),
+    ...(head.success ? { head: head.data } : {}),
+    ...(object.success ? { object: object.data } : {}),
+  };
+}
+
+export function artifactHeadsEqual(
+  a: ArtifactHead | undefined,
+  b: ArtifactHead | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.capturedAt !== b.capturedAt)
+    return false;
+  const paths = Object.keys(a.files);
+  return (
+    paths.length === Object.keys(b.files).length &&
+    paths.every((path) => {
+      if (!Object.hasOwn(b.files, path)) return false;
+      const left = a.files[path];
+      const right = b.files[path];
+      return (
+        left.sha256 === right.sha256 &&
+        left.byteLength === right.byteLength &&
+        left.mediaType === right.mediaType &&
+        left.status === right.status
+      );
+    })
+  );
+}
+
 export function projectArtifact(
   id: string,
   entry: Y.Map<unknown>,
@@ -256,11 +316,14 @@ export function projectArtifact(
       ? readMaybeNumber(entry, "status")
       : null;
   const artifactRoomId = readMaybeNullableString(entry, "artifactRoomId");
+  const objectFields = projectArtifactObjectFields(entry);
+  if (objectFields === null) return null;
   return {
     id,
     kind,
     title: readMaybeString(entry, "title"),
     folderName: readMaybeString(entry, "folderName"),
+    ...objectFields,
     parentId: readMaybeNullableString(entry, "parentId"),
     artifactRoomId:
       artifactRoomId !== null && artifactRoomId.length > 0
@@ -292,14 +355,21 @@ export function projectDeletedArtifact(
   };
 }
 
-export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
+export function projectChat(
+  id: string,
+  entry: Y.Map<unknown>,
+  currentUserId: string | null,
+): ChatProjection {
+  const userId = readMaybeNullableString(entry, "userId");
   return {
     id,
     title: readMaybeString(entry, "title"),
     parentId: readMaybeNullableString(entry, "parentId"),
     createdAt: readMaybeNumber(entry, "createdAt"),
     updatedAt: readMaybeNumber(entry, "updatedAt"),
-    userId: readMaybeNullableString(entry, "userId"),
+    userId,
+    // A doc entry carries no `origin`, so it answers by owner equality.
+    ownedByViewer: isChatVisibleToUser(null, userId, currentUserId, null),
     hostId: readMaybeNullableString(entry, "hostId"),
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     // A chat projected FROM THE DOC is doc-homed by construction - the doc is
@@ -410,6 +480,32 @@ export function messageRowId(message: OpenMessage, index: number): string {
 
 // ─── Equality short-circuits ──────────────────────────────────────────────
 
+function artifactObjectsEqual(
+  a: ArtifactObjectRef | undefined,
+  b: ArtifactObjectRef | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return (
+    a.sha256 === b.sha256 &&
+    a.byteLength === b.byteLength &&
+    a.mediaType === b.mediaType &&
+    a.status === b.status
+  );
+}
+
+function artifactObjectFieldsEqual(
+  a: ArtifactProjection,
+  b: ArtifactProjection,
+): boolean {
+  return (
+    a.layout === b.layout &&
+    a.relativePath === b.relativePath &&
+    artifactObjectsEqual(a.object, b.object) &&
+    artifactHeadsEqual(a.head, b.head)
+  );
+}
+
 export function artifactProjectionsEq(
   a: ArtifactProjection,
   b: ArtifactProjection,
@@ -419,6 +515,7 @@ export function artifactProjectionsEq(
     a.kind === b.kind &&
     a.title === b.title &&
     a.folderName === b.folderName &&
+    artifactObjectFieldsEqual(a, b) &&
     a.parentId === b.parentId &&
     a.artifactRoomId === b.artifactRoomId &&
     a.createdAt === b.createdAt &&
@@ -452,6 +549,7 @@ export function chatProjectionsEq(
     a.createdAt === b.createdAt &&
     a.updatedAt === b.updatedAt &&
     a.userId === b.userId &&
+    a.ownedByViewer === b.ownedByViewer &&
     a.hostId === b.hostId &&
     a.isTitleEditedByUser === b.isTitleEditedByUser &&
     a.archivedAt === b.archivedAt &&
@@ -630,13 +728,42 @@ function isOwnedRecordVisibleToUser(
   return ownerUserId === currentUserId;
 }
 
+/**
+ * Whether a chat is the viewer's own: THE one decision, made where a
+ * {@link ChatProjection} is built and carried as `ownedByViewer`.
+ *
+ * `origin` is the serving host's word on a record row, `null` for a row that
+ * has none (a doc entry, a pending stand-in). An `own` row admits whatever its
+ * owner is: a team host keys its task chats by its environment id, so an
+ * admitted member's own chat names an owner that is not the member, and the
+ * host lists that row as `own` only to a viewer who may act on it.
+ *
+ * The host is the authority for an `own` row only for the identity it
+ * answered, so the arm admits only when `answeredForViewer` - whom the table's
+ * rows were answered for - IS the current viewer. After an account switch the
+ * previous identity's `own` rows stop admitting until the new identity's first
+ * answer re-stamps it. A `null` stamp admits only while the viewer is `null`
+ * too, the boot fail-open the owner arm below already gives; once a viewer is
+ * known, rows nobody stamped wait for an answer. Every other case answers by
+ * owner equality, failing open as described above, so the viewer's own rows
+ * show whatever the stamp says.
+ */
 export function isChatVisibleToUser(
-  chatUserId: string | null,
+  origin: ChatRecordOrigin | null,
+  ownerUserId: string | null,
   currentUserId: string | null,
+  answeredForViewer: string | null,
 ): boolean {
-  return isOwnedRecordVisibleToUser(chatUserId, currentUserId);
+  if (origin === "own" && answeredForViewer === currentUserId) return true;
+  return isOwnedRecordVisibleToUser(ownerUserId, currentUserId);
 }
 
+/**
+ * Owner equality only, with no `origin` arm: terminal agents stay
+ * member-owned on a team host, so no TUI row is ever keyed by the environment
+ * and no TUI arm admits. (The TUI `origin` is `registry`/`doc`/`cloud`, and
+ * the `doc` arm carries every collaborator's agents.)
+ */
 export function isTerminalAgentVisibleToUser(
   agentUserId: string | null,
   currentUserId: string | null,
@@ -656,8 +783,8 @@ function projectChatsSlice(
   const allIds: string[] = [];
   for (const [id, entry] of map.entries()) {
     if (!(entry instanceof Y.Map)) continue;
-    const projected = projectChat(id, entry as Y.Map<unknown>);
-    if (!isChatVisibleToUser(projected.userId, currentUserId)) continue;
+    const projected = projectChat(id, entry as Y.Map<unknown>, currentUserId);
+    if (!projected.ownedByViewer) continue;
     byId[id] = projected;
     allIds.push(id);
   }
@@ -696,6 +823,8 @@ function projectChatsSlice(
  */
 export function chatProjectionFromRecord(
   record: HeldChatRecordRow,
+  currentUserId: string | null,
+  answeredForViewer: string | null,
 ): ChatProjection {
   return {
     id: record.chatId,
@@ -704,6 +833,12 @@ export function chatProjectionFromRecord(
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     userId: record.ownerUserId,
+    ownedByViewer: isChatVisibleToUser(
+      record.origin,
+      record.ownerUserId,
+      currentUserId,
+      answeredForViewer,
+    ),
     // Never `null` here, unlike a legacy doc entry: the registry row always
     // names the host that minted the chat.
     hostId: record.originHostId,
@@ -720,22 +855,29 @@ export function chatProjectionFromRecord(
 }
 
 /**
- * The host-served rows as a slice.
+ * The host-served rows as a slice, each stamped `ownedByViewer` for
+ * `currentUserId` against the table's `answeredForViewer` (see
+ * {@link isChatVisibleToUser}).
  *
- * A pure mapping, with no ownership filter: the display boundary for "somebody
- * else's agent" is applied in {@link unionChatsSlice}, at projection time,
- * because that is when the signed-in user is known. Filtering here would freeze
- * the answer at the moment the rows ARRIVED, and a user switch afterwards would
- * re-project the previous user's chats out of a slice that had already been
- * declared safe.
+ * A pure mapping, with no ownership filter: the record table selects the rows
+ * the viewer may see before this runs, and {@link unionChatsSlice} drops any
+ * entry not stamped as the viewer's. The stamp is not frozen at arrival: the
+ * table re-runs this over its retained rows on every recompute, and a user
+ * switch republishes before it re-projects.
  */
 export function chatRecordsSlice(
   records: readonly HeldChatRecordRow[],
+  currentUserId: string | null,
+  answeredForViewer: string | null,
 ): ChatsSlice {
   const byId: Record<string, ChatProjection> = {};
   const allIds: string[] = [];
   for (const record of records) {
-    const projected = chatProjectionFromRecord(record);
+    const projected = chatProjectionFromRecord(
+      record,
+      currentUserId,
+      answeredForViewer,
+    );
     byId[projected.id] = projected;
     allIds.push(projected.id);
   }
@@ -786,7 +928,6 @@ export function chatSlicesEq(a: ChatsSlice, b: ChatsSlice): boolean {
 export function unionChatsSlice(
   docChats: ChatsSlice,
   records: ChatsSlice,
-  currentUserId: string | null,
 ): ChatsSlice {
   if (records.allIds.length === 0) return docChats;
   const byId: Record<string, ChatProjection> = { ...docChats.byId };
@@ -810,7 +951,14 @@ export function unionChatsSlice(
     // collapse two people's chats into one entry. That re-keying is the real
     // precondition for retiring the sidebar's `epic.listCloudChats` arm, which
     // is where collaborators' chats are served from today.
-    if (!isChatVisibleToUser(record.userId, currentUserId)) continue;
+    //
+    // The one owner other than the viewer that passes is a row its serving
+    // host lists as `origin: "own"` - a team host's environment-owned task
+    // chat. That cannot collapse two chats: a host serves its own rows only to
+    // a viewer who may act on them, and one host never holds two own rows with
+    // one `chatId`. The stamp was made by `isChatVisibleToUser` when the record
+    // slice was built for this viewer.
+    if (!record.ownedByViewer) continue;
     if (!Object.hasOwn(byId, id)) {
       byId[id] = record;
       allIds.push(id);
@@ -1553,13 +1701,11 @@ export function readEpicRawProjectionSources(
 export function unionChatsForConnection(
   docChats: ChatsSlice,
   chatRecords: ChatsSlice,
-  currentUserId: string | null,
   docArm: EpicDocRecordArms,
 ): ChatsSlice {
   return unionChatsSlice(
     docArm.chats ? docChats : EMPTY_CHATS_SLICE,
     chatRecords,
-    currentUserId,
   );
 }
 
@@ -1594,12 +1740,7 @@ export function composeEpicProjection(
   const { chatRecords, tuiAgentRecords, pendingOverlay, reportDeadMutations } =
     inputs;
   const { artifacts, deletedArtifacts, docChats, docTuiAgents } = raw;
-  const chats = unionChatsForConnection(
-    docChats,
-    chatRecords,
-    currentUserId,
-    inputs.docArm,
-  );
+  const chats = unionChatsForConnection(docChats, chatRecords, inputs.docArm);
   const tuiAgents = unionTuiAgentsForConnection(
     docTuiAgents,
     tuiAgentRecords,

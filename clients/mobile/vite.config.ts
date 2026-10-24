@@ -51,11 +51,17 @@ const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
 const SHIPPED_ENVIRONMENTS = {
   staging: {
     authnBaseUrl: "https://authn.dev.traycer.ai",
+    // The host's staging `traycerServerBaseUrl`. Fronted by IAP, so a call
+    // carrying only the user bearer is refused there: a staging build turns
+    // its sandbox surfaces off (`SANDBOXES_UNAVAILABLE_IN_STAGING`, set in
+    // `src/web/main.tsx`) rather than sending calls that cannot pass.
+    serverBaseUrl: "https://server.dev.traycer.ai",
     cloudUiBaseUrl: "https://dev.traycer.ai",
     relayBaseUrl: "wss://relay.dev.traycer.ai/attach",
   },
   production: {
     authnBaseUrl: "https://authn.traycer.ai",
+    serverBaseUrl: "https://server.traycer.ai",
     cloudUiBaseUrl: "https://traycer.ai",
     relayBaseUrl: RELAY_BASE_URL,
   },
@@ -123,6 +129,7 @@ function shippedConfig(
   return {
     environment,
     authnBaseUrl: backends.authnBaseUrl,
+    serverBaseUrl: backends.serverBaseUrl,
     signInUrl: new URL("/sign-in", backends.cloudUiBaseUrl).toString(),
     relayBaseUrl: backends.relayBaseUrl,
     // Authn shows this on the device-flow approval page as who is asking.
@@ -146,6 +153,7 @@ const clientsRoot = resolve(mobileRoot, "..");
 const guiAppRoot = resolve(clientsRoot, "gui-app");
 const sharedRoot = resolve(clientsRoot, "shared");
 const protocolRoot = resolve(clientsRoot, "..", "protocol");
+const htmlSourceRoot = resolve(clientsRoot, "..", "packages", "html-source");
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -338,10 +346,23 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
     "TRAYCER_DEV_CLOUD_UI_BASE_URL",
     requiredEnv("TRAYCER_DEV_CLOUD_UI_BASE_URL"),
   );
+  // Not required, unlike the two above: only the sandbox surfaces read it.
+  // The dev run sets it to its own traycer-server (`ports.server` in
+  // `run.json`, which `dev-android.ts` tunnels with every other run port);
+  // outside a run it falls back to the host's own dev default
+  // (`traycer-host/src/config.ts`).
+  const serverBaseUrlRaw = process.env.TRAYCER_DEV_SERVER_BASE_URL;
+  const serverBaseUrl = parseHttpBaseUrl(
+    "TRAYCER_DEV_SERVER_BASE_URL",
+    serverBaseUrlRaw === undefined || serverBaseUrlRaw.trim().length === 0
+      ? "http://localhost:5010"
+      : serverBaseUrlRaw,
+  );
   const host = await readDevHost(slot);
   return {
     environment: "dev",
     authnBaseUrl,
+    serverBaseUrl,
     signInUrl: new URL("/sign-in", cloudUiBaseUrl).toString(),
     // Same dev-gated posture as the desktop's `config.ts`: the shipped relay
     // endpoint unless this run exports its own (`make dev-remote` does). This
@@ -495,6 +516,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       alias: {
         "@traycer/protocol/utils": resolve(protocolRoot, "utils"),
         "@traycer/protocol": resolve(protocolRoot, "src"),
+        "@traycer/html-source": resolve(htmlSourceRoot, "src", "index.ts"),
         "@traycer-clients/gui-app": guiAppRoot,
         "@traycer-clients/shared": sharedRoot,
         "@": resolve(guiAppRoot, "src"),

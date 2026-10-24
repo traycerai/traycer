@@ -557,11 +557,22 @@ describe("RootDndProvider on a vertical strip", () => {
 
   describe("group membership by drop position", () => {
     const inBand = BAND.left.start + STRIP_WIDTH / 2;
-    /** The strip's rows stacked 100..268; the group block reaches 4px past its rows. */
+    /**
+     * The strip's rows stacked 100..268; the group block reaches 4px past its
+     * rows. The group is the account's: a group the account does not have is
+     * closed to every drop.
+     */
     function seedGroup(members: ReadonlyArray<TabRef>, collapsed: boolean) {
       act(() => {
         useTabsStore.setState({
-          groups: { g: { name: "Work", color: "#8ab4f8", collapsed } },
+          groups: {
+            g: {
+              name: "Work",
+              color: "#8ab4f8",
+              collapsed,
+              organizationOwnerId: "user-1",
+            },
+          },
           customizations: Object.fromEntries(
             members.map((ref) => [
               tabRefKey(ref),
@@ -623,6 +634,7 @@ describe("RootDndProvider on a vertical strip", () => {
           }),
         }),
         supported: true,
+        hostSupport: true,
         userId: "user-1",
         view: {
           catalog: [],
@@ -651,8 +663,25 @@ describe("RootDndProvider on a vertical strip", () => {
       };
     }
 
-    it("never joins an organization's group with a tab the organization does not keep, and goes past it whole", async () => {
-      seedOrganizationGroup([B, X, Y], [B, X, Y]);
+    /** A supported organization for a test that does not look at the command. */
+    const quietOrganization = (): OrganizationContextValue =>
+      organizationOf(vi.fn(() => Promise.resolve()));
+
+    it("never joins a group with a tab that is not a task, and goes past it whole", async () => {
+      seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+      // The dragged row is a bot's tab: groups hold tasks.
+      const botTab: TabRef = { kind: "bot", id: A.id };
+      act(() => {
+        const state = useTabsStore.getState();
+        useTabsStore.setState({
+          items: state.items.map((item) =>
+            item.id === itemIdOf(A) ? { ...item, ref: botTab } : item,
+          ),
+          stripOrder: state.stripOrder.map((ref) =>
+            tabRefKey(ref) === tabRefKey(A) ? botTab : ref,
+          ),
+        });
+      });
       const view = await mountStrip("left", ROWS, organizationBlock, null);
       const drag = pressAndActivate(view, ROW_A, inBand, 25);
       // Over the group's block, short of its centre: next to it, not in it.
@@ -666,31 +695,34 @@ describe("RootDndProvider on a vertical strip", () => {
 
       releaseAt(drag, inBand, 200);
 
-      expect(groupOf(A)).toBeNull();
+      expect(groupOf(botTab)).toBeNull();
       expect(stripItemIds()).toEqual([
         ROW_B.stripItemId,
         SPLIT_ID,
-        ROW_A.stripItemId,
+        itemIdOf(botTab),
         ROW_C.stripItemId,
       ]);
     });
 
-    it("keeps a tab the organization does not keep in an organization's group, moving it to the run's nearest edge when it is dropped outside", async () => {
-      seedOrganizationGroup([B, X, Y], [X, Y]);
+    it("never joins a group the account does not have, though its tabs are tasks", async () => {
+      // Residual machine-local data: no organization owner on the group.
+      seedGroup([B, X, Y], false);
+      act(() => {
+        useTabsStore.setState({
+          groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+        });
+      });
       const view = await mountStrip("left", ROWS, organizationBlock, null);
-      const drag = pressAndActivate(view, ROW_B, inBand, 26);
-      // Below the block, past C: out of the group's run.
-      moveTo(drag, inBand, 300);
+      const drag = pressAndActivate(view, ROW_A, inBand, 26);
+      moveTo(drag, inBand, 170);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        groupId: null,
+        joinsGroup: false,
+      });
 
-      releaseAt(drag, inBand, 300);
+      releaseAt(drag, inBand, 170);
 
-      expect(groupOf(B)).toBe("g");
-      expect(stripItemIds()).toEqual([
-        ROW_A.stripItemId,
-        SPLIT_ID,
-        ROW_B.stripItemId,
-        ROW_C.stripItemId,
-      ]);
+      expect(groupOf(A)).toBeNull();
     });
 
     it("joins an organization's group with a task the organization keeps, and saves it with the menu's command at its place among all members", async () => {
@@ -790,7 +822,7 @@ describe("RootDndProvider on a vertical strip", () => {
         "left",
         ROWS,
         [{ groupId: "g", top: 130, height: 108 }],
-        null,
+        quietOrganization(),
       );
       const drag = pressAndActivate(view, ROW_A, inBand, 20);
       // Past B's centre (150), short of the pair's (201): between them.
@@ -818,7 +850,7 @@ describe("RootDndProvider on a vertical strip", () => {
         "left",
         ROWS,
         [{ groupId: "g", top: 96, height: 40 }],
-        null,
+        quietOrganization(),
       );
       const drag = pressAndActivate(view, ROW_SPLIT, inBand, 24);
       // Past A's centre (116) and short of B's (150), inside the block (to 136).
@@ -842,7 +874,7 @@ describe("RootDndProvider on a vertical strip", () => {
         "left",
         ROWS,
         [{ groupId: "g", top: 130, height: 108 }],
-        null,
+        quietOrganization(),
       );
       const drag = pressAndActivate(view, ROW_B, inBand, 21);
       // Past A's far quarter (from 108), above the block's top (130).
@@ -871,7 +903,7 @@ describe("RootDndProvider on a vertical strip", () => {
         "left",
         ROWS,
         [{ groupId: "g", top: 130, height: 40 }],
-        null,
+        quietOrganization(),
       );
       const drag = pressAndActivate(view, ROW_B, inBand, 22);
       // Below the block's bottom (170), short of the pair's centre (201): the
@@ -897,7 +929,7 @@ describe("RootDndProvider on a vertical strip", () => {
         "left",
         ROWS.filter((row) => row !== ROW_B),
         [{ groupId: "g", top: 134, height: 28 }],
-        null,
+        quietOrganization(),
       );
       const drag = pressAndActivate(view, ROW_C, inBand, 23);
       moveTo(drag, inBand, 148);
@@ -919,6 +951,185 @@ describe("RootDndProvider on a vertical strip", () => {
         ROW_B.stripItemId,
         SPLIT_ID,
       ]);
+    });
+
+    describe("while the account cannot be told", () => {
+      const ORIGINAL_ORDER = [
+        ROW_A.stripItemId,
+        ROW_B.stripItemId,
+        SPLIT_ID,
+        ROW_C.stripItemId,
+      ];
+      /** An organization whose context is not ready: a saved membership would carry no command. */
+      const unsupportedOrganization = (
+        command: OrganizationContextValue["command"],
+      ): OrganizationContextValue => ({
+        ...organizationOf(command),
+        supported: false,
+      });
+
+      it("refuses a drop that would join an account group, leaving membership and order as they were", async () => {
+        seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          organizationBlock,
+          unsupportedOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_A, inBand, 30);
+        // The same position that joins the group when the account can be told.
+        moveTo(drag, inBand, 170);
+        expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+          kind: "reorder",
+          groupId: "g",
+          joinsGroup: true,
+        });
+
+        releaseAt(drag, inBand, 170);
+
+        expect(groupOf(A)).toBeNull();
+        expect(stripItemIds()).toEqual(ORIGINAL_ORDER);
+        expect(command).not.toHaveBeenCalled();
+      });
+
+      it("refuses a drop that would take a task out of an account group, leaving membership and order as they were", async () => {
+        seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          organizationBlock,
+          unsupportedOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_B, inBand, 31);
+        // The same position that takes B out when the account can be told.
+        moveTo(drag, inBand, 106);
+        expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+          kind: "reorder",
+          groupId: null,
+          joinsGroup: false,
+        });
+
+        releaseAt(drag, inBand, 106);
+
+        expect(groupOf(B)).toBe("g");
+        expect(stripItemIds()).toEqual(ORIGINAL_ORDER);
+        expect(command).not.toHaveBeenCalled();
+      });
+
+      it("still reorders ungrouped tabs, as that changes no group", async () => {
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          [],
+          unsupportedOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_A, inBand, 32);
+        moveTo(drag, inBand, 170);
+
+        releaseAt(drag, inBand, 170);
+
+        expect(stripItemIds()).toEqual([
+          ROW_B.stripItemId,
+          ROW_A.stripItemId,
+          SPLIT_ID,
+          ROW_C.stripItemId,
+        ]);
+        expect(command).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("while the account is ready but its first view has not arrived", () => {
+      const ORIGINAL_ORDER = [
+        ROW_A.stripItemId,
+        ROW_B.stripItemId,
+        SPLIT_ID,
+        ROW_C.stripItemId,
+      ];
+      /**
+       * A handshake and an account that are ready, with no projection yet: the
+       * stamped layout of the last session is on screen, and a saved
+       * membership would send no command.
+       */
+      const viewlessOrganization = (
+        command: OrganizationContextValue["command"],
+      ): OrganizationContextValue => ({
+        ...organizationOf(command),
+        supported: true,
+        view: undefined,
+      });
+
+      it("refuses a drop that would join an account group, leaving membership and order as they were", async () => {
+        seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          organizationBlock,
+          viewlessOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_A, inBand, 33);
+        moveTo(drag, inBand, 170);
+        expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+          kind: "reorder",
+          groupId: "g",
+          joinsGroup: true,
+        });
+
+        releaseAt(drag, inBand, 170);
+
+        expect(groupOf(A)).toBeNull();
+        expect(stripItemIds()).toEqual(ORIGINAL_ORDER);
+        expect(command).not.toHaveBeenCalled();
+      });
+
+      it("refuses a drop that would take a task out of an account group, leaving membership and order as they were", async () => {
+        seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          organizationBlock,
+          viewlessOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_B, inBand, 34);
+        moveTo(drag, inBand, 106);
+        expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+          kind: "reorder",
+          groupId: null,
+          joinsGroup: false,
+        });
+
+        releaseAt(drag, inBand, 106);
+
+        expect(groupOf(B)).toBe("g");
+        expect(stripItemIds()).toEqual(ORIGINAL_ORDER);
+        expect(command).not.toHaveBeenCalled();
+      });
+
+      it("still reorders ungrouped tabs, as that changes no group", async () => {
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          [],
+          viewlessOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_A, inBand, 35);
+        moveTo(drag, inBand, 170);
+
+        releaseAt(drag, inBand, 170);
+
+        expect(stripItemIds()).toEqual([
+          ROW_B.stripItemId,
+          ROW_A.stripItemId,
+          SPLIT_ID,
+          ROW_C.stripItemId,
+        ]);
+        expect(command).not.toHaveBeenCalled();
+      });
     });
   });
 

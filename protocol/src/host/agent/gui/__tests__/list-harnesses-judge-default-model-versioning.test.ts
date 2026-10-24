@@ -9,6 +9,7 @@ import {
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV92,
+  listGuiHarnessesResponseSchemaV100,
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
@@ -64,12 +65,19 @@ describe("agent.gui.listHarnesses registry: 9.1 and 9.2 frozen, 10.0 the head", 
     ).toBe(false);
   });
 
-  it("binds the live schema on the 10.0 head", () => {
+  it("binds the live schema on the 10.1 head, with 10.0 frozen below it", () => {
     const head = hostRpcRegistry["agent.gui.listHarnesses"][10];
-    expect(head.latestMinor).toBe(0);
+    expect(head.latestMinor).toBe(1);
+    // 10.0 is released (`host-v1.5.1`) and froze when 10.1 opened.
     expect(head.versions[0].contract.responseSchema).toBe(
+      listGuiHarnessesResponseSchemaV100,
+    );
+    expect(head.versions[1].contract.responseSchema).toBe(
       listGuiHarnessesResponseSchema,
     );
+    expect(
+      Object.hasOwn(head.versions[1], "responseGrowthProjectionGated"),
+    ).toBe(false);
   });
 });
 

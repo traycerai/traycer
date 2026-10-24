@@ -1,6 +1,7 @@
 import { nestedFocusBoundaryMock } from "@/__tests__/nested-focus-boundary-mock";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import {
   requestSidebarNodeReveal,
@@ -185,6 +187,15 @@ const MockWsStreamClient =
 /** Minimal, fully-populated `PrLightItem` fixture builder - every required
  * field gets a realistic default; callers override only what the case cares
  * about. */
+function railRowKind(row: HTMLElement): string {
+  if (row.querySelector("[data-testid=pr-stack-absent]") !== null) {
+    return "absent";
+  }
+  if (row.querySelector("[data-testid=pr-stack-base]") !== null) return "base";
+  const card = row.querySelector("[data-testid^=mock-pr-card-]");
+  return card?.getAttribute("data-testid")?.replace("mock-pr-card-", "") ?? "?";
+}
+
 function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
   return {
     githubHost: null,
@@ -270,6 +281,7 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     canvasHostState.id = "host-a";
+    usePrPanelStore.setState({ openOnly: false });
     useSurfaceHostSelectionStore.setState({ selections: {} });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
     hostOptionsState.value = {
@@ -303,6 +315,7 @@ describe("PrPanelBody card list", () => {
 
   afterEach(() => {
     cleanup();
+    usePrPanelStore.setState({ openOnly: false });
     resetCanvas();
     useSidebarNodeRevealStore.setState(
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
@@ -642,5 +655,259 @@ describe("PrPanelBody card list", () => {
     });
     expect(await screen.findByTestId("pr-panel-error-notice")).toBeTruthy();
     expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
+  });
+  describe("open-only filter", () => {
+    const stateRows = (): readonly PrLightItem[] => [
+      buildPrItem({ headRefName: "open-head", state: "open" }),
+      buildPrItem({ headRefName: "merged-head", state: "merged" }),
+      buildPrItem({ headRefName: "closed-head", state: "closed" }),
+    ];
+
+    it("shows every row while the filter is off", async () => {
+      const epicId = "epic-oo0";
+      renderPanel({ epicId, tabId: "tab-oo0" });
+      await emitSnapshot(epicId, stateRows());
+
+      expect(await screen.findByTestId("mock-pr-card-open-head")).toBeTruthy();
+      expect(screen.getByTestId("mock-pr-card-merged-head")).toBeTruthy();
+      expect(screen.getByTestId("mock-pr-card-closed-head")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
+    });
+
+    it("keeps open rows and hides merged and closed ones", async () => {
+      usePrPanelStore.setState({ openOnly: true });
+      const epicId = "epic-oo1";
+      renderPanel({ epicId, tabId: "tab-oo1" });
+      await emitSnapshot(epicId, stateRows());
+
+      expect(await screen.findByTestId("mock-pr-card-open-head")).toBeTruthy();
+      expect(screen.queryByTestId("mock-pr-card-merged-head")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-closed-head")).toBeNull();
+      // The repo count follows what is shown, and nothing says "all hidden".
+      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
+        "1",
+      );
+      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
+    });
+
+    it("says every row is merged or closed instead of showing the empty state", async () => {
+      usePrPanelStore.setState({ openOnly: true });
+      const epicId = "epic-oo2";
+      renderPanel({ epicId, tabId: "tab-oo2" });
+      await emitSnapshot(epicId, [
+        buildPrItem({ headRefName: "merged-head", state: "merged" }),
+        buildPrItem({ headRefName: "closed-head", state: "closed" }),
+        buildPrItem({ headRefName: "closed-head-2", state: "closed" }),
+      ]);
+
+      const message = await screen.findByTestId("pr-panel-all-hidden");
+      expect(message.textContent).toBe(
+        "All 3 pull requests are merged or closed",
+      );
+      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
+      expect(screen.queryByTestId("pr-repo-group")).toBeNull();
+    });
+
+    it("uses the singular line when the only pull request is merged or closed", async () => {
+      usePrPanelStore.setState({ openOnly: true });
+      const epicId = "epic-oo3";
+      renderPanel({ epicId, tabId: "tab-oo3" });
+      await emitSnapshot(epicId, [
+        buildPrItem({ headRefName: "merged-head", state: "merged" }),
+      ]);
+
+      const message = await screen.findByTestId("pr-panel-all-hidden");
+      expect(message.textContent).toBe(
+        "The only pull request is merged or closed",
+      );
+      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
+    });
+
+    it("still shows the generic empty state when the list itself is empty", async () => {
+      usePrPanelStore.setState({ openOnly: true });
+      const epicId = "epic-oo4";
+      renderPanel({ epicId, tabId: "tab-oo4" });
+      await emitSnapshot(epicId, []);
+
+      expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
+    });
+
+    it("reveals the hidden rows again when the filter is switched off", async () => {
+      usePrPanelStore.setState({ openOnly: true });
+      const epicId = "epic-oo5";
+      renderPanel({ epicId, tabId: "tab-oo5" });
+      await emitSnapshot(epicId, [
+        buildPrItem({ headRefName: "merged-head", state: "merged" }),
+      ]);
+      await screen.findByTestId("pr-panel-all-hidden");
+
+      act(() => {
+        usePrPanelStore.getState().setOpenOnly(false);
+      });
+
+      expect(
+        await screen.findByTestId("mock-pr-card-merged-head"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-all-hidden")).toBeNull();
+    });
+  });
+
+  describe("stacks", () => {
+    it("draws a stack header above two rows chained by base and head", async () => {
+      const epicId = "epic-st1";
+      renderPanel({ epicId, tabId: "tab-st1" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "stack-top",
+          baseRefName: "stack-bottom",
+        }),
+        buildPrItem({ headRefName: "stack-bottom", baseRefName: "main" }),
+      ]);
+
+      const header = await screen.findByTestId("pr-stack-header");
+      expect(header.textContent).toContain("Stack → main");
+      expect(header.textContent).toContain("2");
+      expect(screen.getAllByTestId("pr-stack-header")).toHaveLength(1);
+      // Top layer first beneath the header, the base branch at the foot.
+      const bottom = screen.getByTestId("mock-pr-card-stack-bottom");
+      const top = screen.getByTestId("mock-pr-card-stack-top");
+      expect(
+        header.compareDocumentPosition(top) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.getByTestId("pr-stack-base").textContent).toBe("main");
+      expect(screen.queryByTestId("pr-stack-absent")).toBeNull();
+      expect(
+        top.compareDocumentPosition(bottom) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("counts a native stack against its full size when only some layers are listed", async () => {
+      const epicId = "epic-st2";
+      renderPanel({ epicId, tabId: "tab-st2" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "native-1",
+          stack: {
+            number: 7,
+            baseRefName: "development",
+            size: 5,
+            position: 1,
+          },
+        }),
+        buildPrItem({
+          headRefName: "native-2",
+          stack: {
+            number: 7,
+            baseRefName: "development",
+            size: 5,
+            position: 2,
+          },
+        }),
+      ]);
+
+      const header = await screen.findByTestId("pr-stack-header");
+      expect(header.textContent).toContain("Stack #7 → development");
+      expect(header.textContent).toContain("2 of 5");
+      // Drawn top first down the rail: the three absent upper layers, then
+      // layer 2, layer 1, and the base at the foot.
+      const rail = screen.getAllByTestId("pr-stack-rail-row");
+      expect(rail.map((row) => railRowKind(row))).toEqual([
+        "absent",
+        "native-2",
+        "native-1",
+        "base",
+      ]);
+      expect(screen.getByTestId("pr-stack-absent").textContent).toBe(
+        "3 layers not in this task",
+      );
+      expect(screen.getByTestId("pr-stack-base").textContent).toBe(
+        "development",
+      );
+    });
+
+    it("does not invent a stack when Open only hides a fan-in row", async () => {
+      const epicId = "epic-filter-fanin";
+      renderPanel({ epicId, tabId: "tab-filter-fanin" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "development",
+          baseRefName: "main",
+          state: "open",
+        }),
+        buildPrItem({
+          headRefName: "feat-open",
+          baseRefName: "development",
+          state: "open",
+        }),
+        buildPrItem({
+          headRefName: "feat-merged",
+          baseRefName: "development",
+          state: "merged",
+        }),
+      ]);
+      await screen.findByTestId("mock-pr-card-feat-open");
+      expect(screen.queryByTestId("pr-stack-header")).toBeNull();
+
+      act(() => {
+        usePrPanelStore.getState().setOpenOnly(true);
+      });
+
+      expect(screen.queryByTestId("mock-pr-card-feat-merged")).toBeNull();
+      expect(screen.queryByTestId("pr-stack-header")).toBeNull();
+      expect(screen.queryByTestId("pr-stack-rail-row")).toBeNull();
+    });
+
+    it("keeps a hidden layer's neighbours in their stack places", async () => {
+      const epicId = "epic-filter-stack";
+      renderPanel({ epicId, tabId: "tab-filter-stack" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "layer-1",
+          baseRefName: "main",
+          state: "merged",
+        }),
+        buildPrItem({
+          headRefName: "layer-2",
+          baseRefName: "layer-1",
+          state: "open",
+        }),
+        buildPrItem({
+          headRefName: "layer-3",
+          baseRefName: "layer-2",
+          state: "open",
+        }),
+      ]);
+      await screen.findByTestId("pr-stack-header");
+      const railKinds = () =>
+        screen
+          .getAllByTestId("pr-stack-rail-row")
+          .map((row) => railRowKind(row));
+      expect(railKinds()).toEqual(["layer-3", "layer-2", "layer-1", "base"]);
+
+      act(() => {
+        usePrPanelStore.getState().setOpenOnly(true);
+      });
+
+      expect(screen.queryByTestId("mock-pr-card-layer-1")).toBeNull();
+      expect(screen.getByTestId("pr-stack-header").textContent).toContain(
+        "2 of 3",
+      );
+      // The hidden bottom layer leaves the rail; the rest keep their order
+      // and the base stays at the foot.
+      expect(railKinds()).toEqual(["layer-3", "layer-2", "base"]);
+    });
+
+    it("draws no stack header for unrelated rows", async () => {
+      const epicId = "epic-st3";
+      renderPanel({ epicId, tabId: "tab-st3" });
+      await emitSnapshot(epicId, [
+        buildPrItem({ headRefName: "solo-a" }),
+        buildPrItem({ headRefName: "solo-b" }),
+      ]);
+
+      await screen.findByTestId("mock-pr-card-solo-a");
+      expect(screen.queryByTestId("pr-stack-header")).toBeNull();
+    });
   });
 });

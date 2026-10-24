@@ -2,6 +2,10 @@ import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
 import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type {
+  BotAnnouncement,
+  ConversationRequest,
+} from "@traycer/protocol/persistence/epic/messages";
+import type {
   ChatQueueSteerMode,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -21,6 +25,7 @@ import type {
   BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  AgentMessageDelivery,
   AgentMessageReceipt,
   AgentMessageSend,
   ArtifactOperationAction,
@@ -41,7 +46,7 @@ import type {
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
-  ToolCallPageStamp,
+  ToolCallArtifactStamp,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -156,6 +161,10 @@ export interface ToolSegment {
   // tool call, for a TUI receiver, and for sends persisted before the host
   // carried this (the card then just opens the receiver's tile).
   agentMessageReceipt: AgentMessageReceipt | null;
+  // Where a cross-host send stands: queued for the other host, delivered,
+  // expired or refused. Null for every other tool call, for a send delivered
+  // on the same host, and for sends persisted before the host carried this.
+  agentMessageDelivery: AgentMessageDelivery | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
@@ -186,10 +195,7 @@ export interface ToolSegment {
   parentId: string | null;
   /** Generated images carried by chat.subscribe@1.6. Normalized at projection. */
   imageResults: ReadonlyArray<ImageGenerationResult>;
-  // The page a `traycer_show_page` call showed, stamped by the host when the
-  // call completes (`chat.subscribe@1.22`). Null for every other call, and for
-  // a show-page call that is still running or failed.
-  page: ToolCallPageStamp | null;
+  artifact: ToolCallArtifactStamp | null;
   // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
   // Null for every other call, and on a harness without app support.
   mcpApp: ToolCallMcpAppStamp | null;
@@ -311,6 +317,9 @@ export interface CommandSegment {
 export interface SubagentSegment {
   id: string;
   kind: "subagent";
+  // A tool owning child blocks is re-cast as this card. Keep that tool's own
+  // results visible on the parent card; ordinary subagents carry an empty list.
+  toolImageResults: ReadonlyArray<ImageGenerationResult>;
   name: string | null;
   agentType: string | null;
   task: string | null;
@@ -486,6 +495,7 @@ export type MessageSegment =
       id: string;
       kind: "compaction";
       status: "streaming" | "completed" | "errored";
+      notApplied: boolean;
       trigger: "auto" | "manual" | null;
       preTokens: number | null;
       postTokens: number | null;
@@ -677,6 +687,7 @@ export interface AssistantTurnMeta {
   /** Picker-style label resolved from the selected model's reasoning options. */
   readonly reasoningEffortLabel: string | null;
   readonly serviceTier: string | null;
+  readonly serviceTierLabel: string | null;
   /**
    * Cumulative billed cost for the turn in USD, from the turn's final usage.
    * `null` for harnesses that don't price the turn (Codex/Cursor) and for live/
@@ -727,10 +738,43 @@ export interface ChatMessageStoppedInfo {
 }
 
 export interface ChatMessage {
+  readonly workingVerbSeed?: string;
   id: string;
   role: ChatMessageRole;
   content: string;
   segments: ReadonlyArray<MessageSegment>;
+  /**
+   * The request this user row opened in a bot conversation (Tracy Bots), or
+   * absent on every row outside one. `resolvedAt: null` is an OPEN request;
+   * a resolved one may name the bot's reply row by `resolvedByMessageId`.
+   * Carried from the persisted row untouched: the resolution state lives on
+   * the USER row, never on the reply, so this is the one place a surface
+   * reads it.
+   */
+  conversationRequest?: ConversationRequest;
+  /**
+   * The announcement this assistant row is, on a bot channel (Tracy Bots):
+   * its kind and the one thing it points at. Absent on every other row.
+   */
+  announcement?: BotAnnouncement;
+  /**
+   * The choices a bot reply offers the person (Tracy Bots, decision 56),
+   * each a button that posts it as their next message on that surface.
+   * Absent on every other row.
+   */
+  options?: ReadonlyArray<string>;
+  /**
+   * The member's post a bot's direct reply answers, by its message id (Tracy
+   * Bots, reply mode `direct`), on the bot's row in its channel. Absent on
+   * every other row.
+   */
+  repliesTo?: string;
+  /**
+   * The picture of the member who wrote this user row, in a bot
+   * conversation whose member directory knows one. Absent on every other
+   * row, and on a member with no picture.
+   */
+  senderAvatarUrl?: string;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;

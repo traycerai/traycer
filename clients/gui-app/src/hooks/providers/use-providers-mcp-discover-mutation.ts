@@ -8,6 +8,7 @@ import type {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
+  isProviderNativeRpcError,
   mapProvidersListToMcpDiscover,
   type McpDiscoverData,
   type McpListData,
@@ -109,6 +110,8 @@ export function useProvidersMcpDiscover(): UseMutationResult<
         (server) => server.name === data.server.name,
       );
       queryClient.setQueryData<McpListData>(listKey, {
+        notices: previous.notices,
+        coverage: previous.coverage,
         servers: found
           ? previous.servers.map((server) =>
               server.name === data.server.name ? data.server : server,
@@ -126,7 +129,22 @@ export function useProvidersMcpDiscover(): UseMutationResult<
         });
       }
     },
-    onError: (error) =>
-      toastFromHostError(error, "Couldn't refresh MCP server tools."),
+    onError: (error, _variables, ctx) => {
+      if (
+        isProviderNativeRpcError(error) &&
+        error.nativeCode === "server_not_found" &&
+        ctx !== undefined &&
+        ctx.hostId !== null
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: providersNativeQueryKeys.mcpList(
+            ctx.hostId,
+            ctx.listParams,
+          ),
+          exact: true,
+        });
+      }
+      toastFromHostError(error, "Couldn't refresh MCP server tools.");
+    },
   });
 }

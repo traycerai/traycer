@@ -1,9 +1,22 @@
+import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
 import { app, dialog, nativeImage } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { initLogger, log } from "../app/logger";
+import { admitClientProcess } from "@traycer-clients/shared/host-lock/data-migration-admission";
+import { MigrationAdmissionError } from "@traycer/protocol/config/data-migration-admission";
+import {
+  currentDataRootResolution,
+  dataRootPlatformOf,
+} from "@traycer/protocol/config/data-root";
+import {
+  describeDefaultDataRootFinding,
+  inspectDefaultDataRoot,
+  type DefaultDataRootFinding,
+} from "@traycer/protocol/config/data-root-default-check";
 import { configureNativeAboutPanel } from "../app/about";
 import {
   findJumplistCommandInArgv,
@@ -222,6 +235,10 @@ import {
 } from "../config/desktop-config";
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
+import {
+  publishLocalHostUnresponsive,
+  setLocalHostStillUnresponsiveCheck,
+} from "../host/local-host-unresponsive";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
 import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { retireCompetingCliRegistrationWithContender } from "../host/launch-repair-contender";
@@ -311,6 +328,7 @@ export async function runDesktopStartup(): Promise<void> {
 }
 
 interface BootState {
+  readonly sandboxArtifacts: SandboxArtifactServer;
   readonly config: DesktopConfig;
   // Set when a browser-return deep link arrives before the bridge is installed;
   // drained once the window phase exposes a renderer. Coalesced - the signal is
@@ -394,6 +412,10 @@ async function runTestStartupPhases(
 ): Promise<DeferredStartupPlan> {
   initLogger();
   const state: BootState = {
+    sandboxArtifacts: new SandboxArtifactServer(
+      (windowId, channel, request) =>
+        state.bridge?.safeSendToWindow(windowId, channel, request) ?? false,
+    ),
     config: testHooks.config,
     pendingAuthReturnSignal: false,
     bridge: null,
@@ -413,13 +435,29 @@ async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
   initLogger();
   const config = resolveDesktopConfig();
   const state: BootState = {
+    sandboxArtifacts: new SandboxArtifactServer(
+      (windowId, channel, request) =>
+        state.bridge?.safeSendToWindow(windowId, channel, request) ?? false,
+    ),
     config,
     pendingAuthReturnSignal: false,
     bridge: null,
   };
 
   runPreReady(state);
+  // Started once the deep-link handler is registered (an `open-url` must not
+  // be missed while this awaits) and settled before on-ready, whose steps are
+  // the first to read or write under the data root.
+  // Its failure is held as a value so it cannot surface as an unhandled
+  // rejection while `whenReady` is pending.
+  const admission = admitDesktopProcess().then(
+    () => null,
+    (error: unknown) => error,
+  );
   await app.whenReady();
+  const admissionFailure = await admission;
+  if (admissionFailure !== null) throw admissionFailure;
+  noticeDefaultDataRoot();
   await runOnReady(state);
   log.info("[desktop] app ready", {
     platform: process.platform,
@@ -431,6 +469,83 @@ async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
     services,
     runBackground: () => runDeferredBackground(state, services),
   };
+}
+
+/**
+ * Admit this Desktop process against the data-migration startup barrier.
+ * A refusal (a migration in progress, or a location record its journal does
+ * not back) tells the user why and exits before anything under the data root
+ * is touched; it throws so no later phase runs while the exit lands.
+ */
+async function admitDesktopProcess(): Promise<void> {
+  let message: string;
+  let code: string;
+  try {
+    const result = await admitClientProcess({
+      component: "desktop",
+      build: app.getVersion(),
+      // Never block boot on the start-identity read (a PowerShell spawn on
+      // Windows); the entry is completed in the background.
+      identityWaitMs: 0,
+    });
+    if (result.kind === "admitted") return;
+    message = result.decision.message;
+    code = result.decision.code;
+  } catch (error) {
+    // Admission could not be decided (a busy or unusable bootstrap folder):
+    // starting anyway would be the unchecked gap admission exists to close.
+    message =
+      error instanceof MigrationAdmissionError
+        ? error.message
+        : "Traycer could not check whether a data migration is in progress. Try again in a moment.";
+    code =
+      error instanceof MigrationAdmissionError
+        ? error.code
+        : "admission-failed";
+  }
+  log.error("[desktop] data migration gate refused startup - quitting", {
+    code,
+  });
+  dialog.showErrorBox("Traycer cannot start yet", message);
+  app.exit(1);
+  throw new Error(`desktop startup refused: ${code}`);
+}
+
+/**
+ * A populated default data folder beside the configured one. A migration's
+ * retained backup is expected until `traycer data cleanup` and is only
+ * logged; anything else (most likely an older Traycer version booted the
+ * default folder) gets a non-blocking warning. Bounded identity check, never
+ * blocks startup and never changes either folder. The log line carries no
+ * path.
+ */
+function noticeDefaultDataRoot(): void {
+  let finding: DefaultDataRootFinding;
+  try {
+    finding = inspectDefaultDataRoot({
+      homeDir: homedir(),
+      platform: dataRootPlatformOf(process.platform),
+      resolution: currentDataRootResolution(),
+    });
+  } catch {
+    return;
+  }
+  if (finding.kind === "none") return;
+  log.warn(
+    "[desktop] default data folder is populated beside the configured one",
+    {
+      finding: finding.kind,
+    },
+  );
+  const detail = describeDefaultDataRootFinding(finding);
+  if (finding.kind !== "unexpected" || detail === null) return;
+  void dialog.showMessageBox({
+    type: "warning",
+    title: "Traycer",
+    message: "Traycer found data in its default folder",
+    detail,
+    buttons: ["OK"],
+  });
 }
 
 // Wrap a step in timing + a best-effort boundary. A non-fatal step throwing
@@ -497,7 +612,7 @@ async function runOnReady(state: BootState): Promise<void> {
   await Promise.all([
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
     timed("on-ready", "sandbox-protocol", () =>
-      installSandboxProtocolHandler(),
+      installSandboxProtocolHandler(state.sandboxArtifacts),
     ),
     timed("on-ready", "app-identity", () =>
       configureAppIdentity(state.config.iconPath),
@@ -793,6 +908,8 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const support = new DesktopSupportService({
     appName: appDisplayName,
     host,
+    readHostEnsureFailure: async () =>
+      (await hostController.getStatus()).lastEnsureFailure,
     authSession,
     hostLayout,
   });
@@ -838,6 +955,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
+    sandboxArtifacts: state.sandboxArtifacts,
     host,
     hostController,
     authnBaseUrl: config.authnBaseUrl,
@@ -1162,8 +1280,18 @@ function localHostLaneStarters(
           readLiveness: undefined,
           readLiveSupervisorPid: () =>
             services.hostLifecycle.readIdentifiedSupervisorPid(),
+          onHostUnresponsive: publishLocalHostUnresponsive,
         });
-        state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+        setLocalHostStillUnresponsiveCheck((offer) =>
+          healthMonitor.stillUnresponsive(offer),
+        );
+        state.bridge?.disposeFns.push(() => {
+          // No monitor, no verdict: an offer left standing would be one whose
+          // action can only be declined.
+          setLocalHostStillUnresponsiveCheck(null);
+          publishLocalHostUnresponsive(null);
+          healthMonitor.dispose();
+        });
       });
     },
     "substrate-owner-backfill": () => {

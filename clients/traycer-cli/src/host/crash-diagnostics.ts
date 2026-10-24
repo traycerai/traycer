@@ -63,6 +63,56 @@ export const STDERR_FATAL_WINDOW_MAX_BYTES = 2048;
  */
 const FATAL_NEEDLES = ["FATAL ERROR", "# Fatal error"] as const;
 
+/**
+ * The closed set of fatal kinds a stderr capture can be sorted into, the only
+ * thing about the capture that leaves the machine (as the crash event's
+ * `host_fatal` tag). Never the text, a path or a number read from it.
+ *
+ * - `v8-heap-oom`: a `FATAL ERROR:` line naming heap exhaustion. Node's
+ *   `OOMErrorHandler` (src/node_errors.cc) prints
+ *   `FATAL ERROR: <location> Allocation failed - JavaScript heap out of
+ *   memory` when V8 reports `is_heap_oom`, where `<location>` is V8's own
+ *   (`Reached heap limit`, `Ineffective mark-compacts near heap limit`,
+ *   `CALL_AND_RETRY_LAST`, ...).
+ * - `v8-fatal`: any other `FATAL ERROR:` line (`OnFatalError`: a failed
+ *   `ToLocalChecked`, a native addon's `napi_fatal_error`, and
+ *   `Allocation failed - process out of memory`, the non-heap OOM).
+ * - `check-failed`: a `# Fatal error in ...` block, V8's own CHECK/FATAL
+ *   output (`V8_Fatal`).
+ * - `assertion`: a native assertion line, MSVC CRT / libuv on Windows
+ *   (`Assertion failed: <expr>, file src\win\..., line N`) or the glibc and
+ *   Node `CHECK` form (``Assertion `<expr>' failed.``).
+ * - `none`: the child wrote nothing to stderr.
+ * - `incomplete`: nothing recognised and the stderr stream had not ended when
+ *   the capture was read, so bytes may still have been unread.
+ * - `other`: it wrote, and nothing matched.
+ */
+export const STDERR_FATAL_KINDS = [
+  "v8-heap-oom",
+  "v8-fatal",
+  "check-failed",
+  "assertion",
+  "none",
+  "incomplete",
+  "other",
+] as const;
+
+export type StderrFatalKind = (typeof STDERR_FATAL_KINDS)[number];
+
+/** Heap-exhaustion wording in a `FATAL ERROR:` line (V8 and Node's own). */
+const HEAP_OOM_LINE = /heap out of memory|heap limit/;
+
+/**
+ * Node `CHECK` (`  #  Assertion failed: <expr>`), and the MSVC CRT / libuv on
+ * Windows and macOS `assert` (`Assertion failed: <expr>, [function f, ]file
+ * <path>, line N`). Never the bare phrase: `console.assert` writes
+ * `Assertion failed: <msg>` to stderr too, and so can any log line.
+ */
+const ASSERTION_FAILED_FORM =
+  /^[ \t]*#[ \t]*Assertion failed:|Assertion failed: [^\n]{0,512}, file [^\n]{1,512}, line \d+/m;
+/** glibc `assert` and Node's `CHECK`: ``Assertion `expr' failed.``. */
+const ASSERTION_QUOTED_FORM = /Assertion `[^\n]{0,512}' failed\./;
+
 /** Carried across chunk boundaries so a split needle is still detected. */
 const FATAL_BOUNDARY_CHARS = 16;
 
@@ -120,9 +170,42 @@ const WINDOWS_EXIT_MEANINGS: ReadonlyMap<number, string> = new Map([
   ],
   [0xc0000005, "STATUS_ACCESS_VIOLATION (native crash)"],
   [0xc0000142, "STATUS_DLL_INIT_FAILED (spawn during session shutdown)"],
-  [0x40010004, "DBG_TERMINATE_PROCESS (session teardown kill)"],
+  [
+    0x40010004,
+    "DBG_TERMINATE_PROCESS (terminated from outside, most often the session ending)",
+  ],
+  [
+    0xc000026b,
+    "STATUS_DLL_INIT_FAILED_LOGOFF (spawn during logoff or shutdown)",
+  ],
   [0xc00000fd, "STATUS_STACK_OVERFLOW"],
 ]);
+
+/**
+ * The Windows exit status that is a session ending by its own name: a relaunch
+ * attempted while the window station is closing
+ * (`STATUS_DLL_INIT_FAILED_LOGOFF`). Not a defect of the host, and not
+ * reported as a crash.
+ */
+const WINDOWS_SESSION_END_EXIT_CODES: ReadonlySet<number> = new Set([
+  0xc000026b,
+]);
+
+/** Whether a Windows exit status is the session ending rather than a crash. */
+export function isWindowsSessionEndExit(code: number): boolean {
+  return WINDOWS_SESSION_END_EXIT_CODES.has(code >>> 0);
+}
+
+/**
+ * `DBG_TERMINATE_PROCESS`: the child was ended from outside. Most often the
+ * user's session ending, but any caller of `TerminateProcess` (a security
+ * product, a debugger, another tool) leaves it, so it is not a crash and not
+ * proven to be a session end either: it is reported at a lower severity under
+ * its own fingerprint (see `buildHostCrashEvent`).
+ */
+export function isWindowsExternalTerminationExit(code: number): boolean {
+  return code >>> 0 === 0x40010004;
+}
 
 /**
  * POSIX signals that mean the host CRASHED rather than being shut down. A
@@ -258,6 +341,48 @@ export class StderrCaptureBuffer {
 
   isEmpty(): boolean {
     return this.headBytes === 0 && this.tailBytes === 0;
+  }
+
+  /**
+   * Which kind of fatal the capture holds (see {@link StderrFatalKind}).
+   * Reads only what is already held: the FATAL-anchored window decides the
+   * `FATAL ERROR` and `# Fatal error` kinds from its first line, so a heap
+   * OOM block that arrived after kilobytes of earlier stderr is still seen;
+   * an assertion is looked for in the head and the tail, where its line
+   * lands. Bounded by the capture's own byte caps and never throws.
+   *
+   * `streamEnded` is whether the child's stderr had ended when the capture
+   * was read; a capture with nothing recognised that was read early is
+   * `incomplete`, not `none` or `other`.
+   */
+  classifyFatal(streamEnded: boolean): StderrFatalKind {
+    try {
+      if (this.fatalText !== null) {
+        const newline = this.fatalText.indexOf("\n");
+        const firstLine =
+          newline === -1 ? this.fatalText : this.fatalText.slice(0, newline);
+        if (firstLine.startsWith("# Fatal error")) return "check-failed";
+        return HEAP_OOM_LINE.test(firstLine) ? "v8-heap-oom" : "v8-fatal";
+      }
+      if (this.isEmpty()) {
+        return streamEnded ? "none" : "incomplete";
+      }
+      const held =
+        Buffer.concat(this.headChunks).toString("utf8") +
+        // Contiguous unless the middle was dropped; a separator inside an
+        // unbroken stream would split a line across the head/tail boundary.
+        (this.elidedBytes > 0 ? "\n" : "") +
+        Buffer.concat(this.tailChunks).toString("utf8");
+      if (
+        ASSERTION_FAILED_FORM.test(held) ||
+        ASSERTION_QUOTED_FORM.test(held)
+      ) {
+        return "assertion";
+      }
+      return streamEnded ? "other" : "incomplete";
+    } catch {
+      return "other";
+    }
   }
 
   /**
@@ -472,6 +597,23 @@ export async function pruneCrashReports(
   }
 }
 
+/**
+ * The three numbers a heap-exhaustion report states, in bytes: the V8 heap
+ * limit, the heap in use and the resident set. A value the report does not
+ * carry, or carries as anything but a non-negative whole number, is `null`.
+ */
+export interface CrashReportMemory {
+  readonly heapLimitBytes: number | null;
+  readonly heapUsedBytes: number | null;
+  readonly rssBytes: number | null;
+}
+
+const NO_REPORT_MEMORY: CrashReportMemory = {
+  heapLimitBytes: null,
+  heapUsedBytes: null,
+  rssBytes: null,
+};
+
 export interface CrashReportMatch {
   readonly filename: string;
   /**
@@ -480,6 +622,8 @@ export interface CrashReportMatch {
    * still tells support where to look.
    */
   readonly summary: string | null;
+  /** The report's memory numbers; every field `null` when unreadable. */
+  readonly memory: CrashReportMemory;
 }
 
 /**
@@ -517,10 +661,8 @@ export async function findCrashReportSince(
   if (newest === null) {
     return null;
   }
-  return {
-    filename: newest.name,
-    summary: await summarizeReport(join(dir, newest.name)),
-  };
+  const read = await summarizeReport(join(dir, newest.name));
+  return { filename: newest.name, summary: read.summary, memory: read.memory };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -535,7 +677,32 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-async function summarizeReport(path: string): Promise<string | null> {
+function asByteCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/**
+ * `resourceUsage.rss` and `maxRss` as a byte count. Node's documentation shows
+ * them as quoted decimal strings (`"rss": "35766272"`) while the Node the host
+ * runs writes numbers, so both are read. A string must be plain decimal
+ * digits that fit a safe integer: no sign, space, fraction or exponent.
+ */
+function asResidentBytes(value: unknown): number | null {
+  if (typeof value === "string") {
+    if (!/^[0-9]+$/.test(value)) return null;
+    return asByteCount(Number(value));
+  }
+  return asByteCount(value);
+}
+
+interface ReportReading {
+  readonly summary: string | null;
+  readonly memory: CrashReportMemory;
+}
+
+async function summarizeReport(path: string): Promise<ReportReading> {
   try {
     const parsed = asRecord(JSON.parse(await readFile(path, "utf8")));
     const header = asRecord(parsed?.["header"]);
@@ -543,23 +710,45 @@ async function summarizeReport(path: string): Promise<string | null> {
     const trigger = asString(header?.["trigger"]);
     const stackRecord = asRecord(parsed?.["javascriptStack"]);
     const message = asString(stackRecord?.["message"]);
+    const heap = asRecord(parsed?.["javascriptHeap"]);
+    const usage = asRecord(parsed?.["resourceUsage"]);
+    const memory: CrashReportMemory = {
+      heapLimitBytes: asByteCount(heap?.["memoryLimit"]),
+      heapUsedBytes: asByteCount(heap?.["usedMemory"]),
+      // `rss` is the figure at the report; `maxRss` is the peak, the answer
+      // only when the report has no current reading.
+      rssBytes:
+        asResidentBytes(usage?.["rss"]) ?? asResidentBytes(usage?.["maxRss"]),
+    };
     const parts: string[] = [];
     if (event !== null) parts.push(`event=${event}`);
     if (trigger !== null) parts.push(`trigger=${trigger}`);
+    // Before the stack message, which is clamped from the end: a long message
+    // must never be what cuts the numbers off.
+    if (memory.heapLimitBytes !== null) {
+      parts.push(`heapLimitBytes=${memory.heapLimitBytes}`);
+    }
+    if (memory.heapUsedBytes !== null) {
+      parts.push(`heapUsedBytes=${memory.heapUsedBytes}`);
+    }
+    if (memory.rssBytes !== null) parts.push(`rssBytes=${memory.rssBytes}`);
     if (message !== null) parts.push(`js=${message}`);
     if (parts.length === 0) {
-      return null;
+      return { summary: null, memory };
     }
     // ENFORCED, not just documented: these values come verbatim out of the
     // report JSON, and a `javascriptStack.message` carrying a line
     // terminator would break the one-line contract this digest promises -
     // the same hazard `escapedForMarker` exists to prevent for stderr, and
     // `persistChildExit` already passes this straight into a log line.
-    return StderrCaptureBuffer.toSingleLine(
-      parts.join(" "),
-      REPORT_SUMMARY_MAX_CHARS,
-    );
+    return {
+      summary: StderrCaptureBuffer.toSingleLine(
+        parts.join(" "),
+        REPORT_SUMMARY_MAX_CHARS,
+      ),
+      memory,
+    };
   } catch {
-    return null;
+    return { summary: null, memory: NO_REPORT_MEMORY };
   }
 }

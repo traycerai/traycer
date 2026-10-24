@@ -3,13 +3,16 @@ import { OrganizationProvider } from "@/hooks/organization/organization-provider
 import type { ReactNode } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
+import { HostUnresponsivePrompt } from "@/components/layout/bridges/host-unresponsive-prompt";
 import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-lifecycle-analytics-bridge";
 import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
+import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { AppShell } from "@/components/layout/app-shell";
+import { useStatusBarTapScrollToTop } from "@/components/layout/shell/use-status-bar-tap-scroll-to-top";
 import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
 import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
@@ -28,6 +31,7 @@ import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-naviga
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
+import { TeamRemovalTileCloser } from "@/providers/team-removal-tile-closer";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
@@ -72,6 +76,11 @@ export function RootComponent() {
   const admission = useShellLocalPlaneAdmission();
   const isStandalone =
     !admission.admitted || showOnboarding || isOnboardingRoute;
+  // The iOS status-bar tap scrolls whatever is in front back to its top. Here
+  // rather than in AppShell so sign-in and the tour, which render without it,
+  // answer too, and outside HostReadyGate like the bridges below. Self-gated
+  // on the shell capability, so every other shell attaches nothing.
+  useStatusBarTapScrollToTop();
 
   return (
     <>
@@ -91,7 +100,12 @@ export function RootComponent() {
           without a ready host. */}
       <MenuCommandListener />
       <HostTrayCommandListener />
+      {/* Offers a force restart while the shell reports this machine's host
+          alive but not responding; outside the gate, which a wedged host
+          keeps closed. */}
+      <HostUnresponsivePrompt />
       <DesktopDialogHost />
+      <SandboxDetailsDrawerHost />
       {/* The host quit modal: on every route, signed in or not, so a quit is
           always answered in-window rather than by main's native prompt. */}
       <HostQuitDecisionBridge />
@@ -146,6 +160,7 @@ export function RootComponent() {
             <TrayOpenEpicBridge />
             <NotificationFocusBridge />
             <EpicAccessCoordinator />
+            <TeamRemovalTileCloser />
             <ProviderProfileAddFlowHost />
           </HostScopeReady>
           <RootSurface

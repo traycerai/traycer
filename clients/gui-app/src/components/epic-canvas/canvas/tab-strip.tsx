@@ -19,6 +19,7 @@ import {
   FilePlus,
   GitPullRequest,
   Lock,
+  Smartphone,
   SplitSquareHorizontal,
   SplitSquareVertical,
   Trash2,
@@ -30,7 +31,6 @@ import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-str
 import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
-import { epicFileViewer } from "@/lib/files/viewer-registry";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -115,7 +115,11 @@ import {
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
+import {
+  terminalTabUsesLegacyReads,
+  useTerminalTabControl,
+  type TerminalTabControl,
+} from "@/components/epic-canvas/canvas/use-terminal-tab-control";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import {
   useBrowserTabPresentation,
@@ -476,7 +480,11 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onCopyFilePath" | "onEditTitle" | "onOpenUsage"
+    | "canRename"
+    | "onCopyFilePath"
+    | "onEditTitle"
+    | "onOpenUsage"
+    | "chatRouting"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
 }
@@ -509,13 +517,6 @@ function useChatUsageMenuHandler(
       });
     };
   }, [chatTitle, openChatUsageDialog, tab.id, usageChatHostId, usageSupported]);
-}
-
-interface TerminalTabControl {
-  readonly mode: "unknown" | "legacy" | "capable";
-  readonly displayTitle: string;
-  readonly canMutate: boolean;
-  readonly rename: (title: string) => void;
 }
 
 function TabItem(props: TabItemProps) {
@@ -557,29 +558,7 @@ function BrowserTabItem(
 function TerminalTabItem(
   props: Omit<TabItemProps, "tab"> & { readonly tab: EpicTerminalRef },
 ) {
-  const controller = useEpicTerminalAuthority({
-    epicId: props.epicId,
-    node: props.tab,
-  });
-  const rename = controller.rename;
-  const terminalId = props.tab.id;
-  const canMutate =
-    controller.canMutate &&
-    !controller.migrationPending &&
-    controller.projection !== undefined;
-  const control: TerminalTabControl = {
-    mode: controller.capability,
-    displayTitle: controller.viewModel?.displayTitle ?? props.tab.name,
-    canMutate,
-    rename: (title) => {
-      if (!controller.canMutate) return;
-      rename.mutate({
-        hostId: props.tab.hostId,
-        terminalId,
-        manualTitle: title,
-      });
-    },
-  };
+  const control = useTerminalTabControl(props.epicId, props.tab);
   return (
     <TabItemBody
       {...props}
@@ -612,7 +591,7 @@ function useTabRenameControl(args: {
     isTerminalTab ? tabHostId(tab) : null,
   );
   const terminalHostClient =
-    isTerminalTab && terminalControl?.mode !== "capable"
+    isTerminalTab && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
@@ -927,6 +906,11 @@ function TabItemBody(
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
         onOpenUsage={onOpenUsage}
+        chatRouting={
+          tab.type === "chat"
+            ? { epicId, chatId: tab.id, hostId: tab.hostId }
+            : null
+        }
       />
     </ContextMenu>
   );
@@ -1301,14 +1285,8 @@ function renderFixedTabIcon(
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
     case "deleted-artifacts":
       return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
-    case "epic-file": {
-      const viewer = epicFileViewer(tab.path);
-      return (
-        <viewer.Icon
-          className={cn("size-3.5 shrink-0", viewer.iconClassName)}
-        />
-      );
-    }
+    case "simulator":
+      return <Smartphone className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }

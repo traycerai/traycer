@@ -1,6 +1,7 @@
 import type { Editor } from "@tiptap/core";
 import type { PluginKey } from "@tiptap/pm/state";
 import type { SuggestionProps } from "@tiptap/suggestion";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { isDismissedMentionQuery } from "@/lib/composer/mentions/mention-dismissal";
 import { githubMentionSectionForStep } from "@/lib/composer/mentions/providers";
 import { activePickerItemDisabledReason } from "./composer-picker-store";
@@ -290,11 +291,14 @@ export function createComposerSuggestionRender<
         const state = args.pickerStore.getState();
         if (!state.open) return false;
 
-        if (event.key === "ArrowDown") {
+        // Returning true makes ProseMirror preventDefault, which is what keeps
+        // a macOS Ctrl+N/P alias from also moving the caret behind the menu.
+        const navigationKey = listNavigationKey(event);
+        if (navigationKey === "ArrowDown") {
           state.moveActive(1);
           return true;
         }
-        if (event.key === "ArrowUp") {
+        if (navigationKey === "ArrowUp") {
           state.moveActive(-1);
           return true;
         }

@@ -11,6 +11,7 @@ import {
   useFallbackModelCatalogues,
   useFallbackModelLabels,
 } from "@/components/chat/fallback/fallback-identity";
+import { ChatOpencodeLineContext } from "@/hooks/harnesses/chat-opencode-line-context";
 
 /**
  * `useFallbackModelLabels`'s own resolution rules, isolated from any
@@ -65,7 +66,10 @@ const modelsByHarness = vi.hoisted(() => ({
 
 const hostQueriesCalls = vi.hoisted(() => ({
   requests: [] as ReadonlyArray<{
-    readonly params: { readonly harnessId: string };
+    readonly params: {
+      readonly harnessId: string;
+      readonly workingDirectory: string | null;
+    };
   }>,
 }));
 
@@ -131,7 +135,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
     readonly requests: ReadonlyArray<{
-      readonly params: { readonly harnessId: string };
+      readonly params: {
+        readonly harnessId: string;
+        readonly workingDirectory: string | null;
+      };
     }>;
     // The real hook forwards `combine` to `useQueries` and returns ITS value,
     // not the result array. A double that ignored it would hand the caller
@@ -438,6 +445,58 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     // Unasked-for ids have no read in flight; treating them as unsettled
     // would block on a request that will never be made.
     expect(result.current.settledFor("grok")).toBe(true);
+  });
+
+  it("reads an opencode tuple's catalogue for the line its chat runs, and no other harness's", () => {
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", true, SETTLED_TRUE),
+        settledRow("opencode", true, SETTLED_TRUE),
+      ],
+    };
+    renderHook(
+      () =>
+        useFallbackModelCatalogues(HOST_SPINE, ["opencode", "claude"], true),
+      {
+        wrapper: ({ children }) => (
+          <ChatOpencodeLineContext.Provider value={1}>
+            {children}
+          </ChatOpencodeLineContext.Provider>
+        ),
+      },
+    );
+
+    expect(hostQueriesCalls.requests.map((r) => r.params)).toEqual([
+      { harnessId: "claude", workingDirectory: null },
+      { harnessId: "opencode", workingDirectory: null, opencodeLine: 1 },
+    ]);
+  });
+
+  it("resolves the failed model from the null-directory catalog query", () => {
+    harnessesData.value = {
+      harnesses: [settledRow("claude", true, SETTLED_TRUE)],
+    };
+    modelsByHarness.value = new Map([
+      [
+        "claude",
+        [modelOption("claude", "claude-fable-5-1[1m]", "Claude Fable")],
+      ],
+    ]);
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(HOST_SPINE, ["claude"], true),
+    );
+
+    expect(hostQueriesCalls.requests).toHaveLength(1);
+    expect(hostQueriesCalls.requests[0]?.params).toEqual({
+      harnessId: "claude",
+      workingDirectory: null,
+    });
+    expect(
+      result.current.modelFor("claude", "claude-fable-5-1[1m]"),
+    ).toMatchObject({
+      label: "Claude Fable",
+    });
+    expect(result.current.modelFor("codex", "gpt-5")).toBeNull();
   });
 
   it("HOLDS every requested id when a cold listHarnesses read has errored - the initial-error lane re-issues", () => {

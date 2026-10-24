@@ -53,6 +53,7 @@ import {
   markEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   GetTaskContextsResponse,
@@ -111,22 +112,17 @@ type ListHarnessesResponse = ResponseOfMethod<
   HostRpcRegistry,
   "agent.gui.listHarnesses"
 >;
-type ListTasksResponse = ResponseOfMethod<HostRpcRegistry, "epic.listTasks">;
-type ListTasksRequest = RequestOfMethod<HostRpcRegistry, "epic.listTasks">;
 
-// Explicitly complete. This suite records method NAMES for the mock host,
-// never versions, and the reconciler reads a page with no `completeness`
-// marker from a host of unknown line as unproven - and an unproven page may
-// not close any tab.
-const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
-  tasks: [],
-  hasMore: false,
-  completeness: {
-    cloudPage: "settled",
-    facets: "server",
-    localRows: "none",
-    sort: "loaded-union",
-  },
+// Explicitly complete: the reconciler reads the host's local History
+// contribution, and an incomplete or absent one is unproven - an unproven
+// contribution may not close any tab.
+const EMPTY_LOCAL_HISTORY: LocalHistoryReadResponse = {
+  complete: true,
+  willComplete: true,
+  localHomeRows: [],
+  preservedRows: [],
+  tombstonedEpicIds: [],
+  localRows: "none",
 };
 
 interface Deferred<T> {
@@ -142,9 +138,6 @@ interface StartupConsumersOptions {
   readonly listHarnesses: () =>
     | Promise<ListHarnessesResponse>
     | ListHarnessesResponse;
-  readonly listTasks?: (
-    params: ListTasksRequest,
-  ) => Promise<ListTasksResponse> | ListTasksResponse;
   readonly onMethod: (method: string) => void;
 }
 
@@ -167,6 +160,8 @@ const compatibleHostStatus: HostStatusResponse = {
   updateTransaction: null,
   storeFormats: null,
   install: null,
+  processMemory: null,
+  crossHostMessaging: null,
 };
 
 let restoreFetch: () => void = () => undefined;
@@ -193,7 +188,6 @@ function buildQueryClient(): QueryClient {
 function buildMessengerFactory(
   options: StartupConsumersOptions,
 ): MessengerFactory<HostRpcRegistry> {
-  const listTasks = options.listTasks ?? (() => EMPTY_LIST_TASKS_RESPONSE);
   return (args) =>
     new MockHostMessenger<HostRpcRegistry>({
       registry: args.registry,
@@ -211,9 +205,9 @@ function buildMessengerFactory(
           options.onMethod("agent.gui.listHarnesses");
           return options.listHarnesses();
         },
-        "epic.listTasks": (params) => {
-          options.onMethod("epic.listTasks");
-          return listTasks(params);
+        "epic.localHistory.read": () => {
+          options.onMethod("epic.localHistory.read");
+          return EMPTY_LOCAL_HISTORY;
         },
       },
     });
@@ -723,6 +717,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
           message: "request aborted by host rebind",
           requestId: "req-status",
           method: "host.status",
+          mayHaveDispatched: false,
         });
       },
       getTaskContexts,

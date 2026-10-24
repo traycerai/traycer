@@ -154,7 +154,6 @@ const HOST_ID = "host-1";
 
 const EMPTY_RESTORE: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: "user-1",
   activeHostId: HOST_ID,
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,
@@ -281,6 +280,7 @@ function surfacesProps(patch: {
       // renders the strip itself, above the composer.
       workspaceControls: <div data-testid="workspace-controls-stub" />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },
     todo: null,

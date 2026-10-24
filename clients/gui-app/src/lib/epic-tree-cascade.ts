@@ -6,6 +6,9 @@ export interface DescendantCounts {
   readonly ticket: number;
   readonly story: number;
   readonly review: number;
+  readonly html: number;
+  readonly canvas: number;
+  readonly file: number;
   readonly chat: number;
   readonly "terminal-agent": number;
 }
@@ -27,6 +30,9 @@ export function computeDescendantCounts(
     ticket: 0,
     story: 0,
     review: 0,
+    html: 0,
+    canvas: 0,
+    file: 0,
     chat: 0,
     "terminal-agent": 0,
   };
@@ -62,6 +68,9 @@ export function computeDescendantCountsFromTree(
     ticket: 0,
     story: 0,
     review: 0,
+    html: 0,
+    canvas: 0,
+    file: 0,
     chat: 0,
     "terminal-agent": 0,
   };
@@ -105,6 +114,9 @@ const CASCADE_LABELS: ReadonlyArray<{
   { keys: ["ticket"], singular: "ticket", plural: "tickets" },
   { keys: ["story"], singular: "story", plural: "stories" },
   { keys: ["review"], singular: "review", plural: "reviews" },
+  { keys: ["html"], singular: "page", plural: "pages" },
+  { keys: ["canvas"], singular: "canvas", plural: "canvases" },
+  { keys: ["file"], singular: "file", plural: "files" },
   { keys: ["chat", "terminal-agent"], singular: "agent", plural: "agents" },
 ];
 
@@ -118,4 +130,38 @@ export function formatCascadeSummary(counts: DescendantCounts): string | null {
   if (parts.length === 1) return parts[0];
   if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
   return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * How many agents are DIRECT children of `nodeId`: the ones that move to the
+ * top level when it is deleted. Grandchildren are not counted - they stay under
+ * their own, kept, parent. Artifacts never nest under agents, so only the two
+ * agent kinds count.
+ */
+export function countDirectAgentChildren(
+  tree: TreeSlice,
+  nodeId: string,
+): number {
+  if (!Object.hasOwn(tree.childrenByParent, nodeId)) return 0;
+  let count = 0;
+  for (const childId of tree.childrenByParent[nodeId]) {
+    if (!Object.hasOwn(tree.nodeById, childId)) continue;
+    const { type } = tree.nodeById[childId];
+    if (type === "chat" || type === "terminal-agent") count += 1;
+  }
+  return count;
+}
+
+/**
+ * Sentence for an AGENT row's delete dialog, or null when it has no nested
+ * agents. Deleting an agent removes that one record only: its direct children
+ * are kept and the tree draws them at the top level, so the dialog says that
+ * instead of the cascade sentence an artifact row gets from
+ * `formatCascadeSummary`.
+ */
+export function formatAgentDeleteNesting(
+  nestedAgentCount: number,
+): string | null {
+  if (nestedAgentCount <= 0) return null;
+  return `${nestedAgentCount} ${nestedAgentCount === 1 ? "agent" : "agents"} nested under it will be kept and moved to the top level.`;
 }

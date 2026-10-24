@@ -188,7 +188,15 @@ export type PrSubscribeListForEpicOpenRequest = z.infer<
  * Every enrichment field below `liveness` is independently nullable so a
  * cache-only or never-swept item still renders from identity + state alone.
  */
-export const prLightItemSchema = lazySchema(() =>
+/**
+ * `pr.subscribeListForEpic@1.0`'s row, FROZEN at the shape `cli-v1.5.1`
+ * shipped. A hand-written copy rather than `prLightItemSchema.omit(...)`: the
+ * released-baseline gate diffs the schema bound to each released minor, and a
+ * derived copy would silently follow every later edit to the live shape. A
+ * @1.0 peer re-parses a @1.1 frame through this plain `z.object`, which strips
+ * the newer `stack` key. Never edit.
+ */
+export const prLightItemSchemaV10 = lazySchema(() =>
   z.object({
     githubHost: z.string().nullable(),
     base: prBaseCoordinatesSchema.nullable(),
@@ -212,7 +220,71 @@ export const prLightItemSchema = lazySchema(() =>
     owners: z.array(prOwnerRefSchema),
   }),
 );
+export type PrLightItemV10 = z.infer<typeof prLightItemSchemaV10>;
+
+/**
+ * The PR's membership in a GitHub-native stacked pull request, as GitHub's
+ * GraphQL `PullRequest.stack` / `stackEntry` report it. `number` identifies
+ * the stack within its repository; `baseRefName` is the branch the WHOLE
+ * stack targets; `position` is this PR's layer, 1 closest to the base;
+ * `size` counts every layer, merged ones included, so a panel holding fewer
+ * rows than `size` is showing part of a stack, not all of it.
+ *
+ * `null` for a PR in no stack, and for one whose fact predates the field or
+ * was fetched from a GitHub host that does not serve it. Stacks built by hand
+ * (branch B targeting branch A) carry no stack here; the client infers those
+ * from `baseRefName` / `headRefName` on its own.
+ */
+export const prStackSchema = lazySchema(() =>
+  z.object({
+    number: z.number().int().positive(),
+    baseRefName: z.string(),
+    size: z.number().int().positive(),
+    position: z.number().int().positive(),
+  }),
+);
+export type PrStack = z.infer<typeof prStackSchema>;
+
+/**
+ * `@1.1` adds `stack` (see {@link prStackSchema}). Optional on the wire so a
+ * frame from a host that predates the field still parses; absent reads as
+ * `null`.
+ */
+export const prLightItemSchema = lazySchema(() =>
+  prLightItemSchemaV10.extend({
+    stack: prStackSchema.nullable().optional(),
+  }),
+);
 export type PrLightItem = z.infer<typeof prLightItemSchema>;
+
+/** The `@1.0` frame, bound to the frozen `@1.0` row. Never edit. */
+export const prSubscribeListForEpicServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      hasBinaryPayload: z.literal(false),
+      sourceStatus: prSourceStatusSchema,
+      notice: prSourceNoticeSchema.nullable(),
+      items: z.array(prLightItemSchemaV10),
+    }),
+    z.object({
+      kind: z.literal("updated"),
+      hasBinaryPayload: z.literal(false),
+      sourceStatus: prSourceStatusSchema,
+      notice: prSourceNoticeSchema.nullable(),
+      items: z.array(prLightItemSchemaV10),
+    }),
+    z.object({
+      kind: z.literal("error"),
+      hasBinaryPayload: z.literal(false),
+      message: z.string(),
+      isFatal: z.boolean(),
+    }),
+  ]),
+);
+export type PrSubscribeListForEpicServerFrameV10 = z.infer<
+  typeof prSubscribeListForEpicServerFrameSchemaV10
+>;
 
 const PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS = {
   hasBinaryPayload: lazySchema(() => z.literal(false)),

@@ -29,7 +29,10 @@ import {
   type ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { deliveringUserMessageActionsFor } from "@/components/epic-canvas/renderers/use-chat-message-actions";
-import { transcriptShowsSetupCard } from "@/stores/chats/rendered-messages";
+import {
+  transcriptShowsSetupCard,
+  transcriptShowsWorkingRow,
+} from "@/stores/chats/rendered-messages";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
   chatTranscriptJumpKey,
@@ -1699,6 +1702,7 @@ function editingUserActions(content: JsonContent): ChatMessageUserActions {
       pending: false,
       canSubmit: false,
       slashProviderId: "claude",
+      slashProfileId: null,
       mentionRoots: [],
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
@@ -2068,6 +2072,16 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
     };
   }
 
+  function workingRow(): ChatMessageModel {
+    return {
+      ...plainUserMessage(""),
+      id: "working-row",
+      role: "assistant",
+      runState: "running",
+      senderLabel: null,
+    };
+  }
+
   function renderOpeningPrompt(
     phase: ChatMessageDeliveryPhase,
     transcript: ReadonlyArray<ChatMessageModel>,
@@ -2077,6 +2091,7 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
         actions={deliveringUserMessageActionsFor(
           phase,
           transcriptShowsSetupCard(transcript),
+          transcriptShowsWorkingRow(transcript),
         )}
         message={openingPrompt}
       />,
@@ -2111,6 +2126,21 @@ describe("<UserMessageBody /> delivery footer beside the worktree setup card", (
   it("preparing with no setup card: keeps its 'Setting up' status", () => {
     renderOpeningPrompt("preparing", [openingPrompt]);
     expect(screen.getByRole("status").textContent).toContain("Setting up");
+  });
+
+  // No card at all, only the send's own pre-turn "Working…" row under the
+  // prompt: that row already shows the wait.
+  it("preparing with the working row showing: no 'Setting up' status, Copy only", () => {
+    renderOpeningPrompt("preparing", [openingPrompt, workingRow()]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Setting up")).toBeNull();
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("pending with the working row showing: still reads 'Sending'", () => {
+    renderOpeningPrompt("pending", [openingPrompt, workingRow()]);
+    expect(screen.getByRole("status").textContent).toContain("Sending");
   });
 });
 

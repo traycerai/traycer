@@ -15,6 +15,9 @@ import type {
 } from "./selection-authority-ipc";
 
 export const RunnerHostInvoke = {
+  sandboxArtifactRegister: "runnerHost:sandboxArtifact:register",
+  sandboxArtifactUnregister: "runnerHost:sandboxArtifact:unregister",
+  sandboxArtifactRespond: "runnerHost:sandboxArtifact:respond",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
   // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
   // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
@@ -65,6 +68,26 @@ export const RunnerHostInvoke = {
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
+  // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
+  // reason as the registry calls above: traycer-server's allow-list is the web
+  // dashboard origin, so the renderer cannot reach it directly.
+  listSandboxes: "runnerHost:sandboxes:list",
+  getSandboxCosts: "runnerHost:sandboxes:costs",
+  getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
+  createSandbox: "runnerHost:sandboxes:create",
+  destroySandbox: "runnerHost:sandboxes:destroy",
+  patchSandbox: "runnerHost:sandboxes:patch",
+  keepSandbox: "runnerHost:sandboxes:keep",
+  runSandboxVerb: "runnerHost:sandboxes:verb",
+  getSandboxAutomation: "runnerHost:sandboxes:automation:get",
+  openSandboxAutomation: "runnerHost:sandboxes:automation:open",
+  // The secrets broker (authn), from Electron main for the same reason.
+  getSandboxGrants: "runnerHost:sandboxSecrets:grants",
+  getTeamEnvironment: "runnerHost:environments:team",
+  getEnvironmentProviders: "runnerHost:environments:providers",
+  decideSecretRequest: "runnerHost:sandboxSecrets:decide",
+  // The executable-write grant (authn), from Electron main for the same reason.
+  mintExecutableWriteGrant: "runnerHost:environment:mintExecutableWriteGrant",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -109,6 +132,14 @@ export const RunnerHostInvoke = {
   // change may never come. This channel removes the whole class: a subscriber
   // asks for the current value instead of hoping it was told.
   localHostSnapshot: "runnerHost:host:localHostSnapshot",
+  // PULL for the same state `localHostUnresponsiveChange` pushes, for the
+  // same reason as `localHostSnapshot`: a window that subscribes after the
+  // push asks instead of hoping it was told.
+  localHostUnresponsive: "runnerHost:host:localHostUnresponsive",
+  // The force restart offered for an unresponsive host, carrying that host's
+  // pid: main restarts only while the same host is published and still not
+  // answering, never whatever host has replaced it since.
+  forceRestartUnresponsiveHost: "runnerHost:host:forceRestartUnresponsive",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).
@@ -191,6 +222,7 @@ export const RunnerHostInvoke = {
   traycerConfigEnvSet: "runnerHost:traycer:config:env:set",
   traycerConfigEnvDelete: "runnerHost:traycer:config:env:delete",
   recentDocumentAdd: "runnerHost:recentDocuments:add",
+  windowCaptureRegion: "runnerHost:window:captureRegion",
   windowFlashFrame: "runnerHost:window:flashFrame",
   windowSetProgressBar: "runnerHost:window:setProgressBar",
   windowSetBadge: "runnerHost:app:setBadge",
@@ -422,6 +454,8 @@ export const RunnerHostInvoke = {
 } as const;
 
 export const RunnerHostEvent = {
+  sandboxArtifactCancel: "runnerHost:event:sandboxArtifact:cancel",
+  sandboxArtifactRequest: "runnerHost:event:sandboxArtifact:request",
   authCallback: "runnerHost:event:authCallback",
   // Credentials-file change broadcast (tech plan §3/§4). Fired by the main
   // `FileTokenStore`'s owned watcher on every observed change (external writes
@@ -432,6 +466,11 @@ export const RunnerHostEvent = {
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
+  // The health monitor's verdict that the local host is alive but has not
+  // answered past the busy window (`LocalHostUnresponsive`), or `null` once it
+  // answers again or dies. The renderer offers a force restart; nothing is
+  // killed on this signal.
+  localHostUnresponsiveChange: "runnerHost:event:localHostUnresponsiveChange",
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
   // live request context within seconds of wake instead of waiting out the
@@ -464,7 +503,10 @@ export const RunnerHostEvent = {
    * session: windows' IPC is unordered, so a revoke can arrive after a
    * sibling's fresh sign-in, and one that names a bearer a window no longer
    * holds must leave it alone (`DesktopAuthSession.revokeVerification` fences
-   * main's own copy by the same rule).
+   * main's own copy by the same rule). Also carries the revocation scope
+   * (`DesktopAuthVerificationRevoked`): a host refuses a "sign out
+   * everywhere" bearer at once, so every window must know it, not only the
+   * one that saw the refusal.
    */
   authVerificationRevoked: "runnerHost:event:windows:authSession:revoked",
   menuCommand: "runnerHost:event:menu:command",

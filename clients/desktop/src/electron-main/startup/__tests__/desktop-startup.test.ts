@@ -438,8 +438,11 @@ describe("runPreReady - scheme/crash-reporter ordering", () => {
     const { runPreReady } = await import("../desktop-startup");
     const { initCrashReporter } = await import("../../app/crash-reporter");
     const { registerAppScheme } = await import("../../app/app-protocol");
+    const { SandboxArtifactServer } =
+      await import("../../app/sandbox-artifact-server");
 
     runPreReady({
+      sandboxArtifacts: new SandboxArtifactServer(() => false),
       config: {
         environment: "dev",
         isDev: true,

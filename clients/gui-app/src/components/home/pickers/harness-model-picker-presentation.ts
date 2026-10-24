@@ -1,6 +1,6 @@
 import {
   findReasoningLabel,
-  findUpgradeServiceTierForModel,
+  selectedServiceTierOption,
   findModelLabel,
   type HarnessModelSelection,
   type ModelOption,
@@ -9,6 +9,10 @@ import type {
   ReasoningFooterConfig,
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import {
+  maxModeListedFor,
+  type MaxModeContext,
+} from "@/components/home/data/model-max-mode";
 import {
   profileAccentDotInput,
   profileCommitId,
@@ -20,8 +24,10 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 interface HarnessModelPickerPresentationInput {
   readonly selection: HarnessModelSelection;
   readonly models: ReadonlyArray<ModelOption>;
+  readonly selectedModel?: ModelOption | null;
   readonly reasoningFooter: ReasoningFooterConfig | null;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
+  readonly maxModeContext?: MaxModeContext;
   readonly harnessesPending: boolean;
   readonly modelsPending: boolean;
   readonly selectedHarnessAvailable: boolean;
@@ -61,9 +67,27 @@ export interface HarnessModelPickerPresentation {
   readonly reasoningStep: ReasoningStep | null;
   readonly activeServiceTierLabel: string | null;
   readonly serviceTierActive: boolean;
+  readonly maxModeRequired: boolean;
   readonly isLoading: boolean;
   readonly profileLabel: string | null;
   readonly profileAccentDot: ProfileAccentDotInput | null;
+}
+
+function maxModeRequiredForSelection(input: {
+  readonly selectedModel: ModelOption | null | undefined;
+  readonly models: ReadonlyArray<ModelOption>;
+  readonly selection: HarnessModelSelection;
+  readonly context: MaxModeContext | undefined;
+}): boolean {
+  const model =
+    input.selectedModel ??
+    input.models.find(
+      (row) =>
+        row.harnessId === input.selection.harnessId &&
+        row.slug === input.selection.modelSlug,
+    ) ??
+    null;
+  return maxModeListedFor(model, input.context ?? { kind: "none" });
 }
 
 export function deriveHarnessModelPickerPresentation(
@@ -72,8 +96,10 @@ export function deriveHarnessModelPickerPresentation(
   const {
     selection,
     models,
+    selectedModel,
     reasoningFooter,
     serviceTierFooter,
+    maxModeContext,
     harnessesPending,
     modelsPending,
     selectedHarnessAvailable,
@@ -86,18 +112,21 @@ export function deriveHarnessModelPickerPresentation(
       ? findReasoningLabel(reasoningFooter.value, reasoningFooter.options)
       : null;
   const reasoningStep = deriveReasoningStep(reasoningFooter);
-  const upgradeServiceTier =
+  const selectedServiceTier =
     serviceTierFooter === null
       ? null
-      : findUpgradeServiceTierForModel(serviceTierFooter.selectedModel);
-  const serviceTierActive =
-    serviceTierFooter !== null &&
-    upgradeServiceTier !== null &&
-    serviceTierFooter.value === upgradeServiceTier.id;
-  const activeServiceTierLabel =
-    upgradeServiceTier === null || !serviceTierActive
-      ? null
-      : upgradeServiceTier.label;
+      : selectedServiceTierOption(
+          serviceTierFooter.value,
+          serviceTierFooter.selectedModel,
+        );
+  const serviceTierActive = selectedServiceTier !== null;
+  const activeServiceTierLabel = selectedServiceTier?.label ?? null;
+  const maxModeRequired = maxModeRequiredForSelection({
+    selectedModel,
+    models,
+    selection,
+    context: maxModeContext,
+  });
   const isLoading =
     harnessesPending || (selectedHarnessAvailable && modelsPending);
   const hasMultipleProfiles = selectedHarnessProfiles.length >= 2;
@@ -121,6 +150,7 @@ export function deriveHarnessModelPickerPresentation(
     reasoningStep,
     activeServiceTierLabel,
     serviceTierActive,
+    maxModeRequired,
     isLoading,
     profileLabel,
     profileAccentDot,

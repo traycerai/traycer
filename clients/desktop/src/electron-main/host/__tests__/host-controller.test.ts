@@ -83,6 +83,9 @@ vi.mock("../../cli/cli-discovery", () => ({
   // elsewhere on `PATH` - so this stub leaves the fence open and the rows
   // that exercise it keep testing what they were written to test.
   readCliManifest: vi.fn(async () => null),
+  // No version metadata, as in a local build: no supervisor predates it.
+  BUNDLED_CLI_LOCAL_VERSION: "0.0.0-local",
+  readBundledCliVersion: vi.fn(async () => "0.0.0-local"),
 }));
 
 // Mirrors exactly what production imports from this module across
@@ -293,9 +296,18 @@ import {
   registerHostLoginItem,
   unregisterHostLoginItemGuarded,
 } from "../../app/host-login-item";
-import { resolveBundledCliPath } from "../../cli/cli-discovery";
+import {
+  readBundledCliVersion,
+  resolveBundledCliPath,
+} from "../../cli/cli-discovery";
 import { waitForHostReady } from "../host-readiness";
+import {
+  publishLocalHostUnresponsive,
+  setLocalHostStillUnresponsiveCheck,
+} from "../local-host-unresponsive";
+import { unresponsiveHostRestartIntent } from "../../ipc/host-ipc";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   DESKTOP_LOCK_POLL_INTERVAL_MS,
@@ -306,6 +318,10 @@ import {
 import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_RESTART_TARGET_CHANGED_MESSAGE,
+  HOST_STARTUP_TURNED_OFF_NOTE,
+  HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+  HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
   HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
   HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
   SERVICE_TASK_LEFT_IN_PLACE_MESSAGE,
@@ -313,6 +329,7 @@ import {
   SERVICE_TASK_NOT_OWNED_MESSAGE,
   type LifecycleAdmissionBlock,
   type LocalAttemptFacts,
+  type LocalHostMutationIntent,
   type MutationLaneStatus,
   type MutationProgress,
   type ReprovisionGuardVerdict,
@@ -417,6 +434,7 @@ beforeEach(() => {
     state: "not-running",
     supervisorPid: null,
     admittedAs: null,
+    cliVersion: null,
   });
 });
 
@@ -5359,6 +5377,233 @@ describe("platform matrix", () => {
     expect(restartCalls).toEqual([]);
   });
 
+  it("an unresponsive-host restart queued behind a mutation is abandoned, with no restart, when the host answers again before the job owns the lane (traycer#1563 D3a)", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const installGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await installGate.promise;
+      return { data: { action: "noop", version: "1.7.0" } };
+    });
+    const occupy = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    // The verdict names offer 3 for pid 4242 when the restart is submitted;
+    // the monitor's fresh look is asked only once the job owns the lane.
+    const asked: Array<{ pid: number; offerId: number }> = [];
+    let answers = false;
+    setLocalHostStillUnresponsiveCheck(async (offer) => {
+      asked.push(offer);
+      return answers ? null : { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    });
+    publishLocalHostUnresponsive({
+      pid: 4242,
+      offerId: 3,
+      unreachableForMs: 600_000,
+    });
+    try {
+      const restart = controller.respawn(
+        unresponsiveHostRestartIntent({ pid: 4242, offerId: 3 }),
+        "force",
+      );
+      await vi.waitFor(() => {
+        expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+      });
+      expect(asked).toEqual([]);
+
+      // The host answers again while the restart waits behind the install.
+      answers = true;
+      installGate.resolve();
+      await occupy;
+
+      await expect(restart).resolves.toEqual({
+        kind: "abandoned",
+        message:
+          "The host started responding again or was replaced, so it was not restarted.",
+      });
+      expect(asked).toEqual([{ pid: 4242, offerId: 3 }]);
+      const restartCalls = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.filter((call) => call[0].args.includes("restart"));
+      expect(restartCalls).toEqual([]);
+    } finally {
+      setLocalHostStillUnresponsiveCheck(null);
+      publishLocalHostUnresponsive(null);
+    }
+  });
+
+  // The guard above runs at the head of the lane, but the host is stopped a
+  // few steps later: past the continuation lookup and, for the CLI route,
+  // past the command's wait for its lifecycle lock (up to 30s). A restart
+  // confirmed for one host process carries that process to the CLI, which
+  // checks it again once it holds the lock.
+  describe("a restart confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    const BOUND_ARGS = [
+      "--expect-host-pid",
+      "4242",
+      "--expect-host-start-identity",
+      "linux:boot-a 4242",
+      "--lifecycle-origin",
+      "desktop",
+    ];
+
+    function confirmedFor(
+      host: typeof CONFIRMED_HOST,
+    ): LocalHostMutationIntent {
+      return {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: async () => ({ kind: "proceed-for-host", host }),
+      };
+    }
+
+    function stageInstalledHost(): HostController {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      return controller;
+    }
+
+    it("passes the confirmed host to the forced CLI restart", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+
+      const outcome = await controller.respawn(
+        confirmedFor(CONFIRMED_HOST),
+        "force",
+      );
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            ...BOUND_ARGS,
+          ],
+        }),
+      );
+    });
+
+    it("passes the confirmed host to the idle-only CLI restart", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+
+      await controller.respawn(confirmedFor(CONFIRMED_HOST), "if-idle");
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--if-idle",
+            "--defer-if-parked",
+            ...BOUND_ARGS,
+          ],
+        }),
+      );
+    });
+
+    it("carries the host an unresponsive-host offer was confirmed for, from the monitor's check to the CLI", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+      setLocalHostStillUnresponsiveCheck(async () => CONFIRMED_HOST);
+      publishLocalHostUnresponsive({
+        pid: 4242,
+        offerId: 3,
+        unreachableForMs: 600_000,
+      });
+      try {
+        await controller.respawn(
+          unresponsiveHostRestartIntent({ pid: 4242, offerId: 3 }),
+          "force",
+        );
+      } finally {
+        setLocalHostStillUnresponsiveCheck(null);
+        publishLocalHostUnresponsive(null);
+      }
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            ...BOUND_ARGS,
+          ],
+        }),
+      );
+    });
+
+    it("defers, with the host-changed message, when the CLI found another host published once it held the lock", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        new TraycerCliError(
+          "E_HOST_RESTART_TARGET_CHANGED",
+          "the confirmed host is no longer the published one",
+        ),
+      );
+
+      const outcome = await controller.respawn(
+        confirmedFor(CONFIRMED_HOST),
+        "force",
+      );
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+    });
+
+    it("adds no host to a restart whose guard confirmed none", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+
+      await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({ kind: "proceed" }),
+        },
+        "force",
+      );
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            "--lifecycle-origin",
+            "desktop",
+          ],
+        }),
+      );
+    });
+  });
+
   it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {
     // The coalesce key is intent-discriminated, so a watched user repair and
     // a menu/tray background restart for the same slot are DIFFERENT lane
@@ -5748,6 +5993,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: "foreground",
+      cliVersion: null,
     });
     const controller = newController("production");
 
@@ -5767,6 +6013,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: "foreground",
+      cliVersion: null,
     });
     const controller = newController("production");
 
@@ -5788,11 +6035,13 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
         state: "enforcing",
         supervisorPid: 9001,
         admittedAs: "service",
+        cliVersion: null,
       })
       .mockResolvedValue({
         state: "enforcing",
         supervisorPid: 4242,
         admittedAs: "foreground",
+        cliVersion: null,
       });
     const controller = newController("production");
     expect(await isHostRemovedByUser()).toBe(false);
@@ -5813,6 +6062,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_NOT_SERVICE_RUN", "not a service-run host"),
@@ -5835,6 +6085,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: "foreground",
+      cliVersion: null,
     });
     const controller = newController("production");
 
@@ -5853,6 +6104,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -5866,12 +6118,280 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     expect(uninstallSpawnCount()).toBe(1);
   });
 
+  // traycer#1563 D3e: the stop inside `host uninstall --all` could not be
+  // confirmed, so the CLI kept the install and refused
+  // (`E_HOST_UNINSTALL_HOST_RUNNING`). The CLI deregisters the service before
+  // it asks the host to stop, so the removal is half done: the person is told
+  // so, and the removed-by-user sentinel stays - clearing it would let an
+  // automatic ensure treat a host whose automatic start is off as one this
+  // app still keeps running.
+  it("removeTraycer defers with the not-fully-removed message and keeps the sentinel when the CLI kept the install because it could not confirm the host stopped (traycer#1563 D3e)", async () => {
+    readSupervisorRunMock.mockResolvedValue({
+      state: "not-running",
+      supervisorPid: null,
+      admittedAs: null,
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError(
+        "E_HOST_UNINSTALL_HOST_RUNNING",
+        "host uninstall: the host did not stop, so its install was kept.",
+      ),
+    );
+    const controller = newController("production");
+    expect(await isHostRemovedByUser()).toBe(false);
+
+    const outcome = await controller.removeTraycer();
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  // The CLI keeps the install when it could not confirm the host stopped: the
+  // stop failed, the host is still running, or its pid record could not be
+  // read. None of those shows the host is not responding, so the message says
+  // only what happened and gives no force-restart advice. It does not claim
+  // nothing changed: the automatic start was already turned off.
+  it("words the uninstall-kept-the-install message without a not-responding claim, force-restart advice or a claim that nothing was removed (traycer#1563)", () => {
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).toBe(
+      "Traycer was not fully removed. Its automatic start was turned off, but the host could not be confirmed as stopped, so its files were kept. Try again in a moment.",
+    );
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain("not responding");
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain("Force restart");
+    expect(HOST_UNINSTALL_HOST_RUNNING_MESSAGE).not.toContain(
+      "Nothing was removed",
+    );
+    expect(HOST_STARTUP_TURNED_OFF_NOTE).toBe(
+      "Traycer was not fully removed: its automatic start was turned off.",
+    );
+    expect(HOST_STARTUP_TURNED_OFF_NOTE).not.toContain("Nothing was removed");
+  });
+
+  // traycer#1563 R5: the uninstall's stop was declined because the host has
+  // work in progress, and the CLI rethrows the host's own `E_HOST_BUSY`. The
+  // CLI had deregistered the service by then and no uninstall route offers a
+  // Force, so it is a deferral that says the automatic start is off and the
+  // host was left running, not the busy outcome with a restart refusal. The
+  // sentinel stays.
+  it("removeTraycer defers with the host-busy message, never a busy Force or restart wording, when the CLI rethrows the host's E_HOST_BUSY, and keeps the sentinel", async () => {
+    readSupervisorRunMock.mockResolvedValue({
+      state: "not-running",
+      supervisorPid: null,
+      admittedAs: null,
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+    expect(await isHostRemovedByUser()).toBe(false);
+
+    const outcome = await controller.removeTraycer();
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  // The message says what happened and when to try again: the automatic start
+  // is off, the host was not stopped, the files were kept. It offers no
+  // restart and is not prefixed with the generic note, which it makes
+  // redundant.
+  it("words the uninstall-host-busy message without restart wording and without the generic startup-turned-off prefix (traycer#1563)", () => {
+    expect(HOST_UNINSTALL_HOST_BUSY_MESSAGE).toBe(
+      "Traycer was not fully removed. Its automatic start was turned off, but the host has work in progress, so it was not stopped and its files were kept. Try again when it is idle.",
+    );
+    expect(HOST_UNINSTALL_HOST_BUSY_MESSAGE).not.toContain("restart");
+    expect(
+      HOST_UNINSTALL_HOST_BUSY_MESSAGE.startsWith(HOST_STARTUP_TURNED_OFF_NOTE),
+    ).toBe(false);
+  });
+
+  // Packaged macOS removes the login item before the CLI runs, so any refusal
+  // after that is a partial removal, whatever the CLI's reason.
+  it("removeTraycer prefixes the note and keeps the sentinel when a packaged-macOS login item was unregistered and the CLI is then lock-busy", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.removeTraycer();
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: `${HOST_STARTUP_TURNED_OFF_NOTE} Another Traycer process is managing the host.`,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  it("uninstallHost(true) prefixes the note when a packaged-macOS login item was unregistered and the CLI is then lock-busy", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: `${HOST_STARTUP_TURNED_OFF_NOTE} Another Traycer process is managing the host.`,
+    });
+  });
+
+  // The control: off packaged macOS nothing precedes the CLI, and a lock-busy
+  // refusal changed nothing, so the message is not prefixed and the sentinel
+  // this call wrote is taken back (the old behaviour).
+  it("removeTraycer leaves a lock-busy refusal off packaged macOS unprefixed and takes the sentinel back", async () => {
+    readSupervisorRunMock.mockResolvedValue({
+      state: "not-running",
+      supervisorPid: null,
+      admittedAs: null,
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
+    );
+    const controller = newController("production");
+    expect(await isHostRemovedByUser()).toBe(false);
+
+    const outcome = await controller.removeTraycer();
+
+    expect(unregisterHostLoginItemGuarded).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: "Another Traycer process is managing the host.",
+    });
+    expect(await isHostRemovedByUser()).toBe(false);
+  });
+
+  it("uninstallHost(true) answers the host-did-not-stop refusal with the not-fully-removed message, not prefixed twice", async () => {
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_UNINSTALL_HOST_RUNNING", "kept"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
+    });
+    expect(outcome.kind === "deferred" ? outcome.message : "").not.toContain(
+      "Nothing was removed",
+    );
+  });
+
+  it("uninstallHost(true) defers with the host-busy message on the busy refusal, not a busy outcome and not prefixed", async () => {
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+    });
+    expect(outcome.kind === "deferred" ? outcome.message : "").not.toContain(
+      "restart",
+    );
+  });
+
+  // Packaged macOS removes the login item before the CLI runs; a busy-host
+  // refusal after that is the same deferral, with its own message and no
+  // second note in front of it.
+  it("removeTraycer defers with the host-busy message and keeps the sentinel when a packaged-macOS login item was unregistered and the CLI then rethrows E_HOST_BUSY", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.removeTraycer();
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  it("uninstallHost(true) defers with the host-busy message when a packaged-macOS login item was unregistered and the CLI then rethrows E_HOST_BUSY", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+      cliVersion: null,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+    });
+  });
+
+  // Without `--all` the CLI leaves the service and a running host alone, so
+  // nothing was turned off and no refusal is prefixed.
+  it("uninstallHost(false) never prefixes the note", async () => {
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(false);
+
+    expect(outcome).toMatchObject({ kind: "busy" });
+    if (outcome.kind !== "busy") throw new Error("expected busy");
+    expect(outcome.message).toBe(
+      "The host has work in progress; refusing to restart it and lose that work.",
+    );
+    expect(unregisterHostLoginItemGuarded).not.toHaveBeenCalled();
+  });
+
   it("removeTraycer proceeds over a packaged-macOS host running as a service", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     readSupervisorRunMock.mockResolvedValue({
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -5892,6 +6412,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -5910,6 +6431,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -5927,6 +6449,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_NOT_SERVICE_RUN", "not a service-run host"),
@@ -6899,6 +7422,63 @@ describe("HostControllerStatus.lastEnsureFailure", () => {
       code: null,
     });
   });
+
+  it("a failed convergeReady logs the code and the Last Run Result with private paths and tokens scrubbed", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(electronLog.warn).mockClear();
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError(
+        "E_SERVICE_CONTROL_FAILED",
+        "Last Run Result: 0x80070005 reading C:\\Users\\anurag\\secret-host.json with Bearer startuptoken",
+      ),
+    );
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+    expect(outcome.kind).toBe("failed");
+
+    const call = vi
+      .mocked(electronLog.warn)
+      .mock.calls.find(([message]) =>
+        String(message).includes("host ensure failed"),
+      );
+    expect(call).toBeDefined();
+    const fields = call?.[1] as { code: string; message: string };
+    expect(fields.code).toBe("E_SERVICE_CONTROL_FAILED");
+    expect(fields.message).toContain("Last Run Result: 0x80070005");
+    expect(JSON.stringify(fields)).not.toContain("anurag");
+    expect(JSON.stringify(fields)).not.toContain("startuptoken");
+  });
+
+  it("a successful convergeReady logs no ensure failure", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(electronLog.warn).mockClear();
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+    expect(outcome.kind).toBe("ok");
+    expect(
+      vi
+        .mocked(electronLog.warn)
+        .mock.calls.some(([message]) =>
+          String(message).includes("host ensure failed"),
+        ),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -7457,6 +8037,129 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       value: { running: true, version: "1.7.0" },
     });
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  // No marker: the debt is a service supervisor still running from a bundle
+  // an auto-update replaced.
+  describe("supervisor predating the bundle (no pending marker)", () => {
+    function arrange(input: {
+      bundled: string;
+      admittedAs: "service" | "foreground";
+      cliVersion: string;
+      substrate: "smappservice" | "raw-fallback";
+    }): HostController {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
+      vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+      vi.mocked(readBundledCliVersion).mockResolvedValue(input.bundled);
+      readSupervisorRunMock.mockResolvedValue({
+        state: "enforcing",
+        supervisorPid: process.pid,
+        admittedAs: input.admittedAs,
+        cliVersion: input.cliVersion,
+      });
+      const layout = getHostFsLayout("production");
+      mkdirSync(layout.rootDir, { recursive: true });
+      writeFileSync(
+        layout.substrateFile,
+        JSON.stringify({
+          v: 1,
+          active: input.substrate,
+          since: "2026-01-01T00:00:00.000Z",
+          reason: "stale-bundle-test",
+          attestation: null,
+        }),
+      );
+      return controller;
+    }
+
+    const stale = {
+      bundled: "2.0.0",
+      admittedAs: "service",
+      cliVersion: "1.0.0",
+      substrate: "smappservice",
+    } as const;
+
+    afterEach(() => {
+      vi.mocked(readBundledCliVersion).mockResolvedValue("0.0.0-local");
+    });
+
+    it("an idle smappservice supervisor from an older bundle runs the refresh cycle", async () => {
+      const controller = arrange(stale);
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toEqual({
+        kind: "ok",
+        value: { running: true, version: "1.7.0" },
+      });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    });
+
+    it("a supervisor already on the bundled CLI version owes nothing", async () => {
+      const controller = arrange({ ...stale, cliVersion: "2.0.0" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("a foreground-admitted supervisor is left alone", async () => {
+      const controller = arrange({ ...stale, admittedAs: "foreground" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("a raw-fallback substrate is left alone", async () => {
+      const controller = arrange({ ...stale, substrate: "raw-fallback" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("a bundle without version metadata owes nothing", async () => {
+      const controller = arrange({ ...stale, bundled: "0.0.0-local" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("skips the cycle when the supervisor was restarted from this bundle before the lock was held", async () => {
+      const controller = arrange(stale);
+      readSupervisorRunMock
+        .mockResolvedValueOnce({
+          state: "enforcing",
+          supervisorPid: process.pid,
+          admittedAs: "service",
+          cliVersion: "1.0.0",
+        })
+        .mockResolvedValue({
+          state: "enforcing",
+          supervisorPid: process.pid,
+          admittedAs: "service",
+          cliVersion: "2.0.0",
+        });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
   });
 
   it("removed-by-user mid-refresh short-circuits to an ok/not-running result without quarantining", async () => {
@@ -9333,6 +10036,170 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       }
     });
 
+    // The macOS continuation sits between the guard and the stop, and its
+    // drain and actuator-lock wait are windows in which another host can be
+    // published. A restart confirmed for one host process must not boot out a
+    // different live one: the record goes back to its park and the plain CLI
+    // restart is not tried either, since it would refuse for the same reason.
+    it("a continuation confirmed for one host stops nothing when pid.json now names a different live host", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      // The confirmed host was pid 4242; this test process now stands in for
+      // the healthy replacement published in its place.
+      const replacementIdentity = ownProcessStartIdentity();
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        ...(replacementIdentity === null
+          ? {}
+          : { processStartIdentity: replacementIdentity }),
+      });
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: 4242, startIdentity: "linux:boot-a 4242" },
+          }),
+        },
+        "force",
+      );
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+      expect(await currentAttemptPhase()).toBe("waiting-to-activate");
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining(["restart"]),
+        }),
+      );
+    });
+
+    // The span check above is not the last word: the continuation then waits
+    // for the actuator lock and registers, and a host admitted before that
+    // can publish in the gap. The registration asks again immediately before
+    // its bootout, so the check below passes at the span and the bootout is
+    // what refuses.
+    it("a continuation confirmed for one host that passes its span check stops nothing when pid.json comes to name a different live host before the registration's bootout", async () => {
+      eligibleDesktopCohort();
+      // The terminalized record does not end the request: the plain CLI
+      // restart is tried next, bound to the same host, and it refuses as the
+      // real command does against a pid.json naming another live host.
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (options) => {
+          if (options.args.includes("update-verify")) {
+            return { data: { outcome: "complete" } };
+          }
+          throw new TraycerCliError(
+            "E_HOST_RESTART_TARGET_CHANGED",
+            "the confirmed host is no longer the published one",
+          );
+        },
+      );
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      const confirmedIdentity = "linux:boot-a 4242";
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        processStartIdentity: confirmedIdentity,
+      });
+      // The same pid under another start identity is a different process; it
+      // is live (this one), so it reads as a replacement.
+      const replacementIdentity = ownProcessStartIdentity();
+      let bootoutReached = false;
+      let bootoutRan = false;
+      vi.mocked(registerHostLoginItem).mockImplementationOnce(
+        async (_revalidate, confirmTarget) => {
+          bootoutReached = true;
+          writePidMetadata("production", {
+            version: "2.0.0",
+            pid: process.pid,
+            ...(replacementIdentity === null
+              ? {}
+              : { processStartIdentity: replacementIdentity }),
+          });
+          // The real registration asks before its bootout and stops on false.
+          if (confirmTarget !== null && !(await confirmTarget())) {
+            return "deferred-busy";
+          }
+          bootoutRan = true;
+          return "enabled";
+        },
+      );
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: process.pid, startIdentity: confirmedIdentity },
+          }),
+        },
+        "force",
+      );
+
+      expect(bootoutReached).toBe(true);
+      expect(bootoutRan).toBe(false);
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+      expect(await currentAttemptPhase()).toBe("failed");
+      // The only restart left carries the confirmed host to the CLI, whose
+      // own check is the refusal reported above.
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining([
+            "restart",
+            "--expect-host-pid",
+            String(process.pid),
+            "--expect-host-start-identity",
+            confirmedIdentity,
+          ]),
+        }),
+      );
+    });
+
+    it("a continuation confirmed for one host proceeds while pid.json still names that host", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        processStartIdentity: "linux:boot-a 4242",
+      });
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: process.pid, startIdentity: "linux:boot-a 4242" },
+          }),
+        },
+        "force",
+      );
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalled();
+    });
+
     // NOTE on what this test actually proves right now: the assertion below
     // (never re-parked as `waiting-to-activate`) is true and meaningful, but
     // with the self-deadlock defect pinned above still live, this record
@@ -9785,6 +10652,43 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       // spawned argv no longer contained `--attempt-adoption` at all
       // (`flagIndex` was `-1`). Reverted before committing anything;
       // `host-controller.ts` was never touched.
+    });
+
+    it("a takeover-recoverable registration failure on a restart confirmed for one host shells --takeover holding it to that host", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        processStartIdentity: "linux:boot-a 4242",
+      });
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: process.pid, startIdentity: "linux:boot-a 4242" },
+          }),
+        },
+        "force",
+      );
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      const argv = takeoverCallArgv();
+      const at = argv?.indexOf("--expect-host-pid") ?? -1;
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(argv?.slice(at, at + 4)).toEqual([
+        "--expect-host-pid",
+        String(process.pid),
+        "--expect-host-start-identity",
+        "linux:boot-a 4242",
+      ]);
     });
 
     // Sibling of the test above, for the OTHER `needs-takeover` producer:
@@ -11039,6 +11943,290 @@ describe("restart with no launchd job to restart (packaged macOS, neither host l
       });
       expect(registerHostLoginItem).not.toHaveBeenCalled();
       expect(spawnedRestarts()).toEqual([]);
+    });
+  });
+
+  // The register cycle waits for the desktop lock before it boots anything
+  // out, after the guard that confirmed the restart for one host process. A
+  // host another actor starts in that wait is not the one the person chose.
+  describe("respawn confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    const HOST_FLAGS = [
+      "--expect-host-pid",
+      "4242",
+      "--expect-host-start-identity",
+      "linux:boot-a 4242",
+    ];
+
+    function confirmedIntent(): LocalHostMutationIntent {
+      return {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: async () => ({ kind: "proceed-for-host", host: CONFIRMED_HOST }),
+      };
+    }
+
+    function flagsOf(argv: readonly string[] | undefined): readonly string[] {
+      const at = argv?.indexOf("--expect-host-pid") ?? -1;
+      return at < 0 ? [] : (argv?.slice(at, at + 4) ?? []);
+    }
+
+    it("defers, registering and booting out nothing, when a different live host is published while the cycle waits for its lock", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: CONFIRMED_HOST.pid,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      });
+      const held = await acquireDesktopCliLock({
+        lockPath: cliLockPath("production"),
+        reason: "test-held-elsewhere",
+        waitMs: 0,
+        pollIntervalMs: 25,
+      });
+      if (held.kind !== "acquired") {
+        throw new Error("failed to seed a held lock for this test");
+      }
+
+      let released = false;
+      try {
+        const outcome = controller.respawn(confirmedIntent(), "force");
+        // The cycle is about to wait for the lock the test holds.
+        await vi.waitFor(() => {
+          expect(readHostLoginItemStatus).toHaveBeenCalled();
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        // A healthy replacement is published while it waits: this test
+        // process stands in for it, a live process under its own identity.
+        const replacementIdentity = ownProcessStartIdentity();
+        writePidMetadata("production", {
+          version: "1.7.0",
+          pid: process.pid,
+          ...(replacementIdentity === null
+            ? {}
+            : { processStartIdentity: replacementIdentity }),
+        });
+        released = true;
+        await held.handle.release();
+
+        await expect(outcome).resolves.toEqual({
+          kind: "deferred",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        });
+      } finally {
+        if (!released) await held.handle.release();
+      }
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(spawnedRestarts()).toEqual([]);
+    });
+
+    it("registers as before when no host is published", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    });
+
+    it("registers as before when pid.json still names the confirmed host, whose process is gone", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: CONFIRMED_HOST.pid,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      });
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    });
+
+    // The first register cycle starts a host that never becomes ready, and
+    // nothing reachable appears afterwards, so the wrapper runs the whole
+    // cycle once more. That second cycle boots out first, after waiting for
+    // the lock again, so it is held to the confirmed host the same way.
+    const NOT_READY = {
+      ready: false,
+      version: null,
+      pid: null,
+      startedAt: null,
+      reason: "pid metadata never appeared",
+    } as const;
+
+    it("refuses the readiness-timeout retry, registering only once, when a different live host is published while the retry waits for its lock", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: CONFIRMED_HOST.pid,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      });
+      vi.mocked(waitForHostReady).mockImplementationOnce(async () => {
+        // The first cycle's lock is released by now. Another actor takes the
+        // lock the retry will need and publishes a healthy replacement: this
+        // test process stands in for it, a live process under its own
+        // identity.
+        const other = await acquireDesktopCliLock({
+          lockPath: cliLockPath("production"),
+          reason: "test-held-elsewhere",
+          waitMs: 0,
+          pollIntervalMs: 25,
+        });
+        if (other.kind !== "acquired") {
+          throw new Error("failed to seed a held lock for this test");
+        }
+        const replacementIdentity = ownProcessStartIdentity();
+        writePidMetadata("production", {
+          version: "1.7.0",
+          pid: process.pid,
+          ...(replacementIdentity === null
+            ? {}
+            : { processStartIdentity: replacementIdentity }),
+        });
+        setTimeout(() => {
+          void other.handle.release();
+        }, 300);
+        return NOT_READY;
+      });
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["no host is published", false],
+      ["pid.json still names the confirmed host, whose process is gone", true],
+    ] as const)(
+      "runs the readiness-timeout retry, registering twice, when %s",
+      async (_name, publishConfirmed) => {
+        const { controller } = stageNoLaunchdJobWorld();
+        if (publishConfirmed) {
+          writePidMetadata("production", {
+            version: "1.7.0",
+            pid: CONFIRMED_HOST.pid,
+            processStartIdentity: CONFIRMED_HOST.startIdentity,
+          });
+        }
+        vi.mocked(waitForHostReady).mockResolvedValueOnce(NOT_READY);
+
+        const outcome = await controller.respawn(confirmedIntent(), "force");
+
+        expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+        expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+        expect(waitForHostReady).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it("carries the confirmed host to the post-lock CLI restart after a parked registration", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn(confirmedIntent(), "force");
+
+      expect(spawnedRestarts()).toEqual([
+        [
+          "host",
+          "restart",
+          "--force",
+          "--defer-if-parked",
+          ...HOST_FLAGS,
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      ]);
+    });
+
+    it("carries the confirmed host to the CLI takeover after a registration failure", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn(confirmedIntent(), "force");
+
+      const takeover = spawnedCliCommands().find((args) =>
+        args.includes("--takeover"),
+      );
+      expect(takeover?.slice(0, 4)).toEqual([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+      ]);
+      expect(flagsOf(takeover)).toEqual(HOST_FLAGS);
+    });
+
+    // The takeover reaches the same CLI refusal as the plain restart: it
+    // boots out and installs behind the confirmed host. A different host
+    // published in its place is a deferral, never a failed registration.
+    it("defers, with the host-changed message, when the CLI takeover found another host published in place of the confirmed one", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (options) => {
+          if (options.args.includes("--takeover")) {
+            throw new TraycerCliError(
+              "E_HOST_RESTART_TARGET_CHANGED",
+              "the confirmed host is no longer the published one",
+            );
+          }
+          return { data: { restarted: true, version: "1.7.0" } };
+        },
+      );
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome.kind).toBe("deferred");
+      if (outcome.kind === "deferred") {
+        expect(outcome.message).toContain(HOST_RESTART_TARGET_CHANGED_MESSAGE);
+      }
+    });
+
+    it("carries the confirmed host to the CLI takeover after a parked registration with no host running", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn(confirmedIntent(), "force");
+
+      const takeover = spawnedCliCommands().find((args) =>
+        args.includes("--takeover"),
+      );
+      expect(flagsOf(takeover)).toEqual(HOST_FLAGS);
+    });
+
+    it("adds no host flags to the same fallbacks when the guard confirmed none", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn({ kind: "background" }, "force");
+
+      const takeover = spawnedCliCommands().find((args) =>
+        args.includes("--takeover"),
+      );
+      expect(takeover).toBeDefined();
+      expect(flagsOf(takeover)).toEqual([]);
     });
   });
 

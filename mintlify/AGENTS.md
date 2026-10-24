@@ -14,6 +14,10 @@ not have to be listed in `docs.json` to become a public URL. `docs.json` sets
 Customer-facing product pages only. Add each new page to the `docs.json`
 navigation.
 
+Write for someone using the product: what a feature does and how to use it,
+not what it is built from. The repo-root `AGENTS.md` rule "User-facing copy"
+applies to every sentence here.
+
 ## What does not
 
 Support runbooks, production ops procedures, ADRs, design notes, SQL,

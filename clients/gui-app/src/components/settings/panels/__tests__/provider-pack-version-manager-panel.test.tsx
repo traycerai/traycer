@@ -1,4 +1,5 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -29,6 +30,13 @@ type UseMutateOptions = {
           readonly ok: false;
           readonly code: UsePackVersionRefusalCode;
           readonly detail: string | null;
+        }
+      | {
+          readonly ok: false;
+          readonly code: "macos-ineligible";
+          readonly requiredMacos: string;
+          readonly runningMacos: string;
+          readonly detail?: string;
         };
   }) => void;
   readonly onSettled?: () => void;
@@ -353,6 +361,8 @@ function renderPanel(options: {
 }): void {
   render(
     <ProviderPackVersionManagerPanel
+      refusedVersions={[]}
+      runningMacos={null}
       hostId={options.hostId}
       packId="opencode"
       packDisplayName="opencode CLI"
@@ -1001,6 +1011,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     ];
     const view = render(
       <ProviderPackVersionManagerPanel
+        refusedVersions={[]}
+        runningMacos={null}
         hostId="host-1"
         packId="opencode"
         packDisplayName="opencode CLI"
@@ -1015,6 +1027,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
     view.rerender(
       <ProviderPackVersionManagerPanel
+        refusedVersions={[]}
+        runningMacos={null}
         hostId="host-2"
         packId="opencode"
         packDisplayName="opencode CLI"
@@ -1249,6 +1263,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
       const { rerender } = render(
         <ProviderPackVersionManagerPanel
+          refusedVersions={[]}
+          runningMacos={null}
           hostId="host-1"
           packId="opencode"
           packDisplayName="opencode CLI"
@@ -1260,6 +1276,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
       rerender(
         <ProviderPackVersionManagerPanel
+          refusedVersions={[]}
+          runningMacos={null}
           hostId={next.hostId}
           packId={next.packId}
           packDisplayName="another CLI"
@@ -1291,6 +1309,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
     const { rerender } = render(
       <ProviderPackVersionManagerPanel
+        refusedVersions={[]}
+        runningMacos={null}
         hostId="host-1"
         packId="opencode"
         packDisplayName="opencode CLI"
@@ -1304,6 +1324,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     mocks.checkIsPending = true;
     rerender(
       <ProviderPackVersionManagerPanel
+        refusedVersions={[]}
+        runningMacos={null}
         hostId="host-1"
         packId="codex"
         packDisplayName="codex CLI"
@@ -1344,6 +1366,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
     const { rerender } = render(
       <ProviderPackVersionManagerPanel
+        refusedVersions={[]}
+        runningMacos={null}
         hostId="host-1"
         packId="opencode"
         packDisplayName="opencode CLI"
@@ -1355,6 +1379,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     mocks.checkIsPending = true;
     rerender(
       <ProviderPackVersionManagerPanel
+        refusedVersions={[]}
+        runningMacos={null}
         hostId="host-1"
         packId="codex"
         packDisplayName="codex CLI"
@@ -1683,5 +1709,328 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
     );
     expect(screen.queryByTestId("version-row-chip-unpublished")).toBeNull();
     expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
+  });
+});
+
+describe("<ProviderPackVersionManagerPanel /> macOS-ineligible versions", () => {
+  afterEach(() => {
+    cleanup();
+    mocks.useMutate.mockReset();
+  });
+
+  function renderWithRefusals(
+    refusedVersions: readonly {
+      readonly version: string;
+      readonly requiredMacos: string;
+    }[],
+  ): void {
+    render(
+      <ProviderPackVersionManagerPanel
+        hostId="host-1"
+        packId="antigravity"
+        packDisplayName="Antigravity CLI"
+        managedVersions={managed(
+          [
+            version({
+              version: "1.0.0",
+              current: true,
+              installState: { status: "installed" },
+            }),
+            version({
+              version: "2.0.0",
+              installState: { status: "installed" },
+            }),
+            version({
+              version: "3.0.0",
+              installState: { status: "installed" },
+            }),
+          ],
+          null,
+        )}
+        refusedVersions={refusedVersions}
+        runningMacos="14.2"
+      />,
+    );
+  }
+
+  it("shows the typed sentence on the row for the first refusal, before any refetch, and never the detail", async () => {
+    const user = userEvent.setup();
+    mocks.useMutate.mockImplementation((_variables, options) => {
+      options.onSuccess?.({
+        result: {
+          ok: false,
+          code: "macos-ineligible",
+          requiredMacos: "15.0",
+          runningMacos: "14.2",
+          detail: "operator detail that must not be the user sentence",
+        },
+      });
+      options.onSettled?.();
+    });
+    renderWithRefusals([]);
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Use", "2.0.0") }),
+    );
+
+    const notice = screen.getByTestId("version-row-notice");
+    expect(notice.textContent).toBe(
+      "Needs macOS 15.0 or later. This Mac runs macOS 14.2.",
+    );
+    expect(screen.queryByText(/operator detail/iu)).toBeNull();
+    expect(screen.queryByText(/could not verify/iu)).toBeNull();
+  });
+
+  it("disables each refused version with its own floor, never the table floor", () => {
+    renderWithRefusals([
+      { version: "2.0.0", requiredMacos: "15.0" },
+      { version: "3.0.0", requiredMacos: "16.0" },
+    ]);
+
+    const rowTwo = screen.getByTestId("provider-pack-version-row-2.0.0");
+    const rowThree = screen.getByTestId("provider-pack-version-row-3.0.0");
+    expect(rowTwo.textContent).toContain("Needs macOS 15.0");
+    expect(rowTwo.textContent).not.toContain("16.0");
+    expect(rowThree.textContent).toContain("Needs macOS 16.0");
+    expect(rowThree.textContent).not.toContain("14.0");
+    for (const label of ["2.0.0", "3.0.0"]) {
+      const use = screen.getByRole("button", {
+        name: rowActionName("Use", label),
+      });
+      expect(use.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("leaves versions the host did not refuse usable", () => {
+    renderWithRefusals([{ version: "3.0.0", requiredMacos: "16.0" }]);
+    const use = screen.getByRole("button", {
+      name: rowActionName("Use", "2.0.0"),
+    });
+    expect(use.hasAttribute("disabled")).toBe(false);
+    expect(
+      screen.getByTestId("provider-pack-version-row-2.0.0").textContent,
+    ).not.toContain("Needs macOS");
+  });
+
+  function panelElement(args: {
+    readonly hostId: string;
+    readonly runningMacos: string | null;
+    readonly refusedVersions: readonly {
+      readonly version: string;
+      readonly requiredMacos: string;
+    }[];
+  }): ReactElement {
+    return (
+      <ProviderPackVersionManagerPanel
+        hostId={args.hostId}
+        packId="antigravity"
+        packDisplayName="Antigravity CLI"
+        managedVersions={managed(
+          [
+            version({
+              version: "1.0.0",
+              current: true,
+              installState: { status: "installed" },
+            }),
+            version({
+              version: "2.0.0",
+              installState: { status: "installed" },
+            }),
+          ],
+          null,
+        )}
+        refusedVersions={args.refusedVersions}
+        runningMacos={args.runningMacos}
+      />
+    );
+  }
+
+  const NOTICE_13_6 = "Needs macOS 15.0 or later. This Mac runs macOS 13.6.";
+
+  it("names its own floor on a 13.6 Mac, and a later refusedVersions row disables it without rewriting the sentence", async () => {
+    const user = userEvent.setup();
+    mocks.useMutate.mockImplementation((_variables, options) => {
+      options.onSuccess?.({
+        result: {
+          ok: false,
+          code: "macos-ineligible",
+          requiredMacos: "15.0",
+          runningMacos: "13.6",
+        },
+      });
+      options.onSettled?.();
+    });
+    const rendered = render(
+      panelElement({
+        hostId: "host-1",
+        runningMacos: "13.6",
+        refusedVersions: [],
+      }),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Use", "2.0.0") }),
+    );
+    expect(screen.getByTestId("version-row-notice").textContent).toBe(
+      NOTICE_13_6,
+    );
+    expect(
+      screen
+        .getByRole("button", { name: rowActionName("Use", "2.0.0") })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    // The refetch lands: the row now comes from the host's own list.
+    rendered.rerender(
+      panelElement({
+        hostId: "host-1",
+        runningMacos: "13.6",
+        refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+      }),
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: rowActionName("Use", "2.0.0") })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    const rowText = screen.getByTestId(
+      "provider-pack-version-row-2.0.0",
+    ).textContent;
+    expect(rowText).toContain("Needs macOS 15.0");
+    expect(rowText).not.toContain("14.0");
+    // The first-refusal string was not rewritten by the new state.
+    expect(screen.getByTestId("version-row-notice").textContent).toBe(
+      NOTICE_13_6,
+    );
+  });
+
+  it("drops a refusal that resolves after the panel moved to another host", async () => {
+    const user = userEvent.setup();
+    let late: UseMutateOptions | null = null;
+    mocks.useMutate.mockImplementation((_variables, options) => {
+      late = options;
+    });
+    const rendered = render(
+      panelElement({
+        hostId: "host-1",
+        runningMacos: "14.2",
+        refusedVersions: [],
+      }),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: rowActionName("Use", "2.0.0") }),
+    );
+    // Same pack, other host, while the request to host-1 is still in flight.
+    rendered.rerender(
+      panelElement({
+        hostId: "host-2",
+        runningMacos: "14.2",
+        refusedVersions: [],
+      }),
+    );
+    const options = late as UseMutateOptions | null;
+    if (options === null) throw new Error("Expected a pending use request.");
+    act(() => {
+      options.onSuccess?.({
+        result: {
+          ok: false,
+          code: "macos-ineligible",
+          requiredMacos: "15.0",
+          runningMacos: "14.2",
+        },
+      });
+      options.onSettled?.();
+    });
+
+    expect(screen.queryByTestId("version-row-notice")).toBeNull();
+    expect(screen.queryByText(/Needs macOS/u)).toBeNull();
+  });
+
+  describe("update banner for a version the host refused for this macOS", () => {
+    afterEach(() => {
+      mocks.installMutate.mockReset();
+    });
+
+    function renderUpdateOffer(
+      refusedVersions: readonly {
+        readonly version: string;
+        readonly requiredMacos: string;
+      }[],
+    ): void {
+      render(
+        <ProviderPackVersionManagerPanel
+          hostId="host-1"
+          packId="antigravity"
+          packDisplayName="Antigravity CLI"
+          managedVersions={managed(
+            [
+              version({
+                version: "1.0.0",
+                current: true,
+                installState: { status: "installed" },
+              }),
+              // Eligible and absent: nothing but the OS refusal stops it.
+              version({
+                version: "2.0.0",
+                installState: { status: "absent" },
+              }),
+            ],
+            { updateAvailable: { version: "2.0.0" } },
+          )}
+          refusedVersions={refusedVersions}
+          runningMacos="14.2"
+        />,
+      );
+    }
+
+    it("disables the banner and row Download with the version's own floor and dispatches no install", async () => {
+      const user = userEvent.setup();
+      renderUpdateOffer([{ version: "2.0.0", requiredMacos: "15.0" }]);
+
+      const bannerDownload = screen.getByTestId(
+        "provider-pack-update-download",
+      );
+      const rowDownload = screen.getByRole("button", {
+        name: rowActionName("Download", "2.0.0"),
+      });
+      expect(bannerDownload.hasAttribute("disabled")).toBe(true);
+      expect(rowDownload.hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByTestId("provider-pack-update-banner-disabled-reason")
+          .textContent,
+      ).toBe("Needs macOS 15.0 or later. This Mac runs macOS 14.2.");
+
+      await user.click(bannerDownload);
+      await user.click(rowDownload);
+      expect(mocks.installMutate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "no refusal reported (older host)", refused: [] },
+      {
+        name: "a refusal for a different version",
+        refused: [{ version: "3.0.0", requiredMacos: "16.0" }],
+      },
+    ])("still downloads from the banner with $name", async ({ refused }) => {
+      const user = userEvent.setup();
+      renderUpdateOffer(refused);
+
+      const bannerDownload = screen.getByTestId(
+        "provider-pack-update-download",
+      );
+      expect(bannerDownload.hasAttribute("disabled")).toBe(false);
+      expect(
+        screen.queryByTestId("provider-pack-update-banner-disabled-reason"),
+      ).toBeNull();
+
+      await user.click(bannerDownload);
+      expect(mocks.installMutate).toHaveBeenCalledTimes(1);
+      expect(mocks.installMutate.mock.calls[0]?.[0]).toEqual({
+        packId: "antigravity",
+        version: "2.0.0",
+      });
+    });
   });
 });

@@ -1,3 +1,8 @@
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useChatPrestartRuntime } from "@/hooks/chats/use-chat-prestart-runtime";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { settingsFromDerived } from "@/stores/composer/composer-toolbar-store";
+import { readStagedWorktreeIntent } from "@/stores/worktree/worktree-intent-staging-store";
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import {
   memo,
@@ -72,6 +77,7 @@ import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
+import { ChatSecretExportNotices } from "./chat-secret-export-notices";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "./profile-disabled-banner";
 import {
@@ -452,6 +458,57 @@ function ChatComposerImpl(props: ChatComposerProps) {
       chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
     },
   );
+  const prestartSupport = useHostMethodSupport(
+    tabHostId,
+    "chat.prestartRuntime",
+  );
+  const { mutate: prestart } = useChatPrestartRuntime(
+    hostClient,
+    tabHostId,
+    taskId,
+  );
+  const requestPrestart = useCallback(
+    (settings: ChatRunSettings) => {
+      if (
+        !focused ||
+        currentEpicId === null ||
+        prestartSupport !== true ||
+        settings.model.length === 0
+      )
+        return;
+      if (
+        readStagedWorktreeIntent({
+          surface: "owner",
+          hostId: tabHostId,
+          epicId: currentEpicId,
+          ownerKind: "chat",
+          ownerId: taskId,
+        }) !== null
+      )
+        return;
+      prestart({
+        epicId: currentEpicId,
+        chatId: taskId,
+        settings,
+        accountContext: useAccountContextStore.getState().accountContext,
+      });
+    },
+    [focused, currentEpicId, prestartSupport, tabHostId, taskId, prestart],
+  );
+  const handleUserInput = useCallback(
+    (wasEmpty: boolean) => {
+      if (wasEmpty && !draftHasText && !draftHasImages)
+        requestPrestart(settingsFromDerived(toolbarStore.getState()));
+    },
+    [requestPrestart, toolbarStore, draftHasText, draftHasImages],
+  );
+  useEffect(() => {
+    const onUserSettingsChange = (settings: ChatRunSettings) => {
+      if (draftHasText || draftHasImages) requestPrestart(settings);
+    };
+    toolbarStore.setState({ onUserSettingsChange });
+    return () => toolbarStore.setState({ onUserSettingsChange: undefined });
+  }, [toolbarStore, draftHasText, draftHasImages, requestPrestart]);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   // Connection-level auth gate for the selected provider, scoped to the tab's
@@ -560,6 +617,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pickerStore,
     hostClient,
     harnessId,
+    profileId,
     mentionRoots: resolvedMentionRoots,
     currentEpicId,
     isActive: focused,
@@ -645,6 +703,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       getActiveTurnForSteer,
       hasPendingApprovals,
       sendDisabled: sendBlocked,
+      sendDisabledHint: sendBlockedHint,
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
@@ -822,6 +881,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
             eligibility={profileEligibility}
             onChooseProfile={toggleActiveModelPicker}
           />
+          <ChatSecretExportNotices chatId={taskId} />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -876,6 +936,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                       isActive={focused}
                       disabled={false}
                       onDocumentChange={handleDocumentChangeNotingEdit}
+                      onUserInput={handleUserInput}
                       onSelectionChange={handleSelectionChange}
                       onSubmit={handleSubmitDraft}
                       steerHintActive={steerHintActive}

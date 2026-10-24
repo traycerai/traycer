@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import {
   downgradeRequestAcrossMajors,
   downgradeResponseAcrossMajors,
@@ -28,6 +27,7 @@ import {
   providersListResponseSchemaV92,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Pins the frozen `providers.list` shapes around v7.0 - hand-copied off the
@@ -551,9 +551,13 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
   // "regenerate to green".
   it("the frozen v7.0 request is still exactly the live request", () => {
     expect(
-      z.toJSONSchema(providersListRequestSchemaV70, { unrepresentable: "any" }),
+      toCanonicalJsonSchema(providersListRequestSchemaV70, {
+        unrepresentable: "any",
+      }),
     ).toEqual(
-      z.toJSONSchema(providersListRequestSchema, { unrepresentable: "any" }),
+      toCanonicalJsonSchema(providersListRequestSchema, {
+        unrepresentable: "any",
+      }),
     );
   });
 });
@@ -819,6 +823,29 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
       },
       cliBinaryResolved: false,
       autoJudge: "traycer",
+      nativeSubagents: true,
+      managedLines: [
+        {
+          line: 1,
+          candidate: {
+            kind: "bundled",
+            path: "",
+            version: null,
+            available: false,
+            versionPending: false,
+          },
+          packId: null,
+          managedInstallState: null,
+          managedVersions: null,
+          managedVersionsUnavailable: null,
+        },
+      ],
+      macosRequirement: {
+        runningMacos: "13.6",
+        managed: { requiredMacos: "14.0" },
+        launch: { requiredMacos: "14.0" },
+        refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+      },
     });
 
   it("has a non-empty obligation set, so nothing below can pass vacuously", () => {
@@ -833,6 +860,15 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
     expect(laterThanV10.filter((key) => key in live).sort()).toEqual(
       [...laterThanV10].sort(),
     );
+    // `macosRequirement` is `.catch(null)`: a malformed fixture value would
+    // parse to a present-but-null key and keep the check above green while
+    // proving nothing, so the populated object itself has to survive.
+    expect(live.macosRequirement).toEqual({
+      runningMacos: "13.6",
+      managed: { requiredMacos: "14.0" },
+      launch: { requiredMacos: "14.0" },
+      refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+    });
   });
 
   it("downgrades without vanishing, and none of them survive", () => {

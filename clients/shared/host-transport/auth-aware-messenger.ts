@@ -8,29 +8,23 @@ import {
   HostRpcError,
   HostAuthoritySupersededError,
   HostRequestAbortedError,
+  mayHaveReachedHost,
   type HostRequestAuthority,
   type HostRequestOptions,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "./host-messenger";
+import {
+  withEarlierAttemptDispatch,
+  withEpisodeDispatch,
+} from "./retrying-messenger";
 
 /**
- * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
- * "UNAUTHORIZED"` triggers `auth.revalidateCurrentContext()` before the error
- * propagates. The host never refreshes tokens itself - it only signals
- * `UNAUTHORIZED` - so this wrapper is the single client-side place that closes
- * the refresh loop for unary RPC, shared by the renderer and the CLI.
- *
- * With a `retry` policy, a revalidation that rotated the bearer is followed by
- * one more `request` attempt; otherwise (and always, on a second failure) the
- * original error propagates.
- */
-/**
- * Reads the current bearer string for the retry gate, tolerating every "no
- * bearer" shape (no retry policy, no source, or a released/empty lease whose
- * `getBearerToken()` throws) by returning `null`. The gate then compares
- * before/after: equal-or-null means "no rotation happened", so don't retry.
+ * Reads the current bearer string for the retry gate, tolerating a released
+ * or empty lease (whose `getBearerToken()` throws) by returning `null`. The
+ * gate then compares before/after: when `after` is null, or `after` equals
+ * `before`, no rotation happened, so don't retry.
  */
 function readBearer(source: OpenFrameBearerSource): string | null {
   try {
@@ -40,9 +34,63 @@ function readBearer(source: OpenFrameBearerSource): string | null {
   }
 }
 
+/**
+ * Which UNAUTHORIZED failures a recovery refreshes and sends again after.
+ * `"always"`: every one that is not a retryable transient. `"before-request"`:
+ * only a host fatal that ended the call before its request frame (see
+ * {@link hostRejectedBeforeRequest}), for a caller that reads a refusal as
+ * proof that nothing was done - the second send's answer carries no trace of
+ * a first that went out.
+ */
+export type AuthRecoveryScope = "always" | "before-request";
+
+/**
+ * True for a host fatal that ended the call before its request frame was
+ * written, such as the host's refusal of the open frame's bearer. A fatal
+ * after the send carries the same details but is marked as possibly reaching
+ * the host, and a host error envelope carries no fatal details.
+ */
+export function hostRejectedBeforeRequest(error: unknown): boolean {
+  return (
+    error instanceof HostRpcError &&
+    error.fatalDetails !== null &&
+    !mayHaveReachedHost(error)
+  );
+}
+
+/**
+ * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
+ * "UNAUTHORIZED"` triggers `auth.revalidateExpectedBearer(authority.bearer)`
+ * before the error propagates. The host never refreshes tokens itself - it
+ * only signals `UNAUTHORIZED` - so this wrapper is the single client-side
+ * place that closes the refresh loop for unary RPC, shared by the renderer and
+ * the CLI.
+ *
+ * Recovery is bound to the request's own authority, the bearer object that
+ * produced the rejected `open`, not to whatever context is current: by the
+ * time the refusal arrives the person may have switched account or signed
+ * out, and refreshing or signing out that newer context on an old request's
+ * say-so would act on a session the refusal says nothing about. A recovery
+ * whose bearer is no longer current comes back `"superseded"`.
+ *
+ * A revalidation that rotated the bearer is followed by one more `request`
+ * attempt, whose failure propagates. One that did not rotate rethrows the
+ * original error; an abort during recovery rejects with
+ * `HostRequestAbortedError`, and a superseded recovery with
+ * `HostAuthoritySupersededError`.
+ *
+ * Recovery never hides that the first attempt may have reached the host (see
+ * `mayHaveReachedHost`; a session that went fatal with the request pending is
+ * the case that brings one here). After such an attempt an abort during
+ * recovery says it may have dispatched, a superseded recovery is an unattested
+ * transport failure, and the retry's failure carries the earlier send the way
+ * a retry episode's does. A first attempt that never left ends every exit as
+ * the paragraph above says.
+ */
 export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
   auth: AuthorityBoundAuthRevalidator,
+  scope: AuthRecoveryScope,
 ): IHostMessenger<Registry> {
   const runWithAuthRecovery = async <Response>(
     authority: HostRequestAuthority,
@@ -62,12 +110,20 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (cause.fatalDetails?.retryable === true) {
         throw cause;
       }
+      if (scope === "before-request" && !hostRejectedBeforeRequest(cause)) {
+        throw cause;
+      }
+      // Every exit below that rethrows `cause` hands on this same object, so
+      // its own mark already says so; the exits that build a new error state
+      // it.
+      const sentEarlier = mayHaveReachedHost(cause);
       if (authority.abortSignal.aborted) {
         throw new HostRequestAbortedError({
           message:
             "Host request authority was aborted before authentication recovery",
           requestId: "authority-aborted",
           method,
+          mayHaveDispatched: sentEarlier,
         });
       }
       const before = readBearer(authority.bearer);
@@ -78,7 +134,11 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         throw cause;
       }
       if (outcome === "superseded") {
-        throw new HostAuthoritySupersededError();
+        throw withEpisodeDispatch(
+          new HostAuthoritySupersededError(),
+          method,
+          sentEarlier,
+        );
       }
       // Anything but a rotation rethrows, and that is the right answer for
       // `local-plane-retained` too: a unary call has no reconnect ladder to put
@@ -91,6 +151,7 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
               "Host request authority was aborted during authentication recovery",
             requestId: "authority-aborted",
             method,
+            mayHaveDispatched: sentEarlier,
           });
         }
         throw cause;
@@ -99,7 +160,11 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (after === null || after === before) {
         throw cause;
       }
-      return call();
+      try {
+        return await call();
+      } catch (retryCause) {
+        throw withEarlierAttemptDispatch(retryCause, method, sentEarlier);
+      }
     }
   };
 

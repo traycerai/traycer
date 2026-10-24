@@ -14,6 +14,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   prSubscribeListForEpicOpenRequestSchema,
   prSubscribeListForEpicServerFrameSchema,
+  prSubscribeListForEpicServerFrameSchemaV10,
   prSubscribeDetailOpenRequestSchema,
   prSubscribeDetailServerFrameSchema,
   prSubscribeClientFrameSchema,
@@ -34,6 +35,20 @@ import {
 export const prSubscribeListForEpicV10 = defineStreamRpcContract({
   method: "pr.subscribeListForEpic",
   schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: prSubscribeListForEpicOpenRequestSchema,
+  serverFrameSchema: prSubscribeListForEpicServerFrameSchemaV10,
+  clientFrameSchema: prSubscribeClientFrameSchema,
+});
+
+/**
+ * `pr.subscribeListForEpic@1.1` - each row may carry `stack`, the PR's
+ * GitHub-native stacked-PR membership (`prStackSchema`). Additive minor: the
+ * @1.0 frame stays bound to its frozen row so a @1.0 peer's re-parse strips
+ * the key.
+ */
+export const prSubscribeListForEpicV11 = defineStreamRpcContract({
+  method: "pr.subscribeListForEpic",
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: prSubscribeListForEpicOpenRequestSchema,
   serverFrameSchema: prSubscribeListForEpicServerFrameSchema,
   clientFrameSchema: prSubscribeClientFrameSchema,

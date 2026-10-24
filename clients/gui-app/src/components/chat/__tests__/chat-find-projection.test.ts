@@ -37,6 +37,11 @@ import type {
 } from "@/stores/composer/chat-store";
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { makeMessage } from "./chat-message-fixtures";
+import {
+  persistedCompaction,
+  REFUSED_COMPACTION_ERROR,
+  renderedCompactionMessages,
+} from "@/stores/chats/__tests__/rendered-compaction-fixture";
 
 const TILE_INSTANCE_ID = "chat-find-test-tile";
 
@@ -447,6 +452,7 @@ describe("chat find projection", () => {
         agentMessageSend: null,
         managedCommand: null,
         agentMessageReceipt: null,
+        agentMessageDelivery: null,
         isStreaming: false,
         endState: null,
         stopped: false,
@@ -454,7 +460,7 @@ describe("chat find projection", () => {
         backgroundOutput: null,
         backgroundTask: false,
         imageResults: [],
-        page: null,
+        artifact: null,
         mcpApp: null,
         durationMs: null,
         startedAt: 0,
@@ -493,13 +499,13 @@ describe("chat find projection", () => {
     expect(rowSearchText(row)).not.toContain("No diff available");
   });
 
-  it("indexes nothing for a stamped page whatever its tool is called", () => {
-    // The page row renders off the stamp, not the name, so find must skip it
-    // on the same test or it indexes a header that never paints.
-    const page: MessageSegment = {
-      id: "page-1",
+  it("indexes nothing for a stamped inline artifact whatever its tool is called", () => {
+    // The artifact row renders off the stamp and carries
+    // no distinguished tool-name spelling to key a classifier on.
+    const artifact: MessageSegment = {
+      id: "artifact-1",
       kind: "tool",
-      toolName: "some_other_page_tool",
+      toolName: "some_other_artifact_tool",
       inputSummary: "quarterly-report",
       inputDetail: null,
       taskTodoItems: null,
@@ -507,6 +513,7 @@ describe("chat find projection", () => {
       agentMessageSend: null,
       managedCommand: null,
       agentMessageReceipt: null,
+      agentMessageDelivery: null,
       isStreaming: false,
       endState: null,
       stopped: false,
@@ -514,13 +521,10 @@ describe("chat find projection", () => {
       backgroundOutput: null,
       backgroundTask: false,
       imageResults: [],
-      page: {
-        path: "files/pages/report.html",
-        sha256: "a".repeat(64),
-        title: "Report",
-        height: 400,
-        heights: [],
-        derivedFrom: null,
+      artifact: {
+        artifactId: "art-1",
+        title: "Quarterly Report",
+        manifest: { files: {}, capturedAt: 0 },
         originChatId: "chat-1",
       },
       mcpApp: null,
@@ -530,7 +534,7 @@ describe("chat find projection", () => {
     };
     const assistant: ChatMessageModel = {
       ...makeMessage(3, "assistant"),
-      segments: [page],
+      segments: [artifact],
     };
 
     const rows = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
@@ -539,8 +543,9 @@ describe("chat find projection", () => {
     });
 
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
-    expect(joined).not.toContain("some_other_page_tool");
+    expect(joined).not.toContain("some_other_artifact_tool");
     expect(joined).not.toContain("quarterly-report");
+    expect(joined).not.toContain("Quarterly Report");
   });
 
   it("does not index completed reasoning body text hidden behind the collapsed summary", () => {
@@ -643,6 +648,7 @@ describe("chat find projection", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          agentMessageDelivery: null,
           isStreaming: false,
           endState: null,
           stopped: false,
@@ -651,7 +657,7 @@ describe("chat find projection", () => {
           // No durable marker - promotion is visible ONLY through the live set.
           backgroundTask: false,
           imageResults: [],
-          page: null,
+          artifact: null,
           mcpApp: null,
           durationMs: null,
           startedAt: 0,
@@ -885,6 +891,7 @@ describe("chat find projection", () => {
           spawnToolCallId: null,
           parentId: null,
           workflowMeta: null,
+          toolImageResults: [],
           children: [],
         },
       ],
@@ -951,6 +958,7 @@ describe("chat find projection", () => {
             agentsFinished: 1,
             totalTokens: 500,
           },
+          toolImageResults: [],
           children: [],
         },
       ],
@@ -1000,6 +1008,7 @@ describe("chat find projection", () => {
           spawnToolCallId: null,
           parentId: null,
           workflowMeta: null,
+          toolImageResults: [],
           children: [],
         },
       ],
@@ -1312,6 +1321,7 @@ describe("chat find projection", () => {
           spawnToolCallId: null,
           parentId: null,
           workflowMeta: null,
+          toolImageResults: [],
           children: [
             {
               id: "notice-nested",
@@ -1375,6 +1385,7 @@ describe("chat find projection", () => {
         spawnToolCallId: null,
         parentId: null,
         workflowMeta: null,
+        toolImageResults: [],
         children: [],
         ...patch,
       };
@@ -2096,6 +2107,7 @@ describe("buildSubagentChatFindRows", () => {
       spawnToolCallId: null,
       parentId: null,
       workflowMeta: null,
+      toolImageResults: [],
       children: [],
       ...patch,
     };
@@ -2130,6 +2142,7 @@ describe("buildSubagentChatFindRows", () => {
       agentMessageSend: null,
       managedCommand: null,
       agentMessageReceipt: null,
+      agentMessageDelivery: null,
       isStreaming: false,
       endState: null,
       stopped: false,
@@ -2137,7 +2150,7 @@ describe("buildSubagentChatFindRows", () => {
       backgroundOutput: null,
       backgroundTask: false,
       imageResults: [],
-      page: null,
+      artifact: null,
       mcpApp: null,
       startedAt: 0,
       durationMs: null,
@@ -2197,5 +2210,60 @@ describe("buildSubagentChatFindRows", () => {
     expect(last.unitId).toBe(chatFindSubagentChatResultUnitId(OPEN_ID));
     expect(last.text).toBe("Final answer");
     expect(last.owningChain).toEqual([]);
+  });
+});
+
+describe("chat find projection of an unsuccessful compaction", () => {
+  const FIND_OPTIONS = {
+    hideReasoning: false,
+    queuePauseReasonProtocolSupported: null,
+  } as const;
+
+  function findTextOf(persisted: Record<string, unknown>): string {
+    return buildChatFindRows(
+      renderedCompactionMessages(persisted),
+      TILE_INSTANCE_ID,
+      new Set(),
+      FIND_OPTIONS,
+    )
+      .map((row) => rowSearchText(row))
+      .join("\n");
+  }
+
+  it("indexes a not-applied manual compaction by the neutral label it paints, not the hidden error", () => {
+    const text = findTextOf(persistedCompaction({ notApplied: true }));
+
+    expect(text).toContain("Compaction not applied");
+    expect(text).not.toContain(REFUSED_COMPACTION_ERROR);
+    expect(text).not.toContain("errored");
+  });
+
+  it("indexes a not-applied automatic compaction by the automatic label", () => {
+    const text = findTextOf(
+      persistedCompaction({ notApplied: true, trigger: "auto" }),
+    );
+
+    expect(text).toContain("Auto-compaction not applied");
+    expect(text).not.toContain(REFUSED_COMPACTION_ERROR);
+  });
+
+  it("keeps indexing an ordinary failed compaction's error and status", () => {
+    const text = findTextOf(persistedCompaction({}));
+
+    expect(text).toContain(REFUSED_COMPACTION_ERROR);
+    expect(text).toContain("errored");
+    expect(text).not.toContain("not applied");
+  });
+
+  it("keeps indexing a completed compaction's summary", () => {
+    const text = findTextOf(
+      persistedCompaction({
+        status: "completed",
+        summary: "The folded context",
+        error: null,
+      }),
+    );
+
+    expect(text).toContain("The folded context");
   });
 });

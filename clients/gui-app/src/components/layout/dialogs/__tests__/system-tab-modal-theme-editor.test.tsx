@@ -18,6 +18,7 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -37,8 +38,8 @@ vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
 }));
 
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () => ({
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () => ({
     hosts: [],
     host: null,
     hostId: null,
@@ -58,8 +59,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
     listsFailed: false,
     retryLists: () => {},
     nowMs: 0,
-  }),
-}));
+  });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 
 // History content is outside this regression's modal-lock boundary and needs
 // the full host runtime. Keep the actual system modal shell while isolating
@@ -149,7 +154,9 @@ describe("SystemTabModalHost theme editor integration", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ThemeProvider>
-            <RouterProvider router={router} />
+            <HostRuntimeTestProvider>
+              <RouterProvider router={router} />
+            </HostRuntimeTestProvider>
             <ThemeEditorHost />
           </ThemeProvider>
         </TooltipProvider>

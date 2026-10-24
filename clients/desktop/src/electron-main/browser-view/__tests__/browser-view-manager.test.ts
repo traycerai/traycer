@@ -903,6 +903,7 @@ function createHarnessWithOptions(
     releaseRendererGuest,
     getWindow: (windowId) => windows.get(windowId) ?? null,
     isWindowShown: (windowId) => !hiddenWindowIds.has(windowId),
+    isScreenLocked: () => false,
     onWindowShownChange: (listener) => {
       windowShownListeners.add(listener);
       return () => {

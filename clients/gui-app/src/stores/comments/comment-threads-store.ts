@@ -25,6 +25,7 @@ export interface FlashThread {
 }
 
 export interface DraftRange {
+  readonly draftId: string;
   readonly tileId: string;
   readonly artifactId: string;
   readonly from: number;

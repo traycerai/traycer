@@ -476,6 +476,7 @@ describe("useAutoJudgeBilling", () => {
       harnessLabel: "Claude Code",
       modelLabel: "claude-sonnet",
       effortLabel: null,
+      maxModeListed: false,
     });
   });
 
@@ -528,6 +529,7 @@ describe("useAutoJudgeBilling", () => {
       harnessLabel: "Claude Code",
       modelLabel: "kept-model",
       effortLabel: null,
+      maxModeListed: false,
     });
   });
 
@@ -849,6 +851,7 @@ describe("useAutoJudgeBilling", () => {
         harnessLabel: "Claude Code",
         modelLabel: JUDGE_MODEL_SLUG,
         effortLabel: null,
+        maxModeListed: false,
       });
     });
 
@@ -926,6 +929,7 @@ describe("useAutoJudgeBilling", () => {
         harnessLabel: "some-future-harness",
         modelLabel: "some-future-model",
         effortLabel: null,
+        maxModeListed: false,
       });
     });
 
@@ -975,6 +979,7 @@ describe("useAutoJudgeBilling", () => {
         harnessLabel: "Claude Code",
         modelLabel: "claude-fallback-default",
         effortLabel: null,
+        maxModeListed: false,
       });
     });
 
@@ -999,6 +1004,7 @@ describe("useAutoJudgeBilling", () => {
         harnessLabel: "Claude Code",
         modelLabel: "composer-model",
         effortLabel: null,
+        maxModeListed: false,
       });
     });
 
@@ -1049,6 +1055,7 @@ describe("useAutoJudgeBilling", () => {
         harnessLabel: "Claude Code",
         modelLabel: JUDGE_MODEL_SLUG,
         effortLabel: "low",
+        maxModeListed: false,
       });
     });
 
@@ -1085,8 +1092,216 @@ describe("useAutoJudgeBilling", () => {
           harnessLabel: "Claude Code",
           modelLabel: JUDGE_MODEL_SLUG,
           effortLabel: null,
+          maxModeListed: false,
         });
       },
     );
+  });
+});
+
+// `maxModeListed` rides the judge key of the target row's `metadata.maxMode`,
+// at the effort `autoJudgeEffortLabel`'s own rule would name (the stored effort
+// on a 1.3+ line, `null` before it).
+describe("useAutoJudgeBilling - Max Mode", () => {
+  function maxModeRow(
+    slug: string,
+    efforts: ReadonlyArray<string>,
+    judge: ReadonlyArray<string | null>,
+  ): GuiAgentModelOption {
+    return guiAgentModelOptionSchema.parse({
+      harnessId: CURSOR_HARNESS_ID,
+      slug,
+      label: slug,
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: efforts.map((id) => ({
+        id,
+        label: id,
+        description: null,
+      })),
+      metadata: {
+        maxMode: {
+          chat: [],
+          judge: judge.map((reasoningEffort) => ({ reasoningEffort })),
+          fastServiceTierId: null,
+        },
+      },
+    });
+  }
+
+  const CURSOR_HARNESS_ID = "cursor";
+
+  function cursorHarnessRow(
+    nativeAutoJudge: boolean,
+    judgeDefaultModel: string | null,
+  ): GuiHarnessOption {
+    return guiHarnessOptionSchema.parse({
+      id: CURSOR_HARNESS_ID,
+      label: "Cursor",
+      available: true,
+      error: null,
+      modes: ["gui"],
+      requiresApiKey: false,
+      nativeAutoJudge,
+      judgeDefaultModel,
+    });
+  }
+
+  function pickJudge(reasoningEffort: string | null) {
+    autoJudgeGetData = {
+      selection: {
+        harnessId: CURSOR_HARNESS_ID,
+        model: JUDGE_MODEL_SLUG,
+        profileId: null,
+        reasoningEffort,
+      },
+    };
+    providersListData = { providers: [] };
+    harnessesData = { harnesses: [cursorHarnessRow(false, null)] };
+  }
+
+  function billingMaxMode(runModelSlug: string): boolean | null {
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CURSOR_HARNESS_ID, runModelSlug),
+    );
+    const billing = result.current;
+    if (billing === null) return null;
+    return billing.kind === "provider" ? billing.maxModeListed : null;
+  }
+
+  it("is true for a picked judge whose effective effort the judge key lists", () => {
+    judgeGetVersion.current = { major: 1, minor: 3 };
+    pickJudge("high");
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([
+        maxModeRow(JUDGE_MODEL_SLUG, ["low", "high"], ["high"]),
+      ]),
+    );
+
+    expect(billingMaxMode("")).toBe(true);
+  });
+
+  it("is false for a picked judge whose effort the judge key does not list", () => {
+    judgeGetVersion.current = { major: 1, minor: 3 };
+    pickJudge("low");
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([
+        maxModeRow(JUDGE_MODEL_SLUG, ["low", "high"], ["high"]),
+      ]),
+    );
+
+    expect(billingMaxMode("")).toBe(false);
+  });
+
+  it("keys on a null effort before the host runs the judge at an effort of its own", () => {
+    judgeGetVersion.current = { major: 1, minor: 2 };
+    pickJudge("high");
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([
+        maxModeRow(JUDGE_MODEL_SLUG, ["low", "high"], ["high"]),
+      ]),
+    );
+    expect(billingMaxMode("")).toBe(false);
+
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([
+        maxModeRow(JUDGE_MODEL_SLUG, ["low", "high"], [null]),
+      ]),
+    );
+    expect(billingMaxMode("")).toBe(true);
+  });
+
+  it("is true for Automatic's conversation-model fallback when its row's judge key lists the effective effort", () => {
+    autoJudgeGetData = { selection: null, effective: { source: "fallback" } };
+    providersListData = { providers: [] };
+    harnessesData = { harnesses: [cursorHarnessRow(false, null)] };
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([maxModeRow("composer-model", [], [null])]),
+    );
+
+    expect(billingMaxMode("composer-model")).toBe(true);
+  });
+
+  it("is true for Automatic's fallback onto the run harness's judgeDefaultModel", () => {
+    autoJudgeGetData = { selection: null, effective: { source: "fallback" } };
+    providersListData = { providers: [] };
+    harnessesData = {
+      harnesses: [cursorHarnessRow(false, "fallback-default")],
+    };
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([
+        maxModeRow("fallback-default", [], [null]),
+        maxModeRow("composer-model", [], []),
+      ]),
+    );
+
+    expect(billingMaxMode("composer-model")).toBe(true);
+  });
+
+  it("is false for the fallback when the judge key lists nothing for that model", () => {
+    autoJudgeGetData = { selection: null, effective: { source: "fallback" } };
+    providersListData = { providers: [] };
+    harnessesData = { harnesses: [cursorHarnessRow(false, null)] };
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([maxModeRow("composer-model", [], [])]),
+    );
+
+    expect(billingMaxMode("composer-model")).toBe(false);
+  });
+
+  it("is false while the judge catalog has not answered, and when it has no row for the model", () => {
+    pickJudge(null);
+    judgeModelsQueryMock.mockReturnValue({ data: undefined, isSuccess: false });
+    expect(billingMaxMode("")).not.toBe(true);
+
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([maxModeRow("some-other-model", [], [null])]),
+    );
+    expect(billingMaxMode("")).not.toBe(true);
+  });
+
+  it("never adds Max Mode to the traycer arm, even when its row lists it", () => {
+    autoJudgeGetData = {
+      selection: null,
+      effective: {
+        harnessId: "traycer",
+        model: JUDGE_MODEL_SLUG,
+        source: "default",
+      },
+    };
+    providersListData = { providers: [] };
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([maxModeRow(JUDGE_MODEL_SLUG, [], [null])]),
+    );
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+    );
+    expect(result.current).toEqual({
+      kind: "traycer",
+      modelLabel: JUDGE_MODEL_SLUG,
+      effortLabel: null,
+    });
+  });
+
+  it("never adds Max Mode to a provider-native result", () => {
+    autoJudgeGetData = { selection: null };
+    providersListData = {
+      providers: [providerState({ autoJudge: "provider" })],
+    };
+    judgeModelsQueryMock.mockReturnValue(
+      judgeModelsAnswered([maxModeRow(JUDGE_MODEL_SLUG, [], [null])]),
+    );
+
+    const { result } = renderHook(() =>
+      useAutoJudgeBilling("host-b", CLAUDE_HARNESS_ID, ""),
+    );
+    expect(result.current).toEqual({
+      kind: "provider-native",
+      harnessId: CLAUDE_HARNESS_ID,
+      harnessLabel: "Claude Code",
+    });
   });
 });

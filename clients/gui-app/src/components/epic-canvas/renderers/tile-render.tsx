@@ -8,6 +8,8 @@
  * no per-kind branching outside this table.
  */
 import type { ReactNode } from "react";
+import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
+import { SandboxWakeOnTileOpen } from "@/components/hosts/sandbox-wake-on-tile-open";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
@@ -19,6 +21,7 @@ import { TileErrorBoundary } from "./tile-error-boundary";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
+import { ObjectArtifactTile } from "./object-artifact-tile";
 import { ReviewTile } from "./review-tile";
 import { SpecTile } from "./spec-tile";
 import { StoryTile } from "./story-tile";
@@ -35,7 +38,7 @@ import { PublishedChatTile } from "./published-chat-tile";
 import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
-import { EpicFileTile } from "@/components/files/epic-file-tile";
+import { SimulatorTile } from "@/components/simulator-tile/simulator-tile";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
   readonly node: R;
@@ -70,6 +73,15 @@ const TILE_RENDERERS: TileRendererRegistry = {
       tileId={tileId}
       isActive={isActive}
     />
+  ),
+  html: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
+  canvas: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
+  file: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
   ),
   spec: ({ node, viewTabId, tileId, isActive }) => (
     <SpecTile
@@ -177,12 +189,15 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  "epic-file": ({ node, epicId }) => (
-    <EpicFileTile node={node} epicId={epicId} />
+  simulator: ({ node, viewTabId, tileId, epicId }) => (
+    <SimulatorTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      epicId={epicId}
+    />
   ),
-  // A blank tab's body IS the inline opener; picking content replaces it in
-  // place (via openTileInPane). `tileId` is the group id; `isActive` drives
-  // the opener's autofocus.
+  // A blank tab renders the inline opener until content replaces it.
   blank: ({ viewTabId, tileId, epicId, isActive }) => (
     <PaneOpener
       epicId={epicId}
@@ -212,6 +227,11 @@ function tileRenderer<K extends TileKindId>(
  * It is a no-op when the tile is on the canvas host, and coordinators are
  * refcounted, so N tiles on one host share one stream.
  *
+ * On a sandbox host the body sits in `<SandboxTileStateFrame>`, which greys
+ * the last screen under the sandbox's state while it is frozen, asleep or
+ * waking - except a chat the pool serves at rest, whose body stays readable
+ * under a strip; a personal host's body is not wrapped.
+ *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
  * mounted - a lazy one would not be live at click time, so the first link
  * click would still fall out to the OS browser. A tile on a host that is
@@ -222,6 +242,10 @@ function tileRenderer<K extends TileKindId>(
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
+      <SandboxWakeOnTileOpen
+        hostId={args.node.hostId}
+        instanceId={args.node.instanceId}
+      />
       <BrowserSessionsHostBoundary
         hostId={args.node.hostId}
         scope={{ kind: "epic", epicId: args.epicId }}
@@ -239,7 +263,15 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
                 instanceId={args.node.instanceId}
                 resetKey={args.node.instanceId}
               >
-                {tileRenderer(args.node.type)(args)}
+                <SandboxTileStateFrame
+                  chat={
+                    args.node.type === "chat"
+                      ? { epicId: args.epicId, chatId: args.node.id }
+                      : null
+                  }
+                >
+                  {tileRenderer(args.node.type)(args)}
+                </SandboxTileStateFrame>
               </TileErrorBoundary>
             </TileMinimapScope>
           </TileFindScope>

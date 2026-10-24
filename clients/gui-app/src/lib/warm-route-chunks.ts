@@ -1,4 +1,5 @@
 import { isMobileApp } from "@/lib/mobile-app";
+import { appLogger, describeLogErrorSummary } from "@/lib/logger";
 
 /**
  * Eagerly warm the heavy epic route component chunks shortly after startup so
@@ -82,6 +83,12 @@ const DESKTOP_ONLY_WARMERS: ReadonlyArray<RouteChunkWarmer> = [
     module: "@/components/settings/settings-surface",
     load: () => import("@/components/settings/settings-surface"),
   },
+  // The bot tab (Tracy Bots): a conversation transcript plus the trunk view,
+  // mounted lazily by its kind module like every other tab surface.
+  {
+    module: "@/components/bots/bot-tab-surface",
+    load: () => import("@/components/bots/bot-tab-surface"),
+  },
   // The experimental layout editor's sample workspace (Settings >
   // Appearance). Off by default, and never a phone boot path.
   {
@@ -108,8 +115,19 @@ export function warmRouteChunks(): void {
   });
 }
 
+// Warming is best effort and nobody waits on it, so a chunk that fails to load
+// here is only logged. Left unhandled, the rejection became an error report for
+// a load the person never saw. If the surface itself later cannot load, its own
+// import fails into the route error screen, which offers a refresh.
 function warm(warmers: ReadonlyArray<RouteChunkWarmer>): void {
-  for (const warmer of warmers) void warmer.load();
+  for (const warmer of warmers) {
+    void warmer.load().catch((error: unknown) => {
+      appLogger.warn("[warm-route-chunks] chunk warm-up failed", {
+        module: warmer.module,
+        error: describeLogErrorSummary(error),
+      });
+    });
+  }
 }
 
 function whenIdle(run: () => void): void {

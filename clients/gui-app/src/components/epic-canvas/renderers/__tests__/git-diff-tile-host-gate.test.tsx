@@ -41,6 +41,16 @@ const state = vi.hoisted((): GateTestState => ({
   })),
 }));
 
+// The no-menu open surfaces read the install probe; none of this suite's claims
+// depend on it, so it stays "still in flight".
+vi.mock("@/hooks/editor/use-editor-availability-query", () => ({
+  useEditorAvailability: () => ({ data: undefined }),
+}));
+
+vi.mock("@/hooks/editor/use-no-editor-installed-notice", () => ({
+  useNoEditorInstalledNotice: () => vi.fn(),
+}));
+
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
 // to, so `git.subscribeStatus` cannot ride the window's effective host while
 // carrying the tile's host id as a param. `null` is that hook's FOLLOWING
@@ -96,6 +106,16 @@ vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: () => <div data-testid="virtuoso" />,
+}));
+
+// A narrow window renders one column whatever the stored diff mode
+// (`useDiffViewerPreferences`); the tile reads the width through this seam.
+// Partial: the shell's `useIsMobileViewport` subscribes through this
+// module's real query plumbing and must keep it.
+const viewport = vi.hoisted(() => ({ narrow: false }));
+vi.mock(import("@/hooks/ui/use-narrow-window"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useIsNarrowWindow: () => viewport.narrow,
 }));
 
 // The toolbar's "open file" now dispatches on the TAB client (D15); these tests
@@ -159,6 +179,7 @@ function renderTile(boundHostId: string): void {
 
 describe("<GitDiffTile /> host-binding gate", () => {
   beforeEach(() => {
+    viewport.narrow = false;
     state.activeHostId = "host-A";
     state.reachability = { status: "reachable", hostLabel: "Host A" };
     state.subscribe.mockClear();
@@ -239,6 +260,24 @@ describe("<GitDiffTile /> host-binding gate", () => {
 
     expect(useSettingsStore.getState().diffViewerPreferences.mode).toBe(
       "unified",
+    );
+  });
+
+  it("renders one column in a narrow window whatever the stored mode, with no layout toggle", () => {
+    renderTile("host-A");
+    // The wide control: the stored split renders two-column rows.
+    expect(document.querySelector(".grid-cols-2")).not.toBeNull();
+    cleanup();
+
+    viewport.narrow = true;
+    renderTile("host-A");
+
+    expect(document.querySelector(".grid-cols-2")).toBeNull();
+    expect(screen.queryByLabelText("Switch to unified view")).toBeNull();
+    expect(screen.queryByLabelText("Switch to split view")).toBeNull();
+    // The stored choice is the desktop's and is left alone.
+    expect(useSettingsStore.getState().diffViewerPreferences.mode).toBe(
+      "split",
     );
   });
 

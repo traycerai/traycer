@@ -23,6 +23,7 @@ function chat(fields: {
     createdAt: 0,
     updatedAt: 0,
     userId: null,
+    ownedByViewer: true,
     hostId: TERMINAL_HOST,
     isTitleEditedByUser: false,
     // Neutral scaffolding: this suite exercises target resolution, not doc

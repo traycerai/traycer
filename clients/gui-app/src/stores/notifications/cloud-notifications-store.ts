@@ -5,8 +5,8 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV12,
-  type HostNotificationsCloudFeedRowV11,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV14,
+  type HostNotificationsCloudFeedRowV14,
   type HostNotificationsCloudFeedSummary,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -34,7 +34,7 @@ export interface CloudNotificationsState {
    * activation still asks for it.
    */
   readonly rows: Readonly<
-    Partial<Record<string, HostNotificationsCloudFeedRowV11>>
+    Partial<Record<string, HostNotificationsCloudFeedRowV14>>
   >;
   readonly summary: HostNotificationsCloudFeedSummary | null;
   /** The cloud's per-user change sequence, as of the last snapshot. This is
@@ -69,10 +69,24 @@ export interface CloudNotificationsState {
   >;
   readonly connectionState: CloudNotificationsConnectionState;
   applySnapshot(input: {
-    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV14>;
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
-  }): ReadonlyArray<HostNotificationsCloudFeedRowV11> | null;
+  }): ReadonlyArray<HostNotificationsCloudFeedRowV14> | null;
+  /**
+   * Paints the replica tier's copy of the feed before this session's first
+   * snapshot. A no-op once a snapshot landed. It leaves `hasSnapshot` false
+   * and `version` null, so the seeded rows are never authoritative: no bulk
+   * mutation names them, they raise no arrival, and the first snapshot
+   * replaces them wholesale.
+   */
+  seedFromReplica(input: {
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV14>;
+    readonly summary: HostNotificationsCloudFeedSummary;
+  }): void;
+  /** The replica no longer admits its page: drop the rows it seeded. A live
+   * snapshot, once held, is the feed's own and stays. */
+  revokeReplicaSeed(): void;
   /** Optimistic set-once marker application. A later authoritative snapshot
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
@@ -187,12 +201,12 @@ export function cloudNotificationFeedId(entryId: string): string {
 }
 
 function rowKey(
-  row: Pick<HostNotificationsCloudFeedRowV11, "entryId">,
+  row: Pick<HostNotificationsCloudFeedRowV14, "entryId">,
 ): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
-function isUnreadAttention(row: HostNotificationsCloudFeedRowV11): boolean {
+function isUnreadAttention(row: HostNotificationsCloudFeedRowV14): boolean {
   return (
     (row.entry.severity === "needs_action" ||
       row.entry.severity === "failure") &&
@@ -216,9 +230,9 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       // uses accepted snapshots to drive cross-plane completion reconciliation.
       if (currentVersion !== null && input.version < currentVersion)
         return null;
-      const arrivals: HostNotificationsCloudFeedRowV11[] = [];
+      const arrivals: HostNotificationsCloudFeedRowV14[] = [];
       set((state) => {
-        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV11>> =
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV14>> =
           {};
         for (const row of input.rows) {
           const key = rowKey(row);
@@ -237,6 +251,21 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       });
       return arrivals;
     },
+    seedFromReplica: (input) =>
+      set((state) => {
+        if (state.hasSnapshot) return state;
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV14>> =
+          {};
+        for (const row of input.rows) rows[rowKey(row)] = row;
+        return { rows, summary: input.summary };
+      }),
+    revokeReplicaSeed: () =>
+      set((state) =>
+        state.hasSnapshot ||
+        (state.summary === null && Object.keys(state.rows).length === 0)
+          ? state
+          : { rows: {}, summary: null },
+      ),
     markReadLocally: (entryId, readAt) =>
       set((state) => {
         const key = cloudNotificationFeedId(entryId);
@@ -380,8 +409,8 @@ export function openCloudNotificationsStream(
   onAuthError: (() => void) | null,
   onSnapshot:
     | ((input: {
-        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
-        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
+        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV14>;
+        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV14>;
       }) => void)
     | null,
 ): () => void {
@@ -424,7 +453,7 @@ export function openCloudNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsCloudFeedSubscribeServerFrameSchemaV12.safeParse(
+        hostNotificationsCloudFeedSubscribeServerFrameSchemaV14.safeParse(
           envelope,
         );
       if (!parsed.success) {

@@ -51,7 +51,6 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { DeletedArtifactsOpenMenuItem } from "@/components/epic-canvas/deleted-artifacts/deleted-artifacts-open-menu-item";
-import { FilesPanelBody } from "@/components/epic-canvas/sidebar/files-panel";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -171,24 +170,29 @@ import {
 import { displayTitle } from "@/lib/display-title";
 import {
   useEpicArchiveChats,
-  useEpicDeleteChat,
+  useEpicDeleteChatInBatch,
 } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  toastFromOwnerHostBatchWriteFailuresWithUnconfirmed,
+  type OwnerHostBatchWriteCopy,
+  type OwnerHostBatchWriteOutcome,
+} from "@/lib/owner-host-write-error-toast";
+import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   useChatArchiveSupported,
   SET_CHAT_ARCHIVED_METHOD,
 } from "@/hooks/epic/use-chat-archive-support";
-import {
-  getNegotiatedHostMethods,
-  subscribeNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { subscribeRecordWriteRouting } from "@/lib/host/owner-gone-write-routing";
+import { readRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 import {
   useEpicCreateArtifact,
-  useEpicDeleteArtifact,
+  useEpicDeleteArtifactInBatch,
 } from "@/hooks/epic/use-epic-node-mutations";
-import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { useEpicDeleteTuiAgentInBatch } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
-  isEpicArtifactKind,
+  isMarkdownArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { useArtifactReadStateStore } from "@/stores/epics/artifact-read-state-store";
@@ -241,6 +245,10 @@ import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle
 import {
   isSidebarBulkSelectionPanelId,
   rootmostSelectedSidebarIds,
+  sidebarIdsStillWithinRoot,
+  sidebarBulkDeleteIds,
+  sidebarBulkDeleteSelectedRows,
+  sidebarBulkDeleteSelectionOrder,
   sidebarIdsWithinRoots,
   SidebarBulkSelectionProvider,
   useSidebarBulkSelection,
@@ -545,14 +553,6 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     },
     loading: emptyLoadingSlots(ArtifactsLoadingPanelBody),
   },
-  files: {
-    live: {
-      Body: FilesPanelBody,
-      Actions: null,
-      Subtitle: null,
-    },
-    loading: emptyLoadingSlots(GenericLoadingPanelBody),
-  },
   "git-diff": {
     live: {
       Body: GitDiffPanelBody,
@@ -686,7 +686,9 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact;
+    activeArtifact !== null &&
+    "kind" in activeArtifact &&
+    isMarkdownArtifactKind(activeArtifact.kind);
   // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
@@ -1529,9 +1531,11 @@ function SidebarBulkDeleteController(props: {
   // `null`: this controller deletes EVERY selected row, so there is no one
   // artifact it speaks for. It reads its own `deletePending` off the
   // selection store rather than the hook's flag.
-  const deleteArtifact = useEpicDeleteArtifact(null);
-  const deleteChat = useEpicDeleteChat();
-  const deleteTerminalAgent = useEpicDeleteTuiAgent();
+  const deleteArtifact = useEpicDeleteArtifactInBatch();
+  // The batch reports its agents' failures once, below, so a selection
+  // spanning several unreachable hosts reads as that and not as one host.
+  const deleteChat = useEpicDeleteChatInBatch();
+  const deleteTerminalAgent = useEpicDeleteTuiAgentInBatch();
   const sessionHostId = useEpicSessionHostId();
   const chatsById = useChatsByIdForWriteRoute();
   const recordById = useMemo(
@@ -1555,9 +1559,10 @@ function SidebarBulkDeleteController(props: {
   // the one row that silently remained.
   const blockedDeleteReason = useMemo(() => {
     if (pendingDeleteIds === null) return null;
-    const blockedTitles = rootmostSelectedSidebarIds({
+    const blockedTitles = sidebarBulkDeleteIds({
       ids: pendingDeleteIds,
       tree,
+      isAgentId: (id) => isAgentRecord(recordById.get(id)),
     }).flatMap((id) => {
       const record = recordById.get(id);
       if (record === undefined || record.type !== "chat") return [];
@@ -1577,11 +1582,24 @@ function SidebarBulkDeleteController(props: {
     // The dialog's confirm is already disabled while this is non-null; the
     // check is here too because a keyboard submit is not the button.
     if (blockedDeleteReason !== null) return;
-    const rootmostIds = rootmostSelectedSidebarIds({
+    const deleteIds = sidebarBulkDeleteIds({
       ids: pendingDeleteIds,
       tree,
+      isAgentId: (id) => isAgentRecord(recordById.get(id)),
     });
-    const targets = rootmostIds.flatMap((id) => {
+    const selectedRows = sidebarBulkDeleteSelectedRows({
+      ids: pendingDeleteIds,
+      tree,
+      isAgentId: (id) => isAgentRecord(recordById.get(id)),
+    });
+    const selectionOrder = sidebarBulkDeleteSelectionOrder({
+      ids: pendingDeleteIds,
+      tree,
+      isAgentId: (id) => isAgentRecord(recordById.get(id)),
+    });
+    // The rows the dialog asked about ("Delete N selected ...?").
+    const confirmedRows = pendingDeleteIds.length;
+    const targets = deleteIds.flatMap((id) => {
       const target = sidebarDeleteTargetForRecord(recordById.get(id));
       return target === null ? [] : [target];
     });
@@ -1593,6 +1611,10 @@ function SidebarBulkDeleteController(props: {
       if (target.kind !== "terminal-agent") markArtifactSelfDeleted(target.id);
     });
     setDeletePending(true);
+    const agentHostId = (target: (typeof targets)[number]): string | null =>
+      target.kind === "chat"
+        ? (chatsById[target.id]?.hostId ?? sessionHostId)
+        : (recordById.get(target.id)?.hostId ?? sessionHostId);
     void Promise.allSettled(
       targets.map((target) => {
         switch (target.kind) {
@@ -1605,18 +1627,54 @@ function SidebarBulkDeleteController(props: {
             return deleteChat.mutateAsync({
               epicId: props.epicId,
               chatId: target.id,
-              hostId: chatsById[target.id]?.hostId ?? sessionHostId,
+              hostId: agentHostId(target),
             });
           case "terminal-agent":
             return deleteTerminalAgent.mutateAsync({
               epicId: props.epicId,
               tuiAgentId: target.id,
-              hostId: recordById.get(target.id)?.hostId ?? sessionHostId,
+              hostId: agentHostId(target),
             });
         }
       }),
     )
       .then((results) => {
+        // In selection order, not dispatch order: the notice lists refusal
+        // advice in the order it first appears in the selection.
+        const selectionPosition = (index: number): number =>
+          selectionOrder.get(targets[index].id) ?? index;
+        // The dialog asked about every confirmed row. One that vanished
+        // before the delete was sent has no request standing for it - nor
+        // its cascade's weight - so it stays in that count, unconfirmed:
+        // never deleted and never failed.
+        const representedRows = targets.reduce(
+          (sum, target) => sum + (selectedRows.get(target.id) ?? 1),
+          0,
+        );
+        toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
+          targets
+            .map((target, index) => {
+              const result = results[index];
+              const isArtifact = target.kind === "artifact";
+              const outcome: OwnerHostBatchWriteOutcome = {
+                kind: isArtifact ? "artifact" : "agent",
+                hostId: isArtifact ? sessionHostId : agentHostId(target),
+                selectedRows: selectedRows.get(target.id) ?? 1,
+                error:
+                  result.status === "rejected"
+                    ? toHostRpcError(
+                        result.reason,
+                        sidebarDeleteMethod(target.kind),
+                      )
+                    : null,
+              };
+              return { position: selectionPosition(index), outcome };
+            })
+            .sort((left, right) => left.position - right.position)
+            .map(({ outcome }) => outcome),
+          Math.max(0, confirmedRows - representedRows),
+          sidebarBulkDeleteCopy(targets),
+        );
         const successfulIds = targets.flatMap((target, index) =>
           results[index].status === "fulfilled" ? [target.id] : [],
         );
@@ -1710,13 +1768,62 @@ function SidebarBulkDeleteController(props: {
         pendingDeleteIds,
         recordById,
       )}
-      description={describeSidebarBulkDeleteDescription(pendingDeleteIds)}
+      description={describeSidebarBulkDeleteDescription(
+        panelId,
+        pendingDeleteIds,
+      )}
       cascadeSummary={null}
       actionLabel="Delete"
       isPending={deletePending}
       onConfirm={handleConfirmDelete}
     />
   );
+}
+
+function isAgentRecord(record: EpicTreeRecord | undefined): boolean {
+  return (
+    record !== undefined &&
+    (record.type === "chat" || record.type === "terminal-agent")
+  );
+}
+
+function sidebarDeleteMethod(
+  kind: "artifact" | "chat" | "terminal-agent",
+): "epic.deleteArtifact" | "epic.deleteChat" | "epic.deleteTuiAgent" {
+  switch (kind) {
+    case "artifact":
+      return "epic.deleteArtifact";
+    case "chat":
+      return "epic.deleteChat";
+    case "terminal-agent":
+      return "epic.deleteTuiAgent";
+  }
+}
+
+/** The bulk delete's one notice, named for what the selection holds. */
+function sidebarBulkDeleteCopy(
+  targets: readonly { readonly kind: "artifact" | "chat" | "terminal-agent" }[],
+): OwnerHostBatchWriteCopy {
+  const hasArtifacts = targets.some((target) => target.kind === "artifact");
+  const hasAgents = targets.some((target) => target.kind !== "artifact");
+  let noun = "agents";
+  let single = "Couldn't delete agent.";
+  if (hasArtifacts && hasAgents) {
+    noun = "items";
+    single = "Couldn't delete item.";
+  } else if (hasArtifacts) {
+    noun = "artifacts";
+    single = "Couldn't delete artifact.";
+  }
+  return {
+    single,
+    partial: (applied, failed) =>
+      `Deleted ${applied} of ${applied + failed} selected ${noun}. ${failed} couldn't be deleted.`,
+    none: (attempted) =>
+      `Couldn't delete any of the ${attempted} selected ${noun}.`,
+    unconfirmed: (attempted) =>
+      `Couldn't confirm all ${attempted} selected ${noun} were deleted. Check them and delete any that weren't.`,
+  };
 }
 
 function sidebarDeleteTargetForRecord(
@@ -1759,10 +1866,16 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     [selection.selectedVisibleIds, tree],
   );
   const ownerHostIds = useEpicNodeHostIds(selectedRootIds);
-  const supported = useSyncExternalStore(subscribeNegotiatedManifests, () =>
+  // Each record is gated on the host its archive will be SENT to (a live
+  // stand-in when its owner is down), as the row's own control is.
+  const supported = useSyncExternalStore(subscribeRecordWriteRouting, () =>
     (ownerHostIds.length === 0 ? [sessionHostId] : ownerHostIds).every(
       (ownerHostId) => {
-        const hostId = ownerHostId ?? sessionHostId;
+        const hostId = readRecordWriteServingHostId(
+          ownerHostId ?? sessionHostId,
+          "epic.setChatArchived",
+          sessionHostId,
+        );
         return (
           hostId !== null &&
           getNegotiatedHostMethods(hostId)?.has(SET_CHAT_ARCHIVED_METHOD) ===
@@ -1791,10 +1904,29 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     archiveChats.mutate(
       {
         epicId,
-        chats: selectedRootIds.map((chatId, index) => ({
-          chatId,
-          hostId: ownerHostIds[index] ?? sessionHostId,
-        })),
+        chats: selectedRootIds.map((chatId, index) => {
+          // Archiving a root hides its subtree, so its request stands for
+          // the root and every selected row beneath it at the gesture. A
+          // collaborator can move or delete one of those rows while the
+          // request is in flight; the latest tree at settlement says which it
+          // still covers.
+          const coveredIds = sidebarIdsWithinRoots({
+            ids: selection.selectedVisibleIds,
+            rootIds: [chatId],
+            tree,
+          });
+          return {
+            chatId,
+            hostId: ownerHostIds[index] ?? sessionHostId,
+            selectedRows: coveredIds.length,
+            coveredRows: () =>
+              sidebarIdsStillWithinRoot({
+                ids: coveredIds,
+                rootId: chatId,
+                tree: latestTreeRef.current,
+              }).length,
+          };
+        }),
         archived: true,
       },
       {
@@ -1837,6 +1969,7 @@ function useSelectedChatArchive(canMutate: boolean): SelectedChatArchiveAction {
     selectedRootIds,
     selection,
     supported,
+    tree,
   ]);
   return {
     supported,
@@ -1879,9 +2012,13 @@ function panelRowNoun(panelId: LeftPanelId, count: number): string {
 }
 
 function describeSidebarBulkDeleteDescription(
+  panelId: LeftPanelId,
   ids: readonly string[] | null,
 ): string {
   if (ids === null || ids.length < 2) return "This action cannot be undone.";
+  // Deleting an agent keeps the agents nested under it, so only artifacts
+  // carry the warning.
+  if (panelId === "chats") return "This action cannot be undone.";
   return "This action cannot be undone. Nested items under selected rows may also be deleted.";
 }
 
@@ -2063,7 +2200,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const addRoot = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate) return;
-      if (type === "chat" || type === "terminal" || type === "terminal-agent") {
+      // This create menu authors Markdown bodies only.
+      if (!isMarkdownArtifactKind(type)) {
         return;
       }
       const pendingName = DEFAULT_EPIC_NODE_NAMES[type];
@@ -2497,7 +2635,8 @@ function SidebarBulkSelectionActions() {
   );
   const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
     const record = recordById.get(id);
-    if (record === undefined || !isEpicArtifactKind(record.type)) return [];
+    // Bulk document export requires Markdown bodies.
+    if (record === undefined || !isMarkdownArtifactKind(record.type)) return [];
     return [{ id: record.id, title: record.name }];
   });
   const canExportSelected = selectedArtifacts.length >= 2;

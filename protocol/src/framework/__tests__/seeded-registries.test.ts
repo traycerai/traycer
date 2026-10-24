@@ -9,15 +9,20 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
-  chatHeadRecordV170,
-  chatShardRecordV170,
+  chatHeadRecordV1110,
+  chatShardRecordV1110,
+  type Epic,
   persistenceRecordRegistry,
 } from "@traycer/protocol/persistence/registry";
 import {
-  chatHeadRecordV170 as chatSyncHeadContract,
-  chatShardRecordV170 as chatSyncShardContract,
+  chatHeadRecordV1110 as chatSyncHeadContract,
+  chatShardRecordV1110 as chatSyncShardContract,
   chatSyncRecordRegistry,
 } from "@traycer/protocol/persistence/chat-sync-registry";
+import {
+  buildDeletedEpicArtifact,
+  epicArtifactSchema,
+} from "@traycer/protocol/persistence/epic/artifacts";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 
 /**
@@ -63,8 +68,8 @@ describe("seeded protocol registries", () => {
     expect(
       getRecordSchema(chatSyncRecordRegistry, "chat-shard", "latest"),
     ).toBe(getRecordSchema(persistenceRecordRegistry, "chat-shard", "latest"));
-    expect(chatHeadRecordV170).toBe(chatSyncHeadContract);
-    expect(chatShardRecordV170).toBe(chatSyncShardContract);
+    expect(chatHeadRecordV1110).toBe(chatSyncHeadContract);
+    expect(chatShardRecordV1110).toBe(chatSyncShardContract);
   });
 
   it("chat-sync record registry has only the two publication records", () => {
@@ -109,6 +114,69 @@ describe("seeded protocol registries", () => {
     });
   });
 
+  it("versions the shared artifact kind as a new record major", () => {
+    expect(
+      Object.keys(commonRecordRegistry["epic-artifact-kind"]).sort(),
+    ).toEqual(["1", "2"]);
+    expect(
+      commonRecordRegistry["epic-artifact-kind"][2].versions[
+        commonRecordRegistry["epic-artifact-kind"][2].latestMinor
+      ].contract.schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+
+    for (const kind of ["spec", "ticket", "story", "review"] as const) {
+      expect(
+        loadRecord(commonRecordRegistry, "epic-artifact-kind", kind, {
+          major: 1,
+          minor: 0,
+        }),
+      ).toBe(kind);
+      expect(
+        downgradeRecordAcrossMajors(
+          commonRecordRegistry["epic-artifact-kind"],
+          2,
+          1,
+          kind,
+        ),
+      ).toEqual({ ok: true, value: kind });
+    }
+
+    // Every kind added after 1.0 takes the same refusal. The message stays
+    // kind-neutral because naming the first new kind would misreport every
+    // kind added after it. The schema checks keep the refusal honest: it only
+    // means something while 2.0 accepts the kind and 1.0 rejects it.
+    for (const kind of ["html", "canvas", "file"] as const) {
+      expect(
+        getRecordSchema(
+          commonRecordRegistry,
+          "epic-artifact-kind",
+          "latest",
+        ).safeParse(kind).success,
+      ).toBe(true);
+      expect(
+        getRecordSchema(commonRecordRegistry, "epic-artifact-kind", {
+          major: 1,
+          minor: 0,
+        }).safeParse(kind).success,
+      ).toBe(false);
+      expect(
+        downgradeRecordAcrossMajors(
+          commonRecordRegistry["epic-artifact-kind"],
+          2,
+          1,
+          kind,
+        ),
+      ).toEqual({
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "This artifact kind cannot be represented by epic-artifact-kind record 1.0",
+        },
+      });
+    }
+  });
+
   it("persistence owns the epic, room-metadata, chat-sync and draft-head records", () => {
     expect(Object.keys(persistenceRecordRegistry).sort()).toEqual([
       "chat-head",
@@ -120,6 +188,7 @@ describe("seeded protocol registries", () => {
     expect(Object.keys(persistenceRecordRegistry.epic).sort()).toEqual([
       "2",
       "3",
+      "4",
     ]);
     expect(
       Object.keys(persistenceRecordRegistry["room-metadata"]).sort(),
@@ -155,11 +224,11 @@ describe("seeded protocol registries", () => {
   });
 
   it("latest local epic record captures on-disk-only fields", () => {
-    const epicRecordV300 =
-      persistenceRecordRegistry.epic[3].versions[0].contract;
-    const onDiskEpicKeys = Object.keys(epicRecordV300.schema.shape);
+    const epicRecordV400 =
+      persistenceRecordRegistry.epic[4].versions[0].contract;
+    const onDiskEpicKeys = Object.keys(epicRecordV400.schema.shape);
 
-    expect(epicRecordV300.schemaVersion).toEqual({ major: 3, minor: 0 });
+    expect(epicRecordV400.schemaVersion).toEqual({ major: 4, minor: 0 });
 
     // `artifacts` and `deletedArtifacts` are the unified on-disk
     // replacements for the four per-kind maps (specs / tickets / stories
@@ -186,12 +255,18 @@ describe("seeded protocol registries", () => {
       minor: 0,
     });
     expect(upgraded).toMatchObject(v200);
+    // `loadRecord` returns the live (seven-kind) epic. The 3.0 bridge accepts
+    // only the registered 3.0 record, so re-parse against that major first.
+    const upgradedAsV300 =
+      persistenceRecordRegistry.epic[3].versions[0].contract.schema.parse(
+        upgraded,
+      );
     expect(
       downgradeRecordAcrossMajors(
         persistenceRecordRegistry.epic,
         3,
         2,
-        upgraded,
+        upgradedAsV300,
       ),
     ).toMatchObject({ ok: true });
 
@@ -234,5 +309,148 @@ describe("seeded protocol registries", () => {
           "Epic contains harness state that the 2.0 record contract cannot represent",
       },
     });
+  });
+  describe("Epic 3.0 to 4.0 (HTML, canvas and file artifacts)", () => {
+    const markdownArtifact = {
+      kind: "spec" as const,
+      id: "artifact-1",
+      folderName: "spec-1",
+      title: "Spec",
+      artifactRoomId: "room-1",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+    };
+    const epicV300 = {
+      id: "epic-1",
+      title: "Epic",
+      isTitleEditedByUser: false,
+      createdAt: 1,
+      updatedAt: 1,
+      chats: {},
+      artifacts: { "artifact-1": markdownArtifact },
+      deletedArtifacts: {},
+    };
+    const htmlArtifact = {
+      kind: "html" as const,
+      id: "artifact-2",
+      folderName: "page-1",
+      title: "Page",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "folder" as const,
+      head: { files: {}, capturedAt: 1 },
+    };
+
+    it("upgrades a stored 3.0 epic by parsing it as is", () => {
+      const upgraded = loadRecord(persistenceRecordRegistry, "epic", epicV300, {
+        major: 3,
+        minor: 0,
+      });
+      expect(upgraded).toMatchObject(epicV300);
+    });
+
+    it("downgrades a 4.0 epic holding only markdown artifacts to 3.0 and 2.0", () => {
+      const current =
+        persistenceRecordRegistry.epic[4].versions[0].contract.schema.parse(
+          epicV300,
+        );
+      for (const target of [3, 2] as const) {
+        expect(
+          downgradeRecordAcrossMajors(
+            persistenceRecordRegistry.epic,
+            4,
+            target,
+            current,
+          ),
+        ).toMatchObject({ ok: true });
+      }
+    });
+
+    const canvasArtifact = {
+      kind: "canvas" as const,
+      id: "artifact-3",
+      folderName: "canvas-1",
+      title: "Canvas",
+      artifactRoomId: "room-3",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "folder" as const,
+      head: { files: {}, capturedAt: 1 },
+    };
+    const fileArtifact = {
+      kind: "file" as const,
+      id: "artifact-4",
+      folderName: "file-1",
+      title: "File",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "file" as const,
+      object: {
+        sha256: "a".repeat(64),
+        byteLength: 12,
+        mediaType: "text/html",
+        status: "published" as const,
+      },
+    };
+    const newKindArtifacts = [
+      { label: "html", id: "artifact-2", artifact: htmlArtifact },
+      { label: "canvas", id: "artifact-3", artifact: canvasArtifact },
+      { label: "file", id: "artifact-4", artifact: fileArtifact },
+    ] as const;
+
+    function expectRefusedAtEveryOlderMajor(current: Epic): void {
+      for (const target of [3, 2] as const) {
+        expect(
+          downgradeRecordAcrossMajors(
+            persistenceRecordRegistry.epic,
+            4,
+            target,
+            current,
+          ),
+        ).toMatchObject({
+          ok: false,
+          error: { code: "DOWNGRADE_UNSUPPORTED" },
+        });
+      }
+    }
+
+    it.each(newKindArtifacts)(
+      "refuses to downgrade a 4.0 epic holding a live $label artifact",
+      ({ id, artifact }) => {
+        const withNewKind =
+          persistenceRecordRegistry.epic[4].versions[0].contract.schema.parse({
+            ...epicV300,
+            artifacts: { ...epicV300.artifacts, [id]: artifact },
+          });
+        expectRefusedAtEveryOlderMajor(withNewKind);
+      },
+    );
+
+    // A tombstone is the only trace of a deleted artifact. An older reader
+    // would drop its kind, so the revive would no longer know what to restore.
+    it.each(newKindArtifacts)(
+      "refuses to downgrade a 4.0 epic whose only $label content is a tombstone",
+      ({ id, artifact }) => {
+        const tombstone = buildDeletedEpicArtifact(
+          epicArtifactSchema.parse(artifact),
+          "2026-10-18T00:00:00.000Z",
+        );
+        const withTombstone =
+          persistenceRecordRegistry.epic[4].versions[0].contract.schema.parse({
+            ...epicV300,
+            deletedArtifacts: { [id]: tombstone },
+          });
+        expect(Object.keys(withTombstone.artifacts)).toEqual(["artifact-1"]);
+        expectRefusedAtEveryOlderMajor(withTombstone);
+      },
+    );
   });
 });

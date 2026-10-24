@@ -28,6 +28,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   __resetProviderRateLimitFetchesForTests,
+  collectProviderRateLimits,
   fetchProviderRateLimits,
   type ProviderRateLimitFetchScope,
   type ProviderRateLimitRequestFn,
@@ -178,6 +179,35 @@ describe("fetchProviderRateLimits", () => {
       expect(request).toHaveBeenCalledTimes(1);
     });
 
+    it("a collection read reaches the host for a FRESH entry, unforced, which force: false cannot", async () => {
+      const queryClient = newQueryClient();
+      const { request, calls } = makeControllableRequest();
+      const scope = scopeFor(HOST_ID, queryClient, request);
+      // The state the strip's `transient` segment is in: a transient failure
+      // the renderer wrote a minute ago. It is fresh by the guard's measure and
+      // worth nothing, so the scheduled retry has to get past the guard - and
+      // must still leave the decision to the host's own floors, which is what
+      // `force: false` on the wire asks for.
+      queryClient.setQueryData(
+        keyFor("codex", null),
+        unavailableResponse("timeout"),
+        {
+          updatedAt: Date.now() - 60_000,
+        },
+      );
+
+      void fetchProviderRateLimits(scope, target("codex", null), {
+        force: false,
+      });
+      await flush();
+      expect(request).not.toHaveBeenCalled();
+
+      void collectProviderRateLimits(scope, target("codex", null));
+      await flush();
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(calls[0].force).toBe(false);
+    });
+
     it("force: true bypasses the stale floor even for fresh data", async () => {
       const queryClient = newQueryClient();
       const { request } = makeControllableRequest();
@@ -221,7 +251,11 @@ describe("fetchProviderRateLimits", () => {
 
     // The cache identity (queryKey) carries no `force` field at all - so a
     // later automatic and a later forced call both resolve to this same slot.
-    expect(queryClient.getQueryData(keyFor("codex", "work-profile"))).toEqual({
+    // Matched rather than equalled: the envelope's episode identity is the
+    // builder's to mint, and no row about the CACHE KEY has a claim on it.
+    expect(
+      queryClient.getQueryData(keyFor("codex", "work-profile")),
+    ).toMatchObject({
       latest: null,
       lastGood: null,
       lastGoodAt: null,
@@ -432,7 +466,7 @@ describe("fetchProviderRateLimits", () => {
       await pull;
       const finalState = queryClient.getQueryState(keyFor("codex", null));
       expect(finalState?.status).toBe("success");
-      expect(finalState?.data).toEqual({
+      expect(finalState?.data).toMatchObject({
         latest: null,
         lastGood: null,
         lastGoodAt: null,

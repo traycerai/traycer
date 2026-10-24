@@ -84,13 +84,19 @@ export interface UseHistoryQueryResult {
    * backfill), never an authorization to spend the cloud capability.
    */
   readonly currentUserId: string | null;
+  /** Stable identity for local worktree/PR matches captured by bulk fetches. */
+  readonly localContextMatchKey: string;
   /** Canonical request identity for scoped activity reconciliation. */
   readonly activityRefreshScope: string;
   refetch: () => Promise<unknown>;
   /** Refresh only the task page when reconciling a chat activity edge. */
   refetchTasks: () => Promise<unknown>;
   fetchNextPage: () => void;
+  fetchAllItems: (
+    signal: AbortSignal,
+  ) => Promise<readonly HistoryItem[] | null>;
   hasNextPage: boolean;
+  hasUnloadedItems: boolean;
   isFetchingNextPage: boolean;
   /**
    * True while the local-first revalidation leg is outstanding - the rendered
@@ -164,8 +170,14 @@ export function useHistoryQuery(
     currentUserId,
     tasks,
     query: tasksQuery,
+    firstPage,
+    presentsCachedPage,
+    firstPagePending,
+    firstPageError,
     fetchNextPage,
+    fetchAllPages,
     hasNextPage,
+    hasUnloadedItems,
     isFetchingNextPage,
     // The GUARDED refresh, not `tasksQuery.refetch`. TanStack's own `refetch`
     // overrides `enabled` and resets the page identity before the dispatch-time
@@ -290,8 +302,10 @@ export function useHistoryQuery(
     // Ahead of the `undefined` guard, because the refusal PRODUCES that
     // `undefined` and would otherwise be indistinguishable from a first load.
     // A settled result is the whole point: it is what moves the panel off the
-    // spinner and onto a sentence that names the actual condition.
-    if (initialLegRefused) {
+    // spinner and onto a sentence that names the actual condition. A cached
+    // page needs no dispatch: it is shown, stating itself as cached, and the
+    // refusal still holds for the request it stands in for.
+    if (initialLegRefused && !presentsCachedPage) {
       return {
         items: [],
         availableRepos: EMPTY_REPOS,
@@ -306,7 +320,7 @@ export function useHistoryQuery(
         hostRequiresCloudToList: true,
       };
     }
-    if (tasksQuery.data === undefined) {
+    if (firstPage === undefined) {
       return undefined;
     }
     // The settled server order is pinned-first, but an optimistic pin patch
@@ -326,7 +340,7 @@ export function useHistoryQuery(
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
     const facets = canUseServerFacets
-      ? mapHistoryFacets(tasksQuery.data.facets)
+      ? mapHistoryFacets(firstPage.facets)
       : EMPTY_FACETS;
     // The union's statement, not the first page's. `items` is assembled from
     // the first page AND every retained "Show more" tail, so reading
@@ -420,8 +434,9 @@ export function useHistoryQuery(
     initialLegRefused,
     isQueryDebouncing,
     params.search,
+    presentsCachedPage,
     shouldProjectLocally,
-    tasksQuery.data,
+    firstPage,
     tasksQuery.isPlaceholderData,
     unionCompleteness,
     worktreesByEpicId,
@@ -437,20 +452,55 @@ export function useHistoryQuery(
   const isHydratingSearchMatches =
     (isPullRequestNumberQuery && activityIndex.isFetching) ||
     taskContexts.isFetching;
+  const fetchAllItems = useCallback(
+    async (signal: AbortSignal) => {
+      if (
+        isQueryDebouncing ||
+        tasksQuery.isPlaceholderData ||
+        isHydratingSearchMatches
+      ) {
+        return null;
+      }
+      const allTasks = await fetchAllPages(signal);
+      if (allTasks === null || signal.aborted) return null;
+      const loadedItems = buildHistoryItemsFromTasks(
+        allTasks,
+        nowMs,
+        currentUserId,
+        EMPTY_LOCAL_HOMED_TASK_IDS,
+      );
+      const seen = new Set(loadedItems.map((item) => item.id));
+      return [
+        ...loadedItems,
+        ...contextItems.filter((item) => !seen.has(item.id)),
+      ];
+    },
+    [
+      contextItems,
+      currentUserId,
+      fetchAllPages,
+      isHydratingSearchMatches,
+      isQueryDebouncing,
+      nowMs,
+      tasksQuery.isPlaceholderData,
+    ],
+  );
 
   return {
     data,
     // A refused leg is SETTLED, not pending. The underlying query reports
     // `pending` forever - it has no data and never will - and passing that
     // through is what put a permanent skeleton on History.
-    isPending: !initialLegRefused && tasksQuery.isPending,
+    // A cached page is shown in place of the spinner, and in place of the
+    // serving tier's error: it says itself that it is cached.
+    isPending: !initialLegRefused && firstPagePending,
     // Placeholder rows answer the previous request; local projection during
     // debounce/hydration is only a preview. A background first-page refresh
     // with current-query data, however, retains a usable loaded count.
     isCountPending:
       !initialLegRefused &&
       [
-        tasksQuery.isPending,
+        firstPagePending,
         isQueryDebouncing,
         tasksQuery.isPlaceholderData,
         isCloudPagePending,
@@ -459,15 +509,18 @@ export function useHistoryQuery(
     isFetching:
       tasksQuery.isFetching || isQueryDebouncing || isHydratingSearchMatches,
     error:
-      (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
+      firstPageError ??
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
     currentUserId,
+    localContextMatchKey: JSON.stringify(localTaskIds),
     activityRefreshScope,
     refetch,
     refetchTasks: refetchCloudTasks,
     fetchNextPage,
+    fetchAllItems,
+    hasUnloadedItems,
     // Pagination follows the plain cloud query; id-fetched local matches are
     // complete per query (not paginated). Keep the guard so "Show more"
     // cannot fetch against a stale request during debouncing / placeholder

@@ -626,14 +626,14 @@ export function isReasoningLevel(value: string): value is ReasoningLevel {
 export type ReasoningLevel = string;
 export type ReasoningLevelOption = AgentReasoningEffortOption;
 
-// Service / speed tier (e.g. Codex `"priority"` for the Fast upgrade). The
-// stored value is the raw user preference - `""` represents "use the harness
-// default" (omit the field on the wire). The toolbar store clamps it to the
-// selected model via `normalizeServiceTierForModel` for both display and emit,
-// so a tier carried over from another model (e.g. Codex `"priority"`) never
-// shows or sends as fast on a model whose only upgrade tier differs (e.g.
-// Claude `"fast"`); the raw preference stays sticky for a later model that
-// honors it. The codex-adapter additionally re-filters against the model's
+// Service / speed tier (e.g. Codex `"priority"` for Fast). The stored value is
+// the raw user preference - `""` means no tier requested. Codex sends it as
+// explicit Standard; other harnesses retain their own default behavior. The
+// toolbar store clamps it to the selected model via
+// `normalizeServiceTierForModel` for both display and emit,
+// so a tier carried over from another model never shows or sends on a model
+// that does not advertise that exact tier; the raw preference stays sticky for
+// a later model that honors it. The codex-adapter additionally re-filters against the model's
 // `supportedServiceTiers` at thread/start as defense-in-depth.
 export type ServiceTier = string;
 export type ServiceTierOption = AgentServiceTierOption;
@@ -641,7 +641,7 @@ export type ServiceTierOption = AgentServiceTierOption;
 /**
  * Whether a persisted service tier means "fast mode is on" - i.e. the value is
  * a real non-default tier rather than the harness default. Per the `ServiceTier`
- * contract above, both `null` (never set) and `""` ("use the harness default")
+ * contract above, both `null` (never set) and `""` (no tier requested)
  * mean off. The single definition shared by every surface that reports fast
  * mode: the assistant turn footer and the sidebar hover card's settings header.
  */
@@ -804,25 +804,58 @@ export function findReasoningLabel(
   return options.find((option) => option.id === level)?.label ?? level;
 }
 
-// Identify the model's "upgrade" tier - the one the toolbar toggle should
-// flip TO when activated. We deliberately do not assume `supportedServiceTiers[0]`
-// is the upgrade: Codex's protocol ordering isn't contractual, and the legacy
-// `additionalSpeedTiers` shape can prepend a literal `"default"` entry. Skip
-// any option whose id matches the model's declared `defaultServiceTier`; if
-// every advertised option matches the default (or none do), fall through to
-// the first option so a model that advertises only an upgrade still works.
-export function findUpgradeServiceTierForModel(
+/** The selectable non-default tiers, in the model's advertised order. */
+export function nonDefaultServiceTiersForModel(
+  model: ModelOption | null,
+): ReadonlyArray<ServiceTierOption> {
+  if (model === null) return [];
+  const seen = new Set<string>();
+  const options = model.supportedServiceTiers.filter((option) => {
+    if (seen.has(option.id)) return false;
+    seen.add(option.id);
+    return option.id !== model.defaultServiceTier;
+  });
+  return options;
+}
+
+export function serviceTierControlForModel(
+  model: ModelOption | null,
+): "none" | "toggle" | "menu" {
+  const count = nonDefaultServiceTiersForModel(model).length;
+  if (count === 0) return "none";
+  return count === 1 ? "toggle" : "menu";
+}
+
+export function selectedServiceTierOption(
+  value: ServiceTier,
   model: ModelOption | null,
 ): ServiceTierOption | null {
-  if (model === null) return null;
-  const options = model.supportedServiceTiers;
-  if (options.length === 0) return null;
-  const defaultId = model.defaultServiceTier;
-  if (defaultId !== null) {
-    const upgrade = options.find((option) => option.id !== defaultId);
-    if (upgrade !== undefined) return upgrade;
-  }
-  return options[0] ?? null;
+  const normalized = normalizeServiceTierForModel(value, model);
+  return (
+    nonDefaultServiceTiersForModel(model).find(
+      (option) => option.id === normalized,
+    ) ?? null
+  );
+}
+
+/** Resolve a recorded tier, including one that the model declares as default. */
+export function advertisedServiceTierOption(
+  value: ServiceTier,
+  model: ModelOption | null,
+): ServiceTierOption | null {
+  const id = value.trim();
+  if (id.length === 0) return null;
+  return (
+    model?.supportedServiceTiers.find((option) => option.id === id) ?? null
+  );
+}
+
+export function standardServiceTierLabel(model: ModelOption | null): string {
+  return (
+    model?.supportedServiceTiers.find(
+      (option) => option.id === model.defaultServiceTier,
+    )?.label ?? "Standard"
+  );
 }
 
 // Clamp the composer's sticky service-tier preference to the selected model -
@@ -837,15 +870,17 @@ export function findUpgradeServiceTierForModel(
 // - `null` model means the catalog is still resolving: pass the value through
 //   untouched (the emit path defers while the slug is unresolved), exactly as
 //   reasoning / permission do, so first paint never clobbers the sticky value.
-// - Otherwise keep the value only when it is the model's upgrade tier - the
-//   same `findUpgradeServiceTierForModel` comparison the toggle uses - so the
-//   emitted / recorded tier can never disagree with what the picker displays.
+// - Otherwise keep the value only when the model advertises that exact tier,
+//   so the emitted / recorded tier agrees with what the picker displays.
 export function normalizeServiceTierForModel(
   value: ServiceTier,
   model: ModelOption | null,
 ): ServiceTier {
   if (model === null) return value;
-  const upgrade = findUpgradeServiceTierForModel(model);
-  if (upgrade === null) return "";
-  return value.trim() === upgrade.id ? upgrade.id : "";
+  const trimmed = value.trim();
+  return nonDefaultServiceTiersForModel(model).some(
+    (option) => option.id === trimmed,
+  )
+    ? trimmed
+    : "";
 }

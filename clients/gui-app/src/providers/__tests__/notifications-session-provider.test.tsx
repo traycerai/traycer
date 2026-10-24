@@ -400,6 +400,11 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import {
+  notificationFeedReplicaAddress,
+  notificationFeedReplicaService,
+} from "@/lib/view-replica/notification-feed-replica";
+import { viewReplicaStore } from "@/lib/view-replica/view-replica-store";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
@@ -1799,6 +1804,80 @@ describe("<NotificationsSessionProvider />", () => {
         "connecting",
       );
     });
+  });
+
+  it("drops a snapshot frame from the previous account's still-open stream when the signed-in account changes in one step", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    const accountA = "user-a-cross-window";
+    const accountB = "user-b-cross-window";
+    const readFeed = (accountId: string) => {
+      const address = notificationFeedReplicaAddress(
+        accountId,
+        mockLocalHostEntry.hostId,
+      );
+      if (address === null) throw new Error("Expected a feed address");
+      return viewReplicaStore.read(notificationFeedReplicaService, address);
+    };
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", accountA, "a@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    await viewReplicaStore.warm(accountA);
+    await viewReplicaStore.warm(accountB);
+    const cloudSession = streamClient.sessionFor(
+      "host.notifications.cloudFeed.subscribe",
+    );
+    const baseline = cloudRow("entry-baseline", 7);
+    act(() => {
+      cloudSession.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 7,
+        rows: [baseline],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      });
+    });
+    expect(readFeed(accountA)?.sourceGeneration).toBe(7);
+    expect(readFeed(accountB)).toBeNull();
+    showNotificationMock.mockClear();
+
+    // The cross-window snapshot projection signs the other account in with
+    // no `signing-in` between, and a frame already in A's stream is delivered
+    // before React flushes the effect that closes it. Neither call is wrapped
+    // in `act`, so no effect runs in between.
+    resetAuth("signed-in", accountB, "b@example.com");
+    cloudSession.emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 8,
+      rows: [baseline, cloudRow("entry-arrived", 8)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+    });
+
+    expect(readFeed(accountB)).toBeNull();
+    expect(readFeed(accountA)?.sourceGeneration).toBe(7);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(showNotificationMock).not.toHaveBeenCalled();
   });
 
   it("drops cloud ownership when the websocket client is replaced", async () => {

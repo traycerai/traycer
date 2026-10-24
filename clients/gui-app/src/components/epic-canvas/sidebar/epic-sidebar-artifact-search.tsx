@@ -55,6 +55,7 @@ import {
   isEpicArtifactKind,
 } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import {
   STATUS_DOT_CLASSES,
@@ -240,13 +241,21 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
 
   const {
     searchActive,
-    results,
+    results: allResults,
     response,
     isUnsupported,
     isError,
     isFetching,
     refetch,
   } = useArtifactSearchResults({ epicId, debouncedQuery });
+
+  const results = useMemo(
+    () =>
+      allResults.filter((hit): hit is SearchArtifactHit =>
+        isEpicArtifactKind(hit.kind),
+      ),
+    [allResults],
+  );
 
   // ── Opening a hit (authoritative selection route) ─────────────────────────
   const handle = useOpenEpicHandle();
@@ -330,10 +339,11 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
         return;
       }
       if (resultCount === 0) return;
-      if (event.key === "ArrowDown") {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey === "ArrowDown") {
         event.preventDefault();
         setActiveIndex((index) => Math.min(index + 1, resultCount - 1));
-      } else if (event.key === "ArrowUp") {
+      } else if (navigationKey === "ArrowUp") {
         event.preventDefault();
         setActiveIndex((index) => Math.max(index - 1, 0));
       } else if (event.key === "Home") {
@@ -578,9 +588,7 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
   props: ArtifactSearchResultRowProps,
 ) {
   const { hit, active, stale, onActivate, onHover } = props;
-  const Icon = isEpicArtifactKind(hit.kind)
-    ? EPIC_NODE_ICONS[hit.kind]
-    : FileText;
+  const Icon = EPIC_NODE_ICONS[hit.kind];
   const title = displayTitle(hit.title, hit.kind);
   // The RPC breadcrumb includes the artifact's own folder slug last; drop it so
   // only the ancestor trail shows (the title already names the artifact) -

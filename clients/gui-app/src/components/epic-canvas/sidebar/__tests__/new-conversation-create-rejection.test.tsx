@@ -96,6 +96,28 @@ const testState = vi.hoisted(() => ({
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
 }));
 
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: () => null,
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => null,
+  }),
+);
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
+}));
+
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
@@ -128,6 +150,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }
@@ -155,6 +178,16 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     hostLabelFor: () => PLACEMENT_TARGET.hostLabel,
     followsEffective: true,
   }),
+}));
+
+// The mirror line reads the task's hosts and the host registry, which this
+// suite's `@/lib/host` mock does not carry; it has its own suite
+// (`composer-mirror-line.test.tsx`), so here it shows nothing.
+const NO_MIRROR_LINE = vi.hoisted(() =>
+  Object.freeze({ notice: null, markSeen: (): void => undefined }),
+);
+vi.mock("@/hooks/composer/use-composer-mirror-line", () => ({
+  useComposerMirrorLine: () => NO_MIRROR_LINE,
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({

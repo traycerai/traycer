@@ -18,14 +18,22 @@ const SWEEP_SPAN_PERCENT = 200;
  * `status-animation-clock.ts` for why it is not a CSS animation).
  */
 export function WorkingShimmerText(props: {
+  readonly animationOrigin?: number;
   readonly children: string;
   readonly className: string | undefined;
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
-  const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
-    const progress = (elapsedMs / SWEEP_MS) % 1;
-    element.style.backgroundPosition = `${SWEEP_START_PERCENT - progress * SWEEP_SPAN_PERCENT}% center`;
-  }, []);
+  const write = useCallback(
+    (element: HTMLSpanElement, elapsedMs: number) => {
+      const elapsed =
+        props.animationOrigin === undefined
+          ? elapsedMs
+          : Math.max(0, Date.now() - props.animationOrigin);
+      const progress = (elapsed / SWEEP_MS) % 1;
+      element.style.backgroundPosition = `${SWEEP_START_PERCENT - progress * SWEEP_SPAN_PERCENT}% center`;
+    },
+    [props.animationOrigin],
+  );
   const clear = useCallback((element: HTMLSpanElement) => {
     element.style.backgroundPosition = "";
   }, []);

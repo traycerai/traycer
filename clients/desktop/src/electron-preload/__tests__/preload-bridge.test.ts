@@ -143,7 +143,17 @@ interface PreloadBridge {
         readonly token: string;
       }): Promise<DesktopLocalAuthSessionRestoreResult>;
       set(snapshot: unknown): Promise<void>;
+      revoke(
+        rejectedToken: string,
+        revocation: "user-epoch" | null,
+      ): Promise<void>;
       onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
+      onVerificationRevoked(
+        handler: (
+          rejectedToken: string,
+          revocation: "user-epoch" | null,
+        ) => void,
+      ): { dispose: () => void };
     };
   };
   validateAuthTokenIdentity(
@@ -183,6 +193,10 @@ interface PreloadBridge {
     openSavedFile(path: string): Promise<void>;
   };
   requestHostRespawn(): Promise<unknown>;
+  forceRestartUnresponsiveHost(offer: {
+    readonly pid: number;
+    readonly offerId: number;
+  }): Promise<unknown>;
   hostManagement: {
     convergeReady(force: boolean): Promise<unknown>;
     applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;
@@ -671,6 +685,22 @@ describe("preload new-capability wiring", () => {
     expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.requestHostRespawn);
   });
 
+  it("forwards forceRestartUnresponsiveHost through ipcRenderer.invoke with the pid and the offer id", async () => {
+    const invokeFn = vi.fn(async () => undefined);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    await bridge.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.forceRestartUnresponsiveHost,
+      { pid: 4242, offerId: 7 },
+    );
+  });
+
   it("forwards workspace folder picking through ipcRenderer.invoke", async () => {
     const invokeFn = vi.fn(async () => ["/tmp/project-a", "/tmp/project-b"]);
     const bridge = await loadPreload({
@@ -992,6 +1022,61 @@ describe("preload new-capability wiring", () => {
       RunnerHostInvoke.authSessionRestoreLocal,
       { userId: "test-user", token: "jwt" },
     );
+  });
+
+  it("carries the revocation scope both ways over the auth-session revoke channels", async () => {
+    const invokeFn = vi.fn((_channel: string, ..._args: unknown[]) =>
+      Promise.resolve<unknown>(undefined),
+    );
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    // Outbound: the scope rides next to the bearer, as a second argument.
+    await bridge.windows.authSession.revoke("bearer-a", "user-epoch");
+    await bridge.windows.authSession.revoke("bearer-b", null);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRevoke,
+      "bearer-a",
+      "user-epoch",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRevoke,
+      "bearer-b",
+      null,
+    );
+
+    // Inbound: main fans out `{ token, revocation }`, which the handler gets
+    // as two arguments rather than as the wrapper object.
+    const observed: Array<readonly [string, "user-epoch" | null]> = [];
+    const subscription = bridge.windows.authSession.onVerificationRevoked(
+      (rejectedToken, revocation) => {
+        observed.push([rejectedToken, revocation]);
+      },
+    );
+    fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
+      token: "bearer-a",
+      revocation: "user-epoch",
+    });
+    fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
+      token: "bearer-b",
+      revocation: null,
+    });
+    expect(observed).toEqual([
+      ["bearer-a", "user-epoch"],
+      ["bearer-b", null],
+    ]);
+
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
+      token: "bearer-c",
+      revocation: "user-epoch",
+    });
+    expect(observed).toHaveLength(2);
   });
 
   it("round-trips the saved-logins pref through ipcRenderer.invoke", async () => {

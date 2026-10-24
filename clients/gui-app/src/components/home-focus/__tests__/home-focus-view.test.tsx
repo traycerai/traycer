@@ -7,6 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HomeFocusView } from "@/components/home-focus/home-focus-view";
@@ -47,6 +50,10 @@ vi.mock("@/hooks/home-focus/use-focus-actions", () => ({
   useFocusActions: () => actionsMock,
 }));
 
+vi.mock("@/components/home/bots/home-bots-section", () => ({
+  HomeBotsSection: () => null,
+}));
+
 const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -85,6 +92,19 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: fleetMock.entries }),
 }));
+
+/** The Getting started section reads the window's host through Query, so the
+ * view renders under the app's query client and host runtime. */
+function HostRuntime(props: { readonly children: ReactNode }): ReactNode {
+  const [queryClient] = useState(
+    () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  );
+  return (
+    <QueryClientProvider client={queryClient}>
+      <HostRuntimeTestProvider>{props.children}</HostRuntimeTestProvider>
+    </QueryClientProvider>
+  );
+}
 
 let idSeq = 0;
 function nextId(prefix: string): string {
@@ -329,7 +349,7 @@ describe("<HomeFocusView /> section presence", () => {
         taskRow({ epicId: "epic-busy" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       within(sectionOf("needs-you"))
@@ -350,7 +370,7 @@ describe("<HomeFocusView /> section presence", () => {
       tasks: [taskRow({ epicId: "epic-1" })],
       prompts: [promptRow({ epicId: "epic-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-section-prompts")).toBeNull();
     expect(taskGroups()).toHaveLength(1);
@@ -360,7 +380,7 @@ describe("<HomeFocusView /> section presence", () => {
 
   it("omits a section with nothing in it", () => {
     modelMock.value = model({ tasks: [taskRow({})] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-section-needs-you")).toBeNull();
     expect(screen.getByTestId("home-focus-section-running")).toBeDefined();
@@ -368,7 +388,7 @@ describe("<HomeFocusView /> section presence", () => {
 
   it("renders only the empty state when there is nothing at all", () => {
     modelMock.value = model({});
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.getByTestId("home-focus-empty")).toBeDefined();
     expect(taskGroups()).toHaveLength(0);
@@ -381,7 +401,7 @@ describe("<HomeFocusView /> section presence", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-empty")).toBeNull();
     expect(screen.getAllByTestId("home-focus-prompt-row")).toHaveLength(1);
@@ -397,7 +417,7 @@ describe("<HomeFocusView /> section headings", () => {
         taskRow({ epicId: "epic-c" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(headingOf("needs-you")).toBe("Needs you · 1");
     expect(headingOf("running")).toBe("Running · 2");
@@ -407,7 +427,7 @@ describe("<HomeFocusView /> section headings", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-a" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(headingOf("running")).toBe("Running · 1");
     expect(
@@ -431,7 +451,7 @@ describe("<HomeFocusView /> section headings", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -447,7 +467,7 @@ describe("<HomeFocusView /> section headings", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -466,7 +486,7 @@ describe("<HomeFocusView /> summary line", () => {
         taskRow({ epicId: "epic-c" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -477,7 +497,7 @@ describe("<HomeFocusView /> summary line", () => {
 
   it("omits a segment whose count is zero", () => {
     modelMock.value = model({ tasks: [taskRow({ epicId: "epic-a" })] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -493,7 +513,7 @@ describe("<HomeFocusView /> summary line", () => {
         taskRow({ epicId: "epic-b" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     for (const segment of screen.getAllByTestId("home-focus-summary-segment")) {
       const target = segment.getAttribute("data-target");
@@ -507,7 +527,7 @@ describe("<HomeFocusView /> summary line", () => {
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       prompts: [promptRow({ epicId: null, taskTitle: null })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -543,7 +563,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
@@ -577,7 +597,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
@@ -614,7 +634,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-1");
@@ -645,7 +665,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         browserRow({ epicId: "epic-1", tabId: "loose", title: "Docs" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-1");
@@ -678,7 +698,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
       prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
@@ -716,7 +736,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-1");
@@ -742,7 +762,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
       prompts: [row],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-prompt-open-body"));
@@ -759,7 +779,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
       ],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-open-body"));
@@ -788,7 +808,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-agent-body"));
@@ -811,7 +831,7 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-1");
@@ -838,7 +858,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-agent-stop"));
@@ -864,7 +884,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
@@ -890,7 +910,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(screen.getByTestId("home-focus-agent-stop")).toBeDefined();
@@ -907,7 +927,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const stop = screen.getByTestId("home-focus-agent-stop");
@@ -926,7 +946,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(
@@ -945,7 +965,7 @@ describe("<HomeFocusView /> stop controls", () => {
       ],
       background: [job],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-background-stop"));
@@ -972,7 +992,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const stop = screen.getByTestId("home-focus-background-stop");
@@ -993,7 +1013,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(screen.getByTestId("home-focus-task-stop"));
     expect(actionsMock.stopAgent).toHaveBeenCalledWith({
@@ -1017,7 +1037,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(screen.getByTestId("home-focus-task-stop-all"));
     expect(
@@ -1046,7 +1066,7 @@ describe("<HomeFocusView /> stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(screen.getByTestId("home-focus-task-stop-all"));
     fireEvent.click(screen.getByTestId("home-focus-stop-all-cancel"));
@@ -1058,7 +1078,7 @@ describe("<HomeFocusView /> stop controls", () => {
     modelMock.value = model({
       browsers: [browserRow({ epicId: "epic-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const browser = screen.getByTestId("home-focus-task-group-browser");
@@ -1087,7 +1107,7 @@ describe("<HomeFocusView /> task row badges", () => {
       ],
       browsers: [browserRow({ epicId: "epic-1", tabId: "t1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const group = taskGroup("epic-1");
     expect(
@@ -1109,7 +1129,7 @@ describe("<HomeFocusView /> task row badges", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-1", needsYou: true })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const group = taskGroup("epic-1");
     expect(
@@ -1132,7 +1152,7 @@ describe("<HomeFocusView /> task row badges", () => {
       ],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const group = taskGroup("epic-1");
     expect(
@@ -1150,7 +1170,7 @@ describe("<HomeFocusView /> task row badges", () => {
       tasks: [taskRow({ epicId: "epic-1", mountedHere: true })],
       background: [backgroundRow({ epicId: "epic-other" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       within(taskGroup("epic-1")).queryByTestId("home-focus-task-group-jobs"),
@@ -1159,7 +1179,7 @@ describe("<HomeFocusView /> task row badges", () => {
 
   it("omits the browsers badge at zero", () => {
     modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       within(taskGroup("epic-1")).queryByTestId(
@@ -1193,7 +1213,7 @@ describe("<HomeFocusView /> a cold task", () => {
   // the summary plus `Stop all` are the row's whole account of the task.
   it("renders as one row: no twisty, no chat rows, a summary and Stop all", () => {
     coldTask({});
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-cold");
@@ -1233,7 +1253,7 @@ describe("<HomeFocusView /> a cold task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       within(taskGroup("epic-cold")).getByTestId("home-focus-cold-agents")
@@ -1244,7 +1264,7 @@ describe("<HomeFocusView /> a cold task", () => {
   // Said once, on the one row there is.
   it("says `not open in this window` exactly once", () => {
     coldTask({});
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(screen.getAllByText(/not open in this window/)).toHaveLength(1);
@@ -1266,7 +1286,7 @@ describe("<HomeFocusView /> a cold task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const group = taskGroup("epic-warm");
     const twisty = within(group).getByTestId(
@@ -1313,7 +1333,7 @@ describe("<HomeFocusView /> a cold task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(
       within(taskGroup("epic-cold")).getByTestId("home-focus-task-stop-all"),
@@ -1361,7 +1381,7 @@ describe("<HomeFocusView /> a cold task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const stop = within(taskGroup("epic-cold")).getByTestId(
       "home-focus-task-stop-all",
@@ -1390,7 +1410,7 @@ describe("<HomeFocusView /> a cold task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-cold");
@@ -1416,7 +1436,7 @@ describe("<HomeFocusView /> a cold task", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const group = taskGroup("epic-cold");
     expect(
@@ -1430,7 +1450,7 @@ describe("<HomeFocusView /> a cold task", () => {
 
   it("opens from its summary row", () => {
     coldTask({});
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-open-body"));
     expect(actionsMock.openTask).toHaveBeenCalledWith("epic-cold");
@@ -1445,7 +1465,7 @@ describe("<HomeFocusView /> unplaced prompts", () => {
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       prompts: [promptRow({ epicId: null, taskTitle: null })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const section = sectionOf("needs-you");
     expect(
@@ -1463,7 +1483,7 @@ describe("<HomeFocusView /> unplaced prompts", () => {
       tasks: [],
       prompts: [promptRow({ epicId: "epic-gone", taskTitle: "Payments" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.getByTestId("home-focus-row-context").textContent).toBe(
       "·in Payments",
@@ -1492,21 +1512,21 @@ describe("<HomeFocusView /> disclosure", () => {
   // another way beside four other tasks, and the user asked for neither.
   it("starts a lone task collapsed", () => {
     modelMock.value = model({ tasks: tasks(1) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(expandedFlags()).toEqual(["false"]);
   });
 
   it("starts two tasks collapsed", () => {
     modelMock.value = model({ tasks: tasks(2) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(expandedFlags()).toEqual(["false", "false"]);
   });
 
   it("starts five tasks collapsed too", () => {
     modelMock.value = model({ tasks: tasks(5) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(expandedFlags()).toEqual([
       "false",
@@ -1529,14 +1549,14 @@ describe("<HomeFocusView /> disclosure", () => {
         })),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(expandedFlags()).toEqual(["false", "false", "false", "false"]);
   });
 
   it("toggles one row without touching its neighbours, and without opening the task", () => {
     modelMock.value = model({ tasks: tasks(2) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const twisties = screen.getAllByTestId("home-focus-task-group-disclosure");
     fireEvent.click(twisties[0]);
@@ -1547,7 +1567,7 @@ describe("<HomeFocusView /> disclosure", () => {
 
   it("closes a row the user opened when they press it again", () => {
     modelMock.value = model({ tasks: tasks(1) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const twisty = screen.getByTestId("home-focus-task-group-disclosure");
     fireEvent.click(twisty);
@@ -1559,7 +1579,7 @@ describe("<HomeFocusView /> disclosure", () => {
 
   it("points the disclosure at the body it controls", () => {
     modelMock.value = model({ tasks: tasks(1) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const twisty = screen.getByTestId("home-focus-task-group-disclosure");
@@ -1580,7 +1600,7 @@ describe("<HomeFocusView /> disclosure", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const twisty = screen.getByTestId("home-focus-task-group-disclosure");
     expect(twisty.className).toContain("invisible");
@@ -1592,7 +1612,7 @@ describe("<HomeFocusView /> disclosure", () => {
   // paint order and lose every click.
   it("lifts the leading disclosure over the body's stretched overlay", () => {
     modelMock.value = model({ tasks: tasks(1) });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen.getByTestId("home-focus-task-group-disclosure").className,
@@ -1615,7 +1635,7 @@ describe("<HomeFocusView /> row spacing", () => {
       ],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     for (const testId of [
@@ -1634,7 +1654,7 @@ describe("<HomeFocusView /> row spacing", () => {
   // surface, so the row keeps the touch chrome a tap needs.
   it("keeps the coarse-pointer touch chrome on the row", () => {
     modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.getByTestId("home-focus-task-group-row").className).toContain(
       "pointer-coarse:touch-chrome",
@@ -1675,7 +1695,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(
@@ -1702,7 +1722,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(
@@ -1740,7 +1760,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const [chat, tui, unknown] = screen.getAllByTestId(
@@ -1773,7 +1793,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     for (const glyph of screen.getAllByTestId("home-focus-agent-glyph")) {
@@ -1784,7 +1804,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
 
   it("keeps the section headings text, with no glyph of their own", () => {
     modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -1797,7 +1817,7 @@ describe("<HomeFocusView /> row vocabulary", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-1", taskTitle: null })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       within(taskGroup("epic-1")).getAllByTestId("home-focus-row-name")[0]
@@ -1833,7 +1853,7 @@ describe("<HomeFocusView /> status column", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const group = taskGroup("epic-1");
@@ -1873,7 +1893,7 @@ describe("<HomeFocusView /> status column", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-2" })],
       prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const warm = taskGroup("epic-1");
@@ -1913,7 +1933,7 @@ describe("<HomeFocusView /> status column", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(screen.getByTestId("home-focus-row-status-note").textContent).toBe(
@@ -1925,7 +1945,7 @@ describe("<HomeFocusView /> status column", () => {
     modelMock.value = model({
       background: [backgroundRow({ epicId: "epic-idle", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       within(taskGroup("epic-idle"))
@@ -1943,7 +1963,7 @@ describe("<HomeFocusView /> status column", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const chat = chatRow(taskGroup("epic-1"), "chat-1");
@@ -1984,7 +2004,7 @@ describe("<HomeFocusView /> job row elapsed", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const job = within(taskGroup("epic-1")).getByTestId(
@@ -2040,7 +2060,7 @@ describe("<HomeFocusView /> job row elapsed", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const job = within(taskGroup("epic-1")).getByTestId(
@@ -2066,7 +2086,7 @@ describe("<HomeFocusView /> job row elapsed", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen.getByTestId("home-focus-row-status-duration").textContent,
@@ -2079,7 +2099,7 @@ describe("<HomeFocusView /> browsers", () => {
   it("opens the parked tile from a tab's row body", () => {
     const tab = browserRow({ epicId: "epic-1", tabId: "t1" });
     modelMock.value = model({ browsers: [tab] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-browser-body"));
@@ -2090,7 +2110,7 @@ describe("<HomeFocusView /> browsers", () => {
     modelMock.value = model({
       browsers: [browserRow({ epicId: "epic-page", taskTitle: "Storefront" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-empty")).toBeNull();
     expect(
@@ -2105,7 +2125,7 @@ describe("<HomeFocusView /> browsers", () => {
         browserRow({ epicId: "epic-1", tabId: "b", status: "crashed" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(
@@ -2121,7 +2141,7 @@ describe("<HomeFocusView /> browsers", () => {
         browserRow({ epicId: "epic-1", title: "Checkout", taskTitle: "Shop" }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const browser = screen.getByTestId("home-focus-task-group-browser");
@@ -2158,7 +2178,7 @@ describe("<HomeFocusView /> host grouping", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -2188,7 +2208,7 @@ describe("<HomeFocusView /> host grouping", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     expect(taskGroups()).toHaveLength(2);
@@ -2222,7 +2242,7 @@ describe("<HomeFocusView /> host grouping", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const bodyIds = screen
@@ -2252,7 +2272,7 @@ describe("<HomeFocusView /> host grouping", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -2289,7 +2309,7 @@ describe("<HomeFocusView /> host grouping", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const notices = screen.getAllByTestId(
       "home-focus-section-running-group-notice",
@@ -2310,7 +2330,7 @@ describe("<HomeFocusView /> host grouping", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.getByTestId("home-focus-activity-notice")).toBeDefined();
   });
@@ -2326,7 +2346,7 @@ describe("<HomeFocusView /> host grouping", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-activity-notice")).toBeNull();
   });
@@ -2360,7 +2380,7 @@ describe("<HomeFocusView /> host grouping", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const labels = screen
@@ -2388,7 +2408,7 @@ describe("<HomeFocusView /> host grouping", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const segment = screen.getByTestId("home-focus-summary-segment");
     expect(segment.textContent).toBe("2 running");
@@ -2422,7 +2442,7 @@ describe("<HomeFocusView /> degraded-host reason lines", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const notice = screen.getByTestId("home-focus-activity-notice");
     expect(
@@ -2516,7 +2536,7 @@ describe("<HomeFocusView /> degraded-host reason lines", () => {
           browsersAreMountedOnly: true,
         },
       });
-      render(<HomeFocusView />);
+      render(<HomeFocusView />, { wrapper: HostRuntime });
 
       const notice = screen.getByTestId("home-focus-activity-notice");
       expect(
@@ -2545,7 +2565,7 @@ describe("<HomeFocusView /> origin host chip", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.getByTestId("home-focus-origin-host").textContent).toBe(
       "Remote Box",
@@ -2563,7 +2583,7 @@ describe("<HomeFocusView /> origin host chip", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-origin-host")).toBeNull();
   });
@@ -2572,7 +2592,7 @@ describe("<HomeFocusView /> origin host chip", () => {
 describe("<HomeFocusView /> empty state", () => {
   it("navigates to a new draft from 'Start a new task'", () => {
     modelMock.value = model({});
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(screen.getByTestId("home-focus-empty-new-task"));
     expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
@@ -2580,7 +2600,7 @@ describe("<HomeFocusView /> empty state", () => {
 
   it("navigates to history from 'Open History'", () => {
     modelMock.value = model({});
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(screen.getByTestId("home-focus-empty-history"));
     expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
@@ -2592,7 +2612,7 @@ describe("<HomeFocusView /> live model updates", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-1", taskTitle: "Before" })],
     });
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     const before = screen.getByTestId("home-focus-task-group");
 
     modelMock.value = model({
@@ -2615,7 +2635,7 @@ describe("<HomeFocusView /> live model updates", () => {
         }),
       ],
     });
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     fireEvent.click(screen.getByTestId("home-focus-task-group-disclosure"));
     expect(
       screen
@@ -2657,7 +2677,7 @@ describe("<HomeFocusView /> relative time ticking", () => {
         promptRow({ epicId: null, taskTitle: null, createdAt: base - 30_000 }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const timeNode = screen.getByTestId("home-focus-row-status-duration");
     expect(timeNode.textContent).toBe("· just now");
@@ -2688,7 +2708,7 @@ describe("<HomeFocusView /> has no trailing Open button", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
       browsers: [browserRow({ epicId: "epic-1", drivenByChatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
     expect(screen.queryByText("Open")).toBeNull();
@@ -2706,7 +2726,7 @@ describe("<HomeFocusView /> has no trailing Open button", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const row = screen.getByTestId("home-focus-task-group-row");
     within(row).getByTestId("home-focus-task-group-disclosure").focus();
@@ -2760,7 +2780,7 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.getByTestId("home-focus-activity-notice")).toBeDefined();
     expect(
@@ -2798,7 +2818,7 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
         browsersAreMountedOnly: true,
       },
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(screen.queryByTestId("home-focus-activity-notice")).toBeNull();
     expect(
@@ -2835,7 +2855,7 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     // Grouping is on - the headings are there - and the tail row still names
     // its machine, because no heading covers it.
@@ -2880,7 +2900,7 @@ describe("<HomeFocusView /> no auto-expand", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
     });
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     expect(screen.queryAllByTestId("home-focus-task-group")).toHaveLength(0);
 
     modelMock.value = model({
@@ -2894,7 +2914,7 @@ describe("<HomeFocusView /> no auto-expand", () => {
 
   it("opens nothing when tasks arrive after an empty first frame either", () => {
     modelMock.value = model({});
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     expect(screen.getByTestId("home-focus-empty")).toBeDefined();
 
     modelMock.value = model({ tasks: someTasks(2) });
@@ -2906,7 +2926,7 @@ describe("<HomeFocusView /> no auto-expand", () => {
   // Two, then five: the count the old latch turned on, on both sides of it.
   it("leaves every task closed however few or many there are", () => {
     modelMock.value = model({ tasks: someTasks(2) });
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     expect(expandedFlags()).toEqual(["false", "false"]);
 
     modelMock.value = model({ tasks: someTasks(5) });
@@ -2924,7 +2944,7 @@ describe("<HomeFocusView /> no auto-expand", () => {
   // place, and a row the reader opened has to still be open afterwards.
   it("keeps a hand-opened row open across a model refresh that adds tasks", () => {
     modelMock.value = model({ tasks: someTasks(2) });
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     fireEvent.click(
       screen.getAllByTestId("home-focus-task-group-disclosure")[0],
     );
@@ -2985,7 +3005,7 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
   // different subtree, and the row the user just opened must not close.
   it("keeps a row open when answering its prompt moves it to Running", () => {
     modelMock.value = waitingTask(true);
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     expect(
       within(sectionOf("needs-you")).getAllByTestId("home-focus-task-group"),
     ).toHaveLength(1);
@@ -3012,7 +3032,7 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
 
   it("keeps a row open when a first prompt moves it to Needs you", () => {
     modelMock.value = waitingTask(false);
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
 
     fireEvent.click(disclosureOf("epic-moving"));
     expect(disclosureOf("epic-moving").getAttribute("aria-expanded")).toBe(
@@ -3034,7 +3054,7 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
 
   it("drops a task's choice once it leaves the model, and not before", () => {
     modelMock.value = waitingTask(false);
-    const view = render(<HomeFocusView />);
+    const view = render(<HomeFocusView />, { wrapper: HostRuntime });
     fireEvent.click(disclosureOf("epic-moving"));
     expect(disclosureOf("epic-moving").getAttribute("aria-expanded")).toBe(
       "true",
@@ -3077,7 +3097,7 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const twisties = screen.getAllByTestId("home-focus-task-group-disclosure");
     expect(twisties).toHaveLength(2);
@@ -3121,7 +3141,7 @@ describe("<HomeFocusView /> a split task with a prompt on one host", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     // Both slices under Needs you, none under Running, and nothing left over.
@@ -3201,14 +3221,14 @@ describe("<HomeFocusView /> narrow rows", () => {
 
   it("makes each section the container the rows fold against", () => {
     modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(sectionOf("running").className).toContain("@container");
   });
 
   it("folds every row shape onto a second line, and only below the fold", () => {
     everyRowShape();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     // The fold lives on the shared row class, so it reaches every shape at
@@ -3230,7 +3250,7 @@ describe("<HomeFocusView /> narrow rows", () => {
 
   it("gives every row shape a meta line that is nothing at all when wide", () => {
     everyRowShape();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const metas = screen.getAllByTestId("home-focus-row-meta");
@@ -3267,7 +3287,7 @@ describe("<HomeFocusView /> narrow rows", () => {
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
       browsers: [browserRow({ epicId: "epic-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const meta = screen.getAllByTestId("home-focus-row-meta")[0];
     for (const testId of [
@@ -3289,7 +3309,7 @@ describe("<HomeFocusView /> narrow rows", () => {
 
   it("releases both fixed tracks below the fold", () => {
     everyRowShape();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     for (const cell of screen.getAllByTestId("home-focus-row-status")) {
@@ -3323,7 +3343,7 @@ describe("<HomeFocusView /> narrow rows", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const note = screen.getByTestId("home-focus-row-status-note");
@@ -3337,7 +3357,7 @@ describe("<HomeFocusView /> narrow rows", () => {
 
   it("hands the folded row's width to the name", () => {
     everyRowShape();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     const body = screen.getByTestId("home-focus-task-group-open-body");
@@ -3386,7 +3406,7 @@ describe("<HomeFocusView /> narrow rows", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     // `via <long parent>` renders and keeps its own ability to give way.
@@ -3404,7 +3424,7 @@ describe("<HomeFocusView /> narrow rows", () => {
 
   it("shrinks the per-level indent so a level-two name keeps the row", () => {
     everyRowShape();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
     openEveryTask();
 
     for (const list of screen.getAllByTestId("home-focus-task-group-body")) {
@@ -3430,7 +3450,7 @@ describe("<HomeFocusView /> narrow stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const stop = screen.getByTestId("home-focus-task-stop");
     const label = within(stop).getByTestId("home-focus-stop-label");
@@ -3466,7 +3486,7 @@ describe("<HomeFocusView /> narrow stop controls", () => {
         }),
       ],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const stop = screen.getByTestId("home-focus-task-stop-all");
     const label = within(stop).getByTestId("home-focus-stop-label");
@@ -3500,7 +3520,7 @@ describe("<HomeFocusView /> narrow stop controls", () => {
       ],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
     });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen.getByTestId("home-focus-task-group-disclosure").className,
@@ -3534,7 +3554,7 @@ describe("<HomeFocusView /> narrow host heading", () => {
 
   it("truncates the hostname alone, and never its count or its pill", () => {
     longHostFleet();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     const hosts = screen.getAllByTestId(
       "home-focus-section-running-group-host",
@@ -3561,7 +3581,7 @@ describe("<HomeFocusView /> narrow host heading", () => {
 
   it("reads the same sentence it always did, separator and all", () => {
     longHostFleet();
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     expect(
       screen
@@ -3572,7 +3592,7 @@ describe("<HomeFocusView /> narrow host heading", () => {
 
   it("wraps the section captions rather than clipping them", () => {
     modelMock.value = model({ tasks: [taskRow({ epicId: "epic-1" })] });
-    render(<HomeFocusView />);
+    render(<HomeFocusView />, { wrapper: HostRuntime });
 
     for (const caption of screen.getAllByTestId(
       "home-focus-section-running-caption",

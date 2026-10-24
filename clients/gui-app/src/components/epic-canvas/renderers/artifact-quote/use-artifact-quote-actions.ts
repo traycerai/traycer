@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 
 import {
   appendArtifactQuoteToDraft,
@@ -16,7 +16,7 @@ interface UseArtifactQuoteActionsArgs {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly artifactId: string;
-  readonly artifactKind: EpicArtifactKind;
+  readonly artifactKind: MarkdownArtifactKind;
 }
 
 export interface ArtifactQuoteActions {

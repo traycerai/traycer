@@ -9,6 +9,7 @@ import {
   HOST_CAPABILITY_MAINTENANCE_LEASE_V1,
   HOST_CAPABILITY_MAINTENANCE_LEASE_V2,
   HOST_CAPABILITY_HOST_START_ADOPTION_V2,
+  HOST_CAPABILITY_SANDBOX_MODE,
   HOST_CAPABILITY_SERVICE_LABEL,
   runHostCapabilities,
 } from "../capabilities";
@@ -36,6 +37,7 @@ describe("host capability tokens", () => {
     );
     expect(HOST_CAPABILITY_MAINTENANCE_LEASE_V1).toBe("maintenance-lease-v1");
     expect(HOST_CAPABILITY_MAINTENANCE_LEASE_V2).toBe("maintenance-lease-v2");
+    expect(HOST_CAPABILITY_SANDBOX_MODE).toBe("sandbox-mode");
   });
 
   it("pins the full advertised set, so adding or dropping a token is a deliberate edit", () => {
@@ -45,6 +47,7 @@ describe("host capability tokens", () => {
       "maintenance-lease-v1",
       "maintenance-lease-v2",
       "lifecycle-policy-v1",
+      "sandbox-mode",
     ]);
   });
 });
@@ -85,6 +88,7 @@ describe("runHostCapabilities", () => {
         "maintenance-lease-v1",
         "maintenance-lease-v2",
         "lifecycle-policy-v1",
+        "sandbox-mode",
       ],
     });
   });
@@ -92,7 +96,7 @@ describe("runHostCapabilities", () => {
   it("emits one token per line without --json", () => {
     expect(runHostCapabilities({ kind: "list", json: false })).toEqual({
       stdout:
-        "service-label\nhost-start-adoption-v2\nmaintenance-lease-v1\nmaintenance-lease-v2\nlifecycle-policy-v1\n",
+        "service-label\nhost-start-adoption-v2\nmaintenance-lease-v1\nmaintenance-lease-v2\nlifecycle-policy-v1\nsandbox-mode\n",
       exitCode: 0,
     });
   });
@@ -166,6 +170,7 @@ describe("`traycer host capabilities` as a subprocess", () => {
         "maintenance-lease-v1",
         "maintenance-lease-v2",
         "lifecycle-policy-v1",
+        "sandbox-mode",
       ],
     });
   });

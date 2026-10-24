@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   HostNotificationEntry,
+  HostNotificationEntryV23,
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -198,6 +199,45 @@ describe("merged notifications feed", () => {
         },
       }).payload,
     ).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "chat-host",
+      messageId: undefined,
+      eventId: undefined,
+      scrollToEnd: true,
+    });
+  });
+
+  it("labels a paused completed chat row and keeps its Done navigation", () => {
+    const row = rowFromHostEntry({
+      id: "agent.stopped:chat-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: "chat-1",
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: "chat-host",
+        agentName: "Agent",
+        taskTitle: "Task",
+        outcome: "completed",
+        messageId: "assistant-message-1",
+        eventId: "event-1",
+        unverified: true,
+      },
+    });
+
+    expect(row.body).toBe("Agent • Paused, not verified");
+    expect(row.severity).toBe("done");
+    expect(row.outcome).toBe("completed");
+    expect(row.payload).toEqual({
       kind: "chat",
       epicId: "epic-1",
       chatId: "chat-1",
@@ -677,6 +717,7 @@ describe("merged notifications feed", () => {
       originHostId: "host-a",
       providerPackAttribution: null,
       category: "system",
+      environmentDetail: null,
     });
   });
 
@@ -910,5 +951,170 @@ describe("merged notifications feed", () => {
     });
     // Readable and acknowledgeable, but never routed by guesswork.
     expect(row.payload).toBeNull();
+  });
+
+  describe("secrets rows", () => {
+    const grantEntry: HostNotificationEntryV23 = {
+      id: "secret-entry-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "secret.grant.requested",
+      sourceRef: "request-1",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "secret_grant_request",
+        requestId: "request-1",
+        hostId: "host-1",
+        secretName: "DB_PASSWORD",
+        destination: "db.example.com",
+        port: 3306,
+        protocol: "mysql",
+        reason: "Run the migration",
+        sandboxName: "build-box",
+        epicId: "epic-1",
+        chatId: "chat-1",
+      },
+    };
+    const exportEntry: HostNotificationEntryV23 = {
+      id: "secret-entry-2",
+      updatedAt: 20,
+      readAt: null,
+      kind: "secret.export.minted",
+      sourceRef: "export-1",
+      severity: "info",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "secret_export_minted",
+        secretName: "DEPLOY_KEY",
+        exportKind: "presigned_url",
+        expiresAt: 1_700_000_900_000,
+        hostId: "host-1",
+        epicId: "epic-1",
+        chatId: "chat-1",
+      },
+    };
+
+    it("projects a grant request into the grant-request detail", () => {
+      const row = rowFromHostEntry(grantEntry);
+      expect(row.secrets).toEqual({
+        kind: "grant-request",
+        requestId: "request-1",
+        secretName: "DB_PASSWORD",
+        destination: "db.example.com",
+        port: 3306,
+        protocol: "mysql",
+        reason: "Run the migration",
+        sandboxName: "build-box",
+        environmentId: null,
+        teamName: null,
+        decision: null,
+        decidedBy: null,
+      });
+      expect(row.payload).toEqual({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+      });
+    });
+
+    it("projects a resolved team grant request with its team and who answered", () => {
+      const row = rowFromHostEntry({
+        ...grantEntry,
+        resolvedAt: 30,
+        payload: {
+          kind: "secret_grant_request",
+          requestId: "request-1",
+          hostId: "host-1",
+          secretName: "DB_PASSWORD",
+          destination: "db.example.com",
+          protocol: "mysql",
+          reason: "Run the migration",
+          environmentId: "env-team-1",
+          teamName: "Acme",
+          decision: "approved",
+          decidedBy: "Ana",
+        },
+      });
+      expect(row.secrets).toMatchObject({
+        kind: "grant-request",
+        environmentId: "env-team-1",
+        teamName: "Acme",
+        decision: "approved",
+        decidedBy: "Ana",
+      });
+    });
+
+    it("projects a minted export into the export-minted detail", () => {
+      const row = rowFromHostEntry(exportEntry);
+      expect(row.secrets).toEqual({
+        kind: "export-minted",
+        secretName: "DEPLOY_KEY",
+        exportKind: "presigned_url",
+        expiresAt: 1_700_000_900_000,
+      });
+      expect(row.payload).toEqual({
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+      });
+    });
+
+    it("has no navigation payload when the host named no chat", () => {
+      const row = rowFromHostEntry({
+        ...grantEntry,
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "secret_grant_request",
+          requestId: "request-3",
+          hostId: "host-1",
+          secretName: null,
+          destination: "db.example.com",
+          protocol: null,
+          reason: "",
+        },
+      });
+      expect(row.payload).toBeNull();
+      expect(row.secrets).toMatchObject({
+        kind: "grant-request",
+        requestId: "request-3",
+        secretName: null,
+      });
+    });
+
+    it("gives a secrets row whose payload cannot be read no detail", () => {
+      expect(
+        rowFromHostEntry({ ...exportEntry, payload: { kind: "unheard_of" } })
+          .secrets,
+      ).toBeNull();
+    });
+
+    it("leaves secrets null on an ordinary host row", () => {
+      expect(
+        rowFromHostEntry(hostEntry("approval", 10, null)).secrets,
+      ).toBeNull();
+    });
+
+    it("projects the detail from a cloud feed row too", () => {
+      const row = rowFromCloudFeedRow({
+        entryId: "entry-secret",
+        originHostId: "host-a",
+        coalesceKey: "secret.export.minted:export-1",
+        entry: exportEntry,
+        presentation: { epicTitle: "Deploy", chatTitle: "Release" },
+      });
+      expect(row.secrets).toEqual({
+        kind: "export-minted",
+        secretName: "DEPLOY_KEY",
+        exportKind: "presigned_url",
+        expiresAt: 1_700_000_900_000,
+      });
+    });
   });
 });

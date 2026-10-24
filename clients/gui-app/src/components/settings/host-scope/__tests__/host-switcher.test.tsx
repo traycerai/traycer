@@ -45,6 +45,8 @@ function renderEmpty(props: {
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists ?? (() => undefined)}
       updateViewForHost={null}
+      composer={null}
+      environmentLabelForHost={null}
     />,
   );
 }
@@ -115,6 +117,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
         listsFailed
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -148,6 +152,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
         listsFailed
         onRetryLists={onRetryLists}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -160,6 +166,126 @@ describe("<HostSwitcher /> empty vs failed", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetryLists).toHaveBeenCalledTimes(1);
+  });
+
+  it("says more hosts are loading under rows listed while a list is still on its first read, and not otherwise", () => {
+    const renderRows = (isLoading: boolean) => {
+      render(
+        <HostSwitcher
+          refusalByHostId={NO_HOST_OPTION_REFUSALS}
+          inertExceptHostId={null}
+          hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
+          selected={null}
+          activeHostId={null}
+          onSelect={() => undefined}
+          action={{ kind: "add-host", onSelect: () => undefined }}
+          surface="rail"
+          intent="view"
+          disabled={false}
+          isLoading={isLoading}
+          listsFailed={false}
+          onRetryLists={() => undefined}
+          updateViewForHost={null}
+          environmentLabelForHost={null}
+          composer={null}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Settings host: none selected" }),
+      );
+    };
+
+    renderRows(true);
+    expect(
+      screen.getByTestId("settings-host-switcher-loading-more").textContent,
+    ).toContain("Loading more hosts…");
+    // The listed row is still offered while more are coming.
+    expect(screen.getByText("Host A")).not.toBeNull();
+    cleanup();
+
+    renderRows(false);
+    expect(
+      screen.queryByTestId("settings-host-switcher-loading-more"),
+    ).toBeNull();
+  });
+
+  describe("the search is cleared on every close", () => {
+    const SEARCH_HOSTS = ["a", "b", "c", "d", "e", "f"].map((letter) =>
+      hostScopeOptionFixture({
+        hostId: `host-${letter}`,
+        name: `Host ${letter}`,
+      }),
+    );
+
+    function renderSearchable(onSelect: (hostId: string) => void): void {
+      render(
+        <HostSwitcher
+          refusalByHostId={NO_HOST_OPTION_REFUSALS}
+          inertExceptHostId={null}
+          hosts={SEARCH_HOSTS}
+          selected={null}
+          activeHostId={null}
+          onSelect={onSelect}
+          action={{ kind: "add-host", onSelect: () => undefined }}
+          surface="rail"
+          intent="view"
+          disabled={false}
+          isLoading={false}
+          listsFailed={false}
+          onRetryLists={() => undefined}
+          updateViewForHost={null}
+          environmentLabelForHost={null}
+          composer={null}
+        />,
+      );
+    }
+
+    function openSwitcher(): void {
+      fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    }
+
+    function searchBox(): HTMLInputElement {
+      return screen.getByPlaceholderText<HTMLInputElement>("Search hosts…");
+    }
+
+    it("reopens unfiltered after the popover was dismissed with a search that matched nothing", () => {
+      renderSearchable(() => undefined);
+      openSwitcher();
+      fireEvent.change(searchBox(), { target: { value: "zzz-no-such-host" } });
+      expect(screen.getByText("No hosts match.")).not.toBeNull();
+
+      fireEvent.keyDown(searchBox(), { key: "Escape" });
+      expect(screen.queryByPlaceholderText("Search hosts…")).toBeNull();
+      openSwitcher();
+
+      expect(searchBox().value).toBe("");
+      expect(screen.queryByText("No hosts match.")).toBeNull();
+      expect(
+        screen.getByTestId("settings-host-switcher-option-host-a"),
+      ).not.toBeNull();
+    });
+
+    it("reopens unfiltered after a row was picked from a filtered list", () => {
+      const onSelect = vi.fn();
+      renderSearchable(onSelect);
+      openSwitcher();
+      fireEvent.change(searchBox(), { target: { value: "Host c" } });
+      expect(searchBox().value).toBe("Host c");
+
+      fireEvent.click(
+        screen.getByTestId("settings-host-switcher-option-host-c"),
+      );
+      expect(onSelect).toHaveBeenCalledWith("host-c");
+      openSwitcher();
+
+      expect(searchBox().value).toBe("");
+      expect(
+        screen.getByTestId("settings-host-switcher-option-host-a"),
+      ).not.toBeNull();
+      expect(
+        screen.getByTestId("settings-host-switcher-option-host-f"),
+      ).not.toBeNull();
+    });
   });
 
   it("labels a host with no route by its health word 'offline', not 'unreachable'", () => {
@@ -200,6 +326,8 @@ describe("<HostSwitcher /> empty vs failed", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -230,6 +358,8 @@ describe("<HostSwitcher /> trigger status", () => {
       listsFailed: false,
       onRetryLists: () => undefined,
       updateViewForHost: null,
+      composer: null,
+      environmentLabelForHost: null,
     };
     const { rerender } = render(
       <HostSwitcher hosts={[healthy]} selected={healthy} {...common} />,
@@ -285,6 +415,8 @@ describe("<HostSwitcher /> trailing action", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -321,6 +453,8 @@ describe("<HostSwitcher /> trailing action", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -366,6 +500,8 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
       />,
     );
 
@@ -381,5 +517,54 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
     );
     expect(localRow.textContent).toContain("setting up");
     expect(remoteRow.textContent).not.toContain("setting up");
+  });
+});
+
+describe("<HostSwitcher /> environment labels (Tracy Bots)", () => {
+  function renderWithResolver(
+    resolver: ((hostId: string) => string | null) | null,
+  ): void {
+    render(
+      <HostSwitcher
+        hosts={[
+          hostScopeOptionFixture({ hostId: "host-a", name: "Host A" }),
+          hostScopeOptionFixture({ hostId: "host-b", name: "Host B" }),
+        ]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        action={{ kind: "add-host", onSelect: () => undefined }}
+        surface="rail"
+        intent="view"
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={resolver}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Settings host: none selected" }),
+    );
+  }
+
+  it("shows the resolver's label on its own row and nothing on a host it returns null for", () => {
+    renderWithResolver((hostId) => (hostId === "host-a" ? "acme" : null));
+
+    expect(
+      screen.getByTestId("host-option-environment-host-a").textContent,
+    ).toBe("acme");
+    expect(screen.queryByTestId("host-option-environment-host-b")).toBeNull();
+  });
+
+  it("renders no environment label on any row without a resolver", () => {
+    renderWithResolver(null);
+
+    expect(screen.queryByTestId("host-option-environment-host-a")).toBeNull();
+    expect(screen.queryByTestId("host-option-environment-host-b")).toBeNull();
   });
 });

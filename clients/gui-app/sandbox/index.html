@@ -4,7 +4,11 @@
   traycer-sandbox: scheme; mobile: /sandbox/ under the app) and always framed
   as an opaque `<iframe sandbox="allow-scripts allow-forms">`. The meta below
   is the base policy; desktop also sends it as a response header. A page's
-  stricter policy is added on top by loader.js, never in place of this one.
+  stricter policy is added on top by the loader, never in place of this one.
+
+  This document fetches nothing: vite/sandbox-assets.ts inlines the loader
+  into the script below. WebKit does not let `*` admit a custom scheme such
+  as iOS's capacitor: from an opaque frame, so a script file would not run.
 -->
 <html>
   <head>
@@ -13,7 +17,9 @@
       http-equiv="Content-Security-Policy"
       content="default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'; base-uri 'none'"
     />
-    <script src="loader.js"></script>
+    <script>
+      /* __TRAYCER_SANDBOX_LOADER__ */
+    </script>
   </head>
   <body></body>
 </html>

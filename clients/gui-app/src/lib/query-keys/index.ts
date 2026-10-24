@@ -25,6 +25,7 @@ export {
   supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
 export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
+export { environmentMutationKeys } from "@/lib/query-keys/environment-mutation-keys";
 export { autoModeMutationKeys } from "@/lib/query-keys/auto-mode-mutation-keys";
 export {
   chatAutoArchiveMutationKeys,
@@ -39,18 +40,19 @@ export {
   editorQueryKeys,
 } from "@/lib/query-keys/editor-mutation-keys";
 export { portForwardMutationKeys } from "@/lib/query-keys/port-forward-mutation-keys";
+export { simulatorMutationKeys } from "@/lib/query-keys/simulator-mutation-keys";
 export { terminalMutationKeys } from "@/lib/query-keys/terminal-mutation-keys";
 export {
   browserMutationKeys,
   browserQueryKeys,
 } from "@/lib/query-keys/browser-mutation-keys";
 export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys";
+export { chatContinueMutationKeys } from "@/lib/query-keys/chat-continue-mutation-keys";
 export { chatFallbackMutationKeys } from "@/lib/query-keys/chat-fallback-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
-export { epicFileMutationKeys } from "@/lib/query-keys/epic-file-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
 export { profileSyncKeys } from "@/lib/query-keys/profile-sync-keys";
 export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
@@ -59,6 +61,7 @@ export {
   autoPolicyWriteScope,
   providerAutoJudgeWriteScope,
 } from "@/lib/query-keys/auto-mode-write-scopes";
+export { providerNativeSubagentsWriteScope } from "@/lib/query-keys/providers-native-subagents-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,
@@ -76,6 +79,8 @@ export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
+export { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+export { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
@@ -100,3 +105,7 @@ export const queryKeys = {
   hostPickerMissing: uiQueryKeys.hostPickerMissing,
   cloudEpicTasksDisabled: uiQueryKeys.cloudEpicTasksDisabled,
 };
+export {
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys/sandbox-query-keys";

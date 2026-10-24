@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
+import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatAttachmentScope } from "@/components/chat/chat-attachment-scope-context";
 import { useBlockingLayerClaim } from "@/components/layout/shell/blocking-layer-claim";
@@ -48,7 +49,7 @@ import { BlockFloatingToolbar } from "@/editor-core/nodes/shared/block-floating-
 import { ToolbarButton } from "@/editor-core/toolbar/toolbar-button";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
-import { useEpicFileTextQuery } from "@/hooks/files/use-epic-file-text-query";
+import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   SCROLL_MORE_BELOW_FADE_CLASS,
@@ -178,25 +179,48 @@ interface PendingDownload {
   readonly settle: (confirmed: boolean) => void;
 }
 
-function LiveMcpApp(props: {
+interface LiveMcpAppProps {
   readonly id: string;
   readonly app: ToolCallMcpAppStamp;
   readonly fallback: ReactNode;
   readonly epicId: string;
   readonly chatId: string;
   readonly hostId: string;
-}) {
+}
+
+type SnapshotContent =
+  | { readonly kind: "pending" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "text"; readonly text: string };
+
+function snapshotContent(query: {
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly data: EpicReadArtifactObjectResponse | undefined;
+}): SnapshotContent {
+  // A reconnect can fail after the immutable snapshot has already loaded.
+  if (query.data?.kind === "text") {
+    return { kind: "text", text: query.data.text };
+  }
+  if (query.isError) return { kind: "unavailable" };
+  if (query.isPending || query.data?.kind === "downloading") {
+    return { kind: "pending" };
+  }
+  return { kind: "unavailable" };
+}
+
+function LiveMcpApp(props: LiveMcpAppProps) {
   const { id, app, epicId, chatId, hostId } = props;
   const rpc = useMcpAppRpc();
   const openLink = useOpenLink();
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
-  const snapshot = useEpicFileTextQuery(hostId, {
-    epicId,
-    path: app.snapshot.path,
-    sha256: app.snapshot.sha256,
-    via: { chatId, blockId: id },
-  });
+  const snapshot = snapshotContent(
+    useArtifactObjectTextQuery(hostId, {
+      epicId,
+      sha256: app.snapshot.sha256,
+    }),
+  );
 
   const [displayMode, setDisplayMode] = useState<SandboxDisplayMode>("inline");
   const [height, setHeight] = useState(INITIAL_APP_HEIGHT_PX);
@@ -481,7 +505,7 @@ function LiveMcpApp(props: {
   const label = (
     <AppLabelLine server={app.server} tool={app.tool} waking={waking} />
   );
-  if (snapshot.isPending) {
+  if (snapshot.kind === "pending") {
     return (
       <AppFigure app={app}>
         {label}
@@ -495,8 +519,8 @@ function LiveMcpApp(props: {
   }
   // No snapshot to run (not on this host, failed, not HTML): the call reads
   // as the tool call it was.
-  if (snapshot.isError || snapshot.data.kind !== "text") return props.fallback;
-  const html = snapshot.data.text;
+  if (snapshot.kind === "unavailable") return props.fallback;
+  const html = snapshot.text;
   const fullscreen = displayMode === "fullscreen";
 
   return (
@@ -517,8 +541,8 @@ function LiveMcpApp(props: {
             popover="manual"
             aria-label={`${app.server} app`}
             className={cn(
-              // `tc-node-page` lends the agent-page hover bar.
-              "tc-node-page relative inset-auto m-0 block h-auto w-full overflow-visible border-0 bg-transparent p-0 text-inherit",
+              // Shared toolbar visibility for the app surface.
+              "tc-node-app relative inset-auto m-0 block h-auto w-full overflow-visible border-0 bg-transparent p-0 text-inherit",
               // The top layer escapes `#root`'s safe-area reservation, so the
               // surface restores all four insets itself.
               "open:fixed open:inset-0 open:flex open:size-full open:flex-col open:bg-background open:pt-safe-top open:pr-safe-right open:pb-safe-bottom open:pl-safe-left",
@@ -580,7 +604,7 @@ function LiveMcpApp(props: {
             >
               <SandboxFrame
                 key={generation}
-                html={html}
+                source={{ kind: "html", html }}
                 kind="app"
                 title={`${app.server} · ${app.tool}`}
                 appName={app.server}
@@ -595,6 +619,7 @@ function LiveMcpApp(props: {
                 onStatus={handleStatus}
                 onRequestTeardown={() => tearDown(() => setClosed(true))}
                 displayMode={displayMode}
+                pageNavigation={null}
                 onBridge={handleBridge}
                 ref={null}
               />

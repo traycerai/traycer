@@ -8,6 +8,7 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type {
+  EditorId,
   GitChangedFile,
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
@@ -54,6 +55,24 @@ const state = vi.hoisted(() => ({
   assetRequests: [] as Array<FileAssetRequest | null>,
   asset: null as FileAssetState | null,
   hostEntry: null as HostDirectoryEntry | null,
+  /** The install probe's answer; `undefined` is still in flight. */
+  installed: undefined as ReadonlyArray<EditorId> | undefined,
+  notice: vi.fn(),
+}));
+
+// The no-menu open surfaces read the install probe; none of this suite's claims
+// depend on it, so it stays "still in flight".
+vi.mock("@/hooks/editor/use-editor-availability-query", () => ({
+  useEditorAvailability: () => ({ data: state.installed }),
+}));
+
+vi.mock("@/hooks/editor/use-no-editor-installed-notice", () => ({
+  useNoEditorInstalledNotice: () => state.notice,
+}));
+
+// Held closed so a Mac does not turn "no editor found" into a Finder open.
+vi.mock("@/hooks/editor/use-finder-open-availability", () => ({
+  useFinderOpenAvailability: () => false,
 }));
 
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
@@ -453,6 +472,8 @@ beforeEach(() => {
   state.hostEntry = hostEntry("local");
   state.subscribe.mockReset();
   state.open.mockReset();
+  state.installed = undefined;
+  state.notice.mockReset();
   state.openFeedback.mockReset();
   state.refresh.mockReset();
   state.refresh.mockResolvedValue(undefined);
@@ -502,6 +523,55 @@ describe("<GitDiffTile /> image routing", () => {
     expect(state.open).toHaveBeenNthCalledWith(2, {
       editorId: "vscode",
       paths: ["/work/repo/assets/photo.png"],
+    });
+  });
+
+  describe("with no editor installed on this machine", () => {
+    const fallbackAsset: FileAssetState = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be loaded.",
+      missing: false,
+      totalBytes: 42,
+      servedFromCache: false,
+    };
+
+    it("says which editors Traycer can open from the toolbar and sends nothing", () => {
+      state.installed = [];
+      renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+
+      expect(state.notice).toHaveBeenCalledTimes(1);
+      expect(state.open).not.toHaveBeenCalled();
+      expect(state.openFeedback).not.toHaveBeenCalled();
+    });
+
+    it("says the same from the panel's Open Externally and sends nothing", () => {
+      state.installed = [];
+      state.asset = fallbackAsset;
+      renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
+
+      fireEvent.click(
+        screen.getAllByRole("button", { name: "Open Externally" })[0],
+      );
+
+      expect(state.notice).toHaveBeenCalledTimes(1);
+      expect(state.open).not.toHaveBeenCalled();
+    });
+
+    it("sends the installed editor instead of the stored default when one was found", () => {
+      state.installed = ["zed"];
+      renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Open in editor" }));
+
+      expect(state.notice).not.toHaveBeenCalled();
+      expect(state.open).toHaveBeenCalledWith({
+        editorId: "zed",
+        paths: ["/work/repo/assets/photo.png"],
+      });
     });
   });
 

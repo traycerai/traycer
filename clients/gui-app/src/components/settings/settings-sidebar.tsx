@@ -29,13 +29,24 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
+import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
+import { AutomationsHostEntry } from "@/components/hosts/automations-host-entry";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
+import { useHostEnvironmentLabelResolver } from "@/hooks/bots/use-host-environment-labels";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { EnvironmentPicker } from "@/components/settings/environment-picker";
+import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
+import { MoveSheet } from "@/components/settings/move-sheet";
+import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
+import { environmentSectionShown } from "@/lib/settings-environment-pages";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -84,12 +95,19 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // `switchToSettingsSection` walks this list to resolve that digit back to a
   // section.
   const sections = visibleSettingsSections();
+  // A Local row hides the pages only a cloud configuration has.
+  const environmentPick = useEnvironmentPick();
+  // The Guide group leaves the rail once every Getting started step is done.
+  const guideComplete = useGettingStartedGuideIsComplete();
+  const groups = guideComplete
+    ? SETTINGS_SECTION_GROUPS.filter((group) => group.id !== "guide")
+    : SETTINGS_SECTION_GROUPS;
   // The host picker below shows a live dot and a health word per row, so this
   // is a liveness surface and opts into the registry poll. It is also the ONE
   // place in Settings that has to: the picker is mounted for as long as any
   // settings panel is, so a per-panel opt-in would poll on exactly the same
   // schedule while being fifteen times easier to get wrong. Panels that merely
-  // read `useHostScope` for names — Shell, Worktrees, Providers — do not, which
+  // read a host scope for names — Worktrees, and the Personal pages — do not, which
   // is the point: reading the list no longer implies polling it.
   useRegisteredHostsPollLiveness();
   // No row is dimmed by host kind any more. Shell and Diagnostics used to be,
@@ -114,11 +132,17 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           names the section every row belongs to. */}
       {searching
         ? null
-        : SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
+        : groups.map((group, groupIndex) => (
             <Fragment key={group.id}>
               {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
               {group.id !== "guide" ? (
                 <SettingsSidebarGroupHeader label={group.label} />
+              ) : null}
+              {group.id === "personal" ? (
+                <SettingsSidebarEnvironmentPicker
+                  scope={scope}
+                  mode={props.mode}
+                />
               ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker scope={scope} />
@@ -134,7 +158,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 )}
               >
                 {sections.map((section, index) =>
-                  section.group === group.id ? (
+                  section.group === group.id &&
+                  (group.id !== "personal" ||
+                    environmentSectionShown(environmentPick, section.id)) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}
@@ -152,7 +178,44 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           race its open state, and unmounting it while a search runs would tear
           down a dialog that is open. */}
       <AddHostDialog />
+      <MoveSheet />
     </aside>
+  );
+}
+
+/**
+ * The Environment dropdown, between the "Environment" heading and the pages
+ * it governs. The section on screen comes from the mode: the modal names it,
+ * the routed surface has it in its path.
+ */
+function SettingsSidebarEnvironmentPicker(props: {
+  readonly scope: HostScope;
+  readonly mode: SettingsSidebarMode;
+}): ReactNode {
+  return (
+    <div className="mb-1 px-1">
+      {props.mode.kind === "modal" ? (
+        <EnvironmentPicker
+          scope={props.scope}
+          activeSection={props.mode.activeSection}
+        />
+      ) : (
+        <RoutedEnvironmentPicker scope={props.scope} />
+      )}
+    </div>
+  );
+}
+
+function RoutedEnvironmentPicker(props: {
+  readonly scope: HostScope;
+}): ReactNode {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const activeSection =
+    visibleSettingsSections().find((section) =>
+      isSectionPathname(pathname, section.id),
+    )?.id ?? null;
+  return (
+    <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
   );
 }
 
@@ -168,13 +231,24 @@ function SettingsSidebarHostPicker(props: {
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const sandboxesUnavailable = useSandboxControlUnavailableReason();
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
   // improves no badge by dialling — every other host simply projects `unknown`
   // and shows nothing.
-  const updateViewForHost = useFleetUpdateViews(
-    useMemo(() => scope.hosts.map((host) => host.hostId), [scope.hosts]),
+  const hostIds = useMemo(
+    () => scope.hosts.map((host) => host.hostId),
+    [scope.hosts],
+  );
+  const updateViewForHost = useFleetUpdateViews(hostIds);
+  // The environment label (Tracy Bots) causes no connection either: every
+  // row is read from the pool, or, in a build without one, only a row whose
+  // session this client already holds; every other row says nothing.
+  const environmentLabelForHost = useHostEnvironmentLabelResolver(
+    hostIds,
+    scope.hostId,
   );
   // `gap-0.5` matches the section rows below, so the picker reads as the first
   // row of the tier it heads rather than a control docked above it.
@@ -200,7 +274,30 @@ function SettingsSidebarHostPicker(props: {
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
+        composer={null}
+        environmentLabelForHost={environmentLabelForHost}
       />
+      {/* A sandbox is an account's machine: nothing to create signed out,
+          and nothing at all from a build that cannot reach the control
+          plane (staging), which says so instead. */}
+      {signedIn && sandboxesUnavailable !== null ? (
+        <p
+          data-testid="settings-sandboxes-unavailable"
+          className="px-2 py-1 text-ui-xs text-muted-foreground"
+        >
+          {sandboxesUnavailable}
+        </p>
+      ) : null}
+      {/* The Automations host before its row exists; the real row joins the
+          list above once it does. */}
+      {signedIn && sandboxesUnavailable === null ? (
+        <AutomationsHostEntry />
+      ) : null}
+      {signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
+      {/* The host list's balance banner: the two-hour and thirty-minute
+          warnings for the account's awake sandboxes. Nothing for a user with
+          none. */}
+      <SandboxBalanceBanner />
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
           surface can be in, so it never waits to be noticed.

@@ -1,0 +1,138 @@
+import { useState, type ReactNode } from "react";
+import { Plus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
+import type { HostRpcRegistry } from "@/lib/host";
+import { botCreatedByLabel } from "@/lib/bots/bot-member-names";
+import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import {
+  HomeBotRow,
+  type HomeBotHostReach,
+} from "@/components/home/bots/home-bot-row";
+import { CreateBotForm } from "@/components/home/bots/create-bot-form";
+
+/**
+ * One environment's card on Home: its label and kind, its bots, and the
+ * create form that makes a bot INTO it - the environment is the card's, named
+ * explicitly on the create, never a page-wide default.
+ */
+export function HomeBotsGroupCard(props: {
+  readonly group: HomeBotsGroup;
+  readonly hostReach: HomeBotHostReach;
+  /** The machines of this environment the reader may see beyond their own;
+   * `null` while a team environment's list has not answered. */
+  readonly environmentHostIds: ReadonlySet<string> | null;
+  readonly connectableHostIds: ReadonlyArray<string>;
+  readonly environmentBindings: HostEnvironmentBindings;
+  /** The client the band reads through and its host: a team bot's row
+   * names who made it when that host answers `environment.members`. */
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+}): ReactNode {
+  const {
+    group,
+    hostReach,
+    environmentHostIds,
+    connectableHostIds,
+    environmentBindings,
+    client,
+    hostId,
+  } = props;
+  const [creating, setCreating] = useState(false);
+  const isTeam = group.ownerKind === "organization";
+  // Only a team bot has another member to name; a personal one asks nothing.
+  const membersSupported =
+    useHostMethodSupport(hostId, "environment.members") === true;
+  const resolveMember = useEnvironmentMembers(
+    client,
+    isTeam ? group.environmentId : null,
+    membersSupported && isTeam,
+  );
+  const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
+  // Until a new team's GitHub set holds a repository, no bot is added here
+  // and none is opened: the onboarding card in the channel sidebar leads.
+  const { gate } = useTeamOnboardingGate({
+    client,
+    hostId,
+    environmentId: group.environmentId,
+    isTeam,
+    botCount: group.bots.length,
+  });
+  const canCreate = group.canCreate && gate !== "locked";
+
+  return (
+    <section
+      data-testid="home-bots-group"
+      data-environment-id={group.environmentId}
+      aria-label={group.label}
+      className="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3"
+    >
+      <header className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="truncate font-medium text-ui-sm text-foreground">
+            {group.label}
+          </h3>
+          {group.ownerKind === null ? null : (
+            <Badge variant="muted" size="xs">
+              {group.ownerKind === "organization" ? "Team" : "Personal"}
+            </Badge>
+          )}
+        </div>
+        {canCreate ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-expanded={creating}
+            data-testid="home-bots-create-toggle"
+            onClick={() => setCreating((open) => !open)}
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+            New bot
+          </Button>
+        ) : null}
+      </header>
+      {creating && canCreate ? (
+        <CreateBotForm
+          environmentId={group.environmentId}
+          environmentLabel={group.label}
+          connectableHostIds={connectableHostIds}
+          environmentBindings={environmentBindings}
+          onDone={() => setCreating(false)}
+        />
+      ) : null}
+      {group.bots.length === 0 ? (
+        <p className="px-1 py-2 text-ui-xs text-muted-foreground">
+          No bots here yet.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {group.bots.map((bot) => (
+            <li key={bot.botId}>
+              <HomeBotRow
+                bot={bot}
+                hostReach={hostReach}
+                environmentHostIds={environmentHostIds}
+                environmentOwnerKind={group.ownerKind}
+                isMain={group.mainBotId === bot.botId}
+                entryLocked={gate === "locked"}
+                createdBy={botCreatedByLabel({
+                  createdByUserId: bot.createdByUserId,
+                  viewerUserId,
+                  isTeamBot: isTeam,
+                  resolveMember,
+                })}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}

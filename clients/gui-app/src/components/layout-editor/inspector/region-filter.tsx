@@ -12,6 +12,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { mergeRefs } from "@/lib/merge-refs";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
@@ -49,7 +50,7 @@ export function RegionFilter(props: RegionFilterProps): ReactNode {
   const fieldRef = useMemo(() => mergeRefs(ref, inputRef), [ref]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "ArrowDown") {
+    if (listNavigationKey(event) === "ArrowDown") {
       event.preventDefault();
       props.onArrowDown();
     } else if (event.key === "Enter") {

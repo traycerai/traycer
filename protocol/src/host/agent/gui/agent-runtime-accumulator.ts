@@ -985,7 +985,8 @@ export function accumulateEvent(
           type: "tool_call",
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          artifact: null,
+          agentMessageDelivery: null,
           mcpApp: null,
           blockId: event.blockId,
           status: "streaming",
@@ -1025,9 +1026,13 @@ export function accumulateEvent(
           // that carried it, and a re-completion without one keeps it.
           agentMessageReceipt:
             event.agentMessageReceipt ?? existing.agentMessageReceipt,
-          // The host's page / MCP App stamps (`chat.subscribe@1.22`): identity
+          // Where a cross-host send stands (`chat.subscribe@1.29`). A later
+          // event that carries it moves the state; one without it keeps it.
+          agentMessageDelivery:
+            event.agentMessageDelivery ?? existing.agentMessageDelivery,
+          // The host's artifact and MCP App stamps: identity
           // the completion established, kept by a re-completion without them.
-          page: event.page ?? existing.page,
+          artifact: event.artifact ?? existing.artifact,
           mcpApp: event.mcpApp ?? existing.mcpApp,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
@@ -1062,7 +1067,8 @@ export function accumulateEvent(
           agentMessageSend: event.agentMessageSend,
           managedCommand: event.managedCommand ?? null,
           agentMessageReceipt: event.agentMessageReceipt ?? null,
-          page: event.page ?? null,
+          artifact: event.artifact ?? null,
+          agentMessageDelivery: event.agentMessageDelivery ?? null,
           mcpApp: event.mcpApp ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
@@ -1102,7 +1108,8 @@ export function accumulateEvent(
           type: "tool_call",
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          artifact: null,
+          agentMessageDelivery: null,
           mcpApp: null,
           blockId: event.blockId,
           status: "errored",
@@ -1429,6 +1436,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           status: "streaming" as const,
+          notApplied: false,
           trigger: event.trigger ?? existing.trigger,
           preTokens: event.preTokens ?? existing.preTokens,
           summary: event.summary ?? existing.summary,
@@ -1449,6 +1457,7 @@ export function accumulateEvent(
           durationMs: null,
           summary: nullableString(event.summary),
           error: null,
+          notApplied: false,
         },
       ];
     }
@@ -1459,6 +1468,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           status: "completed" as const,
+          notApplied: false,
           trigger: event.trigger ?? existing.trigger,
           preTokens: event.preTokens ?? existing.preTokens,
           postTokens: event.postTokens ?? existing.postTokens,
@@ -1481,6 +1491,7 @@ export function accumulateEvent(
           durationMs: nullableNumber(event.durationMs),
           summary: nullableString(event.summary),
           error: null,
+          notApplied: false,
         },
       ];
     }
@@ -1494,6 +1505,7 @@ export function accumulateEvent(
           trigger: event.trigger ?? existing.trigger,
           preTokens: event.preTokens ?? existing.preTokens,
           error: event.error,
+          notApplied: event.notApplied ?? false,
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -1511,6 +1523,7 @@ export function accumulateEvent(
           durationMs: null,
           summary: null,
           error: event.error,
+          notApplied: event.notApplied ?? false,
         },
       ];
     }

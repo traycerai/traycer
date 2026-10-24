@@ -1,3 +1,7 @@
+import {
+  SANDBOX_ARTIFACT_SPAN_BYTES,
+  type SandboxArtifactReply,
+} from "../../ipc-contracts/sandbox-artifact-types";
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import { log } from "../app/logger";
 import type {
@@ -35,6 +39,17 @@ export {
 } from "../../ipc-contracts/window-state-parsers";
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
 import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import {
+  sandboxPatchRequestSchema,
+  type SandboxAutomationOpenTarget,
+  type SandboxCreateRequest,
+  type SandboxLifecycleVerb,
+  type SandboxPatchRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import {
+  SECRET_REQUEST_DECISIONS,
+  type SecretRequestDecision,
+} from "@traycer/protocol/host/sandbox-secrets";
 
 export function assertString(
   value: unknown,
@@ -42,6 +57,15 @@ export function assertString(
 ): asserts value is string {
   if (typeof value !== "string") {
     throw new Error(`${context} requires a string argument`);
+  }
+}
+
+export function assertNullableString(
+  value: unknown,
+  context: string,
+): asserts value is string | null {
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`${context} requires a string or null argument`);
   }
 }
 
@@ -496,6 +520,219 @@ export function parseUpdateHostVersionPolicyInput(
   return { updatePolicy, desiredVersion, force };
 }
 
+/**
+ * Parses the renderer-supplied `POST /api/sandboxes` body. Unlike the version
+ * policy above there is no safe degrade for a malformed create - a guessed
+ * shape would provision a machine nobody asked for - so a bad value throws,
+ * which the invoke surfaces to the renderer as a rejected call.
+ */
+export function parseSandboxCreateRequest(
+  value: unknown,
+): SandboxCreateRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("createSandbox.request must be an object");
+  }
+  const obj = value as Record<string, unknown>;
+  const os = obj.os;
+  if (os !== "linux" && os !== "windows") {
+    throw new Error('createSandbox.request.os must be "linux" or "windows"');
+  }
+  const burst = obj.burst;
+  if (typeof burst !== "boolean") {
+    throw new Error("createSandbox.request.burst must be a boolean");
+  }
+  const cpus = obj.cpus;
+  if (typeof cpus !== "number" || !(cpus > 0)) {
+    throw new Error("createSandbox.request.cpus must be a positive number");
+  }
+  return {
+    os,
+    cpus,
+    memoryMb: requirePositiveInteger(
+      obj.memoryMb,
+      "createSandbox.request.memoryMb",
+    ),
+    diskMb: nullOr(obj.diskMb, (v) =>
+      requirePositiveInteger(v, "createSandbox.request.diskMb"),
+    ),
+    region: nullOr(obj.region, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.region"),
+    ),
+    displayName: requireNonEmptyString(
+      obj.displayName,
+      "createSandbox.request.displayName",
+    ),
+    idleMinutes: nullOr(obj.idleMinutes, (v) =>
+      requirePositiveInteger(v, "createSandbox.request.idleMinutes"),
+    ),
+    burst,
+    createdByHostId: nullOr(obj.createdByHostId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByHostId"),
+    ),
+    createdByAgentId: nullOr(obj.createdByAgentId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByAgentId"),
+    ),
+    environmentId: nullOr(obj.environmentId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.environmentId"),
+    ),
+    // `0` is never, as on a patch; `null` is the configuration's default.
+    destroyAfterRestingMinutes: nullOr(obj.destroyAfterRestingMinutes, (v) =>
+      requireNonNegativeInteger(
+        v,
+        "createSandbox.request.destroyAfterRestingMinutes",
+      ),
+    ),
+    createdByTaskId: nullOr(obj.createdByTaskId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByTaskId"),
+    ),
+    clientRequestId: nullOr(obj.clientRequestId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.clientRequestId"),
+    ),
+  };
+}
+
+/**
+ * Parses the renderer-supplied `PATCH /api/sandboxes/:id` body. Each key must
+ * be present: `null` leaves that setting unchanged, so a missing key is a
+ * renderer bug, not a default. `destroyAfterRestingMinutes` takes `0` for
+ * never.
+ */
+export function parseSandboxPatchRequest(value: unknown): SandboxPatchRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("patchSandbox.request must be an object");
+  }
+  const obj = value as Record<string, unknown>;
+  const request: SandboxPatchRequest = {
+    displayName: nullOr(obj.displayName, (v) =>
+      requireNonEmptyString(v, "patchSandbox.request.displayName"),
+    ),
+    idleMinutes: nullOr(obj.idleMinutes, (v) =>
+      requirePositiveInteger(v, "patchSandbox.request.idleMinutes"),
+    ),
+    destroyAfterRestingMinutes: nullOr(obj.destroyAfterRestingMinutes, (v) =>
+      requireNonNegativeInteger(
+        v,
+        "patchSandbox.request.destroyAfterRestingMinutes",
+      ),
+    ),
+  };
+  // The protocol's bounds too (an idle floor, the name's length), so this
+  // guard cannot drift from the contract it forwards.
+  const checked = sandboxPatchRequestSchema.safeParse(request);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `patchSandbox.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return request;
+}
+
+/**
+ * A required id argument (a team id, an environment id): a non-empty
+ * string, or the call is refused.
+ */
+export function parseRequiredId(value: unknown, name: string): string {
+  return requireNonEmptyString(value, name);
+}
+
+/**
+ * The environment a `getSandboxAutomation` reads: `null` for the person's own
+ * Automations host, otherwise a non-empty id (an empty one would send
+ * `?environmentId=` and read no environment at all).
+ */
+export function parseSandboxAutomationEnvironmentId(
+  value: unknown,
+): string | null {
+  return nullOr(value, (v) =>
+    requireNonEmptyString(v, "getSandboxAutomation.environmentId"),
+  );
+}
+
+/**
+ * Parses the renderer-supplied Automations open target: `null` (the
+ * caller's own host, no body) or a team environment and the pod's slot. A
+ * malformed target throws, like a malformed create: a guessed one would open
+ * another pod than the one picked.
+ */
+export function parseSandboxAutomationOpenTarget(
+  value: unknown,
+): SandboxAutomationOpenTarget | null {
+  if (value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("openSandboxAutomation.target must be an object or null");
+  }
+  const obj = value as Record<string, unknown>;
+  return {
+    environmentId: requireNonEmptyString(
+      obj.environmentId,
+      "openSandboxAutomation.target.environmentId",
+    ),
+    ordinal: nullOr(obj.ordinal, (v) => {
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        throw new Error(
+          "openSandboxAutomation.target.ordinal must be a non-negative integer",
+        );
+      }
+      return v;
+    }),
+  };
+}
+
+/** `null` stays `null` (the server's default); anything else must parse. */
+function nullOr<T>(value: unknown, parse: (value: unknown) => T): T | null {
+  return value === null ? null : parse(value);
+}
+
+function requireNonEmptyString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function requireNonNegativeInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+export function parseSecretRequestDecision(
+  value: unknown,
+): SecretRequestDecision {
+  const decision = SECRET_REQUEST_DECISIONS.find((known) => known === value);
+  if (decision === undefined) {
+    throw new Error(
+      'decideSecretRequest.decision must be "approve", "approve_default" or "decline"',
+    );
+  }
+  return decision;
+}
+
+export function parseSandboxLifecycleVerb(
+  value: unknown,
+): SandboxLifecycleVerb {
+  if (
+    value === "suspend" ||
+    value === "resume" ||
+    value === "stop" ||
+    value === "start"
+  ) {
+    return value;
+  }
+  throw new Error(
+    'runSandboxVerb.verb must be "suspend", "resume", "stop" or "start"',
+  );
+}
+
 export function readSenderWebContentsId(
   event: IpcMainInvokeEvent | IpcMainEvent,
 ): number | null {
@@ -529,4 +766,62 @@ export function isMruFallbackMenuCommand(command: MenuCommandId): boolean {
     command === "host.installUpdate" ||
     command === "host.restart"
   );
+}
+
+export function parseSandboxArtifactMountId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z0-9]+$/.test(value)) {
+    throw new Error("Invalid artifact mount id");
+  }
+  return value;
+}
+
+export function parseSandboxArtifactReply(
+  value: unknown,
+): SandboxArtifactReply | null {
+  if (value === null || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.requestId !== "string" ||
+    record.requestId.length === 0 ||
+    record.requestId.length > 128
+  )
+    return null;
+  if (record.kind === "unavailable") {
+    if (
+      (record.status !== 404 && record.status !== 503) ||
+      typeof record.reason !== "string" ||
+      record.reason.length > 256
+    )
+      return null;
+    return {
+      requestId: record.requestId,
+      kind: "unavailable",
+      status: record.status,
+      reason: record.reason,
+    };
+  }
+  if (
+    record.kind !== "bytes" ||
+    !(record.bytes instanceof Uint8Array) ||
+    record.bytes.byteLength > SANDBOX_ARTIFACT_SPAN_BYTES + 1024 ||
+    typeof record.offset !== "number" ||
+    !Number.isSafeInteger(record.offset) ||
+    record.offset < 0 ||
+    typeof record.totalBytes !== "number" ||
+    !Number.isSafeInteger(record.totalBytes) ||
+    record.totalBytes < 0 ||
+    typeof record.mediaType !== "string" ||
+    record.mediaType.length === 0 ||
+    record.mediaType.length > 256 ||
+    /[^\x20-\x7e]/.test(record.mediaType)
+  )
+    return null;
+  return {
+    requestId: record.requestId,
+    kind: "bytes",
+    bytes: record.bytes,
+    offset: record.offset,
+    totalBytes: record.totalBytes,
+    mediaType: record.mediaType,
+  };
 }

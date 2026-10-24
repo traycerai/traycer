@@ -156,7 +156,7 @@ describe("agent stop command function", () => {
 
 describe("agent archive command function", () => {
   it("sends archived: true by default and reports the update", async () => {
-    rpcMock.mockResolvedValue({ updated: true });
+    rpcMock.mockResolvedValue({ updated: true, outcome: "applied" });
 
     const result = await buildAgentArchiveCommand({
       epicId: "epic_1",
@@ -169,13 +169,46 @@ describe("agent archive command function", () => {
       chatId: "agent_1",
       archived: true,
     });
-    expect(result.data).toEqual({ updated: true });
+    expect(result.data).toEqual({ updated: true, outcome: "applied" });
     expect(result.human).toBe("agent_1 archived");
     expect(result.exitCode).toBe(0);
   });
 
+  it("says the agent's host finishes a requested archive when it is back", async () => {
+    rpcMock.mockResolvedValue({ updated: true, outcome: "requested" });
+
+    const result = await buildAgentArchiveCommand({
+      epicId: "epic_1",
+      agentId: "agent_1",
+      unarchive: false,
+    })(makeCtx());
+
+    expect(result.data).toEqual({ updated: true, outcome: "requested" });
+    expect(result.human).toBe(
+      "agent_1 archived; its host will finish when it is back",
+    );
+  });
+
+  // A requested write was accepted for the record's host to finish: the cloud
+  // row's flag already holding the value does not make that "no change", and
+  // a missing record is RECORD_NOT_FOUND, never `updated: false`.
+  it("says a requested archive is with the agent's host even when the cloud row already held it", async () => {
+    rpcMock.mockResolvedValue({ updated: false, outcome: "requested" });
+
+    const result = await buildAgentArchiveCommand({
+      epicId: "epic_1",
+      agentId: "agent_1",
+      unarchive: true,
+    })(makeCtx());
+
+    expect(result.data).toEqual({ updated: false, outcome: "requested" });
+    expect(result.human).toBe(
+      "agent_1 unarchived; its host will finish when it is back",
+    );
+  });
+
   it("sends archived: false with --unarchive", async () => {
-    rpcMock.mockResolvedValue({ updated: true });
+    rpcMock.mockResolvedValue({ updated: true, outcome: "applied" });
 
     const result = await buildAgentArchiveCommand({
       epicId: "epic_1",
@@ -195,7 +228,7 @@ describe("agent archive command function", () => {
   // noncommittal rather than claiming success for a mistyped id (PR #1076
   // review).
   it("reports updated:false noncommittally, without asserting the record exists", async () => {
-    rpcMock.mockResolvedValue({ updated: false });
+    rpcMock.mockResolvedValue({ updated: false, outcome: "applied" });
 
     const archived = await buildAgentArchiveCommand({
       epicId: "epic_1",
@@ -206,7 +239,7 @@ describe("agent archive command function", () => {
       "agent_1: no change (already archived, or no such record)",
     );
 
-    rpcMock.mockResolvedValue({ updated: false });
+    rpcMock.mockResolvedValue({ updated: false, outcome: "applied" });
     const unarchived = await buildAgentArchiveCommand({
       epicId: "epic_1",
       agentId: "agent_1",
@@ -386,7 +419,7 @@ describe("agent archive command function", () => {
 
   it("resolves epicId from $TRAYCER_EPIC_ID when the flag is omitted", async () => {
     process.env.TRAYCER_EPIC_ID = "epic-env";
-    rpcMock.mockResolvedValue({ updated: true });
+    rpcMock.mockResolvedValue({ updated: true, outcome: "applied" });
 
     await buildAgentArchiveCommand({
       epicId: null,

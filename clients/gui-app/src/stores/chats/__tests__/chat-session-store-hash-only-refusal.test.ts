@@ -400,6 +400,24 @@ function emitOwnerSnapshot(
   });
 }
 
+/**
+ * The host's genuine terminal evidence: idle, no turn, nothing it would queue.
+ * An accepted ack plus the saved row do not settle the turn a send owns; this
+ * frame does.
+ */
+function emitIdleHostEvidence(callbacks: ChatStreamCallbacks): void {
+  callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    runStatus: "idle",
+    activeTurn: null,
+    turnInProgress: false,
+    sendWouldQueue: false,
+  });
+}
+
 /** Seeds a real, locally-stored image and a confirmed upload for it, and
  * returns its digest. */
 async function seedConfirmedImage(): Promise<string> {
@@ -1426,8 +1444,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
         sessionAnchor: null,
       },
     });
-    // Positive control: once the recovery AND its retry have both settled,
-    // the same otherwise-idle chat reads as settled again.
+    // The ack and the saved row alone do not settle the turn the retry owns.
+    expect(registry.unsettledWorkForEpic(EPIC_ID).unsettled).toBe(true);
+    // Positive control: once the recovery AND its retry have both settled and
+    // the host reports idle, the same otherwise-idle chat reads as settled.
+    emitIdleHostEvidence(harness.callbacks());
     expect(registry.unsettledWorkForEpic(EPIC_ID).unsettled).toBe(false);
   });
 
@@ -1661,6 +1682,14 @@ describe("chat session store - hash-only refusal (T5)", () => {
       origin: "https://example.com",
       pageUrl: "https://example.com/",
       pageTitle: "Example",
+      source: {
+        kind: "browser",
+        tabId: "tab-1",
+        sessionId: "session-1",
+        origin: "https://example.com",
+        pageUrl: "https://example.com/",
+        pageTitle: "Example",
+      },
       capturedAt: 1_700_000_000_000,
       comment: "make it pop",
       counts: { elements: 0, regions: 0, strokes: 0 },
@@ -2071,6 +2100,24 @@ describe("chat session store - hash-only refusal (T5)", () => {
     registry.acquire(targetC, () => chatCHandle);
     registry.release(chatCEpicId, chatCChatId, HOST_ID);
 
+    // The saved row alone leaves the send's turn owned: A is still retained.
+    expect(registry.peek(EPIC_ID, CHAT_ID, HOST_ID)).not.toBeNull();
+
+    emitIdleHostEvidence(chatA.callbacks());
+    const chatDEpicId = "epic-rr1-2-d";
+    const chatDChatId = "chat-rr1-2-d";
+    const chatDHandle = createIdleChatHandle(chatDEpicId, chatDChatId, HOST_ID);
+    registry.acquire(
+      {
+        epicId: chatDEpicId,
+        chatId: chatDChatId,
+        hostId: HOST_ID,
+        scopeKey: "rr1-2",
+      },
+      () => chatDHandle,
+    );
+    registry.release(chatDEpicId, chatDChatId, HOST_ID);
+
     expect(registry.peek(EPIC_ID, CHAT_ID, HOST_ID)).toBeNull();
   });
 
@@ -2260,8 +2307,13 @@ describe("chat session store - hash-only refusal (T5)", () => {
         },
       });
 
-      // Positive control: nothing left to hold - the next idle check
-      // disposes.
+      // The saved row alone leaves the send's turn owned: still held.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(registry.peek(EPIC_ID, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      // Positive control: the host's idle evidence leaves nothing to hold -
+      // the next idle check disposes.
+      emitIdleHostEvidence(harness.callbacks());
       await vi.advanceTimersByTimeAsync(10_000);
       expect(registry.peek(EPIC_ID, CHAT_ID, HOST_ID)).toBeNull();
     } finally {
@@ -2344,6 +2396,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
           sessionAnchor: null,
         },
       });
+      // The saved row alone leaves the send's turn owned: still held.
+      vi.advanceTimersByTime(5_000);
+      expect(registry.peek(EPIC_ID, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      emitIdleHostEvidence(harness.callbacks());
       vi.advanceTimersByTime(5_000);
       expect(registry.peek(EPIC_ID, CHAT_ID, HOST_ID)).toBeNull();
     } finally {
@@ -2955,6 +3012,14 @@ describe("chat session store - hash-only refusal (T5)", () => {
       origin: "https://example.com",
       pageUrl: "https://example.com/",
       pageTitle: "Example",
+      source: {
+        kind: "browser",
+        tabId: "tab-1",
+        sessionId: "session-1",
+        origin: "https://example.com",
+        pageUrl: "https://example.com/",
+        pageTitle: "Example",
+      },
       capturedAt: 1_700_000_000_000,
       comment: "make it pop",
       counts: { elements: 0, regions: 0, strokes: 0 },

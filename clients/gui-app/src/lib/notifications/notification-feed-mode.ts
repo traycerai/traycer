@@ -2,6 +2,7 @@ import { use, useMemo, useState } from "react";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
   useHostNegotiatedMethodVersions,
   type NegotiatedMethodVersion,
@@ -259,19 +260,43 @@ export function useHeldNotificationFeedMode(
  * `hostId` names the host whose unary manifest to read and must be the SAME
  * host `client` is bound to - passing the app-wide host here would gate a
  * remote host's lanes on the local host's capabilities.
+ *
+ * `cloudFeedClient` is the client the cloud feed is opened on: the server
+ * pool's in a build that has one (the feed is a pool-only family), else
+ * `client` itself. Only the cloud projection is read from it; the local
+ * projection and the four partitioned unary methods are the serving host's.
+ *
+ * `cachedCloudFeedVersion` is the version the cloud feed's serving tier had
+ * negotiated when the replica tier last stored its feed. While that tier's
+ * client reports `unknown` - a cold start with the pool unreachable, before
+ * any handshake - it answers the CLOUD-PROJECTION floor in place of the live
+ * read, so the replica's cached feed can paint. Only that floor: the five
+ * host floors are always the serving host's live negotiation, so no
+ * partition selector reaches a host that has not negotiated it. `unsupported`
+ * is never overridden, and the first handshake re-decides.
  */
 export function useNotificationFeedModeFor(
   client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  cloudFeedClient: IHostStreamClient<HostStreamRpcRegistry> | null,
   hostId: string | null,
+  cachedCloudFeedVersion: SchemaVersion | null,
 ): NotificationFeedMode {
-  const cloudFeedSupport = useStreamMethodSupportFor(
-    client,
+  const liveCloudFeedSupport = useStreamMethodSupportFor(
+    cloudFeedClient,
     "host.notifications.cloudFeed.subscribe",
   );
-  const cloudFeedVersion = useStreamMethodSchemaVersionFor(
-    client,
+  const liveCloudFeedVersion = useStreamMethodSchemaVersionFor(
+    cloudFeedClient,
     "host.notifications.cloudFeed.subscribe",
   );
+  const answeredFromCache =
+    liveCloudFeedSupport === "unknown" && cachedCloudFeedVersion !== null;
+  const cloudFeedSupport = answeredFromCache
+    ? "supported"
+    : liveCloudFeedSupport;
+  const cloudFeedVersion = answeredFromCache
+    ? cachedCloudFeedVersion
+    : liveCloudFeedVersion;
   const localFeedVersion = useStreamMethodSchemaVersionFor(
     client,
     "host.notifications.feed.subscribe",

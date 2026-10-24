@@ -1,3 +1,4 @@
+import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, RefreshCwIcon } from "lucide-react";
 import {
@@ -12,6 +13,7 @@ import {
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
   EpicsListNoRows,
+  EpicsListReducedCoverage,
   EpicsListShowMore,
 } from "@/components/epics/epics-list-shared";
 import { MobileHistoryRow } from "@/components/epics/mobile/mobile-history-row";
@@ -50,6 +52,7 @@ export interface MobileHistoryListProps {
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending: boolean;
   readonly onLoadMore: () => void;
   readonly onOpenItem: (item: HistoryItem) => void;
   readonly onRefresh: () => Promise<unknown>;
@@ -95,6 +98,7 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
     pendingSetPinnedEpicIds,
     hasNextPage,
     isFetchingNextPage,
+    isBulkSelectionPending,
     onLoadMore,
     onOpenItem,
     onRefresh,
@@ -178,6 +182,7 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
           pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
           hasNextPage={hasNextPage}
           isFetchingNextPage={isFetchingNextPage}
+          isBulkSelectionPending={isBulkSelectionPending}
           onLoadMore={onLoadMore}
           onOpenItem={onOpenItem}
         />
@@ -254,6 +259,7 @@ interface MobileHistoryListBodyProps {
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending: boolean;
   readonly onLoadMore: () => void;
   readonly onOpenItem: (item: HistoryItem) => void;
 }
@@ -285,12 +291,16 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
         onRetry={props.onRetry}
         hasNextPage={props.hasNextPage}
         isFetchingNextPage={props.isFetchingNextPage}
+        isBulkSelectionPending={props.isBulkSelectionPending}
         onLoadMore={props.onLoadMore}
       />
     );
   }
   return (
     <>
+      {historyCoverageIsReduced(props.completeness) ? (
+        <EpicsListReducedCoverage />
+      ) : null}
       <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
         {props.items.map((item) => (
           <MobileHistoryRow
@@ -312,6 +322,7 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
       <EpicsListShowMore
         hasNextPage={props.hasNextPage}
         isFetchingNextPage={props.isFetchingNextPage}
+        isBulkSelectionPending={props.isBulkSelectionPending}
         onLoadMore={props.onLoadMore}
       />
     </>

@@ -36,6 +36,7 @@ import {
   defaultHostRpcRequestId,
   type RuntimeHostMessengerBinding,
 } from "@/lib/host/host-messenger";
+import { subscribeTaskHostRefusalReset } from "@/hooks/epic/use-task-hosts-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { acquireRendererSelectionKernel } from "@/lib/host/renderer-selection-kernel";
 import {
@@ -48,6 +49,7 @@ import { buildRuntimeChangeScopeHandler } from "@/lib/host/runtime-change-scope"
 import { appLogger } from "@/lib/logger";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { authQueryKeys } from "@/lib/query-keys";
+import { refreshHostListOnSandboxFrozen } from "@/lib/sandboxes/sandbox-frozen-terminal";
 import {
   runnerHostQueryScopeId,
   runnerQueryKeys,
@@ -327,6 +329,19 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
                 }
                 runtime.hostClient.invalidateHostScopeUnannounced(hostId);
               },
+              // A frozen sandbox's refused attach grant ends its session on
+              // `SANDBOX_FROZEN`. The frozen tile frame and picker row read
+              // the host list, so re-read it (the directory and the picker's
+              // registry query) instead of leaving the host looking awake.
+              onRemoteSessionTerminal: (_hostId, fatal) => {
+                refreshHostListOnSandboxFrozen(fatal, {
+                  refreshDirectory: () => directory.refresh(),
+                  invalidateRegisteredHosts: () =>
+                    queryClient.invalidateQueries({
+                      queryKey: authQueryKeys.registeredHostsAll(),
+                    }),
+                });
+              },
             })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as
@@ -347,7 +362,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth),
+        createAuthAwareMessenger(rawMessenger, auth, "always"),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 
@@ -361,6 +376,10 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         authorityRegistry,
         schedulingPolicy,
         requestCoordinator,
+        // The selection authority's derived host: the only host the person's
+        // input devices are served by (`selected-host` in the routing table).
+        selectedHostId: () =>
+          useSelectionAuthorityStore.getState().effectiveHostId,
         // The window's connection-registry wiring (connection-registry §1).
         // Both halves are READ PORTS: the registry keeps no copy of a row or
         // a lease, so there is still exactly one directory and exactly one
@@ -415,6 +434,12 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           sweepRetiredSessions: sweepRetiredContextSessions,
         }),
       );
+      // A task-host refusal is terminal, so the verdict's return is what
+      // clears it; see `subscribeTaskHostRefusalReset`.
+      const taskHostRefusalResetSubscription = subscribeTaskHostRefusalReset({
+        requestContextProvider,
+        queryClient,
+      });
       // R-1: a remote host whose public key rotated under its OWN id was
       // rebuilt, so everything cached for that id describes a machine that no
       // longer exists. `bind()` swept it as a by-product of pointing at the
@@ -440,6 +465,11 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       const rotationSweepSubscription = directory.onChange(
         sweepRotatedHostScopes,
       );
+      // A frozen sandbox's terminal verdict ends once the list shows it
+      // thawed (a top-up), not when its TTL runs out.
+      const thawedVerdictSubscription = directory.onChange(() => {
+        runtimeMessenger?.hostListChanged();
+      });
       void (async () => {
         let phase = "auth.start";
         try {
@@ -514,7 +544,9 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           selectionBridge?.dispose();
           runtimeMessenger?.dispose();
           runtimeTransportUnsubscribe();
+          taskHostRefusalResetSubscription();
           rotationSweepSubscription.dispose();
+          thawedVerdictSubscription.dispose();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
@@ -539,7 +571,9 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         // sessions reporting into a disposed kernel across any remount.
         runtimeMessenger?.dispose();
         runtimeTransportUnsubscribe();
+        taskHostRefusalResetSubscription();
         rotationSweepSubscription.dispose();
+        thawedVerdictSubscription.dispose();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();

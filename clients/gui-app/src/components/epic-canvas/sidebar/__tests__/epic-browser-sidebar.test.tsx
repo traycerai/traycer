@@ -78,8 +78,8 @@ const browserHostProviderState = vi.hoisted(() => ({
 
 const browserHostOptionsState = vi.hoisted(() => ({
   hosts: [
-    { hostId: "host-1", name: "Home Mac", connectable: true },
-    { hostId: "host-2", name: "Work Mac", connectable: true },
+    { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+    { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
   ],
   isLoading: false,
   listsFailed: false,
@@ -98,6 +98,13 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
     latchOnFirstUse: () => undefined,
   }),
   useSurfaceHostClient: () => null,
+}));
+
+// The Simulators group under the browser rows reads its own host stream and
+// has its own suite (`epic-simulator-sidebar.test.tsx`); this one is about the
+// browser rows, so the group renders nothing here.
+vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
+  SimulatorsSidebarGroup: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -310,8 +317,8 @@ describe("BrowsersPanelBody", () => {
     browserHostPinState.setSelection.mockClear();
     browserHostProviderState.hostIds = [];
     browserHostOptionsState.hosts = [
-      { hostId: "host-1", name: "Home Mac", connectable: true },
-      { hostId: "host-2", name: "Work Mac", connectable: true },
+      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+      { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
     ];
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;
@@ -1533,8 +1540,8 @@ describe("BrowsersPanelActions", () => {
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
     browserHostOptionsState.hosts = [
-      { hostId: "host-1", name: "Home Mac", connectable: true },
-      { hostId: "host-2", name: "Work Mac", connectable: true },
+      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+      { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
     ];
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;

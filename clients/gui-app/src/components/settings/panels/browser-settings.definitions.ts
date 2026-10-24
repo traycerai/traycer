@@ -5,8 +5,7 @@ export const BROWSER = defineSettingsSection("browser", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Browser",
-    description:
-      "Search, agent access, tab placement, and saved website sessions.",
+    description: "Search, tab placement, and saved website sessions.",
     keywords: [
       "cookies",
       "logins",
@@ -54,9 +53,9 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     keywords: ["canvas", "pip", "picture in picture", "split", "pane"],
   },
-  // What agents may do with the browser. Agent-opened tabs is drawn in every
-  // shell, so the group is never empty; the two rows around it are gated on
-  // the HOST and on DATA (below), which no shell can promise.
+  // How agent-opened tabs and detected origins show up. Agent-opened tabs is
+  // drawn in every shell, so the group is never empty; the row after it is
+  // gated on DATA (below), which no shell can promise.
   agents: {
     kind: "group",
     search: { anchor: "browser-agents" },
@@ -66,35 +65,9 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     keywords: ["agent", "popup", "browser", "surface"],
   },
-  // Gated on the HOST: the row renders once the active host advertises
-  // `config.browser.get` and `config.browser.set`, so it folds into the page.
-  // Its description names the active host, so the rendered sentence is a
-  // `status` and this static copy is what search reads.
-  agentBrowserAccess: {
-    kind: "row",
-    group: "agents",
-    search: { contributesTo: "page" },
-    label: "Let agents use the in-app browser",
-    description:
-      "Agents get Traycer's browser as a tool and are told to use it for web pages. Turn off to let them use their own browser tooling.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "browser", "playwright", "mcp"],
-  },
-  // Gated on the HOST like agent access, beside it because both decide which
-  // tools an agent is launched with.
-  agentPages: {
-    kind: "row",
-    group: "agents",
-    search: { contributesTo: "page" },
-    label: "Let agents show pages in chat",
-    description:
-      "Agents can build a page - a chart, a table, a mockup - and show it in the reply. Applies to agents started after you change it.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "page", "chart", "visualization", "html"],
-  },
-  // Beside agent access, not beside "Open browser tabs": the answer is whether
-  // the tile appears at all, not where it lands, and next to the placement row
-  // it read as an override of it.
+  // Not beside "Open browser tabs": the answer is whether the tile appears at
+  // all, not where it lands, and next to the placement row it read as an
+  // override of it.
   agentOpenedTabs: {
     kind: "row",
     group: "agents",

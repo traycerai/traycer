@@ -137,3 +137,45 @@ describe("createAppQueryClient failure logging", () => {
     expect(described.requestId).toBe("req-8821");
   });
 });
+
+// A service in a key segment scopes the query to that instance. The iOS shell
+// crashed on launch when one (`AuthService` -> runner host -> a status-bar tap
+// holding `window`) became cyclic under TanStack's structural hash.
+describe("createAppQueryClient query key hashing", () => {
+  class Service {
+    readonly self: Service = this;
+    bearer = "a";
+  }
+
+  it("hashes a cyclic service by instance, not by its fields", async () => {
+    const client = createAppQueryClient();
+    const service = new Service();
+    await client.fetchQuery({
+      queryKey: ["svc", service],
+      queryFn: () => Promise.resolve(1),
+    });
+    service.bearer = "b";
+    expect(client.getQueryData(["svc", service])).toBe(1);
+    expect(client.getQueryData(["svc", new Service()])).toBeUndefined();
+  });
+
+  it("still hashes plain objects by value, key order ignored", async () => {
+    const client = createAppQueryClient();
+    await client.fetchQuery({
+      queryKey: ["plain", { a: 1, b: 2 }],
+      queryFn: () => Promise.resolve(1),
+    });
+    expect(client.getQueryData(["plain", { b: 2, a: 1 }])).toBe(1);
+  });
+
+  it("never lets a plain object spell an instance segment", async () => {
+    const client = createAppQueryClient();
+    const service = new Service();
+    await client.fetchQuery({
+      queryKey: ["svc", service],
+      queryFn: () => Promise.resolve(1),
+    });
+    expect(client.getQueryData(["svc", { instance: 1 }])).toBeUndefined();
+    expect(client.getQueryData(["svc", { $instance: 1 }])).toBeUndefined();
+  });
+});

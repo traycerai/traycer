@@ -157,6 +157,7 @@ interface ComposerToolbarDerived {
 }
 
 export interface ComposerToolbarState extends ComposerToolbarDerived {
+  readonly onUserSettingsChange?: (settings: ChatRunSettings) => void;
   readonly seedKey: string;
   readonly values: ComposerToolbarValues;
   readonly catalog: ComposerToolbarCatalog;
@@ -256,6 +257,23 @@ export interface CreateComposerToolbarStoreInput {
   readonly reasoningFallback: ReasoningFallback;
 }
 
+/**
+ * Whether `hostId`'s catalog has answered: its harnesses are known and, when
+ * it offers any, the selected harness's models are loaded. The selection then
+ * holds that host's default model, or none when it offers no agent.
+ */
+export function catalogSettledFor(
+  state: ComposerToolbarState,
+  hostId: string | null,
+): boolean {
+  const { catalog } = state;
+  return (
+    catalog.hostId === hostId &&
+    catalog.harnesses !== undefined &&
+    (catalog.harnesses.length === 0 || catalog.modelsLoaded)
+  );
+}
+
 export function createComposerToolbarStore(
   input: CreateComposerToolbarStoreInput,
 ): ComposerToolbarStore {
@@ -308,6 +326,7 @@ export function createComposerToolbarStore(
       }
       set({ values, ...derived, pendingSettingsEmit: false });
       state.onSettingsChange?.(settings);
+      state.onUserSettingsChange?.(settings);
     };
 
     return {
@@ -415,7 +434,11 @@ export function createComposerToolbarStore(
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
         });
-        if (emit) state.onSettingsChange?.(settingsFromDerived(derived));
+        if (emit) {
+          const settings = settingsFromDerived(derived);
+          state.onSettingsChange?.(settings);
+          state.onUserSettingsChange?.(settings);
+        }
       },
 
       setOnSettingsChange: (onSettingsChange) => {
@@ -426,7 +449,9 @@ export function createComposerToolbarStore(
   });
 }
 
-function settingsFromDerived(derived: ComposerToolbarDerived): ChatRunSettings {
+export function settingsFromDerived(
+  derived: ComposerToolbarDerived,
+): ChatRunSettings {
   return buildChatRunSettings({
     selection: derived.selection,
     permission: derived.permission,

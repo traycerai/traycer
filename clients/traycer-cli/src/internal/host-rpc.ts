@@ -7,17 +7,24 @@ import {
 } from "@traycer/protocol/host/registry";
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
-import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aware-messenger";
+import {
+  createAuthAwareMessenger,
+  type AuthRecoveryScope,
+} from "../../../shared/host-transport/auth-aware-messenger";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
+  finalRefusalOf,
+  RetryEpisodeOutcomeUnknownError,
   NO_RETRY_TRANSPORT_POLICY,
   type TransportRetryPolicy,
 } from "../../../shared/host-transport/retrying-messenger";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  RetryableTransportError,
   type RequiredHostMethodVersion,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -30,6 +37,7 @@ import {
   WsRpcClient,
 } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
+import { isProfileLifecycleRejection } from "../../../shared/host-transport/profile-lifecycle-rejection";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import {
@@ -50,7 +58,11 @@ import {
 } from "../host/compat-recovery";
 import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
-const FRAME_TIMEOUT_MS = 15_000;
+/**
+ * How long a call waits for its response frame. Exported so a one-shot stream
+ * read (`readBotSnapshot`) waits for its first answer exactly as long.
+ */
+export const FRAME_TIMEOUT_MS = 15_000;
 
 /**
  * One-shot unary RPC to the host's `/rpc` WebSocket endpoint.
@@ -179,9 +191,26 @@ export interface HostRpcDispatch {
    * One attempt, with no transport retry, for a best-effort call made while
    * the user is waiting to leave (a release after Ctrl+C): the retrying
    * policy can spend a dial timeout per attempt against a wedged host. The
-   * single re-authentication on UNAUTHORIZED still happens.
+   * single re-authentication on UNAUTHORIZED still happens, within
+   * `reauthenticate`.
    */
   readonly failFast: boolean;
+  /**
+   * Which host UNAUTHORIZED refreshes the sign-in and sends the request once
+   * more. `"before-request"` limits it to the host's refusal of the open
+   * frame, for a create that must read a refusal as proof that nothing was
+   * created: an answer to the second send carries no trace of a first that
+   * may have reached the host before its session went fatal.
+   */
+  readonly reauthenticate: AuthRecoveryScope;
+  /**
+   * The key a host that negotiated it deduplicates this call by, or null.
+   * Without one the retrying messenger may not replay a mutation after a
+   * failure that followed the send, so a keyed create is the only one a
+   * transport retry can finish. Byte-identical params under one key replay;
+   * different params under it are refused.
+   */
+  readonly idempotencyKey: string | null;
 }
 
 export const PLAIN_DISPATCH: HostRpcDispatch = {
@@ -189,6 +218,8 @@ export const PLAIN_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  reauthenticate: "always",
+  idempotencyKey: null,
 };
 
 /**
@@ -223,6 +254,31 @@ export async function callHostRpcWithDispatch<
     });
   }
   const endpoint = await resolveEndpoint();
+  return callHostRpcAtResolvedEndpoint(
+    method,
+    params,
+    endpoint,
+    auth,
+    dispatch,
+  );
+}
+
+/**
+ * Like {@link callHostRpcWithDispatch}, on a sign-in and endpoint the caller
+ * already resolved. For a command that preflights both before it records
+ * anything (`task create` writes its key record between the two), so nothing
+ * is re-read after that point: a host restarted in between fails this call
+ * instead of receiving it.
+ */
+export async function callHostRpcAtResolvedEndpoint<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   return requestAtEndpoint(
     method,
     params,
@@ -321,6 +377,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
         clientIdentity: CLI_CLIENT_IDENTITY,
       }),
       revalidator,
+      dispatch.reauthenticate,
     ),
     retryPolicy,
   );
@@ -337,7 +394,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     abortSignal: callLifetime.signal,
   };
   const options: HostRequestOptions = {
-    idempotencyKey: null,
+    idempotencyKey: dispatch.idempotencyKey,
     authority,
     // A caller's FIRST attempt. The replay requirement is raised by the
     // `createRetryingMessenger` wrapper above, per failure, not here.
@@ -476,19 +533,24 @@ const REQUEST_PROJECTION_FAILURE_PREFIX =
  * i.e. this CLI negotiated a newer canonical version for the method than the
  * host speaks, and the request carries a value the host's older minor request
  * schema cannot represent (e.g. a newer enum value that isn't strippable like an
- * additive field). The transport raises this as a `RPC_ERROR` locally during
- * request preparation, so it never reached the host.
+ * additive field). Both transports raise this as `DOWNGRADE_UNSUPPORTED`
+ * locally during request preparation (`ws-rpc-client.ts` and the remote
+ * `rpc-codec.ts`), so the attempt that failed never reached the host. A
+ * refusal that ended a retry episode is matched too: its final attempt failed
+ * preparation, while an earlier attempt's outcome stays unknown.
  *
  * Best-effort hook commands use this to degrade a version-skew miss to a quiet
  * no-op instead of surfacing it: the call is meaningless against a host too old
  * to understand it. Matched narrowly (the specific code + preparation message)
- * so genuine host `RPC_ERROR`s and auth failures still surface.
+ * so other downgrade refusals, genuine host errors and auth failures still
+ * surface.
  */
 export function isRequestVersionProjectionError(err: unknown): boolean {
+  const refusal = finalRefusalOf(err);
   return (
-    err instanceof HostRpcError &&
-    err.code === "RPC_ERROR" &&
-    err.message.startsWith(REQUEST_PROJECTION_FAILURE_PREFIX)
+    refusal instanceof HostRpcError &&
+    refusal.code === "DOWNGRADE_UNSUPPORTED" &&
+    refusal.message.startsWith(REQUEST_PROJECTION_FAILURE_PREFIX)
   );
 }
 
@@ -627,16 +689,41 @@ function assertCanonicalResponseSchema(
   );
 }
 
-function hostRpcToCliError(err: unknown): unknown {
-  if (!(err instanceof HostRpcError)) return err;
+/**
+ * Appended to the mapped message when a refusal ended a retry episode whose
+ * earlier attempt may have reached the host: the refusal's own guidance stays
+ * true about the retry, and this says what may have happened to the request.
+ */
+const EARLIER_ATTEMPT_MAY_HAVE_RUN =
+  "An earlier attempt may have gone through. Check before repeating it.";
+
+/**
+ * The mapping {@link toAgentCliError} applies, for a caller that has to read
+ * the raw transport error itself before it is mapped (`task create` decides
+ * from it whether its request frame was ever written).
+ */
+export function hostRpcToCliError(err: unknown): unknown {
+  // Classified by the refusal that ended a retry episode, not by its
+  // unknown-outcome wrapper: "sign in again" stays true about the retry
+  // whatever an earlier attempt did. The outcome stays unknown, and the
+  // message says so.
+  const refusal = finalRefusalOf(err);
+  if (!(refusal instanceof HostRpcError)) return err;
   createCliLogger(config.environment).warn(
     "Mapping host RPC wire error to CLI error",
     {
       environment: config.environment,
-      hostRpcCode: err.code,
+      hostRpcCode: refusal.code,
     },
   );
-  return mapHostRpcError(err);
+  const mapped = mapHostRpcError(refusal);
+  if (!(err instanceof RetryEpisodeOutcomeUnknownError)) return mapped;
+  return cliError({
+    code: mapped.code,
+    message: `${mapped.message} ${EARLIER_ATTEMPT_MAY_HAVE_RUN}`,
+    details: mapped.details,
+    exitCode: mapped.exitCode,
+  });
 }
 
 /**
@@ -650,12 +737,28 @@ function hostRpcToCliError(err: unknown): unknown {
  *     the internal term "task" (epic), neither actionable for a CLI user.
  *   - `UNAUTHORIZED` → `AUTH_REJECTED`: bearer rejected even after the
  *     auth-aware wrapper's refresh-and-retry.
+ *   - `WORKTREE_MISSING` / `WORKSPACE_BINDING_REQUIRED` / `E_HOST_STORAGE_FULL`
+ *     → the CLI code of the same name: the person's own folder, workspace
+ *     choice or disk stops the request, and the host's message names the fix.
+ *   - `PROVIDER_DISABLED` → `PROVIDER_DISABLED`: the person turned that
+ *     provider off in Settings → Providers; the host's message names it and the
+ *     setting, and is passed through unchanged.
+ *   - `E_INVALID_ARGUMENT` / `MESSAGE_TOO_LARGE`, and an `RPC_ERROR` carrying one
+ *     of the host's four profile-selection messages → `INVALID_ARGUMENT`: the
+ *     caller's own input.
  *   - `E_HOST_UNSUPPORTED` → `HOST_UNSUPPORTED`: per-feature unsupported on
  *     this host, actionable by updating the host.
  *   - `INCOMPATIBLE` / `DOWNGRADE_UNSUPPORTED` → `HOST_INCOMPATIBLE`: host/CLI
  *     protocol skew, actionable via `host restart` / updating the CLI.
- *   - a `HostTransportFailureError` of any code → `HOST_UNREACHABLE`: the
- *     connection failed or went quiet, so nothing below applies.
+ *   - a transport failure the transport could not prove was pre-dispatch →
+ *     `HOST_REQUEST_OUTCOME_UNKNOWN`: the request frame went out and no answer
+ *     came back, so the host may have carried the call out and re-running the
+ *     command can repeat it.
+ *   - every other `HostTransportFailureError` → `HOST_UNREACHABLE`: the
+ *     connection failed before the request went out, or the failure is
+ *     replayable, so nothing below applies and a retry is safe.
+ *   - the exact `RPC_ERROR` shutdown refusal → `HOST_BUSY`: the host is
+ *     stopping and refused this request; its message is preserved.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
  *     host's catch-all for any resolver error (e.g. "agent not found"), so it
  *     must NOT be reported as "host not running" - the host answered. A
@@ -665,7 +768,26 @@ function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
-  // First, and by class rather than by code: the transport raises its own
+  // Ahead of the unreachable arm below, and the two must never share a code:
+  // this is the failure the transport could not prove was pre-dispatch, so
+  // the host may have run the call and answered into a connection that was
+  // already gone. Reported as "unreachable" it reads as "nothing happened",
+  // and a caller that re-runs on that reading repeats whatever the first send
+  // did - an `agent.sendMessage` whose message was delivered exited
+  // `E_HOST_UNREACHABLE`, and the callers that retried on it delivered the
+  // same message twice.
+  //
+  // The message keeps the transport's own text (it carries no host text) and
+  // adds what the caller has to do about it.
+  if (mayHaveReachedHost(err)) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message: `traycer: ${err.message} - the request was sent and the host may have carried it out; check before sending it again.`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  // Then by class rather than by code: the transport raises its own
   // failures as `RPC_ERROR` too, so the code cannot tell "the host answered
   // with an error" from "nothing answered". The class can. A connection that
   // errored, closed early or timed out is a state of the machine the command
@@ -713,7 +835,57 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
-  if (err.code === "E_INVALID_ARGUMENT" || err.code === "MESSAGE_TOO_LARGE") {
+  // The host answers these three with a typed code for a state of the
+  // person's own machine or workspace, and the message already names the
+  // remedy (restore or re-bind the folder, choose a workspace, free disk
+  // space on the host). Left to the fall-through below they became
+  // `UNEXPECTED` and were captured as CLI defects.
+  if (err.code === "WORKTREE_MISSING") {
+    return cliError({
+      code: CLI_ERROR_CODES.WORKTREE_MISSING,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "WORKSPACE_BINDING_REQUIRED") {
+    return cliError({
+      code: CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_HOST_STORAGE_FULL") {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_STORAGE_FULL,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  // A provider the person disabled in Settings → Providers is their own
+  // setting, not a CLI defect. The host's message ("<Provider> is disabled.
+  // Enable it in Settings → Providers.") already names the remedy and is kept
+  // as the fall-through printed it.
+  if (err.code === "PROVIDER_DISABLED") {
+    return cliError({
+      code: CLI_ERROR_CODES.PROVIDER_DISABLED,
+      message: err.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  // A request that names a managed profile the host cannot use (removed, not
+  // registered, still being set up, wrong provider) is the person's own
+  // selection and expected. The host sends it as `RPC_ERROR` with a fixed
+  // message, so it is recognized by message; if the host later sends the same
+  // refusal as `E_INVALID_ARGUMENT`, the output below does not change.
+  if (
+    err.code === "E_INVALID_ARGUMENT" ||
+    err.code === "MESSAGE_TOO_LARGE" ||
+    isProfileLifecycleRejection(err.code, err.message)
+  ) {
     return cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `traycer: ${err.message}`,
@@ -759,6 +931,14 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  if (isHostShuttingDown(err)) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: err.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
   const code =
     err.code === "UNAUTHORIZED"
       ? CLI_ERROR_CODES.AUTH_REJECTED
@@ -769,6 +949,16 @@ function mapHostRpcError(err: HostRpcError): CliError {
     details: null,
     exitCode: 1,
   });
+}
+
+// The host's admission latch refuses work during shutdown with this fixed
+// message under its generic wire code. Match both exactly so other resolver
+// failures remain unexpected; classification does not retry the request.
+function isHostShuttingDown(err: HostRpcError): boolean {
+  return (
+    err.code === "RPC_ERROR" &&
+    err.message === "EntityMemoryManager is shutting down"
+  );
 }
 
 // Best-effort fallback: an `RPC_ERROR` whose message still indicates an access
@@ -782,6 +972,37 @@ function isAccessDenied(err: HostRpcError): boolean {
     err.code === "RPC_ERROR" &&
     /does not have (?:access|[\w ]*permission)/i.test(err.message)
   );
+}
+
+/**
+ * True when the request frame may already have reached the host and its
+ * outcome is therefore unknown.
+ *
+ * Read off the CLASS and the FLAG the transport sets, never off the message
+ * text, because the same sentence describes both outcomes: a frame timeout
+ * before the request went out and one after it read identically, and the
+ * transport is the only layer that knows which happened. `ws-rpc-client.ts`'s
+ * `transientFailure` builds a plain {@link HostTransportFailureError} for
+ * exactly `requestSent && !requestReplaySafe` and a
+ * {@link RetryableTransportError} for every failure that is provably
+ * pre-dispatch or safe to replay, and `createRetryingMessenger` ends an
+ * episode whose earlier attempt was sent and lost with a plain one too
+ * (`RetryEpisodeOutcomeUnknownError`).
+ *
+ * The three arms, in the order they are decided:
+ *   - a `RetryableTransportError` is safe to send again - either nothing was
+ *     dispatched or the host is deduplicating a negotiated key - so it keeps
+ *     the unreachable code, whose whole meaning is "try again";
+ *   - a `HostRequestAbortedError` carries the answer on its own
+ *     `mayHaveDispatched` flag: an abort stops the caller waiting, it does not
+ *     recall a request the host may already be running;
+ *   - every other `HostTransportFailureError` is the ambiguous post-send case.
+ */
+function mayHaveReachedHost(err: HostRpcError): boolean {
+  if (!(err instanceof HostTransportFailureError)) return false;
+  if (err instanceof RetryableTransportError) return false;
+  if (err instanceof HostRequestAbortedError) return err.mayHaveDispatched;
+  return true;
 }
 
 function retryPolicyLabel(

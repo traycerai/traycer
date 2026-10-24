@@ -425,3 +425,88 @@ describe("a subagent's parented rows", () => {
     ]);
   });
 });
+
+describe("compaction outcome labels", () => {
+  function compactionBlock(
+    presented: PresentedChat,
+    input: {
+      readonly blockId: string;
+      readonly raw: JsonObject;
+    },
+  ): PresentedContentBlock {
+    const template = presented.messages
+      .flatMap((message) => message.blocks)
+      .at(0);
+    if (template === undefined) throw new Error("Fixture chat has no block");
+    const raw: JsonObject = {
+      blockId: input.blockId,
+      timestamp: 30,
+      type: "compaction",
+      trigger: "manual",
+      preTokens: null,
+      postTokens: null,
+      durationMs: null,
+      summary: null,
+      ...input.raw,
+    };
+    return {
+      ...template,
+      blockId: input.blockId,
+      variant: "compaction",
+      known: snapshotContentBlockSchema.parse(raw),
+      raw,
+      payloadRefs: [],
+    };
+  }
+
+  async function labelsOf(
+    blocks: readonly { blockId: string; raw: JsonObject }[],
+  ): Promise<readonly string[]> {
+    const presented = await present({ resolvable: null });
+    const chat = codexRetryChat(presented, {
+      turnId: "turn-compaction",
+      blocks: blocks.map((block) => compactionBlock(presented, block)),
+      events: presented.events,
+    });
+    const assistant = buildCloudChatTranscript(chat).messages.find(
+      (message) => message.blocks.length === blocks.length,
+    );
+    if (assistant === undefined) throw new Error("expected the compaction row");
+    return assistant.blocks.map((block) => block.label);
+  }
+
+  it("labels a not-applied compaction as not applied, an ordinary failure as failed, and the rest as compacted", async () => {
+    expect(
+      await labelsOf([
+        {
+          blockId: "not-applied",
+          raw: {
+            status: "errored",
+            error: "Copilot did not apply this compaction.",
+            notApplied: true,
+          },
+        },
+        {
+          blockId: "failed",
+          raw: {
+            status: "errored",
+            error: "Copilot did not apply this compaction.",
+          },
+        },
+        {
+          blockId: "completed",
+          raw: { status: "completed", error: null, summary: "Summary." },
+        },
+        {
+          blockId: "streaming",
+          raw: { status: "streaming", error: null },
+        },
+      ]),
+    ).toEqual([
+      "Compaction not applied",
+      "Compaction failed",
+      "Conversation compacted",
+      "Conversation compacted",
+    ]);
+  });
+});

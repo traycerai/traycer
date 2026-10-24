@@ -1,3 +1,4 @@
+import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
   NotificationFeedDeliveryResult,
   NotificationFeedOccurrence,
@@ -26,6 +27,30 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
+import type {
+  SandboxAutomationFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
+  SandboxVerbFetchResult,
+} from "../host-client/sandbox-control";
+import type {
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SecretRequestDecideFetchResult,
+} from "../host-client/sandbox-secrets";
+import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type { ExecutableWriteGrantFetchResult } from "../host-client/executable-write-grant";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+  SandboxPatchRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type {
@@ -126,6 +151,9 @@ export interface IRunnerHost {
   /** Complete native browser capability, or null on shells without one. */
   readonly browserView: BrowserViewBridge | null;
 
+  /** Serves mounted artifact files to sandbox frames, or null without a native scheme. */
+  readonly sandboxArtifacts: SandboxArtifactBridge | null;
+
   /**
    * Browser-safe sign-in URL the shell wants `gui-app` to open when the
    * user initiates auth. Shells embed their own callback scheme (custom
@@ -153,6 +181,14 @@ export interface IRunnerHost {
    * inside the CS-minted attach grant, so this URL never varies per host.
    */
   readonly relayBaseUrl: string;
+
+  /**
+   * The server pool's session socket (`wss://…/v1/session`), from this
+   * build's own configuration, or `""` when the build has no pool. The only
+   * input `poolHostDirectoryEntry` takes, so the pool entry is never a claim a
+   * peer made.
+   */
+  readonly poolBaseUrl: string;
 
   /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
@@ -343,6 +379,93 @@ export interface IRunnerHost {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
 
+  /**
+   * The sandbox control plane (traycer-server `/api/sandboxes`) with the user
+   * bearer: the user's sandboxes, their cost and the user's awake burn, the
+   * catalogue the create form prices from, create, destroy, the lifecycle
+   * verbs (the card's suspend / resume / stop / start, and the wake a tab open
+   * calls before dialing a suspended or stopped sandbox), and the user's
+   * Automations host (its read, and the open that creates or wakes it). Each shell owns its traycer-server base URL
+   * the way it owns `authnBaseUrl`. Desktop runs these in Electron main
+   * (traycer-server's CORS allow-list is the web dashboard origin); mobile
+   * goes through the native HTTP layer; browser/dev shells call the shared
+   * helpers in `host-client/sandbox-control.ts` directly. Never throw:
+   * failures collapse into the discriminated results.
+   */
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxLifecycleVerbFetchResult>;
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult>;
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult>;
+  /**
+   * The secrets broker (authn), with the user's bearer: the grants one
+   * sandbox host holds, and the answer to an agent's grant request. See
+   * `host-client/sandbox-secrets.ts`.
+   */
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult>;
+  /**
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
+   */
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult>;
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult>;
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult>;
+  /**
+   * An executable-write grant for one host, minted by authn on the user's
+   * session (`host-client/executable-write-grant.ts`). Sent with a write that
+   * can reach an execution sink on that host.
+   */
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult>;
+
   openExternalLink(url: string): Promise<void>;
 
   /**
@@ -468,6 +591,14 @@ export interface IRunnerHost {
   readonly hasLocalHost: boolean;
 
   /**
+   * Why this build cannot reach the sandbox control plane at all, or `null`
+   * when it can. Set on a staging build (`SANDBOXES_UNAVAILABLE_IN_STAGING`):
+   * every sandbox call is refused there before it is sent, and the sandbox
+   * surfaces show this line instead of failing one request at a time.
+   */
+  readonly sandboxControlUnavailableReason: string | null;
+
+  /**
    * Whether an image written through the web clipboard API on this shell
    * actually reaches the system clipboard.
    *
@@ -493,6 +624,21 @@ export interface IRunnerHost {
    */
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,
+  ): Disposable;
+
+  /**
+   * Subscribes to the shell's verdict that the local host has stopped
+   * responding: its process is alive, but its endpoint has not answered for
+   * longer than a busy host plausibly stays silent. The handler fires
+   * synchronously on subscribe with the current state (or `null`), then again
+   * whenever it changes; `null` means the host answered again, died, or was
+   * never unresponsive. The shell kills nothing on this verdict - restarting
+   * is the person's call (`forceRestartUnresponsiveHost`). Shells without a
+   * local host
+   * emit a single `null` on subscribe and never transition.
+   */
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
   ): Disposable;
 
   /**
@@ -553,6 +699,20 @@ export interface IRunnerHost {
    * on genuine failures.
    */
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+
+  /**
+   * Force-restarts the local host the person was offered a restart for
+   * (`onLocalHostUnresponsive`), and only that host: the shell first checks
+   * that this offer is still the one out, and that the host it was made for -
+   * the one the shell recorded when it made the offer, not whatever is
+   * published now - is still published and still does not answer. A host
+   * that answered again, or was replaced (even under the same pid), since
+   * the offer was made is left running, and the call resolves `declined`.
+   * Shells without a local host resolve `declined`.
+   */
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult>;
 
   /**
    * OS-service control surface used by the Service Health settings pane.
@@ -702,6 +862,14 @@ export interface IRunnerHost {
    * to sit on a press that visibly did nothing.
    */
   readonly systemBack: ISystemBackHost | null;
+  /**
+   * The iOS status-bar tap, the platform's "scroll to top" gesture. iOS
+   * answers it on its own only for a page that scrolls as a whole, and this
+   * app's page never does - every screen scrolls inside its own box - so the
+   * shell forwards the tap and the GUI picks the box. Present only on the iOS
+   * shell; `null` everywhere else, since no other platform has the gesture.
+   */
+  readonly statusBarTap: IStatusBarTapHost | null;
 }
 
 /**
@@ -954,6 +1122,14 @@ export interface ISystemBackHost {
   onBack(handler: () => void): Disposable;
   /** Sends the app to the background, leaving it warm for the next resume. */
   minimize(): Promise<void>;
+}
+
+/**
+ * The status-bar tap, where the OS has one. See `IRunnerHost.statusBarTap`.
+ */
+export interface IStatusBarTapHost {
+  /** Fires once per tap on the status bar; carries nothing. */
+  onTap(handler: () => void): Disposable;
 }
 
 /**
@@ -1503,7 +1679,10 @@ export interface IDeviceFlowHost {
  * that plane grants nothing new.
  *
  *   - `credential` — 400/401. A verdict about the token.
- *   - `account`    — 403/404. A verdict about the account.
+ *   - `account`    — 403/404 answered by authn itself (its error envelope on
+ *                    the body). A verdict about the account. The same status
+ *                    from anything else at the URL is an outage, not a verdict,
+ *                    and reads as `network-error`.
  *
  * BOTH hold the local plane. The distinction is real and worth carrying, but it
  * decides the COPY and the recovery policy, not whether local data renders:
@@ -1886,6 +2065,32 @@ export interface IWorkspaceFoldersHost {
    */
   readonly canPickNatively: boolean;
   pickFolders(): Promise<readonly string[]>;
+}
+
+/**
+ * Names one force-restart offer: the host's pid, and the shell's id for the
+ * offer. The shell records which host it made the offer for, and a restart
+ * names the offer rather than a host, so it can only ever reach that one.
+ */
+export interface LocalHostUnresponsiveOffer {
+  readonly pid: number;
+  readonly offerId: number;
+}
+
+/**
+ * A local host whose process is alive but whose endpoint has gone unanswered
+ * past the shell's busy window. See `IRunnerHost.onLocalHostUnresponsive`.
+ */
+export interface LocalHostUnresponsive {
+  readonly pid: number;
+  /**
+   * The force-restart offer, or null when the shell makes none: the host
+   * published no start identity, so a restart could not be held to this host
+   * rather than one that reused its pid and endpoint.
+   */
+  readonly offerId: number | null;
+  /** How long the endpoint had gone unanswered when the verdict was reached. */
+  readonly unreachableForMs: number;
 }
 
 /**

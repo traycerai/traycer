@@ -31,6 +31,7 @@ import {
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import {
   createWorktreeBranchSearchIndex,
   filterWorktreeBranchRows,
@@ -597,10 +598,11 @@ const SourceBranchList = memo(function SourceBranchList(props: {
           aria-label="Search branches"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "ArrowDown") {
+            const navigationKey = listNavigationKey(event);
+            if (navigationKey === "ArrowDown") {
               event.preventDefault();
               moveActive(1);
-            } else if (event.key === "ArrowUp") {
+            } else if (navigationKey === "ArrowUp") {
               event.preventDefault();
               moveActive(-1);
             } else if (event.key === "Home") {

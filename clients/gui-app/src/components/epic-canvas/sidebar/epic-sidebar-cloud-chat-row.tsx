@@ -7,7 +7,9 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
+import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -28,6 +30,8 @@ import {
   publishedChatTileId,
 } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
+import { AgentReachRowMark } from "@/components/epic-canvas/sidebar/agent-reach-mark";
+import { TASK_HOST_UNREACHABLE_LINE } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import { NodeChevron } from "@/components/epic-canvas/sidebar/tree-node-chevron";
 import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-guide";
 import {
@@ -134,8 +138,15 @@ export function EpicSidebarCloudChatRow(
   // owning host is reachable is an ordinary chat that simply is not on this
   // device's tree yet - it opens live, against the host that owns it, exactly
   // as a tree row would. Only an unreachable owner produces a locked row and
-  // the published-copy surface behind it.
-  const ownerReachable = ownerReachability.status === "reachable";
+  // the published-copy surface behind it. An owner sandbox at rest counts as
+  // openable live: the pool serves its chat, and the live tile shows Resume.
+  const ownerSandboxOpensLive = useOwnerSandboxOpensLive(chat.ownerHostId);
+  const ownerReachable =
+    ownerReachability.status === "reachable" || ownerSandboxOpensLive;
+  // Reach, not connectivity: the owner host belongs to another principal, so
+  // agents here cannot work with it. Independent of the lock - a host can be
+  // online and out of reach, or offline and not.
+  const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
   // Openable-live = the owner answers. Host ids are unique (2026-08-07
   // ruling), so a reachable owner IS the machine that holds this chat, and
   // the click opens the ordinary live surface bound to it - the tile
@@ -251,7 +262,12 @@ export function EpicSidebarCloudChatRow(
         // never surfaces, and the tooltip is hover-only - which left a locked row
         // announcing exactly like a live one, though the two open different
         // surfaces.
-        aria-label={ownerReachable ? title : `${title} — ${lockCopy.ariaLabel}`}
+        aria-label={cloudRowAriaLabel(
+          title,
+          ownerReachable,
+          lockCopy.ariaLabel,
+          ownerNotReachable,
+        )}
         data-testid={`epic-sidebar-cloud-item-${chat.identity.chatId}`}
         data-sidebar-node-id={chat.identity.chatId}
         data-owner-host-id={chat.ownerHostId}
@@ -307,6 +323,10 @@ export function EpicSidebarCloudChatRow(
               />
             </LazySidebarTooltipWrapper>
           )}
+          <AgentReachRowMark
+            ownerHostId={chat.ownerHostId}
+            testId={`epic-sidebar-cloud-reach-${chat.identity.chatId}`}
+          />
           <CloudRowIdleTime
             publishedAt={cloudChatRowLastActiveAt(
               chat,
@@ -418,6 +438,18 @@ function CloudRowIdleTime(props: { readonly publishedAt: number }): ReactNode {
  * thing to say and one wording for it. The longer explanation lives on the
  * surface the row opens; a tooltip states the fact.
  */
+/** The row's accessible name: its title, then each state its glyphs show. */
+function cloudRowAriaLabel(
+  title: string,
+  ownerReachable: boolean,
+  lockAriaLabel: string,
+  ownerNotReachable: boolean,
+): string {
+  const lock = ownerReachable ? "" : ` — ${lockAriaLabel}`;
+  const reach = ownerNotReachable ? ` — ${TASK_HOST_UNREACHABLE_LINE}` : "";
+  return `${title}${lock}${reach}`;
+}
+
 function lockedRowCopy(ownerLabel: string): {
   readonly tooltip: string;
   readonly ariaLabel: string;

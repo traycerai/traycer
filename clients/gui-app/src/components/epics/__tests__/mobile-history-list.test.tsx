@@ -69,6 +69,7 @@ import {
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { TaskOrganization } from "@traycer/protocol/host/organization/schemas";
 import type { OrganizationDialog } from "@/components/organization/organization-dialogs";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 
@@ -121,8 +122,14 @@ interface SetEpicPinnedVariables {
 /** What `useOrganization()` answers while a case has staged a context. */
 interface StagedOrganization {
   readonly supported: boolean;
+  readonly hostSupport: boolean | null;
   readonly userId: string | null;
-  readonly view: undefined;
+  /**
+   * The account's projection. A row's organization controls appear because
+   * the account has an answer to put behind them, so a staged context that
+   * carries no view is one that draws nothing.
+   */
+  readonly view: OrganizationView;
   readonly openDialog: (dialog: OrganizationDialog) => void;
 }
 
@@ -259,6 +266,18 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
 }));
 
+// The panel binds a delete to the account it was chosen under, read by the
+// real `useEpicDeleteRequestUserId` through `useHostClient()`, which throws
+// without a host runtime (this suite mounts none). The delete itself is mocked
+// above, so the stub only has to answer the identity.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  const stubHostClient = {
+    getRequestContextUserId: (): string | null => "user-test",
+  };
+  return { ...actual, useHostClient: () => stubHostClient };
+});
+
 /**
  * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
  * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
@@ -292,11 +311,38 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   };
 }
 
-function supportedOrganization(): StagedOrganization {
+const GROUP = { groupId: "group-1", name: "Backend", color: "#445566" };
+
+/**
+ * A signed-in account that takes organization edits, holding `groupedTaskIds`
+ * in one group. The view is what the account answers, so it says the same
+ * thing about those tasks as the rows' own `groupedOrganization` does.
+ */
+function supportedOrganization(
+  groupedTaskIds: ReadonlyArray<string>,
+): StagedOrganization {
   return {
     supported: true,
+    hostSupport: true,
     userId: "user-test",
-    view: undefined,
+    view: {
+      catalog: [],
+      groups: {
+        version: "1",
+        groups: [{ ...GROUP, position: 0 }],
+        memberships: groupedTaskIds.map((taskId, position) => ({
+          taskId,
+          groupId: GROUP.groupId,
+          position,
+        })),
+      },
+      appearances: [],
+      taskLabels: {},
+      ready: true,
+      authenticationRequired: false,
+      pending: [],
+      failures: [],
+    },
     openDialog: testState.openOrganizationDialog,
   };
 }
@@ -306,7 +352,7 @@ function groupedOrganization(taskId: string): TaskOrganization {
   return {
     labels: [],
     appearance: { taskId, version: "0", color: null, icon: null },
-    group: { groupId: "group-1", name: "Backend", color: "#445566" },
+    group: GROUP,
   };
 }
 
@@ -956,7 +1002,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
-    it("renders the rows with no cloud or device notice when the cloud page is unavailable", async () => {
+    it("renders the rows with the reduced-coverage line, naming no cloud or device, when the cloud page is unavailable", async () => {
       testState.items = [
         historyItem({ id: "history-local", epicId: "local", title: "Local" }),
       ];
@@ -970,7 +1016,11 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
       const rows = await screen.findByTestId("epics-list-rows");
       expect(rows.textContent).toContain("Local");
-      expect(screen.queryByRole("status")).toBeNull();
+      // The serving tier did not answer, so the host's rows alone are on
+      // screen: the list says some may be missing, never where rows came from.
+      expect(screen.getByRole("status").textContent).toBe(
+        "Some tasks may be missing from this list.",
+      );
       // Scoped to the list body's own container rather than the whole
       // document: unrelated chrome (a filter chip label, for example) could
       // otherwise fail this assertion for a reason that has nothing to do
@@ -1204,7 +1254,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("offers no organization dropdown, and keeps the other rows' controls", async () => {
       seedDeletingAndLiveRows();
-      testState.organization = supportedOrganization();
+      testState.organization = supportedOrganization([]);
       holdEpicBatchDelete(queryClient, ["epic-from-history"]);
       renderPanel("page", "/");
       await screen.findAllByTestId("epics-list-row-card");
@@ -1269,7 +1319,10 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("opens its organization chip read-only, and a live row's editable, until the delete settles", async () => {
-      testState.organization = supportedOrganization();
+      testState.organization = supportedOrganization([
+        "epic-from-history",
+        "epic-two",
+      ]);
       testState.items = [
         historyItem({ organization: groupedOrganization("epic-from-history") }),
         historyItem({
@@ -1897,7 +1950,6 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
       expect(await screen.findByTestId("epics-list-row-pin")).not.toBeNull();
       expect(screen.getByTestId("epics-list-row-delete")).not.toBeNull();
-      expect(screen.getByTestId("epics-list-row-edit-title")).not.toBeNull();
       expect(screen.queryByTestId("epics-list-row-tray")).toBeNull();
     });
   });

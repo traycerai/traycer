@@ -14,6 +14,9 @@ import type {
   OpenChatQueuedPromptItem,
   ChatQueuedManagedCommandItem,
   ChatQueuedPortForwardItem,
+  ChatQueuedTaskCheckinItem,
+  ChatQueuedMemoryCurationItem,
+  ChatQueuedTaskOverdueItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { buildQueuedMessageOrderKey } from "@/components/chat/queued-message-reorder-dnd";
@@ -23,6 +26,15 @@ import { QUEUE_PAUSED_AFTER_ERROR_TOOLTIP } from "@/components/chat/fallback/fal
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 interface TestDndEvent {
@@ -91,6 +103,7 @@ interface CapturedSortableContextProps {
 
 const testState = vi.hoisted(() => ({
   providerProps: null as CapturedDndContextProps | null,
+  sortableData: new Map<string, unknown>(),
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -113,32 +126,35 @@ vi.mock("@dnd-kit/sortable", () => ({
   ),
   sortableKeyboardCoordinates: () => null,
   verticalListSortingStrategy: () => [],
-  useSortable: () => ({
-    setNodeRef: () => null,
-    setActivatorNodeRef: () => null,
-    // These are the attributes the REAL `useSortable` returns, and they must be
-    // here or the AX7 pin below is vacuous. That is not hypothetical: this mock
-    // returned `attributes: {}`, and under an ablation that re-threaded
-    // `{...attributes}` onto the handle the pin stayed GREEN - spreading an
-    // empty object changes no markup, so the cell asserting those attributes
-    // are ABSENT could not fail whatever production did.
-    //
-    // An under-provisioned mock reads as a missing feature. The pin's subject
-    // is "the handle does not carry dnd-kit's keyboard advertisement", so the
-    // fixture has to be able to supply that advertisement.
-    attributes: {
-      role: "button",
-      tabIndex: 0,
-      "aria-disabled": false,
-      "aria-roledescription": "sortable",
-      "aria-describedby": "DndDescribedBy-0",
-    },
-    listeners: {},
-    transform: null,
-    transition: undefined,
-    isDragging: false,
-    isOver: false,
-  }),
+  useSortable: (options: { readonly id: string; readonly data: unknown }) => {
+    testState.sortableData.set(options.id, options.data);
+    return {
+      setNodeRef: () => null,
+      setActivatorNodeRef: () => null,
+      // These are the attributes the REAL `useSortable` returns, and they must be
+      // here or the AX7 pin below is vacuous. That is not hypothetical: this mock
+      // returned `attributes: {}`, and under an ablation that re-threaded
+      // `{...attributes}` onto the handle the pin stayed GREEN - spreading an
+      // empty object changes no markup, so the cell asserting those attributes
+      // are ABSENT could not fail whatever production did.
+      //
+      // An under-provisioned mock reads as a missing feature. The pin's subject
+      // is "the handle does not carry dnd-kit's keyboard advertisement", so the
+      // fixture has to be able to supply that advertisement.
+      attributes: {
+        role: "button",
+        tabIndex: 0,
+        "aria-disabled": false,
+        "aria-roledescription": "sortable",
+        "aria-describedby": "DndDescribedBy-0",
+      },
+      listeners: {},
+      transform: null,
+      transition: undefined,
+      isDragging: false,
+      isOver: false,
+    };
+  },
 }));
 
 const SETTINGS: ChatRunSettings = {
@@ -159,6 +175,7 @@ describe("<QueuedMessagePanel />", () => {
     cleanup();
     vi.clearAllMocks();
     testState.providerProps = null;
+    testState.sortableData.clear();
   });
 
   it("renders drag handles for movable queued rows and removes arrow actions", () => {
@@ -762,6 +779,75 @@ describe("<QueuedMessagePanel />", () => {
     expect(screen.getByText("Agent response")).not.toBeNull();
   });
 
+  it("offers cancel on a received agent prompt held for a provider sign-in", () => {
+    renderPanel({
+      queue: queueState([
+        signInParkedAgentItem("queue-parked", "Agent prompt", true),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const parkedRow = screen.getByTestId("queued-message-row");
+    // Still a received row: no edit and no steer, only the cancel.
+    expect(
+      within(parkedRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(parkedRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+    fireEvent.click(
+      within(parkedRow).getByRole("button", {
+        name: "Cancel agent message waiting for sign-in",
+      }),
+    );
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-parked",
+      kind: "prompt",
+    });
+  });
+
+  it("offers no cancel on a paused agent prompt the host does not hold for a sign-in", () => {
+    renderPanel({
+      queue: queueState([
+        signInParkedAgentItem("queue-flag-false", "Agent prompt", false),
+        signInParkedAgentItem("queue-flag-absent", "Older host", undefined),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    for (const row of screen.getAllByTestId("queued-message-row")) {
+      expect(
+        within(row).queryByRole("button", {
+          name: "Cancel agent message waiting for sign-in",
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("hides the sign-in park cancel in read-only mode", () => {
+    renderPanel({
+      queue: queueState([
+        signInParkedAgentItem("queue-parked", "Agent prompt", true),
+      ]),
+      readOnly: true,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Cancel agent message waiting for sign-in",
+      }),
+    ).toBeNull();
+  });
+
   it("renders a managed-command item as a describable, cancellable chip", () => {
     renderPanel({
       queue: queueState([
@@ -1026,6 +1112,438 @@ describe("<QueuedMessagePanel />", () => {
     expect(
       within(managedRow).queryByRole("button", {
         name: "Dismiss port forward notice",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders a task-checkin item as a describable, dismissable Check-in chip whose status uses the delivery vocabulary", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 2 tasks"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(screen.getAllByTestId("queued-message-row")).toHaveLength(2);
+    const checkinRow = screen.getAllByTestId("queued-message-row")[1];
+
+    // The content is the item's own description - it is content-free
+    // otherwise, like the other host-authored items.
+    expect(within(checkinRow).getByText("Check-in on 2 tasks")).not.toBeNull();
+    const badge = within(checkinRow).getByTestId("queued-task-checkin-badge");
+    expect(badge.textContent).toBe("Check-in");
+
+    // Never editable, never hand-steerable.
+    expect(
+      within(checkinRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(checkinRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+
+    // Its own dismiss aria-label, distinct from the shell and forward ones.
+    const dismiss = within(checkinRow).getByRole("button", {
+      name: "Dismiss task check-in",
+    });
+    fireEvent.click(dismiss);
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-checkin",
+      kind: "task-checkin",
+    });
+  });
+
+  it("does not put the Check-in chip on a shell or port-forward row", () => {
+    renderPanel({
+      queue: queueState([
+        managedCommandQueuedItem("queue-managed", "bun test"),
+        portForwardQueuedItem("queue-forward", "dev server was interrupted"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(screen.queryByTestId("queued-task-checkin-badge")).toBeNull();
+  });
+
+  it("labels a paused task-checkin item with the same status vocabulary a managed-command item uses", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...taskCheckinQueuedItem("queue-checkin", "Check-in on 1 task"),
+          status: "paused",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const checkinRow = screen.getByTestId("queued-message-row");
+    expect(within(checkinRow).getByText("Paused")).not.toBeNull();
+  });
+
+  it("labels a steering task-checkin item Delivering and closes its dismiss lever, matching the managed-command item", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...taskCheckinQueuedItem("queue-checkin", "Check-in on 1 task"),
+          status: "steering",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const checkinRow = screen.getByTestId("queued-message-row");
+    expect(within(checkinRow).getByText("Delivering")).not.toBeNull();
+    expect(checkinRow.getAttribute("aria-busy")).toBe("true");
+    expect(
+      within(checkinRow).queryByRole("button", { name: /cancel|dismiss/i }),
+    ).toBeNull();
+  });
+
+  it("keeps the task-checkin dismiss aria-label distinct from the shell and port-forward ones", () => {
+    renderPanel({
+      queue: queueState([
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 1 task"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const checkinRow = screen.getByTestId("queued-message-row");
+    expect(
+      within(checkinRow).queryByRole("button", {
+        name: "Cancel queued command output",
+      }),
+    ).toBeNull();
+    expect(
+      within(checkinRow).queryByRole("button", {
+        name: "Dismiss port forward notice",
+      }),
+    ).toBeNull();
+  });
+
+  // One at a time, like the managed-command pair above: the dismiss action
+  // reads `readOnly` and `canAct` independently.
+  it("hides the task-checkin dismiss action in read-only mode", () => {
+    renderPanel({
+      queue: queueState([
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 1 task"),
+      ]),
+      readOnly: true,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Dismiss task check-in",
+      }),
+    ).toBeNull();
+  });
+
+  it("hides the task-checkin dismiss action when the viewer cannot act", () => {
+    renderPanel({
+      queue: queueState([
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 1 task"),
+      ]),
+      readOnly: false,
+      canAct: false,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Dismiss task check-in",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders a task-overdue item as a describable, dismissable Overdue chip whose status uses the delivery vocabulary", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(screen.getAllByTestId("queued-message-row")).toHaveLength(2);
+    const overdueRow = screen.getAllByTestId("queued-message-row")[1];
+
+    expect(within(overdueRow).getByText("Task overdue notice")).not.toBeNull();
+    const badge = within(overdueRow).getByTestId("queued-task-overdue-badge");
+    expect(badge.textContent).toBe("Overdue");
+
+    // Never editable, never hand-steerable.
+    expect(
+      within(overdueRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(overdueRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+
+    const dismiss = within(overdueRow).getByRole("button", {
+      name: "Dismiss overdue notice",
+    });
+    fireEvent.click(dismiss);
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-overdue",
+      kind: "task-overdue",
+    });
+  });
+
+  it("keeps the Overdue chip and the Check-in chip on their own rows when both wait on one trunk", () => {
+    renderPanel({
+      queue: queueState([
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 2 tasks"),
+        taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const [checkinRow, overdueRow] =
+      screen.getAllByTestId("queued-message-row");
+    expect(
+      within(checkinRow).getByTestId("queued-task-checkin-badge"),
+    ).not.toBeNull();
+    expect(
+      within(checkinRow).queryByTestId("queued-task-overdue-badge"),
+    ).toBeNull();
+    expect(
+      within(overdueRow).getByTestId("queued-task-overdue-badge"),
+    ).not.toBeNull();
+    expect(
+      within(overdueRow).queryByTestId("queued-task-checkin-badge"),
+    ).toBeNull();
+    // Each row carries its own dismiss label.
+    expect(
+      within(checkinRow).queryByRole("button", {
+        name: "Dismiss overdue notice",
+      }),
+    ).toBeNull();
+    expect(
+      within(overdueRow).queryByRole("button", {
+        name: "Dismiss task check-in",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not put the Overdue chip on a shell or port-forward row", () => {
+    renderPanel({
+      queue: queueState([
+        managedCommandQueuedItem("queue-managed", "bun test"),
+        portForwardQueuedItem("queue-forward", "dev server was interrupted"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(screen.queryByTestId("queued-task-overdue-badge")).toBeNull();
+  });
+
+  it("labels a paused task-overdue item with the same status vocabulary a managed-command item uses", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+          status: "paused",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).getByText("Paused"),
+    ).not.toBeNull();
+  });
+
+  it("labels a steering task-overdue item Delivering and closes its dismiss lever", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+          status: "steering",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const overdueRow = screen.getByTestId("queued-message-row");
+    expect(within(overdueRow).getByText("Delivering")).not.toBeNull();
+    expect(overdueRow.getAttribute("aria-busy")).toBe("true");
+    expect(
+      within(overdueRow).queryByRole("button", { name: /cancel|dismiss/i }),
+    ).toBeNull();
+  });
+
+  it("hides the task-overdue dismiss action in read-only mode", () => {
+    renderPanel({
+      queue: queueState([
+        taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+      ]),
+      readOnly: true,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Dismiss overdue notice",
+      }),
+    ).toBeNull();
+  });
+
+  it("hides the task-overdue dismiss action when the viewer cannot act", () => {
+    renderPanel({
+      queue: queueState([
+        taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+      ]),
+      readOnly: false,
+      canAct: false,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Dismiss overdue notice",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders a memory-curation item as a describable, dismissable Memory chip", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const memoryRow = screen.getAllByTestId("queued-message-row")[1];
+
+    expect(within(memoryRow).getByText("Memory over its limit")).not.toBeNull();
+    expect(
+      within(memoryRow).getByTestId("queued-memory-curation-badge").textContent,
+    ).toBe("Memory");
+
+    // Never editable, never hand-steerable.
+    expect(
+      within(memoryRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(memoryRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(memoryRow).getByRole("button", { name: "Dismiss memory notice" }),
+    );
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-memory",
+      kind: "memory-curation",
+    });
+  });
+
+  it("keeps the Memory chip off the other host-authored rows, and theirs off its row", () => {
+    renderPanel({
+      queue: queueState([
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 2 tasks"),
+        taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+        memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const [checkinRow, overdueRow, memoryRow] =
+      screen.getAllByTestId("queued-message-row");
+    expect(screen.getAllByTestId("queued-memory-curation-badge")).toHaveLength(
+      1,
+    );
+    expect(
+      within(memoryRow).getByTestId("queued-memory-curation-badge"),
+    ).not.toBeNull();
+    expect(
+      within(checkinRow).queryByRole("button", {
+        name: "Dismiss memory notice",
+      }),
+    ).toBeNull();
+    expect(
+      within(overdueRow).queryByRole("button", {
+        name: "Dismiss memory notice",
+      }),
+    ).toBeNull();
+    expect(
+      within(memoryRow).queryByTestId("queued-task-checkin-badge"),
+    ).toBeNull();
+    expect(
+      within(memoryRow).queryByTestId("queued-task-overdue-badge"),
+    ).toBeNull();
+  });
+
+  it("labels a steering memory-curation item Delivering and closes its dismiss lever", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+          status: "steering",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const memoryRow = screen.getByTestId("queued-message-row");
+    expect(within(memoryRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(memoryRow).queryByRole("button", { name: /cancel|dismiss/i }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["read-only mode", { readOnly: true, canAct: true }],
+    ["a viewer who cannot act", { readOnly: false, canAct: false }],
+  ])("hides the memory-curation dismiss action in %s", (_name, access) => {
+    renderPanel({
+      queue: queueState([
+        memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+      ]),
+      ...access,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Dismiss memory notice",
       }),
     ).toBeNull();
   });
@@ -1678,6 +2196,54 @@ function portForwardQueuedItem(
   };
 }
 
+function taskCheckinQueuedItem(
+  queueItemId: string,
+  description: string,
+): ChatQueuedTaskCheckinItem {
+  return {
+    kind: "task-checkin",
+    queueItemId,
+    description,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function taskOverdueQueuedItem(
+  queueItemId: string,
+  description: string,
+): ChatQueuedTaskOverdueItem {
+  return {
+    kind: "task-overdue",
+    queueItemId,
+    description,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function memoryCurationQueuedItem(
+  queueItemId: string,
+  description: string,
+): ChatQueuedMemoryCurationItem {
+  return {
+    kind: "memory-curation",
+    queueItemId,
+    description,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
 function agentQueuedItem(
   queueItemId: string,
   text: string,
@@ -1695,6 +2261,22 @@ function agentQueuedItem(
     // Received A2A responses are enqueued as `same_turn` so they steer into the
     // running turn (matches the host delivery path).
     delivery: "same_turn",
+  };
+}
+
+// A received agent prompt the host paused. `signInParked` is the host's mark
+// that the pause waits on a provider sign-in; `undefined` is an older host
+// that never sends the key.
+function signInParkedAgentItem(
+  queueItemId: string,
+  text: string,
+  signInParked: boolean | undefined,
+): OpenChatQueuedPromptItem {
+  return {
+    ...agentQueuedItem(queueItemId, text),
+    delivery: "next_turn",
+    status: "paused",
+    ...(signInParked === undefined ? {} : { signInParked }),
   };
 }
 
@@ -1794,3 +2376,165 @@ function makeClientRect(input: {
     right: input.left + input.width,
   };
 }
+
+describe("<QueuedMessagePanel /> with a carried front row from the real store", () => {
+  afterEach(() => {
+    cleanup();
+    testState.providerProps = null;
+    testState.sortableData.clear();
+  });
+
+  function carriedFrontProjection() {
+    const captured: { callbacks: ChatStreamCallbacks | null } = {
+      callbacks: null,
+    };
+    const handle: ChatSessionStoreHandle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: "host-carry-dnd",
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      userId: "owner-carry-dnd",
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+        captured.callbacks = nextCallbacks;
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => false,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
+          close: () => undefined,
+        };
+      },
+    });
+    if (captured.callbacks === null) throw new Error("expected callbacks");
+    const stream: ChatStreamCallbacks = captured.callbacks;
+    const chat: Chat = {
+      id: "chat-carry-dnd",
+      parentId: null,
+      userId: "owner-carry-dnd",
+      hostId: "host-carry-dnd",
+      title: "Chat",
+      createdAt: 1,
+      updatedAt: 1,
+      isTitleEditedByUser: false,
+      settings: null,
+      activeSessionChain: null,
+      claudePendingWakes: [],
+      messages: [],
+      events: [],
+      archivedAt: null,
+      pinnedUserProviderHandle: null,
+      lastDeliveredRolesDigest: null,
+    };
+    stream.onConnectionStatus("open", null, null);
+    stream.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      snapshot: {
+        chat,
+        access: {
+          role: "owner",
+          ownerUserId: "owner-carry-dnd",
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        runStatus: "idle",
+        sendWouldQueue: true,
+        activeTurn: null,
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
+        portForwards: [],
+      },
+    });
+    const sendOne = (): string => {
+      const action = handle.store.getState().sendMessage({
+        content: content("carried drag prompt"),
+        sender: { type: "user", userId: "owner-carry-dnd" },
+        settings: SETTINGS,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: {
+          content: content("carried drag prompt"),
+          browserAnnotations: [],
+        },
+      });
+      if (action === null) throw new Error("sendMessage was refused");
+      return action.messageId;
+    };
+    const ids = [sendOne(), sendOne(), sendOne()];
+    const hostItem = (messageId: string): OpenChatQueuedItem => ({
+      ...queuedItem(`queue-${messageId}`, "carried drag prompt", "pending"),
+      messageId,
+    });
+    stream.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      queue: { status: "running", items: ids.map(hostItem) },
+    });
+    stream.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      queue: { status: "running", items: ids.slice(1).map(hostItem) },
+    });
+    return {
+      handle,
+      ids,
+      queue: queueWithDrainingPrompts(handle.store.getState()),
+    };
+  }
+
+  it("keeps sortable targets relative to the actionable rows and reorders the raw rows through the real drag handlers", () => {
+    const { handle, ids, queue } = carriedFrontProjection();
+    try {
+      expect(queue.items.length).toBe(3);
+      const onReorder = vi.fn();
+      renderPanel({ queue, readOnly: false, canAct: true, onReorder });
+      const second = `queue-${ids[1]}`;
+      const third = `queue-${ids[2]}`;
+      const orderKey = buildQueuedMessageOrderKey([second, third]);
+      const secondData = testState.sortableData.get(second);
+      const thirdData = testState.sortableData.get(third);
+      expect(secondData).toEqual(queuedDndData(second, 0, orderKey));
+      expect(thirdData).toEqual(queuedDndData(third, 1, orderKey));
+
+      const provider = testState.providerProps;
+      if (provider === null) throw new Error("expected the dnd provider");
+      act(() => {
+        provider.onDragStart(
+          makeDndEvent({ sourceData: thirdData, target: null }),
+        );
+        provider.collisionDetection({ pointerCoordinates: { x: 0, y: 101 } });
+        provider.onDragEnd(
+          makeDndEvent({
+            sourceData: thirdData,
+            target: { data: secondData, top: 100, height: 40 },
+          }),
+        );
+      });
+
+      expect(onReorder).toHaveBeenCalledTimes(1);
+      expect(onReorder).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: third }),
+        second,
+      );
+    } finally {
+      handle.dispose();
+    }
+  });
+});

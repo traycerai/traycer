@@ -10,6 +10,7 @@ import type { DowngradeResult } from "@traycer/protocol/framework/versioned-reco
 import {
   authenticatedUserSchema,
   authenticatedUserSchemaPreApple,
+  authenticatedUserSchemaWithEnvironments,
   bundleSummarySchema,
   connectMcpServerResponseSchema,
   creditSchema,
@@ -79,6 +80,14 @@ import {
  * empty - the framework permits that, and a caller asking for a downgrade
  * that does not exist gets a typed `DOWNGRADE_UNSUPPORTED` rather than a
  * silent mis-mapping.
+ *
+ * ## Major 3 of `authenticated-user-response`
+ *
+ * Major 3 adds the caller's `environments` and `actingAs`, both REQUIRED,
+ * because a server authorizes with them and must be able to tell "none"
+ * from "not said". It is served only by `GET /api/v3/user/negotiated` to a
+ * caller that advertises it; the frozen `GET /api/v3/user` stays at major
+ * 1. Only this envelope moves: the `user` inside it is unchanged.
  */
 
 // ---- Entity records ----------------------------------------------------- //
@@ -155,6 +164,12 @@ export const authenticatedUserResponseRecordV200 = defineRecordContract({
   name: "authenticated-user-response",
   schemaVersion: { major: 2, minor: 0 } as const,
   schema: authenticatedUserSchema,
+});
+
+export const authenticatedUserResponseRecordV300 = defineRecordContract({
+  name: "authenticated-user-response",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  schema: authenticatedUserSchemaWithEnvironments,
 });
 
 export const legacyAuthenticatedUserResponseRecordV100 = defineRecordContract({
@@ -362,6 +377,77 @@ const authenticatedUserResponseDowngradeV200ToV100 = defineRecordDowngradePath<
   },
 });
 
+// ---- Major 2 <-> major 3 bridges ---------------------------------------- //
+
+/**
+ * A major-2 body carries no environments, so the upgrade fills the "authn
+ * holds no row yet" value. It exists because a client upgrades every parsed
+ * body to its own latest; an UPGRADED value authorizes nothing - a server
+ * reads these fields only from a response whose served major is 3.
+ */
+const authenticatedUserResponseUpgradeV200ToV300 = defineRecordUpgradePath<
+  typeof authenticatedUserResponseRecordV200,
+  typeof authenticatedUserResponseRecordV300
+>({
+  from: authenticatedUserResponseRecordV200.schemaVersion,
+  to: authenticatedUserResponseRecordV300.schemaVersion,
+  upgradeRecord: (record) => ({
+    ...record,
+    environments: { personal: null, teams: [] },
+    actingAs: null,
+  }),
+});
+
+/**
+ * Drops the two major-3 fields by re-parsing through the major-2 schema,
+ * which strips keys it does not declare. A reader of majors 1 and 2 that
+ * wants `actingAs` gets it from authn outside the schema, as before.
+ */
+function downgradeAuthenticatedUserResponseToV200(
+  record: ValueOf<typeof authenticatedUserResponseRecordV300>,
+): DowngradeResult<ValueOf<typeof authenticatedUserResponseRecordV200>> {
+  const parsed = authenticatedUserResponseRecordV200.schema.safeParse(record);
+  if (parsed.success) return { ok: true as const, value: parsed.data };
+  return {
+    ok: false as const,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED" as const,
+      message:
+        "Authenticated user response contains state that record 2.0 cannot represent",
+    },
+  };
+}
+
+const authenticatedUserResponseDowngradeV300ToV200 = defineRecordDowngradePath<
+  typeof authenticatedUserResponseRecordV300,
+  typeof authenticatedUserResponseRecordV200
+>({
+  from: authenticatedUserResponseRecordV300.schemaVersion,
+  to: authenticatedUserResponseRecordV200.schemaVersion,
+  downgradeRecord: (record) => downgradeAuthenticatedUserResponseToV200(record),
+});
+
+/**
+ * The framework runs only DIRECT paths from the latest major, and a client
+ * that persists a major-1 value (the GUI's provisional-session snapshot)
+ * downgrades from its latest. So 3 reaches 1 by composing the two bridges
+ * that already decide each step, never by restating either.
+ */
+const authenticatedUserResponseDowngradeV300ToV100 = defineRecordDowngradePath<
+  typeof authenticatedUserResponseRecordV300,
+  typeof authenticatedUserResponseRecordV100
+>({
+  from: authenticatedUserResponseRecordV300.schemaVersion,
+  to: authenticatedUserResponseRecordV100.schemaVersion,
+  downgradeRecord: (record) => {
+    const v200 = downgradeAuthenticatedUserResponseToV200(record);
+    if (!v200.ok) return v200;
+    return authenticatedUserResponseDowngradeV200ToV100.downgradeRecord(
+      v200.value,
+    );
+  },
+});
+
 // The three envelopes below are read only by cloud-ui, which ships with
 // authn-v3 and validates nothing. They need a truthful schema and an
 // identity upgrade; nothing downgrades them, so they register no
@@ -525,6 +611,20 @@ export const authRecordRegistry = defineVersionedRecordRegistry({
       },
       downgradePathsFromLatest: {
         1: authenticatedUserResponseDowngradeV200ToV100,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: authenticatedUserResponseRecordV300,
+          upgradeFromPreviousVersion:
+            authenticatedUserResponseUpgradeV200ToV300,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: authenticatedUserResponseDowngradeV300ToV100,
+        2: authenticatedUserResponseDowngradeV300ToV200,
       },
     },
   },
@@ -769,6 +869,12 @@ export type MCPServer = RecordValue<AuthRecordRegistry, "mcp-server">;
 export type AuthenticatedUser = RecordValue<
   AuthRecordRegistry,
   "authenticated-user-response"
+>;
+/** The caller's environment ids, as major 3 carries them. */
+export type AuthenticatedUserEnvironments = AuthenticatedUser["environments"];
+/** The environment an act-as grant acts for, as major 3 carries it. */
+export type AuthenticatedUserActingAs = NonNullable<
+  AuthenticatedUser["actingAs"]
 >;
 export type LegacyAuthenticatedUser = RecordValue<
   AuthRecordRegistry,

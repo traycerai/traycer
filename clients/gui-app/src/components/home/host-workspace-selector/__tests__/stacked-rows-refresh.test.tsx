@@ -100,6 +100,15 @@ const hostClient: MockHostClient = {
   onChange: () => () => undefined,
 };
 
+// The picker's sandbox staging reads the account and the catalogue; this suite
+// stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: undefined }),
+}));
+
 vi.mock("@/components/ui/select", () => ({
   Select: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
@@ -383,6 +392,7 @@ function renderControls(layout: "inline" | "stacked"): {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          sandboxStaging={null}
           disabled={false}
           stagingKey={{
             surface: "landing",

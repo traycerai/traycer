@@ -1,10 +1,17 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   ProviderAdvisory,
   ProviderCliCandidate,
   ProviderCliState,
   ProviderManagedInstallState,
+  ProviderManagedLine,
   ProviderManagedVersions,
   ProviderNextRunBinary,
   ProviderSelection,
@@ -23,6 +30,11 @@ type CapturedVersionManagerProps = {
   readonly packId: string;
   readonly packDisplayName: string;
   readonly managedVersions: ProviderManagedVersions;
+  readonly refusedVersions: readonly {
+    readonly version: string;
+    readonly requiredMacos: string;
+  }[];
+  readonly runningMacos: string | null;
 };
 
 /**
@@ -1413,6 +1425,8 @@ describe("ProviderCliCandidatesSection: version menu capability gate", () => {
       packId: "opencode",
       packDisplayName: "opencode CLI",
       managedVersions,
+      refusedVersions: [],
+      runningMacos: null,
     });
   });
 });
@@ -1558,4 +1572,286 @@ describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-pa
       ),
     ).toBeDefined();
   });
+});
+
+describe("ProviderCliCandidatesSection: macOS requirement", () => {
+  const SENTENCE =
+    "Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.";
+  const MANAGED_NOTE =
+    "Traycer's managed Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.";
+
+  function withRequirement(
+    state: ProviderCliState,
+    macosRequirement: {
+      readonly runningMacos: string;
+      readonly managed: { readonly requiredMacos: string } | null;
+      readonly launch: { readonly requiredMacos: string } | null;
+      readonly refusedVersions: {
+        readonly version: string;
+        readonly requiredMacos: string;
+      }[];
+    },
+  ): ProviderCliState {
+    return { ...state, macosRequirement };
+  }
+
+  it("replaces the empty state's install guide with the sentence when the host settled that nothing can run", () => {
+    const state = withRequirement(
+      providerState({
+        providerId: "antigravity",
+        selected: { kind: "path" },
+        candidates: [],
+      }),
+      {
+        runningMacos: "13.6",
+        managed: { requiredMacos: "14.0" },
+        launch: { requiredMacos: "14.0" },
+        refusedVersions: [],
+      },
+    );
+    renderSection(state);
+
+    expect(screen.getByText(SENTENCE)).toBeDefined();
+    expect(screen.queryByText(/No Antigravity CLI was found/u)).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Antigravity installation guide" }),
+    ).toBeNull();
+  });
+
+  it("shows only the one-line managed note when a compatible PATH binary runs", () => {
+    const state = withRequirement(
+      providerState({
+        providerId: "antigravity",
+        selected: { kind: "path" },
+        candidates: [pathCandidate({ path: "/usr/local/bin/agy_acp_server" })],
+      }),
+      {
+        runningMacos: "13.6",
+        managed: { requiredMacos: "14.0" },
+        launch: null,
+        refusedVersions: [],
+      },
+    );
+    renderSection(state);
+
+    expect(screen.getByText(MANAGED_NOTE)).toBeDefined();
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+
+  it("shows neither sentence on a host that omits the field, keeping today's empty state", () => {
+    const state = providerState({
+      providerId: "antigravity",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+    expect(screen.queryByText(MANAGED_NOTE)).toBeNull();
+    expect(
+      screen.getByText(
+        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+      ),
+    ).toBeDefined();
+  });
+
+  it("hands the host's refused versions and running macOS to the version manager unchanged", () => {
+    mocks.hostSupportsMethod = true;
+    const managedVersions: ProviderManagedVersions = {
+      ...emptyManagedVersions(),
+      available: [
+        {
+          version: "2.0.0",
+          sizeBytes: null,
+          certification: "eligible",
+          recommended: false,
+          current: false,
+          installState: { status: "installed" },
+        },
+      ],
+    };
+    const refusedVersions = [
+      { version: "2.0.0", requiredMacos: "15.0" },
+      { version: "3.0.0", requiredMacos: "16.0" },
+    ];
+    const state = withRequirement(
+      providerState({
+        providerId: "antigravity",
+        selected: { kind: "bundled" },
+        candidates: [
+          {
+            kind: "bundled",
+            path: "/store/antigravity/1.0.0/agy_acp_server",
+            version: "1.0.0",
+            available: true,
+            versionPending: false,
+          },
+        ],
+        managedInstallState: { status: "installed", version: "1.0.0" },
+        packId: "antigravity",
+        managedVersions,
+      }),
+      {
+        runningMacos: "14.2",
+        managed: null,
+        launch: null,
+        refusedVersions,
+      },
+    );
+    renderSection(state);
+
+    fireEvent.click(screen.getByRole("button", { name: /CLI version/u }));
+
+    expect(mocks.lastVersionManagerProps?.refusedVersions).toEqual(
+      refusedVersions,
+    );
+    expect(mocks.lastVersionManagerProps?.runningMacos).toBe("14.2");
+  });
+});
+
+describe("ProviderCliCandidatesSection: OpenCode Managed lines", () => {
+  function managedLine(line: 1 | 2): ProviderManagedLine {
+    return {
+      line,
+      candidate: {
+        ...bundledCandidate({
+          path: `/store/opencode${String(line)}/bin`,
+          version: line === 1 ? "1.14.0" : "2.1.2",
+          available: true,
+        }),
+        kind: "bundled",
+      },
+      packId: line === 1 ? "opencode" : "opencode2",
+      managedInstallState: { status: "installed", version: "x" },
+      managedVersions: null,
+      managedVersionsUnavailable: null,
+    };
+  }
+
+  function opencodeState(args: {
+    readonly selected: ProviderSelection;
+    readonly withLines: boolean;
+    readonly candidates: readonly ProviderCliCandidate[];
+  }): ProviderCliState {
+    const base = providerState({
+      providerId: "opencode",
+      selected: args.selected,
+      candidates: args.candidates,
+    });
+    return args.withLines
+      ? { ...base, managedLines: [managedLine(1), managedLine(2)] }
+      : base;
+  }
+
+  function radios(): readonly HTMLInputElement[] {
+    return screen.getAllByRole("radio");
+  }
+
+  it("lists Managed 2.x first with the Default badge and Managed 1.x second", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios().map((radio) => radio.getAttribute("aria-label"))).toEqual([
+      "Select Managed 2.x",
+      "Select Managed 1.x",
+    ]);
+    expect(screen.getAllByText("Default")).toHaveLength(1);
+    const defaultRow = screen.getByText("Managed 2.x").parentElement;
+    expect(defaultRow?.textContent).toContain("Default");
+    expect(
+      screen.getByText("Managed 1.x").parentElement?.textContent,
+    ).not.toContain("Default");
+  });
+
+  it("selects Managed 2.x for a stored plain bundled selection", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios().map((radio) => radio.checked)).toEqual([true, false]);
+  });
+
+  it("selects the line a stored selection names", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled", line: 1 },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios().map((radio) => radio.checked)).toEqual([false, true]);
+  });
+
+  it("sends the line when a Managed row is picked", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    fireEvent.click(screen.getByLabelText("Select Managed 1.x"));
+    expect(mocks.setSelectionMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.setSelectionMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      selection: { kind: "bundled", line: 1 },
+    });
+  });
+
+  it("keeps a single row without managedLines (an older host)", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: false,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios()).toHaveLength(1);
+    expect(screen.queryByText("Default")).toBeNull();
+    expect(screen.queryByText(/existing chats keep the line/u)).toBeNull();
+  });
+
+  it("keeps a single row for a sibling provider", () => {
+    renderSection(
+      providerState({
+        providerId: "traycer",
+        selected: { kind: "bundled" },
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios()).toHaveLength(1);
+    expect(screen.queryByText("Default")).toBeNull();
+  });
+
+  it.each([["2.0.5"], ["1.14.0"]])(
+    "shows a PATH %s binary's version with no advisory",
+    (version) => {
+      renderSection(
+        opencodeState({
+          selected: { kind: "bundled" },
+          withLines: true,
+          candidates: [
+            pathCandidate({ path: "/usr/local/bin/opencode", version }),
+          ],
+        }),
+      );
+      const row = screen.getByRole("radio", {
+        name: "Select /usr/local/bin/opencode",
+      }).parentElement?.parentElement;
+      if (!row) throw new Error("PATH candidate row not rendered");
+      expect(within(row).getByText(`v${version}`)).toBeDefined();
+      expect(
+        screen.queryByLabelText(
+          "Why this PATH binary is not used automatically",
+        ),
+      ).toBeNull();
+    },
+  );
 });

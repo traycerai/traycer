@@ -1,3 +1,55 @@
+diff --git a/react-native.web.js b/react-native.web.js
+--- a/react-native.web.js
++++ b/react-native.web.js
+@@ -5637,6 +5637,11 @@
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
++  // Traditional DOM moves reload descendant iframes without remounting React.
++  // Older browsers keep the current DOM order for frame-bearing lists; rows
++  // remain visually positioned by the list, and live page state survives.
++  const canPreserveState = typeof container.moveBefore === "function";
++  if (!canPreserveState && container.querySelector("iframe")) return elements;
+   const items = elements.map((element) => {
+     var _a3;
+     return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
+@@ -5672,7 +5677,9 @@
+           break;
+         }
+       }
+-      if (nextStableElement) {
++      if (canPreserveState) {
++        container.moveBefore(element, nextStableElement);
++      } else if (nextStableElement) {
+         container.insertBefore(element, nextStableElement);
+       } else {
+         container.appendChild(element);
+diff --git a/react-native.web.mjs b/react-native.web.mjs
+--- a/react-native.web.mjs
++++ b/react-native.web.mjs
+@@ -5616,6 +5616,11 @@
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
++  // Traditional DOM moves reload descendant iframes without remounting React.
++  // Older browsers keep the current DOM order for frame-bearing lists; rows
++  // remain visually positioned by the list, and live page state survives.
++  const canPreserveState = typeof container.moveBefore === "function";
++  if (!canPreserveState && container.querySelector("iframe")) return elements;
+   const items = elements.map((element) => {
+     var _a3;
+     return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
+@@ -5651,7 +5656,9 @@
+           break;
+         }
+       }
+-      if (nextStableElement) {
++      if (canPreserveState) {
++        container.moveBefore(element, nextStableElement);
++      } else if (nextStableElement) {
+         container.insertBefore(element, nextStableElement);
+       } else {
+         container.appendChild(element);
 diff --git a/react.js b/react.js
 --- a/react.js
 +++ b/react.js
@@ -66,7 +118,30 @@ diff --git a/react.js b/react.js
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -7054,7 +7073,8 @@
+@@ -5637,6 +5656,11 @@
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
++  // Traditional DOM moves reload descendant iframes without remounting React.
++  // Older browsers keep the current DOM order for frame-bearing lists; rows
++  // remain visually positioned by the list, and live page state survives.
++  const canPreserveState = typeof container.moveBefore === "function";
++  if (!canPreserveState && container.querySelector("iframe")) return elements;
+   const items = elements.map((element) => {
+     var _a3;
+     return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
+@@ -5672,7 +5696,9 @@
+           break;
+         }
+       }
+-      if (nextStableElement) {
++      if (canPreserveState) {
++        container.moveBefore(element, nextStableElement);
++      } else if (nextStableElement) {
+         container.insertBefore(element, nextStableElement);
+       } else {
+         container.appendChild(element);
+@@ -7054,7 +7080,8 @@
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -144,7 +219,30 @@ diff --git a/react.mjs b/react.mjs
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -7033,7 +7052,8 @@
+@@ -5616,6 +5635,11 @@
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
++  // Traditional DOM moves reload descendant iframes without remounting React.
++  // Older browsers keep the current DOM order for frame-bearing lists; rows
++  // remain visually positioned by the list, and live page state survives.
++  const canPreserveState = typeof container.moveBefore === "function";
++  if (!canPreserveState && container.querySelector("iframe")) return elements;
+   const items = elements.map((element) => {
+     var _a3;
+     return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
+@@ -5651,7 +5675,9 @@
+           break;
+         }
+       }
+-      if (nextStableElement) {
++      if (canPreserveState) {
++        container.moveBefore(element, nextStableElement);
++      } else if (nextStableElement) {
+         container.insertBefore(element, nextStableElement);
+       } else {
+         container.appendChild(element);
+@@ -7033,7 +7059,8 @@
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);

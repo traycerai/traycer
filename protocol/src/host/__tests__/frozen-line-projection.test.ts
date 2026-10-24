@@ -534,7 +534,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
     ).toEqual(["claude-code"]);
   });
 
-  it("is ARMED only by a pin, and today that is one leaf - proven, not assumed", () => {
+  it("is ARMED only by a pin, and today that is one provider leaf and one native error code - proven, not assumed", () => {
     // This test replaced one that "rescued" a grown `denySources` member. That
     // test was vacuous, and the reason is the whole precondition of this
     // mechanism: the host parses the resolver result against the CANONICAL
@@ -560,13 +560,19 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
       "providers[].providerId",
       // The one field this actually changes today.
       "providers[].managedVersions.sharedWithProviders[]",
+      // The native refusal code: the released lines bind the pre-Kilo
+      // enum (`providerNativeErrorCodeSchemaV11Preimage`), while the head also
+      // admits `server_not_found` and `change_shadowed`. A `native` error arm
+      // is a scalar `code`, so a head-only code leaves that arm unrepresentable
+      // and the caller's existing catch rules, as for `providerId`.
+      "native|1.code",
     ]);
 
     // 9.1 and 9.2 carried pins byte-identical to live by design, which armed
     // nothing until the live enum moved. `commandcode` moved it, so both are
-    // now strictly narrower than the head on the same two leaves as 7.0: the
-    // mechanism is armed on the released 9.x lines, which is what the freeze
-    // exists to make possible.
+    // now strictly narrower than the head on the same three leaves as 7.0 (they
+    // share the frozen native error vocabulary): the mechanism is armed on the
+    // released 9.x lines, which is what the freeze exists to make possible.
     for (const frozen of [
       providersListResponseSchemaV91,
       providersListResponseSchemaV92,
@@ -574,6 +580,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
       expect(strictlyNarrowerEnumPaths(frozen)).toEqual([
         "providers[].providerId",
         "providers[].managedVersions.sharedWithProviders[]",
+        "native|1.code",
       ]);
     }
   });

@@ -1,4 +1,5 @@
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { KeyboardEvent, RefObject } from "react";
 
@@ -37,13 +38,15 @@ export function handleHarnessModelPickerKeyDown(
     onActiveRowId,
   };
 
-  if (event.key === "ArrowDown") {
+  const navigationKey = listNavigationKey(event);
+
+  if (navigationKey === "ArrowDown") {
     event.preventDefault();
     moveActiveRow({ ...navigation, direction: 1 });
     return;
   }
 
-  if (event.key === "ArrowUp") {
+  if (navigationKey === "ArrowUp") {
     event.preventDefault();
     moveActiveRow({ ...navigation, direction: -1 });
     return;

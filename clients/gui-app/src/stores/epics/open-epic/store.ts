@@ -71,14 +71,16 @@ import type {
   ArtifactRoomsSlice,
   ChatsSlice,
   CommentThreadsSlice,
-  FilesSlice,
   DeletedArtifactsSlice,
   EpicArtifactRoomAvailability,
   EpicHeader,
   TerminalAgentsSlice,
   TreeSlice,
 } from "./types";
-import type { PendingChatCreation } from "./pending-chat-creations";
+import type {
+  PendingChatCreation,
+  PendingChatCreationCloudRow,
+} from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
 import { createMainProjectionAccount } from "@/stores/replica-memory/main-projection-account";
@@ -465,12 +467,6 @@ export interface OpenEpicState {
    * artifact, which is not the same as "no threads"; see `CommentThreadsSlice`.
    */
   readonly commentThreads: CommentThreadsSlice;
-  /**
-   * The epic's files as the records lane serves them. `served: false` on every
-   * legacy connection and before the lead snapshot - the Files panel reads that
-   * as "this host has no files plane", not as an empty epic.
-   */
-  readonly files: FilesSlice;
   readonly tree: TreeSlice;
   /**
    * Per-artifact-room availability mirrored from `epic.subscribe@1.0` `artifactRoomState`
@@ -847,6 +843,15 @@ export interface OpenEpicState {
    * first, so the row never blinks out between the two.
    */
   clearPendingChatCreation: (chatId: string) => void;
+  /**
+   * Retires a retained creation whose chat a published cloud row now serves,
+   * matched on `(chatId, ownerHostId)` - see
+   * `ChatRecordTable.expirePendingCreationForCloudRow`. A no-op when nothing
+   * this session created matches.
+   */
+  expirePendingChatCreationForCloudRow: (
+    row: PendingChatCreationCloudRow,
+  ) => void;
   /** Forcibly closes the underlying stream session. Idempotent. */
   dispose: () => void;
   /**
@@ -2204,6 +2209,12 @@ export function createOpenEpicStore(
             runtime.command({
               kind: "clear-pending-chat-creation",
               payload: { chatId },
+            });
+          },
+          expirePendingChatCreationForCloudRow: (row) => {
+            runtime.command({
+              kind: "expire-pending-chat-creation-for-cloud-row",
+              payload: { chatId: row.chatId, ownerHostId: row.ownerHostId },
             });
           },
 

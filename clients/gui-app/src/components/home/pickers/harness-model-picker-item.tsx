@@ -4,6 +4,11 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
 import { guiAgentModelCapabilitiesSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import {
+  maxModeOnlyRow,
+  maxModeTooltipCopy,
+  type MaxModeContext,
+} from "@/components/home/data/model-max-mode";
 
 interface HarnessModelPickerItemProps {
   readonly idPrefix: string;
@@ -11,9 +16,12 @@ interface HarnessModelPickerItemProps {
   readonly selected: boolean;
   readonly active: boolean;
   readonly showCapacity: boolean;
+  readonly maxModeContextKind?: MaxModeContext["kind"];
   readonly onHover: (rowId: string) => void;
   readonly onActive: (rowId: string) => void;
   readonly onSelect: (row: HarnessModelRow) => void;
+  /** Listed but not selectable (a harness a team sandbox does not offer). */
+  readonly disabled: boolean;
 }
 
 export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
@@ -23,9 +31,11 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
     selected,
     active,
     showCapacity,
+    maxModeContextKind,
     onHover,
     onActive,
     onSelect,
+    disabled,
   } = props;
 
   // Search is scoped to the active harness, so rows render identically whether
@@ -38,9 +48,11 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
   const hasDeprecationNotice =
     row.deprecationNotice !== null && row.deprecationNotice.length > 0;
   const supportsImageGeneration = modelSupportsImageGeneration(row);
+  const maxModeOnly = maxModeOnlyRow(row.model, maxModeContextKind ?? "none");
   const tooltipLabel = modelRowTooltipLabel(
     row.deprecationNotice,
     supportsImageGeneration,
+    maxModeOnly,
   );
 
   return (
@@ -58,6 +70,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
         type="button"
         role="option"
         aria-selected={selected}
+        aria-disabled={disabled}
         data-active={active}
         data-selected={selected}
         className={cn(
@@ -77,6 +90,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
           onActive(row.id);
         }}
         onClick={() => {
+          if (disabled) return;
           onSelect(row);
         }}
       >
@@ -85,6 +99,11 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
             {row.browseLabel}
           </span>
         </span>
+        {maxModeOnly ? (
+          <Badge variant="outline" className="shrink-0">
+            Max Mode
+          </Badge>
+        ) : null}
         {hasDeprecationNotice ? (
           <Badge variant="destructive" className="shrink-0">
             Deprecated
@@ -115,16 +134,14 @@ function modelSupportsImageGeneration(row: HarnessModelRow): boolean {
 function modelRowTooltipLabel(
   deprecationNotice: string | null,
   supportsImageGeneration: boolean,
+  maxModeOnly: boolean,
 ): string | null {
-  const imageLabel = supportsImageGeneration
-    ? "Supports image generation"
-    : null;
-  if (deprecationNotice === null || deprecationNotice.length === 0) {
-    return imageLabel;
-  }
-  return imageLabel === null
-    ? deprecationNotice
-    : `${deprecationNotice} · ${imageLabel}`;
+  const labels = [
+    deprecationNotice,
+    supportsImageGeneration ? "Supports image generation" : null,
+    maxModeOnly ? maxModeTooltipCopy() : null,
+  ].filter((label): label is string => label !== null && label.length > 0);
+  return labels.length === 0 ? null : labels.join(" · ");
 }
 
 function modelRowElementId(idPrefix: string, rowId: string): string {

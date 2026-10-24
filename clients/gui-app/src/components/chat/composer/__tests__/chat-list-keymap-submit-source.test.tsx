@@ -8,6 +8,7 @@ import {
 } from "../picker/composer-picker-store";
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import { ROOT_MENTION_STEP } from "@/lib/composer/mentions";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
  * Real ChatListKeymap source wiring (decisions 12, 16).
@@ -392,6 +393,7 @@ describe("ChatListKeymap submit source", () => {
 
 describe("ChatListKeymap on a mobile-width viewport", () => {
   const originalInnerWidth = window.innerWidth;
+  const originalMatchMedia = window.matchMedia;
 
   function setInnerWidth(value: number) {
     Object.defineProperty(window, "innerWidth", {
@@ -400,12 +402,35 @@ describe("ChatListKeymap on a mobile-width viewport", () => {
     });
   }
 
+  /**
+   * The global shim answers width queries from `innerWidth` and every other
+   * query `false` - the fine-pointer arm. This flips the pointer query alone.
+   */
+  function setCoarsePointer(coarse: boolean) {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => {
+        const base = originalMatchMedia.call(window, query);
+        if (query !== "(pointer: coarse)") return base;
+        return { ...base, matches: coarse, media: query };
+      },
+    });
+  }
+
   afterEach(() => {
     setInnerWidth(originalInnerWidth);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+    setPhoneLayoutOnly(false);
   });
 
-  it("plain Enter inserts a newline instead of submitting", () => {
+  it("plain Enter inserts a newline instead of submitting on a touch phone", () => {
     setInnerWidth(390);
+    setCoarsePointer(true);
     const sources: ChatComposerSubmitSource[] = [];
     const { editor } = makeEditor({
       onSubmit: (source) => {
@@ -419,6 +444,59 @@ describe("ChatListKeymap on a mobile-width viewport", () => {
     expect(sources).toEqual([]);
     // splitBlock: the one paragraph became two — the visible newline.
     expect(editor.state.doc.childCount).toBe(2);
+  });
+
+  it("plain Enter still submits in a narrow window driven by a fine pointer", () => {
+    // Desktop app zoomed to 150%: a ~960px window exposes ~640 CSS px, under
+    // the 768 breakpoint, yet the user has a physical keyboard and a mouse.
+    setInnerWidth(640);
+    setCoarsePointer(false);
+    const sources: ChatComposerSubmitSource[] = [];
+    const { editor } = makeEditor({
+      onSubmit: (source) => {
+        sources.push(source);
+      },
+      pickerStore: createComposerPickerStore(),
+    });
+    editor.commands.insertContent("hello");
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(sources).toEqual(["enter"]);
+    expect(editor.state.doc.childCount).toBe(1);
+  });
+
+  it("plain Enter inserts a newline in the installed phone-only app whatever the pointer", () => {
+    setInnerWidth(1024);
+    setCoarsePointer(false);
+    setPhoneLayoutOnly(true);
+    const sources: ChatComposerSubmitSource[] = [];
+    const { editor } = makeEditor({
+      onSubmit: (source) => {
+        sources.push(source);
+      },
+      pickerStore: createComposerPickerStore(),
+    });
+    editor.commands.insertContent("hello");
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(sources).toEqual([]);
+    expect(editor.state.doc.childCount).toBe(2);
+  });
+
+  it("plain Enter submits on a wide touch viewport", () => {
+    setInnerWidth(1024);
+    setCoarsePointer(true);
+    const sources: ChatComposerSubmitSource[] = [];
+    const { editor } = makeEditor({
+      onSubmit: (source) => {
+        sources.push(source);
+      },
+      pickerStore: createComposerPickerStore(),
+    });
+    editor.commands.insertContent("hello");
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(sources).toEqual(["enter"]);
   });
 
   it("Mod-Enter still submits (hardware keyboard on a narrow window)", () => {

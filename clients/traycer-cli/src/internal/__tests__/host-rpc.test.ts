@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   callHostRpc,
+  callHostRpcAtResolvedEndpoint,
   callHostRpcFastFail,
   canonicalResponseSchemaFor,
   parseCanonicalHostResponse,
@@ -11,13 +12,15 @@ import {
 import { resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../../../shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -36,6 +39,10 @@ import {
 import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { worktreeDeleteByPathServerFrameSchemaV13 } from "@traycer/protocol/host/worktree-delete-stream";
+import {
+  simulatorSessionsServerFrameSchemaV10,
+  simulatorStreamServerFrameSchemaV10,
+} from "@traycer/protocol/host/simulator/stream-contracts";
 
 /**
  * Mirrors `getLatestContract`'s traversal (highest major -> its
@@ -432,12 +439,185 @@ describe("callHostRpc", () => {
     });
   });
 
-  // A `HostTransportFailureError` means the connection itself failed or went
-  // quiet - the host never answered. This must map to HOST_UNREACHABLE
-  // rather than UNEXPECTED (its wire code is RPC_ERROR, indistinguishable by
-  // code alone from a resolver error the host actually answered with), and
-  // the transport's own message must pass through unchanged.
-  it("maps a HostTransportFailureError to HOST_UNREACHABLE with the transport's own message", async () => {
+  // The host answers these with a typed wire code for a state of the person's
+  // own machine or workspace, and its message names the remedy. Each used to
+  // fall through to UNEXPECTED, which the runner captures as a CLI defect
+  // (TRAYCER-CLI-7). The mapped code must also be one the runner leaves
+  // uncaptured, so each case checks both.
+  it.each([
+    {
+      wire: "WORKTREE_MISSING" as const,
+      cli: CLI_ERROR_CODES.WORKTREE_MISSING,
+      message:
+        "A bound folder is missing on disk: /gone. Restore it, re-bind to another folder, or remove it to continue.",
+    },
+    {
+      wire: "WORKSPACE_BINDING_REQUIRED" as const,
+      cli: CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
+      message:
+        "Unable to resolve this agent's workspace selection. Choose a workspace before sending a message.",
+    },
+    {
+      wire: "E_HOST_STORAGE_FULL" as const,
+      cli: CLI_ERROR_CODES.HOST_STORAGE_FULL,
+      message:
+        "The host machine is out of disk space. Free some space on it, then try again.",
+    },
+    {
+      // Sent for a reply on a thread that belongs to another pair
+      // (RESPONSE_ID_MISMATCH): the caller's own input.
+      wire: "E_INVALID_ARGUMENT" as const,
+      cli: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "agent.sendMessage: RESPONSE_ID_MISMATCH - 'r1' belongs to a different (sender, receiver) pair.",
+    },
+  ])(
+    "maps the host's $wire refusal to an expected CLI code and keeps its message",
+    async ({ wire, cli, message }) => {
+      const mapped = await toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: wire,
+            message,
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+      expect(mapped).toMatchObject({
+        code: cli,
+        message: `traycer: ${message}`,
+        details: null,
+        exitCode: 1,
+      });
+      expect(EXPECTED_CLI_ERROR_CODES.has(cli)).toBe(true);
+    },
+  );
+
+  // The host sends a request that names a managed profile it cannot use as a
+  // 400 `RPC_ERROR` with one of four fixed messages (the person's own
+  // selection, TRAYCER-CLI-4W). They end as the expected INVALID_ARGUMENT, with
+  // the same output the host's `E_INVALID_ARGUMENT` gets.
+  it.each([
+    'No profile "p-1" is registered for provider "claude-code".',
+    'Profile "p-1" for provider "claude-code" was removed and can no longer be used.',
+    'Profile "p-1" for provider "claude-code" is still completing setup and cannot be used yet.',
+    'Provider "cursor" does not support managed profiles.',
+  ])(
+    "maps an RPC_ERROR carrying the profile-selection refusal %s to an expected INVALID_ARGUMENT",
+    async (message) => {
+      const mapped = await toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message,
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+      expect(mapped).toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: `traycer: ${message}`,
+        details: null,
+        exitCode: 1,
+      });
+      expect(
+        EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.INVALID_ARGUMENT),
+      ).toBe(true);
+    },
+  );
+
+  // Control: an RPC_ERROR whose message is not a profile-selection refusal
+  // stays UNEXPECTED and captured, so a host-side request-validation defect
+  // is still reported.
+  it("keeps an RPC_ERROR with a params-validation message as a captured UNEXPECTED", async () => {
+    const mapped = await toAgentCliError(
+      Promise.reject(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Invalid params for agent.sendMessage: profile: Required",
+          requestId: "r1",
+          method: "agent.sendMessage",
+          fatalDetails: null,
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    expect(mapped).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "Invalid params for agent.sendMessage: profile: Required",
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.UNEXPECTED)).toBe(
+      false,
+    );
+  });
+
+  // TRAYCER-CLI-P: a provider the person turned off in Settings -> Providers.
+  // The host refuses a run or launch on it with HTTP 403 and the typed
+  // `PROVIDER_DISABLED` code. It is the person's own setting, so the mapped
+  // code is an expected one the runner leaves uncaptured, and the host's
+  // message (which names the provider and the setting) is kept exactly as the
+  // fall-through printed it, with no prefix added. `--json`
+  // carries the new code in place of `E_UNEXPECTED`.
+  it("maps the host's PROVIDER_DISABLED refusal to E_PROVIDER_DISABLED and keeps its message", async () => {
+    const message = "Kilo Code is disabled. Enable it in Settings → Providers.";
+    const mapped = await toAgentCliError(
+      Promise.reject(
+        new HostRpcError({
+          code: "PROVIDER_DISABLED",
+          message,
+          requestId: "r1",
+          method: "agent.sendMessage",
+          fatalDetails: null,
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    expect(mapped).toMatchObject({
+      code: "E_PROVIDER_DISABLED",
+      message,
+      details: null,
+      exitCode: 1,
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has("E_PROVIDER_DISABLED")).toBe(true);
+  });
+
+  // The arm keys on the typed wire code, never on the host's wording: the same
+  // sentence arriving as an untyped `RPC_ERROR` stays a captured defect.
+  it("keeps an untyped RPC_ERROR as UNEXPECTED even when its text reads like a disabled provider", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message:
+              "Kilo Code is disabled. Enable it in Settings → Providers.",
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "Kilo Code is disabled. Enable it in Settings → Providers.",
+      details: null,
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.UNEXPECTED)).toBe(
+      false,
+    );
+  });
+
+  // A PLAIN `HostTransportFailureError` is the one shape the transport builds
+  // after the request frame went out with nothing making a replay safe
+  // (`requestSent && !requestReplaySafe`): the host may have carried the call
+  // out and answered into a connection that was already gone. It must NOT
+  // share HOST_UNREACHABLE, whose meaning is that nothing happened and the
+  // command can simply be run again - that reading is what made callers resend
+  // a message the host had already delivered. The transport's own message is
+  // kept and the guidance is appended to it.
+  it("maps a plain HostTransportFailureError to HOST_REQUEST_OUTCOME_UNKNOWN and says the request was sent", async () => {
     await expect(
       toAgentCliError(
         Promise.reject(
@@ -451,17 +631,20 @@ describe("callHostRpc", () => {
         ),
       ),
     ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
-      message: "WebSocket frame timed out after 15000ms",
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message:
+        "traycer: WebSocket frame timed out after 15000ms - the request was sent and the host may have carried it out; check before sending it again.",
       details: null,
       exitCode: 1,
     });
   });
 
-  // RetryableTransportError is a subclass of HostTransportFailureError (the
-  // retrying messenger's own signal that a redial is safe); it must map the
-  // same way as its parent class.
-  it("maps a RetryableTransportError (a HostTransportFailureError subclass) to HOST_UNREACHABLE the same way", async () => {
+  // RetryableTransportError is a subclass of HostTransportFailureError, and it
+  // is the transport's own statement that sending again is safe - either
+  // nothing was dispatched or the host is deduplicating a negotiated key. That
+  // is precisely what HOST_UNREACHABLE means, so it stays there and must not
+  // follow its parent class to the unknown-outcome code.
+  it("keeps a RetryableTransportError on HOST_UNREACHABLE, where a retry is safe", async () => {
     await expect(
       toAgentCliError(
         Promise.reject(
@@ -479,6 +662,42 @@ describe("callHostRpc", () => {
       code: CLI_ERROR_CODES.HOST_UNREACHABLE,
       message: "WebSocket frame timed out after 15000ms",
       details: null,
+      exitCode: 1,
+    });
+  });
+
+  // An abort answers the question on its own flag rather than by its class:
+  // stopping the wait does not recall a request the host may already be
+  // running, while an abort before any send leaves nothing behind.
+  it("splits an aborted request by mayHaveDispatched", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRequestAbortedError({
+            message: "Host request authority was aborted while open",
+            requestId: "r1",
+            method: METHOD,
+            mayHaveDispatched: true,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      exitCode: 1,
+    });
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRequestAbortedError({
+            message: "Host request authority was aborted before dispatch",
+            requestId: "r1",
+            method: METHOD,
+            mayHaveDispatched: false,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
       exitCode: 1,
     });
   });
@@ -505,9 +724,85 @@ describe("callHostRpc", () => {
       details: null,
     });
   });
+
+  // A refusal that ended a retry episode after an earlier attempt may have
+  // reached the host arrives wrapped in an unknown-outcome transport failure.
+  // Its code still says what to do: an access denial, sanitized, not "host
+  // unreachable" with the wrapper's text.
+  it("maps a refusal that ended a retry episode by the refusal's code", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new RetryEpisodeOutcomeUnknownError(
+            new HostRpcError({
+              code: "FORBIDDEN",
+              message:
+                "user 00000000-0000-0000-0000-000000000000 has no role on task",
+              requestId: "r2",
+              method: METHOD,
+              fatalDetails: null,
+            }),
+          ),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message:
+        "traycer: access denied for this epic - check TRAYCER_EPIC_ID and that you're signed in to the account that owns it. An earlier attempt may have gone through. Check before repeating it.",
+      details: null,
+    });
+  });
 });
 
 const COMMANDS_DIR = join(__dirname, "..", "..", "commands");
+
+describe("callHostRpcAtResolvedEndpoint", () => {
+  it("sends on the endpoint and sign-in it is handed, with the dispatch's key and floor", async () => {
+    requestMock.mockResolvedValue({ agents: [] });
+    const params = {
+      epicId: "e",
+      senderAgentId: "agent-1",
+      scope: "user" as const,
+    };
+    const floor = {
+      method: "epic.create",
+      version: { major: 1, minor: 1 },
+    };
+    await callHostRpcAtResolvedEndpoint(
+      METHOD,
+      params,
+      { hostId: "preflighted", websocketUrl: "ws://127.0.0.1:7/rpc" },
+      { token: "tok-p", authnBaseUrl: "https://authn.test", userId: "u-p" },
+      {
+        responseTimeoutMs: null,
+        requiredHostMethodVersion: floor,
+        signal: null,
+        failFast: false,
+        reauthenticate: "always",
+        idempotencyKey: "task-1",
+      },
+    );
+    // Nothing is re-resolved: a host restarted after the caller's preflight
+    // fails this call rather than receiving it under a fresh read.
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(pidMock).not.toHaveBeenCalled();
+    expect(requestMock).toHaveBeenCalledWith(
+      METHOD,
+      params,
+      expect.objectContaining({
+        idempotencyKey: "task-1",
+        requiredHostMethodVersion: floor,
+        authority: expect.objectContaining({
+          endpoint: {
+            hostId: "preflighted",
+            websocketUrl: "ws://127.0.0.1:7/rpc",
+          },
+          bearer: expect.objectContaining({ identity: { userId: "u-p" } }),
+        }),
+      }),
+    );
+  });
+});
 
 describe("canonicalResponseSchemaFor", () => {
   it("returns exactly the registry's latest contract response schema for a spread of methods", () => {
@@ -666,5 +961,25 @@ describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
         "stream method (see the identity assertion above) or justify the " +
         "addition in this allowlist.",
     ).toEqual([]);
+  });
+});
+
+describe("canonical stream frame pairing (simulator streams)", () => {
+  // The shared `simulator-*-stream-client.ts` wrappers parse with these two
+  // explicit `V10` schemas; a later minor that leaves them behind would
+  // silently strip its new keys (`protocol/README.md`, "Opening a new minor
+  // on a stream"), so the pin is held here by identity.
+  it("simulatorSessionsServerFrameSchemaV10 is the canonical serverFrameSchema for simulator.sessions", () => {
+    expect(
+      latestStreamServerFrameSchema(
+        hostStreamRpcRegistry["simulator.sessions"],
+      ),
+    ).toBe(simulatorSessionsServerFrameSchemaV10);
+  });
+
+  it("simulatorStreamServerFrameSchemaV10 is the canonical serverFrameSchema for simulator.stream", () => {
+    expect(
+      latestStreamServerFrameSchema(hostStreamRpcRegistry["simulator.stream"]),
+    ).toBe(simulatorStreamServerFrameSchemaV10);
   });
 });

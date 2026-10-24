@@ -1,10 +1,10 @@
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { basenameOfPath } from "@/lib/path";
 
-// Set membership beats `epicArtifactKindSchema.safeParse(value).success`
+// Set membership beats `markdownArtifactKindSchema.safeParse(value).success`
 // on the per-render mention paths (`createLegacyMentionAttachment` runs
 // for every mention segment in every chat-message render).
-const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set<EpicArtifactKind>([
+const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set<MarkdownArtifactKind>([
   "spec",
   "ticket",
   "story",
@@ -192,6 +192,6 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
   };
 }
 
-function isEpicArtifactKind(value: string): value is EpicArtifactKind {
+function isEpicArtifactKind(value: string): value is MarkdownArtifactKind {
   return EPIC_ARTIFACT_KINDS.has(value);
 }

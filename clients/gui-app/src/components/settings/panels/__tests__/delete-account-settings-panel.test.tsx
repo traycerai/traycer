@@ -71,6 +71,8 @@ function userWithEmail(email: string | null): AuthenticatedUser {
     },
     payAsYouGoUsage: { allowPayAsYouGo: false },
     teamSubscriptions: [],
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
 

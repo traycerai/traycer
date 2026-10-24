@@ -147,11 +147,10 @@ export function selectConnectionManifestForPeer(
       selected[method] = hostCanonical;
       continue;
     }
-    selected[method] = {
-      major: sharedMajor,
-      minor: line.latestMinor,
-      supportedMajors: [...advertisedMajors(hostCanonical)],
-    };
+    selected[method] = withSupportedMajors(
+      { major: sharedMajor, minor: line.latestMinor },
+      advertisedMajors(hostCanonical),
+    );
   }
 
   return selected;
@@ -166,5 +165,28 @@ function manifestEntryForMethodVersionLine(
     .map(Number)
     .filter(Number.isInteger)
     .sort((left, right) => left - right);
-  return { ...canonical, supportedMajors };
+  return withSupportedMajors(canonical, supportedMajors);
+}
+
+/**
+ * Omits `supportedMajors` when it would name only the entry's own major.
+ *
+ * Absence already means exactly that on every peer (`advertisedMajors`), and
+ * it is the form every peer older than the multi-major handshake has always
+ * sent, so the omission changes no negotiation anywhere. It is worth doing
+ * because most methods have one major, and this list is repeated per method
+ * in every `open` and `openAck`, which go out before compression is agreed.
+ */
+function withSupportedMajors(
+  entry: { readonly major: number; readonly minor: number },
+  supportedMajors: readonly number[],
+): ManifestMethodEntry {
+  if (supportedMajors.length === 1 && supportedMajors[0] === entry.major) {
+    return { major: entry.major, minor: entry.minor };
+  }
+  return {
+    major: entry.major,
+    minor: entry.minor,
+    supportedMajors: [...supportedMajors],
+  };
 }

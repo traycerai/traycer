@@ -39,6 +39,30 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => null,
+  useOptionalHostClient: () => null,
+}));
+
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
+  useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+
+vi.mock("@/lib/sandboxes/staged-sandbox-in-window", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/sandboxes/staged-sandbox-in-window")
+    >();
+  return {
+    ...actual,
+    useStagedSandboxInThisWindow: () => null,
+  };
+});
+
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => () => Promise.resolve(),
 }));
 
 // The host Overview re-provides a scoped STREAM binding for its import and
@@ -62,7 +86,9 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
 // the Overview's header and tab bar render in every host state, so the
 // contract mounts both under a `connecting` scope - the state where every
 // host-backed body is withheld - and the fixture's `hostScope` says which
-// state to serve. The ref is set per test.
+// state to serve. Permissions reads `usePersonalHostScope` (it is an Account
+// page now) and the Overview reads `useHostScope`, so BOTH hooks answer with
+// the same connecting-aware factory. The ref is set per test.
 const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
   current: null,
 }));
@@ -71,16 +97,16 @@ vi.mock(
   async (importOriginal) => {
     const { hostScopeFixture: fixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
+    const useScope = () =>
+      fixture(
+        hostScopeState.current === "connecting" ? { status: "connecting" } : {},
+      );
     return {
       ...(await importOriginal<
         typeof import("@/components/settings/host-scope/use-host-scope")
       >()),
-      useHostScope: () =>
-        fixture(
-          hostScopeState.current === "connecting"
-            ? { status: "connecting" }
-            : {},
-        ),
+      useHostScope: useScope,
+      usePersonalHostScope: useScope,
     };
   },
 );

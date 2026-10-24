@@ -12,6 +12,7 @@ import {
   hostQueryKeys,
   providersMutationKeys,
 } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 interface FallbackPolicySaveContext {
   readonly hostId: string | null;
@@ -39,6 +40,7 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostMutation<
     HostRpcRegistry,
     "providers.fallbackPolicy.set",
@@ -52,7 +54,7 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
       // Shared with the restore and reset hooks beside this one - see
       // `fallbackPolicyWriteScope`. Without it two rapid saves race and the
       // `setQueriesData` below writes whichever response LANDED last.
-      scope: fallbackPolicyWriteScope(client.getActiveHostId()),
+      scope: fallbackPolicyWriteScope(requesterHostId),
       // Captured before dispatch: the host can change under a slow save, and
       // writing the result into the new host's cache slot would show one
       // machine's policy under another's name.

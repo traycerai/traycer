@@ -145,6 +145,8 @@ const user: AuthenticatedUser = {
   userSubscription,
   payAsYouGoUsage: { allowPayAsYouGo: false },
   teamSubscriptions: [teamSubscription],
+  environments: { personal: null, teams: [] },
+  actingAs: null,
 };
 
 describe("TraycerSubscriptionSection", () => {

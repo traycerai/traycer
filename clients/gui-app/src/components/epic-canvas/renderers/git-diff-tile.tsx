@@ -17,6 +17,7 @@ import {
 } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useDiffViewerPreferences } from "@/hooks/ui/use-diff-viewer-preferences";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
@@ -61,6 +62,7 @@ import { GitWatcherStatusNotice } from "@/components/epic-canvas/git-diff/git-wa
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { openTargetActionLabel } from "@/lib/editor/editor-menu-catalog";
+import { useNoEditorInstalledNotice } from "@/hooks/editor/use-no-editor-installed-notice";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { BoundedTileLoad } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -280,10 +282,9 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const queryClient = useQueryClient();
   const tabHostId = useTabHostId();
   const effectiveEditor = useEffectiveDefaultEditor(tabHostId);
+  const showNoEditorInstalledNotice = useNoEditorInstalledNotice(tabHostId);
   const canOpenHostPaths = useHostPathOpenAvailability(tabHostId);
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
@@ -361,6 +362,10 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const handleOpenFile = useCallback(() => {
     if (!canOpenHostPaths || props.onOpenFile === null) return;
     if (openFileOpening) return;
+    if (effectiveEditor === null) {
+      showNoEditorInstalledNotice();
+      return;
+    }
     triggerOpenFileFeedback();
     editorOpen.mutate({
       editorId: effectiveEditor,
@@ -371,6 +376,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
     effectiveEditor,
     editorOpen,
     openFileOpening,
+    showNoEditorInstalledNotice,
     props.node.diff.runningDir,
     props.onOpenFile,
     triggerOpenFileFeedback,
@@ -398,7 +404,10 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
         canOpenHostPaths && props.onOpenFile !== null
           ? {
               onClick: handleOpenFile,
-              label: openTargetActionLabel(effectiveEditor),
+              label:
+                effectiveEditor === null
+                  ? "Open in editor"
+                  : openTargetActionLabel(effectiveEditor),
               disabled: openFileOpening,
               pending: openFileOpening,
             }
@@ -416,9 +425,7 @@ interface GitFileDiffTileBodyProps {
 }
 
 function GitFileDiffTileBody(props: GitFileDiffTileBodyProps): ReactNode {
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   if (props.subscription.error !== null) {
     return (
       <>
@@ -519,6 +526,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
   const tabHostId = useTabHostId();
   const effectiveEditor = useEffectiveDefaultEditor(tabHostId);
+  const showNoEditorInstalledNotice = useNoEditorInstalledNotice(tabHostId);
   const canOpenHostPaths = useHostPathOpenAvailability(tabHostId);
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
@@ -612,6 +620,10 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 
   const handleOpenExternally = useCallback(() => {
     if (!canOpenHostPaths || openExternallyOpening) return;
+    if (effectiveEditor === null) {
+      showNoEditorInstalledNotice();
+      return;
+    }
     triggerOpenExternallyFeedback();
     editorOpen.mutate({
       editorId: effectiveEditor,
@@ -622,6 +634,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     effectiveEditor,
     editorOpen,
     openExternallyOpening,
+    showNoEditorInstalledNotice,
     props.file.path,
     props.node.diff.runningDir,
     triggerOpenExternallyFeedback,
@@ -932,9 +945,7 @@ interface GitBundleDiffTileBodyProps {
 
 function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
   const bundleTabHostId = useTabHostId();
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   const bundleGroup = props.node.diff.bundleGroup;
   // Derive content before any early return so the restoration hooks run
   // unconditionally (React rules of hooks).

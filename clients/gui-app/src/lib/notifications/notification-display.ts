@@ -22,8 +22,8 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationEntryV22,
-  HostNotificationsCloudFeedRowV11,
+  HostNotificationEntryV24,
+  HostNotificationsCloudFeedRowV14,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
@@ -75,7 +75,7 @@ export function resetNotificationFeedDisplayReceiptsForTests(): void {
 function feedOccurrenceKey(
   originHostId: string | null,
   coalesceKey: string,
-  entry: HostNotificationEntryV22,
+  entry: HostNotificationEntryV24,
 ): string {
   return JSON.stringify([
     "feed-occurrence-v1",
@@ -467,7 +467,7 @@ function activationRoute(
 
 /** Keep host batching while sharing occurrence receipts with cloud arrivals. */
 export async function displayHostChannelEmission(
-  entries: ReadonlyArray<HostNotificationEntryV22>,
+  entries: ReadonlyArray<HostNotificationEntryV24>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): Promise<void> {
@@ -505,7 +505,7 @@ export async function displayHostChannelEmission(
 
 /** Cloud copies use the origin's semantic key, never their replica row id. */
 export async function displayCloudSnapshotArrivals(
-  entries: ReadonlyArray<HostNotificationsCloudFeedRowV11>,
+  entries: ReadonlyArray<HostNotificationsCloudFeedRowV14>,
   target: NotificationDisplayTarget,
 ): Promise<void> {
   const focused = readFocusedHostNotificationPresence();
@@ -562,7 +562,7 @@ function feedOccurrenceDisplay({
   readonly key: string;
   readonly originHostId: string | null;
   readonly feedSource: "host" | "cloud";
-  readonly entry: HostNotificationEntryV22;
+  readonly entry: HostNotificationEntryV24;
 }): NotificationFeedOccurrence {
   const content = buildNotificationToastContent([row]);
   return {

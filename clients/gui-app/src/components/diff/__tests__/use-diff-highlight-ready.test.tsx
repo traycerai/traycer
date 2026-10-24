@@ -182,6 +182,34 @@ describe("useDiffs highlight gates", () => {
     });
   });
 
+  // A theme switch invalidates what the pool highlighted for the old theme.
+  // The memoized prime dropped `theme` from its inputs, so a file that stayed
+  // the same was never re-primed and the first paint in the new theme ran cold.
+  it("primes the file again when only the theme changes", async () => {
+    const primeFileHighlightCache = vi.fn(() => Promise.resolve());
+    poolState.pool = {
+      setRenderOptions: vi.fn(() => Promise.resolve()),
+      primeFileHighlightCache,
+      primeDiffHighlightCache: vi.fn(() => Promise.resolve()),
+    };
+    const file = sampleFile();
+    const rendered = render(
+      <FileReadyProbe file={file} theme="pierre-dark" enabled />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("ready").textContent).toBe("ready");
+    });
+    expect(primeFileHighlightCache).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <FileReadyProbe file={file} theme="pierre-light" enabled />,
+    );
+
+    await waitFor(() => {
+      expect(primeFileHighlightCache).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("renders DiffHighlightLoading with the requested test id", () => {
     render(<DiffHighlightLoading testId="workspace-file-highlighting" />);
     expect(screen.getByTestId("workspace-file-highlighting")).toBeTruthy();

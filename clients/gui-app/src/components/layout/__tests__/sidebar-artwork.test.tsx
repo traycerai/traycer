@@ -150,4 +150,22 @@ describe("SidebarArtwork", () => {
     );
     expect(container.querySelector(".sidebar-artwork")).toBeNull();
   });
+
+  // The theme switch reaches the sidebar through the theme revision alone: no
+  // parent re-renders it, so the artwork must leave when the theme drops it.
+  it("leaves when the active theme turns its artwork off, with no parent re-render", () => {
+    const { container } = renderArtwork();
+    expect(container.querySelector(".sidebar-artwork")).not.toBeNull();
+
+    act(() =>
+      useThemeLibraryStore.setState({
+        draft: {
+          ...createThemeFromPreset("neutral", "dark"),
+          sidebarArtwork: false,
+        },
+      }),
+    );
+
+    expect(container.querySelector(".sidebar-artwork")).toBeNull();
+  });
 });

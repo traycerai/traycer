@@ -114,19 +114,16 @@ describe("settings search", () => {
       "general#general-prevent-sleep",
     );
     expect(labelsFor("dictation", DESKTOP)).toContain("Voice input");
-    expect(labelsFor("proxy", DESKTOP)).toContain("Shell");
+    expect(labelsFor("proxy", DESKTOP)).toContain("Variables and shells");
   });
 
-  it("reaches the replay card by the words the old General row owned", () => {
-    // The tour's replay moved out of General, and its vocabulary moved with
-    // it: these queries appear in no label anywhere and must still land on
-    // the card, anchor included, rather than at the top of a page.
-    expect(landingFor("walkthrough", DESKTOP)).toBe(
-      "getting-started#getting-started-product-tour",
+  it("reaches Start a task and the download card on Getting started", () => {
+    expect(landingFor("start a task", DESKTOP)).toBe(
+      "getting-started#getting-started-start-task",
     );
-    for (const query of ["product tour", "first run", "intro"]) {
-      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
-    }
+    expect(landingFor("another computer", DESKTOP)).toBe(
+      "getting-started#getting-started-install",
+    );
   });
 
   it("reaches the Notifications page by its former name, Inbox", () => {
@@ -203,6 +200,69 @@ describe("settings search", () => {
       .map((result) => result.scopeLabel);
     expect(scopes).toContain("Application");
     expect(scopes).toContain("Host");
+  });
+
+  it("labels each regrouped page with the scope the sidebar files it under", () => {
+    // The scope label is read off the section's group, so a page that moves
+    // group has to move its label with it. A page result is the section-kind
+    // entry whose label is the page's own name.
+    const pageScopeFor = (
+      query: string,
+      section: string,
+      label: string,
+    ): string | undefined =>
+      searchSettings(query, DESKTOP).find(
+        (result) =>
+          result.entry.kind === "section" &&
+          result.entry.section === section &&
+          result.entry.label === label,
+      )?.scopeLabel;
+
+    for (const [query, section, label] of [
+      ["Model routing", "fallback", "Model routing"],
+      ["Variables and shells", "shell", "Variables and shells"],
+      ["Agent selection", "agents", "Agent selection"],
+      ["Browser agent access", "browser-agent-access", "Browser agent access"],
+      ["Secrets", "secrets", "Secrets"],
+      ["MCP servers", "mcp-servers", "MCP servers"],
+      ["Skills", "skills", "Skills"],
+      ["Agent definitions", "agent-definitions", "Agent definitions"],
+      ["Providers", "providers", "Providers"],
+      ["Permissions", "permissions", "Permissions"],
+      ["Sandboxes", "sandboxes", "Sandboxes"],
+      ["Members", "members", "Members"],
+    ] as const) {
+      expect(pageScopeFor(query, section, label), query).toBe("Environment");
+    }
+    for (const [query, section, label] of [
+      ["Credits", "credits", "Credits"],
+      ["Notifications", "notifications", "Notifications"],
+    ] as const) {
+      expect(pageScopeFor(query, section, label), query).toBe("Account");
+    }
+    expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
+  });
+
+  it("opens the Browser agent access and Secrets pages on their own words", () => {
+    expect(landingFor("browser agent access", DESKTOP)).toBe(
+      "browser-agent-access#<top>",
+    );
+    expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
+  });
+
+  it("opens MCP servers and Agent definitions on their own words", () => {
+    expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
+    expect(landingFor("agent definitions", DESKTOP)).toBe(
+      "agent-definitions#<top>",
+    );
+  });
+
+  it("no longer offers Machine setup as a page of its own", () => {
+    expect(
+      searchSettings("machine setup", DESKTOP).some(
+        (result) => result.entry.section === "machine-setup",
+      ),
+    ).toBe(false);
   });
 
   it("reaches the Agent office default view row, group breadcrumb included", () => {
@@ -415,7 +475,7 @@ describe("settings search", () => {
     it("sends selected-host vocabulary to its Overview tab", () => {
       // Every group on a host-scoped page is dropped or concealed for an
       // unresolved, connecting or vanished host, so none of the in-body
-      // groups is a target — but each of the four tabs anchors on its own
+      // groups is a target — but each of the five tabs anchors on its own
       // trigger, which renders in every host state, so these words now land
       // on the TAB that answers them rather than on the bare page.
       for (const context of [DESKTOP, MOBILE]) {
@@ -454,6 +514,10 @@ describe("settings search", () => {
         ["uninstall", "host-overview-tab-installation"],
         ["port forward", "host-overview-tab-ports"],
         ["release candidate", "host-overview-tab-updates"],
+        ["remote access", "host-overview-tab-access"],
+        ["finishing setup", "host-overview-tab-access"],
+        ["terminal account", "host-overview-tab-access"],
+        ["keep value", "host-overview-tab-access"],
         ["import", "host-overview-tab-data"],
         ["version history", "host-overview-tab-data"],
         ["host id", "host-overview-tab-installation"],

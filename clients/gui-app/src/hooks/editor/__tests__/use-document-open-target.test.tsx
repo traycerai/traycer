@@ -27,6 +27,12 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
 
+// The install probe is not what this suite decides on; "still in flight" leaves
+// the stored default in place.
+vi.mock("@/hooks/editor/use-editor-availability-query", () => ({
+  useEditorAvailability: () => ({ data: undefined }),
+}));
+
 import { useDocumentOpenExternallyTarget } from "../use-document-open-target";
 
 function resetSettingsStore(): void {

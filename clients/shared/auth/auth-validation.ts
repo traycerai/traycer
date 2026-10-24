@@ -48,6 +48,7 @@ import type {
   AuthIdentityValidationResult,
   AuthServerTimeObservation,
 } from "./auth-validation-types";
+import { composeRequestAbort } from "./request-abort";
 
 export type {
   AuthIdentityValidationResult,
@@ -95,12 +96,13 @@ type AuthenticatedUserResponseMajor =
  * fails a test instead of going silently unadvertised.
  *
  * The majors are the ENVELOPE's, not the nested `user` the header is named
- * after. Both move together by construction - an envelope gains a major
- * precisely because the user inside it did - and advertising what can
- * actually be PARSED is the safer of the two if they ever drift.
+ * after, because what this build can PARSE is the envelope. They have
+ * drifted once: major 3 adds the caller's environments to the envelope and
+ * leaves `user` at major 2. This build parses major 3 and reads none of its
+ * new fields.
  */
 export const SUPPORTED_USER_RECORD_MAJORS: readonly AuthenticatedUserResponseMajor[] =
-  [1, 2];
+  [1, 2, 3];
 
 const ADVERTISED_USER_RECORD_MAJORS = SUPPORTED_USER_RECORD_MAJORS.join(",");
 
@@ -153,7 +155,8 @@ function resolveServedRecordVersion(
  * Per-attempt ceiling and bounded exponential-backoff retry for the auth
  * boundary's HTTP calls (the identity routes, `/api/v3/auth/refresh`).
  *
- * Every attempt is time-boxed with `AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)`
+ * Every attempt is time-boxed with `composeRequestAbort(…, AUTH_FETCH_TIMEOUT_MS)`
+ * (not `AbortSignal.timeout`, which the iOS WebView floor lacks)
  * so a stalled/half-open socket can no longer hang the caller indefinitely -
  * previously an un-timed-out `fetch` here could block `auth.start()` (and, through
  * it, the renderer's "Loading Traycer…" gate) until the OS TCP timeout,
@@ -205,7 +208,7 @@ function delayFor(ms: number): Promise<void> {
 
 /**
  * True for an abort/timeout thrown while reading a response body *after* the
- * headers arrived - the per-attempt `AbortSignal.timeout` (a `TimeoutError`) or
+ * headers arrived - the per-attempt timeout (a `TimeoutError`) or
  * a caller abort (`AbortError`) firing during `response.json()`. Such a failure
  * is transient/retriable and must surface as `network-error`, NOT be collapsed
  * into a terminal `rejected`/invalid body the way a genuine parse failure is.
@@ -256,11 +259,17 @@ export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
   readonly token: string;
   readonly signal: AbortSignal | null;
 }): Promise<AuthIdentityValidationResult> {
-  const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
-  const signal =
-    args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
-  const result = await fetchIdentityOnce(args.authnBaseUrl, args.token, signal);
-  return toIdentityValidationResult(result);
+  const abort = composeRequestAbort(args.signal, AUTH_FETCH_TIMEOUT_MS);
+  try {
+    const result = await fetchIdentityOnce(
+      args.authnBaseUrl,
+      args.token,
+      abort.signal,
+    );
+    return toIdentityValidationResult(result);
+  } finally {
+    abort.clear();
+  }
 }
 
 async function validateAuthTokenIdentityFetch(
@@ -280,8 +289,8 @@ async function validateAuthTokenIdentityFetch(
  *
  * The body is parsed against the version the SERVER said it served and then
  * migrated to this build's latest through the registry's upgrade chain, so a
- * major-1 body from the frozen route and a major-2 body from the negotiated
- * one reach `applySignedIn` as the same shape. A failure here is still a
+ * major-1 body from the frozen route and a major-2 or major-3 body from the
+ * negotiated one reach `applySignedIn` as the same shape. A failure here is still a
  * terminal `rejected`, exactly as a bad body always was: the version was
  * resolved to an installed one before the request's body was even read, so
  * what is left is a 2xx that does not match the contract it claims.
@@ -381,15 +390,14 @@ async function fetchUserResponse(
   authnBaseUrl: string,
   token: string,
 ): Promise<UserFetchResult> {
-  return withAuthNetworkRetry(
-    () =>
-      fetchIdentityOnce(
-        authnBaseUrl,
-        token,
-        AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
-      ),
-    isUserFetchTransient,
-  );
+  return withAuthNetworkRetry(async () => {
+    const abort = composeRequestAbort(null, AUTH_FETCH_TIMEOUT_MS);
+    try {
+      return await fetchIdentityOnce(authnBaseUrl, token, abort.signal);
+    } finally {
+      abort.clear();
+    }
+  }, isUserFetchTransient);
 }
 
 function isUserFetchTransient(result: UserFetchResult): boolean {
@@ -542,7 +550,7 @@ async function fetchUserRouteOnce(
     });
   } catch {
     // A thrown `fetch` - a transport failure OR the per-attempt
-    // `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and
+    // timeout firing (a `TimeoutError`) - is transient and
     // retriable, so both collapse to `network-error`.
     return { kind: "network-error", serverTime: null };
   }
@@ -619,16 +627,18 @@ export async function refreshOnceAbortable(args: {
   readonly clientKind: "cli" | "desktop" | null;
   readonly signal: AbortSignal | null;
 }): Promise<AuthTokenRefreshResult> {
-  const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
-  const signal =
-    args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
-  return refreshAuthTokenOnceViaHttp(
-    args.authnBaseUrl,
-    args.token,
-    args.refreshToken,
-    args.clientKind,
-    signal,
-  );
+  const abort = composeRequestAbort(args.signal, AUTH_FETCH_TIMEOUT_MS);
+  try {
+    return await refreshAuthTokenOnceViaHttp(
+      args.authnBaseUrl,
+      args.token,
+      args.refreshToken,
+      args.clientKind,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
 }
 
 /**
@@ -638,6 +648,45 @@ export async function refreshOnceAbortable(args: {
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/**
+ * Whether a 403/404 refresh answer is authn's own refusal of THIS request, as
+ * opposed to a 403/404 minted by whatever else answered on authn's URL.
+ *
+ * authn serializes every refusal through one error handler
+ * (`authn-v3/src/plugins/error-handler.ts`) as `{ statusCode, error }`: a
+ * deleted user's refresh is a 404 whose body is
+ * `{ "statusCode": 404, "error": "User not found" }`. Nothing else that can
+ * answer a 404 on that URL produces that shape:
+ *
+ * - a gateway, a reverse proxy, a wrong base URL or another process holding
+ *   authn's port answers with an empty, HTML or unrelated body. A dev stack
+ *   whose authn port was held by a WebSocket capture proxy answered exactly
+ *   this - `Content-Length: 0` - and every renderer on it concluded the account
+ *   had been deleted, latched, and sent the person to sign in with "a different
+ *   account" on a stack that had no sign-in service either;
+ * - Fastify's own route-not-found, a deployment that lacks the route, answers
+ *   `{ message, error: "Not Found", statusCode }`. authn's handler never emits
+ *   `message`, and a missing route is a statement about the deployment, not the
+ *   account.
+ *
+ * `statusCode` is checked against the status actually answered so a cached or
+ * replayed envelope for some other status cannot pass as this one.
+ */
+async function isAuthnRefusal(response: Response): Promise<boolean> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(payload) &&
+    payload.statusCode === response.status &&
+    typeof payload.error === "string" &&
+    !("message" in payload)
+  );
 }
 
 /**
@@ -742,8 +791,17 @@ async function refreshAuthTokenOnceViaHttp(
   // fix, while retaining read access to already-on-disk data slightly past a
   // termination is mild. 409 is handled above (mid-rotation, retriable) and
   // every other non-2xx falls through to `network-error`, which also holds.
+  //
+  // The account verdict is TERMINAL three layers up (the renderer latches it,
+  // stops recovering, and tells the person their account is gone), so the
+  // status alone is not enough evidence for it: a 404 is also what answers
+  // when nothing at the URL is authn at all. The body decides - see
+  // `isAuthnRefusal`. Without authn's own answer behind it a 403/404 is an
+  // outage, which holds and keeps recovering like every other one.
   if (response.status === 403 || response.status === 404) {
-    return { kind: "rejected", rejection: { kind: "account" } };
+    return (await isAuthnRefusal(response))
+      ? { kind: "rejected", rejection: { kind: "account" } }
+      : { kind: "network-error" };
   }
 
   if (response.status === 400 || response.status === 401) {
@@ -800,7 +858,7 @@ export type AuthCodeExchangeResult =
  *
  * A `4xx` is a terminal `rejected` (bad/expired/used code, or a PKCE mismatch);
  * any other non-2xx or a transport failure is a transient `network-error`. The
- * request is time-boxed by `AbortSignal.timeout` (a fired timeout surfaces as
+ * request is time-boxed by `composeRequestAbort` (a fired timeout surfaces as
  * `network-error` via the `catch`); unlike validation/refresh it is deliberately
  * NOT retried, because the `code` is single-use - replaying it after a lost
  * response would be rejected as already-consumed. The sign-in callback surfaces
@@ -810,6 +868,25 @@ export async function exchangeCodeForTokens(
   authnBaseUrl: string,
   code: string,
   codeVerifier: string,
+): Promise<AuthCodeExchangeResult> {
+  const abort = composeRequestAbort(null, AUTH_FETCH_TIMEOUT_MS);
+  try {
+    return await exchangeCodeForTokensWithSignal(
+      authnBaseUrl,
+      code,
+      codeVerifier,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function exchangeCodeForTokensWithSignal(
+  authnBaseUrl: string,
+  code: string,
+  codeVerifier: string,
+  signal: AbortSignal,
 ): Promise<AuthCodeExchangeResult> {
   let response: Response;
   try {
@@ -822,7 +899,7 @@ export async function exchangeCodeForTokens(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
-        signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
+        signal,
       },
     );
   } catch {
@@ -870,7 +947,18 @@ export type RotatedTokensOutcome =
       readonly token: string;
       readonly refreshToken: string;
     }
-  | { readonly kind: "invalid" }
+  | {
+      readonly kind: "invalid";
+      /**
+       * Boxed when the body READ threw something other than a parse failure:
+       * the connection ended or stalled mid-body (undici's `terminated` with
+       * `cause.code = UND_ERR_SOCKET`, `UND_ERR_BODY_TIMEOUT`), so no complete
+       * body ever arrived. `null` for a body that arrived and is not a token
+       * pair. The outcome is `invalid` either way, as it always was; the box
+       * only lets a caller that logs say WHY.
+       */
+      readonly readFailure: { readonly error: unknown } | null;
+    }
   | { readonly kind: "transient" };
 
 /**
@@ -888,13 +976,15 @@ export async function readRotatedTokens(
   try {
     body = await response.json();
   } catch (error) {
-    return isAbortOrTimeout(error)
-      ? { kind: "transient" }
-      : { kind: "invalid" };
+    if (isAbortOrTimeout(error)) return { kind: "transient" };
+    return {
+      kind: "invalid",
+      readFailure: error instanceof SyntaxError ? null : { error },
+    };
   }
 
   if (body === null || typeof body !== "object") {
-    return { kind: "invalid" };
+    return { kind: "invalid", readFailure: null };
   }
 
   const record = body as Record<string, unknown>;
@@ -906,7 +996,7 @@ export async function readRotatedTokens(
     typeof refreshToken !== "string" ||
     refreshToken.length === 0
   ) {
-    return { kind: "invalid" };
+    return { kind: "invalid", readFailure: null };
   }
 
   return { kind: "ok", token, refreshToken };

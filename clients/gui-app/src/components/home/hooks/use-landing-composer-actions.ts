@@ -7,6 +7,7 @@ import type {
   CreateEpicChatSeedV12,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
+  EpicCreateOwner,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -27,7 +28,17 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
+  epicCreateOwnerFor,
+  landingOwnerRefusal,
+  type LandingOwnerTeam,
+} from "@/components/home/composer/landing-owner-model";
+import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
@@ -144,7 +155,10 @@ import {
   buildDefaultBranchByPath,
   EMPTY_DEFAULT_BRANCH,
 } from "@/lib/worktree/default-branch-name";
-import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
+import {
+  defaultFolderIntent,
+  mainCheckoutHasCommit,
+} from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface LandingComposerSubmitArgs {
@@ -164,6 +178,35 @@ export interface LandingComposerSubmitArgs {
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
   };
+  /**
+   * Who the new task belongs to: the resolved host's owner, read by the
+   * caller at submit; `null` is Personal.
+   */
+  readonly owner: LandingOwnerTeam | null;
+  /**
+   * Whether the selected harness is one a team sandbox does not offer, on a
+   * team sandbox, read by the caller at submit.
+   */
+  readonly teamSandboxHarnessBlocked: boolean;
+  /**
+   * Told once whether the create went out, once `submit` returned no
+   * refusal: `true` as it is dispatched, `false` where the submission stops
+   * short (a hold, an image that could not be read, the draft moving or
+   * closing first). `null` where the caller does not wait on it.
+   */
+  readonly settled: ((dispatched: boolean) => void) | null;
+}
+
+export interface LandingTerminalAgentArgs {
+  readonly launch: TerminalAgentLaunch;
+  /** The caller-owned draft the Start replaces, or null. */
+  readonly draftId: string | null;
+  /** As `LandingComposerSubmitArgs.owner`. */
+  readonly owner: LandingOwnerTeam | null;
+  /** Whether `launch.harnessId` is one a team sandbox does not offer. */
+  readonly teamSandboxHarnessBlocked: boolean;
+  /** As `LandingComposerSubmitArgs.settled`. */
+  readonly settled: ((dispatched: boolean) => void) | null;
 }
 
 export interface TerminalAgentLaunch {
@@ -178,17 +221,16 @@ export interface TerminalAgentLaunch {
 
 /**
  * Both actions return the submit-time placement refusal (selection model §54)
- * instead of dispatching, or `null` when the create was dispatched. The caller
- * renders the message inline on the composer - never a toast-and-proceed, and
- * never a silent fallback onto another host.
+ * instead of dispatching, or `null` otherwise; `settled` then says whether the
+ * create went out. The caller renders the message inline on the composer -
+ * never a toast-and-proceed, and never a silent fallback onto another host.
  */
 export interface LandingComposerActions {
   readonly submit: (
     args: LandingComposerSubmitArgs,
   ) => LandingPlacementRefusal | null;
   readonly selectTerminalAgent: (
-    launch: TerminalAgentLaunch,
-    draftId: string | null,
+    args: LandingTerminalAgentArgs,
   ) => LandingPlacementRefusal | null;
   /**
    * Whether a create started here is still running.
@@ -321,6 +363,8 @@ export function useLandingComposerActions(
       readonly title: string;
       readonly initialUserPrompt: string;
       readonly chat: CreateEpicChatSeedV12 | null;
+      /** `epic.create@1.3`'s owner; `null` is the person. */
+      readonly owner: EpicCreateOwner | null;
       readonly workspaceFolders: ReadonlyArray<string>;
       readonly workspaceFolderInfoByPath: Readonly<
         Record<string, WorkspaceFolderInfo>
@@ -451,6 +495,9 @@ export function useLandingComposerActions(
           input.workspaceFolderInfoByPath,
         ),
         chat: input.chat,
+        // A team owner is floored at `epic.create@1.3` by the create
+        // mutation, so it never reaches a host that would strip it.
+        owner: input.owner,
       })
         .then((response) => {
           // A REFUSAL resolves, so it arrives HERE and not in the `.catch`
@@ -745,6 +792,7 @@ export function useLandingComposerActions(
         captureSeedRecovery: (recover) => {
           seedRecovery.run = recover;
         },
+        owner: epicCreateOwnerFor(args.owner),
         chat: {
           chatId,
           parentId: null,
@@ -1098,14 +1146,18 @@ export function useLandingComposerActions(
     [finalizeSubmission, refusedOverWireHashCap],
   );
 
+  /**
+   * Whether a submission attempt started; one that did tells `args.settled`
+   * itself (see `DraftSubmissionAttempt.onSettled`).
+   */
   const dispatchSubmission = useCallback(
     (
       args: LandingComposerSubmitArgs,
       workspaceContext: LandingWorkspaceContext,
       hostId: string,
-    ) => {
+    ): boolean => {
       const { editor } = args;
-      if (editor === null) return;
+      if (editor === null) return false;
 
       const normalized = normalizeComposerContentWithSelection(
         editor.getJSON(),
@@ -1114,14 +1166,14 @@ export function useLandingComposerActions(
       const editorContent = normalized.content;
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
-      if (text.trim().length === 0 && !hasImages) return;
+      if (text.trim().length === 0 && !hasImages) return false;
       const draftId = ensureSubmissionDraft(
         args.draftId,
         editorContent,
         hostId,
       );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
-      if (runtime === null) return;
+      if (runtime === null) return false;
       // The runtime's stored content already reflects the latest edit (every
       // keystroke flows through `onDocumentChange` synchronously, well before
       // a later submit click) or was just seeded verbatim by
@@ -1134,8 +1186,9 @@ export function useLandingComposerActions(
       }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
+        args.settled,
       );
-      if (attempt === null) return;
+      if (attempt === null) return false;
       const exactArgs = { ...args, draftId };
 
       // The live editor content is hash-only (landing pastes hashes, never
@@ -1157,7 +1210,7 @@ export function useLandingComposerActions(
           attempt,
           hostId,
         });
-        return;
+        return true;
       }
       // …unless the host takes the hashes THEMSELVES, which is the whole point
       // of `epic.create@1.2`: the bytes crossed the relay once at paste, and a
@@ -1188,7 +1241,7 @@ export function useLandingComposerActions(
           text,
           workspaceContext,
         });
-        return;
+        return true;
       }
       const sessionBytes = sessionBase64ByHash(hashes);
       if (sessionBytes !== null) {
@@ -1205,7 +1258,7 @@ export function useLandingComposerActions(
           attempt,
           hostId,
         });
-        return;
+        return true;
       }
       // Async (session-cold / restored draft) path only — the sync paths above
       // finalize in-stack and clear the editor before any re-entry is possible, so
@@ -1220,7 +1273,7 @@ export function useLandingComposerActions(
         // gets a live attempt and then bails here, so without completing it
         // that draft stays `isSubmitting` with nothing left to settle it.
         draftRuntimeRegistry.complete(attempt);
-        return;
+        return true;
       }
       submissionInFlightRef.current = true;
       void resolveBase64ByHash(hashes, draftImageByteTargetForHost(hostId))
@@ -1276,6 +1329,7 @@ export function useLandingComposerActions(
         .finally(() => {
           submissionInFlightRef.current = false;
         });
+      return true;
     },
     [dispatchByHashSubmission, finalizeSubmission, submitClient],
   );
@@ -1285,6 +1339,7 @@ export function useLandingComposerActions(
       launch: TerminalAgentLaunch,
       workspaceContext: LandingWorkspaceContext,
       hostId: string,
+      owner: LandingOwnerTeam | null,
     ) => {
       const {
         harnessId,
@@ -1371,6 +1426,7 @@ export function useLandingComposerActions(
         // should stand. Nothing to recover to.
         captureSeedRecovery: () => undefined,
         chat: null,
+        owner: epicCreateOwnerFor(owner),
       })
         .then(
           (response) => {
@@ -1485,34 +1541,51 @@ export function useLandingComposerActions(
       if (placement.kind === "refused") {
         return { message: placement.message };
       }
+      if (args.teamSandboxHarnessBlocked) {
+        return { message: TEAM_SANDBOX_HARNESS_UNAVAILABLE };
+      }
+      const ownerRefusal = refuseTeamOwner(args.owner, placement.hostId);
+      if (ownerRefusal !== null) return ownerRefusal;
       const workspaceContext = readLandingWorkspaceContext(
         args.draftId,
         queryClient,
         placement.hostId,
       );
-      if (workspaceContext.worktreeIntentSuspended) return null;
-      dispatchSubmission(args, workspaceContext, placement.hostId);
+      if (
+        workspaceContext.worktreeIntentSuspended ||
+        !dispatchSubmission(args, workspaceContext, placement.hostId)
+      ) {
+        args.settled?.(false);
+      }
       return null;
     },
     [dispatchSubmission, queryClient, resolveAdmittedPlacement],
   );
 
   const selectTerminalAgent = useCallback(
-    (
-      launch: TerminalAgentLaunch,
-      draftId: string | null,
-    ): LandingPlacementRefusal | null => {
+    (args: LandingTerminalAgentArgs): LandingPlacementRefusal | null => {
+      const { launch, draftId, owner, teamSandboxHarnessBlocked, settled } =
+        args;
       const placement = resolveAdmittedPlacement();
       if (placement.kind === "refused") {
         return { message: placement.message };
       }
+      if (teamSandboxHarnessBlocked) {
+        return { message: TEAM_SANDBOX_HARNESS_UNAVAILABLE };
+      }
+      const ownerRefusal = refuseTeamOwner(owner, placement.hostId);
+      if (ownerRefusal !== null) return ownerRefusal;
       const workspaceContext = readLandingWorkspaceContext(
         draftId,
         queryClient,
         placement.hostId,
       );
-      if (workspaceContext.worktreeIntentSuspended) return null;
-      dispatchTerminalAgent(launch, workspaceContext, placement.hostId);
+      if (workspaceContext.worktreeIntentSuspended) {
+        settled?.(false);
+        return null;
+      }
+      dispatchTerminalAgent(launch, workspaceContext, placement.hostId, owner);
+      settled?.(true);
       return null;
     },
     [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],
@@ -1847,7 +1920,10 @@ function readCachedDefaultWorktreeIntent(
       return [];
     }
     const currentBranch = branchForCachedSummary(summary);
-    return currentBranch === null ? [] : [{ summary, currentBranch }];
+    // A detached HEAD or a branch with no commit has no fork source: no default.
+    return currentBranch === null || !mainCheckoutHasCommit(summary)
+      ? []
+      : [{ summary, currentBranch }];
   });
   if (worktreeDefaults.length === 0) return null;
 
@@ -1867,6 +1943,7 @@ function readCachedDefaultWorktreeIntent(
         repoIdentifier: summary.repoIdentifier,
         isPrimary: summary.workspacePath === primaryPath,
         isGitRepo: true,
+        hasCommit: true,
         currentBranch,
         defaultNewBranchName: (
           defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
@@ -2108,4 +2185,22 @@ function buildRepoIdentifiers(
       }),
     ).values(),
   );
+}
+
+/**
+ * The refusals for a team owner, before any frame and with the draft left as it
+ * is: a host below `epic.create@1.3`, or no cloud authorization. Personal is
+ * never refused here.
+ */
+function refuseTeamOwner(
+  owner: LandingOwnerTeam | null,
+  hostId: string,
+): LandingPlacementRefusal | null {
+  if (owner === null) return null;
+  const message = landingOwnerRefusal({
+    owner,
+    hostEpicCreateVersion: readNegotiatedMethodVersion(hostId, "epic.create"),
+    cloudAuthorized: authorizesCloudCapability(useAuthStore.getState().status),
+  });
+  return message === null ? null : { message };
 }

@@ -448,7 +448,8 @@ describe("ProviderCatalogTimeoutGroup rows", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Couldn't read this host's setting");
-    expect(alert.textContent).toContain("~/.traycer/cli/config.json");
+    expect(alert.textContent).toContain("Traycer's config.json");
+    expect(alert.textContent).not.toContain("~/.traycer");
     expect(pressedLabels()).toEqual([]);
     expect(sameForAllSwitch().hasAttribute("disabled")).toBe(true);
     expect(segment("120 s").hasAttribute("disabled")).toBe(true);

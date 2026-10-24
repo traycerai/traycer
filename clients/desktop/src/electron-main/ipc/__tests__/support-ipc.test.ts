@@ -5,6 +5,17 @@ import {
   REPORT_LOG_TAIL_MAX_BYTES,
   TOTAL_ATTACHMENT_BUDGET_BYTES,
 } from "@traycer-clients/shared/support/image-attachment-guards";
+import type {
+  SupportEnvironmentItem,
+  SupportEnvironmentPolicy,
+  SupportEnvironmentReachDenial,
+  SupportEnvironmentRotation,
+  SupportEnvironmentRotationEvidence,
+  SupportEnvironmentRotationProducer,
+  SupportEnvironmentSection,
+  SupportEnvironmentServedTask,
+  SupportEnvironmentSetupAttempt,
+} from "../../../ipc-contracts/window-types";
 import {
   parseSupportFreezeEvidenceInput,
   parseSupportReadFrozenLogTailInput,
@@ -127,6 +138,7 @@ const UNAVAILABLE = { status: "unavailable" };
 const VALID_REGISTRY = {
   routeTemplate: KNOWN_STRING,
   hostId: KNOWN_STRING,
+  tabHostId: { status: "known", value: "host-tab-1" },
   epicId: KNOWN_STRING,
   tabId: STALE_STRING,
   artifactId: UNAVAILABLE,
@@ -145,7 +157,152 @@ const VALID_PRIVATE_DIAGNOSTICS = {
   fingerprint: "fp:v1:abc",
   stackFamily: "stack:v1:abc",
   correlationId: "corr-1",
+  environment: UNAVAILABLE,
 };
+
+// A fully populated environment section, every record and every nullable arm
+// present at least once.
+const ENV_ITEM: SupportEnvironmentItem = {
+  kind: "env_var",
+  key: "DATABASE_URL",
+  os: "all",
+  status: "applied",
+  code: "ok",
+  args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+};
+
+const ENV_FAILED_ITEM: SupportEnvironmentItem = {
+  kind: "setup_script",
+  key: "setup",
+  os: "linux",
+  status: "failed",
+  code: "setup_failed",
+  args: { exitStatus: 2, stage: "install", durationMs: 4100, kind: "script" },
+};
+
+const ENV_ATTEMPT: SupportEnvironmentSetupAttempt = {
+  attemptId: "attempt-1",
+  scriptHash: "sha256:abc123",
+  trigger: "manual",
+  startedAt: 1_700_000_000_000,
+  endedAt: 1_700_000_004_100,
+  exitStatus: 2,
+  stageReached: "install",
+  result: "failed",
+};
+
+const ENV_OPEN_ATTEMPT: SupportEnvironmentSetupAttempt = {
+  ...ENV_ATTEMPT,
+  attemptId: "attempt-2",
+  endedAt: null,
+  exitStatus: null,
+  stageReached: null,
+  result: null,
+};
+
+const ENV_POLICY: SupportEnvironmentPolicy = {
+  source: "account",
+  readState: "ready",
+  teamState: null,
+  teamPolicyVersion: null,
+};
+
+const ENV_EVIDENCE: SupportEnvironmentRotationEvidence = {
+  kind: "sessions",
+  count: 2,
+};
+
+const ENV_WORKER_PRODUCER: SupportEnvironmentRotationProducer = {
+  producer: "worker",
+  workerClass: "sandbox",
+  hostId: null,
+  hostName: null,
+  status: "pending",
+  evidence: [ENV_EVIDENCE],
+};
+
+const ENV_HOST_PRODUCER: SupportEnvironmentRotationProducer = {
+  producer: "host",
+  workerClass: null,
+  hostId: "host-2",
+  hostName: null,
+  status: "done",
+  evidence: null,
+};
+
+const ENV_ROTATION: SupportEnvironmentRotation = {
+  secretName: "STRIPE_KEY",
+  state: "rotating",
+  producers: [ENV_WORKER_PRODUCER, ENV_HOST_PRODUCER],
+};
+
+// The reach section. A denial is opaque references and principal categories;
+// the same-principal refusal reads "personal" and "team" so a mismatch is
+// visible without naming anyone.
+const ENV_REACH_DENIAL: SupportEnvironmentReachDenial = {
+  denialId: "denial-1",
+  at: 1_700_000_000_000,
+  sourceHostRef: "host-ref-source",
+  targetHostRef: "host-ref-target",
+  taskRef: "task-ref-1",
+  reason: "principal_mismatch",
+  sourcePrincipal: "personal",
+  targetPrincipal: "team",
+  count: 3,
+};
+
+const ENV_REACH_DENIAL_NO_TASK: SupportEnvironmentReachDenial = {
+  ...ENV_REACH_DENIAL,
+  denialId: "denial-2",
+  taskRef: null,
+  sourcePrincipal: "unknown",
+  targetPrincipal: "unknown",
+  count: 1,
+};
+
+const ENV_SERVED_TASK: SupportEnvironmentServedTask = {
+  taskRef: "task-ref-1",
+  otherHostPrincipals: ["personal", "team", "unknown"],
+};
+
+const FULL_ENVIRONMENT_SECTION: SupportEnvironmentSection = {
+  hostId: "host-1",
+  principal: "team",
+  reachability: "reachable",
+  bindingGeneration: 3,
+  desiredRevision: 7,
+  receivedRevision: 7,
+  appliedRevision: 6,
+  receiptAgeMs: 1200,
+  items: [ENV_ITEM, ENV_FAILED_ITEM],
+  setupAttempts: [ENV_ATTEMPT, ENV_OPEN_ATTEMPT],
+  policy: ENV_POLICY,
+  rotations: [ENV_ROTATION],
+  reachDenials: [ENV_REACH_DENIAL, ENV_REACH_DENIAL_NO_TASK],
+  servedTask: ENV_SERVED_TASK,
+};
+
+const KNOWN_ENVIRONMENT = {
+  status: "known",
+  value: FULL_ENVIRONMENT_SECTION,
+};
+
+function submitWithEnvironment(environment: object) {
+  return parseSupportSubmitReportRequest({
+    ...VALID_FORM,
+    privateDiagnostics: { ...VALID_PRIVATE_DIAGNOSTICS, environment },
+  });
+}
+
+/** Submits `section` as a `known` environment field. */
+function submitWithSection(section: object) {
+  return submitWithEnvironment({ status: "known", value: section });
+}
+
+/** The full section with `patch` laid over it, for one bad field at a time. */
+function sectionWith(patch: object): object {
+  return { ...FULL_ENVIRONMENT_SECTION, ...patch };
+}
 
 describe("parseSupportSubmitReportRequest", () => {
   it("accepts a well-formed request with no privateDiagnostics", () => {
@@ -412,7 +569,14 @@ describe("parseSupportSubmitReportRequest", () => {
     expect(result.privateDiagnostics?.stackFamily).toBeNull();
   });
 
-  it.each(["cause", "registry", "fingerprint", "stackFamily", "correlationId"])(
+  it.each([
+    "cause",
+    "registry",
+    "fingerprint",
+    "stackFamily",
+    "correlationId",
+    "environment",
+  ])(
     "rejects privateDiagnostics missing the required %s key - the serializer never omits it",
     (key) => {
       const withoutKey = { ...VALID_PRIVATE_DIAGNOSTICS };
@@ -568,6 +732,472 @@ describe("parseSupportSubmitReportRequest", () => {
         },
       }),
     ).toThrow();
+  });
+
+  describe("privateDiagnostics.environment", () => {
+    it("accepts a fully populated known section and returns it unchanged", () => {
+      const result = submitWithEnvironment(KNOWN_ENVIRONMENT);
+      expect(result.privateDiagnostics?.environment).toEqual(KNOWN_ENVIRONMENT);
+    });
+
+    it("accepts a stale section the same way", () => {
+      const stale = { status: "stale", value: FULL_ENVIRONMENT_SECTION };
+      const result = submitWithEnvironment(stale);
+      expect(result.privateDiagnostics?.environment).toEqual(stale);
+    });
+
+    it("accepts an unavailable section and returns it unchanged", () => {
+      const result = submitWithEnvironment(UNAVAILABLE);
+      expect(result.privateDiagnostics?.environment).toEqual(UNAVAILABLE);
+    });
+
+    it("accepts a section whose every nullable member is null", () => {
+      const sparse: SupportEnvironmentSection = {
+        hostId: "host-1",
+        principal: null,
+        reachability: "unreachable",
+        bindingGeneration: null,
+        desiredRevision: null,
+        receivedRevision: null,
+        appliedRevision: null,
+        receiptAgeMs: null,
+        items: [],
+        setupAttempts: null,
+        policy: null,
+        rotations: null,
+        reachDenials: null,
+        servedTask: null,
+      };
+      const result = submitWithSection(sparse);
+      expect(result.privateDiagnostics?.environment).toEqual({
+        status: "known",
+        value: sparse,
+      });
+    });
+
+    it("rejects privateDiagnostics sent without environment, by name", () => {
+      const { environment: _environment, ...withoutEnvironment } =
+        VALID_PRIVATE_DIAGNOSTICS;
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          privateDiagnostics: withoutEnvironment,
+        }),
+      ).toThrow("missing required field: environment");
+    });
+
+    // The ruling's "never a key" list: each is refused by NAME, so a field
+    // added to the renderer's type fails here until it is added on purpose.
+    it.each([
+      "pendingUploads",
+      "localOverrides",
+      "setupScript",
+      "setupOutput",
+      "value",
+      "snapshot",
+      "policyBody",
+      "profile",
+      "cost",
+      "routes",
+      "privateAgents",
+      "teamName",
+      "ownerLabel",
+      "connector",
+      "connectorDetail",
+    ])("rejects %s added to the section, naming it", (key) => {
+      expect(() =>
+        submitWithSection(sectionWith({ [key]: "anything" })),
+      ).toThrow(`contains a disallowed field: ${key}`);
+    });
+
+    it("accepts a team host's policy state and version and returns them unchanged", () => {
+      const team: SupportEnvironmentSection = {
+        ...FULL_ENVIRONMENT_SECTION,
+        policy: {
+          ...ENV_POLICY,
+          teamState: "applied",
+          teamPolicyVersion: "42",
+        },
+      };
+
+      const result = submitWithSection(team);
+
+      expect(result.privateDiagnostics?.environment).toEqual({
+        status: "known",
+        value: team,
+      });
+    });
+
+    it.each([
+      [
+        "teamState",
+        { source: "account", readState: "ready", teamPolicyVersion: null },
+      ],
+      [
+        "teamPolicyVersion",
+        { source: "account", readState: "ready", teamState: null },
+      ],
+    ])("rejects a policy without %s, naming it", (key, policy) => {
+      expect(() => submitWithSection(sectionWith({ policy }))).toThrow(
+        `is missing required field: ${key}`,
+      );
+    });
+
+    it.each(["teamState", "teamPolicyVersion"])(
+      "rejects a non-string %s",
+      (key) => {
+        expect(() =>
+          submitWithSection(
+            sectionWith({ policy: { ...ENV_POLICY, [key]: 7 } }),
+          ),
+        ).toThrow();
+      },
+    );
+
+    it("still rejects an unknown key beside the two team keys", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            policy: {
+              ...ENV_POLICY,
+              teamState: "applied",
+              teamPolicyVersion: "42",
+              teamPolicyBody: "never ship",
+            },
+          }),
+        ),
+      ).toThrow("contains a disallowed field: teamPolicyBody");
+    });
+
+    it("rejects a body added to the policy", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({ policy: { ...ENV_POLICY, body: "never ship" } }),
+        ),
+      ).toThrow("contains a disallowed field: body");
+    });
+
+    it("rejects a value added to an item", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({ items: [{ ...ENV_ITEM, value: "postgres://x" }] }),
+        ),
+      ).toThrow("contains a disallowed field: value");
+    });
+
+    it("rejects an extra key on an item's args", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            items: [
+              { ...ENV_ITEM, args: { ...ENV_ITEM.args, command: "rm -rf /" } },
+            ],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: command");
+    });
+
+    it("rejects an output added to a setup attempt", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            setupAttempts: [{ ...ENV_ATTEMPT, output: "npm ERR! secret" }],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: output");
+    });
+
+    it("rejects a teamName on a rotation", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({ rotations: [{ ...ENV_ROTATION, teamName: "Acme" }] }),
+        ),
+      ).toThrow("contains a disallowed field: teamName");
+    });
+
+    it("rejects an extra key on a rotation producer", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            rotations: [
+              {
+                ...ENV_ROTATION,
+                producers: [{ ...ENV_HOST_PRODUCER, hostLabel: "Alice's Mac" }],
+              },
+            ],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: hostLabel");
+    });
+
+    it("rejects an extra key on a rotation evidence entry", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            rotations: [
+              {
+                ...ENV_ROTATION,
+                producers: [
+                  {
+                    ...ENV_WORKER_PRODUCER,
+                    evidence: [{ ...ENV_EVIDENCE, detail: "free text" }],
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: detail");
+    });
+
+    it("rejects a section missing one of its keys, by name", () => {
+      const { reachability: _reachability, ...withoutReachability } =
+        FULL_ENVIRONMENT_SECTION;
+      expect(() => submitWithSection(withoutReachability)).toThrow(
+        "missing required field: reachability",
+      );
+    });
+
+    it("rejects a section missing reachDenials, by name", () => {
+      const { reachDenials: _reachDenials, ...withoutReachDenials } =
+        FULL_ENVIRONMENT_SECTION;
+      expect(() => submitWithSection(withoutReachDenials)).toThrow(
+        "missing required field: reachDenials",
+      );
+    });
+
+    it("rejects a section missing servedTask, by name", () => {
+      const { servedTask: _servedTask, ...withoutServedTask } =
+        FULL_ENVIRONMENT_SECTION;
+      expect(() => submitWithSection(withoutServedTask)).toThrow(
+        "missing required field: servedTask",
+      );
+    });
+
+    // A refusal is references and categories only. These three are the pins: a
+    // host's label, a person's display name or an owner's id inside a denial is
+    // refused by NAME, never passed through.
+    it("refuses a reach denial carrying a host label", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            reachDenials: [{ ...ENV_REACH_DENIAL, label: "Alice's Mac" }],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: label");
+    });
+
+    it("refuses a reach denial carrying a displayName", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            reachDenials: [{ ...ENV_REACH_DENIAL, displayName: "Alice" }],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: displayName");
+    });
+
+    it("refuses a reach denial carrying an ownerId", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            reachDenials: [{ ...ENV_REACH_DENIAL, ownerId: "user-42" }],
+          }),
+        ),
+      ).toThrow("contains a disallowed field: ownerId");
+    });
+
+    it("refuses a served task carrying an extra key", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            servedTask: { ...ENV_SERVED_TASK, hostLabel: "Alice's Mac" },
+          }),
+        ),
+      ).toThrow("contains a disallowed field: hostLabel");
+    });
+
+    it("accepts a reach denial and a served task and returns them unchanged", () => {
+      const result = submitWithSection(FULL_ENVIRONMENT_SECTION);
+      expect(result.privateDiagnostics?.environment).toEqual({
+        status: "known",
+        value: FULL_ENVIRONMENT_SECTION,
+      });
+    });
+
+    it("accepts an empty denials list and a null served task", () => {
+      const quiet: SupportEnvironmentSection = {
+        ...FULL_ENVIRONMENT_SECTION,
+        reachDenials: [],
+        servedTask: null,
+      };
+      const result = submitWithSection(quiet);
+      expect(result.privateDiagnostics?.environment).toEqual({
+        status: "known",
+        value: quiet,
+      });
+    });
+
+    it("refuses a reach denial reason other than principal_mismatch", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            reachDenials: [{ ...ENV_REACH_DENIAL, reason: "no_such_host" }],
+          }),
+        ),
+      ).toThrow('reason must be "principal_mismatch"');
+    });
+
+    it.each(["sourcePrincipal", "targetPrincipal"])(
+      "refuses a reach denial %s outside personal, team and unknown",
+      (key) => {
+        expect(() =>
+          submitWithSection(
+            sectionWith({
+              reachDenials: [{ ...ENV_REACH_DENIAL, [key]: "Acme" }],
+            }),
+          ),
+        ).toThrow('must be "personal", "team", or "unknown"');
+      },
+    );
+
+    it("refuses a served task principal outside personal, team and unknown", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            servedTask: { ...ENV_SERVED_TASK, otherHostPrincipals: ["Acme"] },
+          }),
+        ),
+      ).toThrow('must be "personal", "team", or "unknown"');
+    });
+
+    it("rejects an item missing one of its keys, by name", () => {
+      const { os: _os, ...itemWithoutOs } = ENV_ITEM;
+      expect(() =>
+        submitWithSection(sectionWith({ items: [itemWithoutOs] })),
+      ).toThrow("missing required field: os");
+    });
+
+    // Each row: where the text sits, its limit, and a section carrying `text`
+    // there. The limits are `SUPPORT_ENVIRONMENT_TEXT_MAX`'s, restated here on
+    // purpose: a loosened bound in the parser must fail this table.
+    const TEXT_BOUNDS: readonly {
+      readonly field: string;
+      readonly max: number;
+      readonly build: (text: string) => object;
+    }[] = [
+      {
+        field: "an item key",
+        max: 3072,
+        build: (text) => sectionWith({ items: [{ ...ENV_ITEM, key: text }] }),
+      },
+      {
+        field: "a secret name",
+        max: 128,
+        build: (text) =>
+          sectionWith({
+            rotations: [{ ...ENV_ROTATION, secretName: text }],
+          }),
+      },
+      {
+        field: "the reachability code",
+        max: 64,
+        build: (text) => sectionWith({ reachability: text }),
+      },
+      {
+        field: "an item's stage code",
+        max: 64,
+        build: (text) =>
+          sectionWith({
+            items: [{ ...ENV_ITEM, args: { ...ENV_ITEM.args, stage: text } }],
+          }),
+      },
+      {
+        field: "an evidence kind",
+        max: 64,
+        build: (text) =>
+          sectionWith({
+            rotations: [
+              {
+                ...ENV_ROTATION,
+                producers: [
+                  {
+                    ...ENV_WORKER_PRODUCER,
+                    evidence: [{ ...ENV_EVIDENCE, kind: text }],
+                  },
+                ],
+              },
+            ],
+          }),
+      },
+      {
+        field: "the host id",
+        max: 256,
+        build: (text) => sectionWith({ hostId: text }),
+      },
+      {
+        field: "a producer's host id",
+        max: 256,
+        build: (text) =>
+          sectionWith({
+            rotations: [
+              {
+                ...ENV_ROTATION,
+                producers: [{ ...ENV_HOST_PRODUCER, hostId: text }],
+              },
+            ],
+          }),
+      },
+      {
+        field: "a setup attempt id",
+        max: 256,
+        build: (text) =>
+          sectionWith({
+            setupAttempts: [{ ...ENV_ATTEMPT, attemptId: text }],
+          }),
+      },
+      {
+        field: "a script hash",
+        max: 128,
+        build: (text) =>
+          sectionWith({
+            setupAttempts: [{ ...ENV_ATTEMPT, scriptHash: text }],
+          }),
+      },
+    ];
+
+    it.each(TEXT_BOUNDS)("accepts $field of exactly $max characters", (row) => {
+      expect(() =>
+        submitWithSection(row.build("k".repeat(row.max))),
+      ).not.toThrow();
+    });
+
+    it.each(TEXT_BOUNDS)("rejects $field one character past $max", (row) => {
+      expect(() =>
+        submitWithSection(row.build("k".repeat(row.max + 1))),
+      ).toThrow(`is longer than ${row.max} characters`);
+    });
+
+    it("rejects a producer whose hostName is a string", () => {
+      expect(() =>
+        submitWithSection(
+          sectionWith({
+            rotations: [
+              {
+                ...ENV_ROTATION,
+                producers: [{ ...ENV_HOST_PRODUCER, hostName: "Alice's Mac" }],
+              },
+            ],
+          }),
+        ),
+      ).toThrow("hostName must be null");
+    });
+
+    it("rejects a team name where the principal category belongs", () => {
+      expect(() =>
+        submitWithSection(sectionWith({ principal: "Acme" })),
+      ).toThrow(/principal must be "personal", "team", or null/);
+    });
   });
 
   describe("images", () => {

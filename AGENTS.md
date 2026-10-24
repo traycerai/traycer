@@ -9,6 +9,9 @@ toolchain and pre-commit hooks: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Nested docs (read when editing there)
 
+- [`.github/AGENTS.md`](.github/AGENTS.md) — the pull-request CI gate and the
+  merge run. Read it before editing a workflow or a CI script
+  (`scripts/ci-*`, `scripts/__tests__/ci-pull-request-gate.test.mjs`)
 - [`clients/gui-app/AGENTS.md`](clients/gui-app/AGENTS.md)
 - [`clients/desktop/AGENTS.md`](clients/desktop/AGENTS.md)
 - [`clients/mobile/AGENTS.md`](clients/mobile/AGENTS.md)
@@ -39,110 +42,51 @@ make dev-desktop VERSION=1.2.3  # pin host release
 
 `make dev-desktop` talks to the **production** cloud — no local backends.
 
-**Never run a full compile, lint, format, test or build locally.** That means
-`bun run compile`, `bun run lint`, `bun run format`, `bun run test`,
-`bun run build`, `make test-affected` (every test of each affected project), a
-project's whole `lint` (`bun run --cwd clients/gui-app lint`), and
-`pre-commit run --all-files`. gui-app's whole-project type-aware lint alone
-needs about 9 GB and its type-check about 5 GB, and two agents running them at
-once have stalled a 24 GB Mac. The checks still run, just not by hand: the
-pre-commit hook lints, formats and compiles what each commit affects (below),
-and CI lints, compiles and builds every project a change affects and runs every
-project's tests. When CI runs is in "When CI runs" below.
+## Local checks: narrow, never full
 
-To check work while you write it, narrow the check to what you touched:
+**Never run a full compile, lint, format, test or build by hand:**
+`bun run compile`, `lint`, `format`, `test` or `build`, `make test-affected`,
+a project's whole `lint`, or `pre-commit run --all-files`. gui-app's lint
+needs about 9 GB and its type-check about 5 GB; two at once have stalled a
+24 GB Mac. The commit hook and CI run them.
 
-- lint the changed files with `bun scripts/lint-changed-files.mjs origin/main`,
-  or `bun run lint:files <paths>` inside a project. The first widens itself
-  when a lint config, tsconfig or `package.json` changed, or over 200 files
-  did: if it prints `linting every affected project` or `$ bun run lint`, stop
-  it and use `lint:files`;
-- run one test file with `bunx vitest run <path>` from its project;
-- run one package's `compile` only to diagnose that package's failure. Never
-  run `tsc` directly; `compile` is the type-check.
+While you work, check only what you touched:
 
-**Commits:** nothing needs running by hand before a commit, and a full
-`compile` / `build` / `lint` / `format` never does; the narrow checks above are
-feedback while you work, not a gate. `pre-commit` already runs the local
-checks: lint on the files your branch changed, format, and an incremental
-compile of the affected projects. It takes one machine-wide slot, so
-concurrent commits from other worktrees queue rather than stacking multi-GB
-type-checks. CI lints each affected project whole and runs the affected
-`build` targets. Tests run in CI (`test.yml`), not in the hook. Commits need
-DCO (`git commit -s`).
+- Lint the changed files: `bun scripts/lint-changed-files.mjs origin/main`,
+  or `bun run lint:files <paths>` inside a project. If the first prints
+  `linting every affected project` or `$ bun run lint`, stop it and use
+  `lint:files`.
+- One test file: `bunx vitest run <path>` from its project.
+- One package's `compile`, only to diagnose its failure. Never run `tsc`.
+
+**Commits** need DCO (`git commit -s`) and nothing run by hand first. The
+hook lints the changed files, formats, and type-checks the affected projects,
+inside one machine-wide slot. Tests and builds run in CI. nx runs without its
+daemon (`useDaemonProcess: false`): leave it off.
 
 ## When CI runs
 
-A team pull request into `main` (a branch in this repository) runs **no CI**:
-every job is skipped, so every required check reports as passed, and the merge
-button is available as soon as review passes. Nothing tests such a PR before
-it merges, so **the local commit hook is the only automatic check before
-merge**. No job is exempt, `guarded-files-tripwire` in `protocol-compat.yml`
-included: it runs only on a pull request that runs CI, so a team edit to a
-guarded protocol file is not flagged before it merges, and the merge run
-reports an edit only to `host-v1.1.5-mutation-v20.ts` (the regenerate-and-compare
-test in `test.yml`'s `@traycer/protocol` leg).
+A team pull request into `main` runs **no CI, on purpose**, except the CodeQL
+scan: every required check reports passed, so a merge needs review only, and
+the commit hook is the only other automatic check before merge. Pull requests from
+forks and bots, and into any other branch, run every check; watch them with
+`gh pr checks --watch` and fix what they report.
 
-A pull request from a fork, a pull request from a bot (Dependabot), and a pull
-request into any other branch (a release or integration branch, which has no
-run on push) run every check, as before.
+**CI does not run on a branch by default.** Check what you can locally with
+the narrow checks above (one package's `build` for packaging); everything
+else runs on the merge. Dispatch a workflow on a branch
+(`gh workflow run <workflow> --ref <branch>`) sparingly: only when a check is
+actually needed before the merge and no local check covers it, and name the
+reason in the pull request.
 
-The full suite runs once on the merged commit, on every push to `main`, and a
-later merge never cancels an earlier merge's run. A failed merge run is rerun
-once (`trunk-red.yml`, failed jobs only, because the test suites have known
-flakes); if the rerun fails too, the `trunk-red` run itself fails, with the
-commit, its author and the run in its summary. It sends nothing anywhere: a
-failed `trunk-red` run is the signal that `main` is really red, a break to fix
-or revert and not a flake, and the one thing an alert has to watch.
+The full suite runs once on every push to `main`. `trunk-red.yml` re-runs
+failed jobs once; a failed `trunk-red` run means `main` is really red, a break
+to fix or revert, not a flake. A red merge stays red until a run covering it
+passes, and a red `main` blocks the internal repository's staging train and
+promotion.
 
-A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`, the
-`changes` job of `browser-regressions.yml`) compares against the last push its
-own workflow passed on, found by `scripts/ci-last-green-sha.sh`, not against
-the push before it. So a red merge is not forgotten: the next merge's range
-still holds the break, its run stays red, and `main` stays red until a run
-covering everything since the last green push passes.
-
-To test a branch before merging it, run the workflow on the branch: the
-Actions tab, or `gh workflow run test.yml --ref <branch>` (likewise
-`pre-commit.yml`, `protocol-compat.yml`, `browser-regressions.yml` and
-`real-supervisor.yml`). Do this for a risky change the hook does not cover:
-packaging, the protocol, the CLI's launchd path.
-
-A red `main` also holds up releases: the internal repository's nightly staging
-train and its promotion to production both refuse a pinned commit of this
-repository whose push checks are not all green.
-
-The rule is one expression, copied into the `if:` of every job in the eight
-workflows that trigger on `pull_request` (`test`, `pre-commit`,
-`protocol-compat`, `browser-regressions`, `real-supervisor`, `codeql`,
-`secret-scan`, `dco`), and pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
-
-```
-github.event_name != 'pull_request'
-  || github.base_ref != 'main'
-  || github.event.pull_request.head.repo.full_name != github.repository
-  || github.event.pull_request.user.type == 'Bot'
-```
-
-The gate asks "is the head repository this repository", not "is it a fork": a
-deleted fork reports no head repository, and that answer must fail toward
-running CI. No job is exempt: `guarded-files-tripwire`, which only makes sense
-on a pull request, is `github.event_name == 'pull_request' && (<expression>)`.
-A new workflow with a `pull_request` trigger carries the
-gate on every job; an
-aggregator that uses `always()` is `always() && (<expression>)`, so it is
-skipped, not failed, on a team PR. The `main` ruleset requires `tests` (the
-single check for `test.yml`'s matrix), not the individual matrix names: a
-matrix job skipped by a job-level `if` is never expanded, so its names never
-report.
-
-After pushing a fork or bot PR, or a PR into another branch, watch the checks
-(`gh pr checks --watch`) and fix what they report.
-
-**nx runs without its daemon** (`useDaemonProcess: false` in `nx.json`). A
-daemon exits only after three hours without an nx command, so every worktree
-that agents keep committing in held one: one machine carried 18 of them,
-3.26 GB, each saving under a second per nx command. Don't turn it back on.
+How the gate works and how a new workflow carries it:
+[`.github/AGENTS.md`](.github/AGENTS.md).
 
 ## Non-negotiable
 
@@ -158,19 +102,22 @@ See `protocol/README.md`.
    Reachability checked at tab-open only.
 
 **Shared code** — transport/auth in `clients/shared/`; wire contract in
-`protocol/`. Don't duplicate.
+`protocol/`. Don't duplicate. One exception: the remote session core
+(`RemoteSession`, the relay socket, streams, the scheduler, Noise and mux
+chunking) lives in `protocol/src/host-transport/remote/`, because a host
+dialing another host drives it too. Put a change in `protocol/` if both peers
+need it, in `clients/shared/` if only the desktop does.
 
-One deliberate exception: the **remote session core** (`RemoteSession`, the
-relay socket, logical streams, the scheduler, Noise channel and mux chunking)
-lives in `protocol/src/host-transport/remote/`, not `clients/shared/`. It is
-runtime-neutral and is driven by two peers — the desktop client dialing a
-host, and a host dialing another host for cross-host agent calls — so it
-cannot depend on anything client-only. What stays in `clients/shared/` is
-the client-specific edge: grant acquisition (`grant-client`, which needs
-fetch + bearer + entitlement), the per-render session cache
-(`active-remote-sessions`), and the thin `RemoteSession` adapter that binds
-those in. Put a change in `protocol/` if both peers need it; in
-`clients/shared/` if only the desktop does.
+**User-facing copy** — a setting description, label, tooltip, toast, error
+message or docs row says what the thing does and what it costs the person, and
+nothing else. Leave out how it is built: the model or library behind a
+feature, its licence or version, per-engine language lists, the mechanism.
+Test every sentence: does the reader need it to decide or to act? Keep to the
+length of the neighbouring rows. When a reviewer calls copy inaccurate or
+incomplete, cut the claim before adding words; never enumerate to make a broad
+sentence true. A change that gives the person nothing new to configure changes
+no copy. Licence and attribution text goes in a notices file, not in the
+interface.
 
 ## Type safety (ESLint — do not bypass)
 
@@ -182,6 +129,27 @@ fn(x = 1)                      fn(x: number)  // caller passes explicitly
 as any / as unknown / chained  // narrow or define a real type
 ReturnType<typeof fn>          // name the concrete type
 ```
+
+## Slop the sweep keeps finding
+
+| BAD                                                             | GOOD                                                                              |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Repeat the same input, path and assertion in another test.      | Keep one case; add coverage only for a distinct regression.                       |
+| Leave A's contract above newly inserted B.                      | Keep each contract comment attached to the declaration or operation it describes. |
+| Assert only a constant or two aliases.                          | Assert its effect through the real consumer.                                      |
+| Ticket BEGIN/END or review-round markers in source.             | Remove workflow markers; retain durable invariants.                               |
+| Carry state that no consumer reads.                             | Remove unused fields and the work that populates them.                            |
+| Wrap one call or expression without a distinct contract.        | Keep the expression at its caller.                                                |
+| Describe access using a retired owner or cache policy.          | Match the current authorization boundary and freshness policy.                    |
+| Export a module-only implementation with no external consumer.  | Keep it private; retain public and registered contracts.                          |
+| Require port members that no consumer reads or calls.           | Keep only the members consumers use; remove fixture no-ops.                       |
+| Repeat an assertion implied by an exact result check.           | Keep the exact check and assertions for distinct effects.                         |
+| Assert only that a required field exists.                       | Exercise its effect through the real consumer.                                    |
+| Keep comments that describe a retired contract.                 | Update or remove stale claims when the contract changes.                          |
+| Assert only a test double's implementation.                     | Assert production behavior through the real consumer.                             |
+| Treat a sleep or fixed microtask count as operation completion. | Await the operation's completion or its observable outcome before asserting.      |
+| Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                     |
+| Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                     |
 
 ## Skills
 

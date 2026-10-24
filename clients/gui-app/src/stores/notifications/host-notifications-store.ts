@@ -8,12 +8,14 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
+  hostNotificationsFeedSubscribeV15,
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameSchemaV13,
-  type HostNotificationEntryV22,
+  hostNotificationsSubscribeClientFrameSchemaV15,
+  hostNotificationsSubscribeServerFrameSchemaV16,
+  type HostNotificationEntryV24,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrameV13,
+  type HostNotificationsSubscribeServerFrameV16,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -41,20 +43,20 @@ export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
 export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 
 /**
- * The feed parses against the NEWEST frame union (`@1.2`), not a released one.
+ * The feed parses against the NEWEST frame union (`@1.6`), not a released one.
  * Stream versions negotiate to `min(client, host)` per method, so a GUI built
- * from this protocol tree lands on `@1.2` against a host built from it too -
- * and parsing those frames with an older schema would reject any
- * `host.operation.finished` or `browser.human.needed` row, which this store
- * treats as connection corruption and answers with a reconnect into a snapshot
- * carrying the same row. Against an older host the negotiated version drops
- * back to `@1.1`/`@1.0`, whose frames are strict subsets of this union and
- * still parse.
+ * from this protocol tree lands on `@1.6` against a host built from it too -
+ * and parsing those frames with an older schema would reject any row of a
+ * kind that union added (the environments rows at `@1.6`, the secrets rows at
+ * `@1.4`), which this store treats as connection corruption and answers with
+ * a reconnect into a snapshot carrying the same row. Against an older host the
+ * negotiated version drops back, and every older minor's frames are strict
+ * subsets of this union and still parse.
  */
-export type HostNotificationFeedEntry = HostNotificationEntryV22;
+export type HostNotificationFeedEntry = HostNotificationEntryV24;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrameV13,
+  HostNotificationsSubscribeServerFrameV16,
   | { readonly kind: "snapshot" }
   | { readonly kind: "partitionSnapshot" }
   | { readonly kind: "upserted" }
@@ -481,6 +483,17 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
   }),
 );
 
+/**
+ * The cloud notification lane as the host's local feed needs to hear of it:
+ * whether it is delivering this client's cloud rows right now. Only a lane
+ * served by a peer other than this host (the server pool) is reported - the
+ * host observes its own relay.
+ */
+export interface HostNotificationsCloudLane {
+  readonly serving: () => boolean;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
 export function openHostNotificationsStream(
   /**
    * THE reconnect policy for this stream's host (redesign P4.1 /
@@ -502,6 +515,8 @@ export function openHostNotificationsStream(
     readonly onFeedFrame: (frame: HostNotificationsFeedFrame) => void;
     readonly onPresenceChanged: (frame: HostNotificationPresenceFrame) => void;
     readonly onStreamOpened: () => void;
+    /** `null` when this host serves the cloud lane itself. */
+    readonly cloudLane: HostNotificationsCloudLane | null;
   },
 ): () => void {
   let disposed = false;
@@ -509,6 +524,7 @@ export function openHostNotificationsStream(
   let streamOpen = false;
   let lastSentPresenceKey: string | null = null;
   let lastNotifiedPresenceKey: string | null = null;
+  let lastSentCloudLaneServing: boolean | null = null;
 
   // A terminal close ("closed" + fatalError) DISPOSES the transport session:
   // `requestReconnect` and wake-time `forceReconnect` are both no-ops on it,
@@ -563,6 +579,40 @@ export function openHostNotificationsStream(
     emitPresence({ forceSend: true, forceNotify: false });
   }, HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
 
+  // Tells the host whether the cloud lane it does not run is delivering, so
+  // its local view serves the empty partition exactly while that lane
+  // carries the cloud rows - and the complete one otherwise. Sent on open and
+  // on every change; a host below `@1.5` cannot parse the frame and keeps
+  // deciding on its own relay.
+  const emitCloudLanePresence = (force: boolean): void => {
+    const lane = options.cloudLane;
+    const session = currentSession;
+    if (lane === null || session === null || !streamOpen) return;
+    const negotiated = wsStreamClient.getMethodSchemaVersion(
+      "host.notifications.feed.subscribe",
+    );
+    const floor = hostNotificationsFeedSubscribeV15.schemaVersion;
+    if (
+      negotiated === null ||
+      negotiated.major !== floor.major ||
+      negotiated.minor < floor.minor
+    ) {
+      return;
+    }
+    const serving = lane.serving();
+    if (!force && serving === lastSentCloudLaneServing) return;
+    const parsed = hostNotificationsSubscribeClientFrameSchemaV15.safeParse({
+      kind: "cloudLanePresence",
+      hasBinaryPayload: false,
+      serving,
+    });
+    if (!parsed.success) return;
+    lastSentCloudLaneServing = serving;
+    session.sendClientFrame(parsed.data, null);
+  };
+  const unsubscribeCloudLane =
+    options.cloudLane?.subscribe(() => emitCloudLanePresence(false)) ?? null;
+
   // A stream frame that fails the contract-specific schema is a
   // connection-integrity failure: the exact summary can no longer be
   // trusted, so the store degrades to unknown and the session redials for a
@@ -594,12 +644,14 @@ export function openHostNotificationsStream(
         reconnect();
         return;
       }
-      // The `@1.3` union, deliberately: zod STRIPS unknown keys and rejects
-      // unknown discriminants, so parsing through `@1.2` would drop the
-      // `partitionSnapshot` frame this client negotiates for. The superset
-      // parses every minor the client can be served.
+      // The `@1.6` union, deliberately: zod STRIPS unknown keys and rejects
+      // unknown discriminants, so parsing through `@1.4` would reject the
+      // environments rows this client negotiates for, through `@1.3` the
+      // secrets rows, and through `@1.2` the
+      // `partitionSnapshot` frame too. The superset parses every minor the
+      // client can be served.
       const parsed =
-        hostNotificationsSubscribeServerFrameSchemaV13.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV16.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;
@@ -668,6 +720,7 @@ export function openHostNotificationsStream(
         // entity, so the focused entity must be re-consumed even though its
         // content key is unchanged.
         emitPresence({ forceSend: true, forceNotify: true });
+        emitCloudLanePresence(true);
       } else {
         streamOpen = false;
       }
@@ -685,6 +738,7 @@ export function openHostNotificationsStream(
     globalThis.clearInterval(presenceHeartbeat);
     reopenScheduler.dispose();
     unsubscribePresence();
+    unsubscribeCloudLane?.();
     currentSession?.close();
     currentSession = null;
   };

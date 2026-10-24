@@ -10,6 +10,17 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import {
+  openSandboxDetails,
+  useSandboxDetailsStore,
+} from "@/stores/sandboxes/sandbox-details-store";
+import {
+  revealSandboxOnPage,
+  useSandboxesPageStore,
+} from "@/stores/sandboxes/sandboxes-page-store";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -146,6 +157,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     useAddHostDialogStore.getState().closeDialog();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
+    useProviderLinkDialogStore.getState().close();
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -302,6 +314,70 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(useWatchHostStore.getState().scopedHostId).toBeNull();
   });
 
+  it("drops every staged sandbox on user-switch", () => {
+    // Left standing, the next account would send into the outgoing
+    // account's team, or resubmit its create key.
+    useStagedSandboxStore.getState().stage("composer:w1", {
+      kind: "existing",
+      hostId: "host-owned-by-alice",
+      sandboxId: "sbx-alice",
+      name: "alice-box",
+      configuration: { kind: "team", teamId: "team-alice", teamName: "Acme" },
+      verb: "resume",
+    });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("drops a terminal a sandbox row asked the landing panel for on user-switch", () => {
+    useLandingPanelStore
+      .getState()
+      .requestTerminal("landing:window-alice", "host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+  });
+
+  it("closes the Details drawer and resets the Sandboxes page on user-switch", () => {
+    openSandboxDetails("sbx-alice");
+    revealSandboxOnPage({ kind: "team", teamId: "team-alice" }, "sbx-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useSandboxDetailsStore.getState().sandboxId).toBeNull();
+    expect(useSandboxesPageStore.getState()).toMatchObject({
+      requestedConfiguration: null,
+      revealSandboxId: null,
+    });
+  });
+
   it("drops the shared watch-host pick on sign-out", () => {
     useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");
 
@@ -406,6 +482,46 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     expect(useProvidersFocusStore.getState().focusHostId).toBe("host-a");
     expect(useProvidersFocusStore.getState().startSignIn).toBe(true);
+  });
+
+  it("closes the provider Link dialog on user-switch", () => {
+    // The target names a provider profile of account A's; left open, account B
+    // would see A's Link dialog and could run its sign-in under B's session.
+    useProviderLinkDialogStore
+      .getState()
+      .open({ providerId: "claude", profileId: "profile-alice" });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+  });
+
+  it("leaves an open provider Link dialog alone when the identity has not changed", () => {
+    // The counterweight: a bridge that closed it on every render would
+    // satisfy the user-switch case above while never letting it survive a
+    // normal render.
+    useProviderLinkDialogStore
+      .getState()
+      .open({ providerId: "claude", profileId: "profile-a" });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    expect(useProviderLinkDialogStore.getState().target).toEqual({
+      providerId: "claude",
+      profileId: "profile-a",
+    });
   });
 
   it("leaves an open Add-host dialog alone when the identity has not changed", () => {

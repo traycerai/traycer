@@ -90,6 +90,16 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 // own, empty kernel snapshot for this suite's host-less `MockRunnerHost` -
 // clobbering a value seeded straight into the store). Mocking the two read
 // hooks instead keeps the seed stable regardless of the bridge's own writes.
+const messagingRef = vi.hoisted(
+  (): {
+    value: {
+      state: "ok" | "paused";
+      pausedSince: number | null;
+      nextRetryAt: number | null;
+      cause: string | null;
+    } | null;
+  } => ({ value: null }),
+);
 const effectiveHostRef = vi.hoisted((): { value: string | null } => ({
   value: null,
 }));
@@ -97,6 +107,11 @@ const leaseRef = vi.hoisted((): { value: HostLeaseSnapshot | null } => ({
   value: null,
 }));
 
+// The paused / ok reading is the polled `host.status` this hook reduces
+// (pinned in its own test); the strip only decides what to show for it.
+vi.mock("@/hooks/host/use-host-cross-host-messaging", () => ({
+  useHostCrossHostMessaging: () => messagingRef.value,
+}));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => effectiveHostRef.value,
 }));
@@ -148,6 +163,8 @@ function makeMessengerFactory(): (args: {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
+            crossHostMessaging: null,
           }),
       },
     });
@@ -197,6 +214,7 @@ function renderStrip(): void {
 }
 
 function resetSharedState(): void {
+  messagingRef.value = null;
   __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -315,6 +333,80 @@ describe("SideStripFoot", () => {
           .getByTestId("side-strip-host-health")
           .getAttribute("data-health"),
       ).toBe(health);
+    },
+  );
+
+  const PAUSED = {
+    state: "paused",
+    pausedSince: 1_700_000_000_000,
+    nextRetryAt: 1_700_000_060_000,
+    cause: "breaker-open",
+  } as const;
+
+  it("reads a ready lease with paused cross-host messages as degraded, with the visible line", async () => {
+    messagingRef.value = PAUSED;
+    seedHost("host-a", "Ada's Mac", "ready");
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    const dot = await waitFor(() => {
+      const element = screen.getByTestId("side-strip-host-health");
+      expect(element.getAttribute("data-health")).toBe("degraded");
+      return element;
+    });
+    expect(dot.getAttribute("aria-label")).toBe(
+      "Host connected. Degraded: cross-host messages paused",
+    );
+    expect(screen.getByTestId("side-strip-host-degraded").textContent).toBe(
+      "Degraded: cross-host messages paused",
+    );
+    // The fixed-height row has two lines: the degraded line replaces the host
+    // name rather than adding a third.
+    expect(screen.queryByTestId("side-strip-host-line")).toBeNull();
+  });
+
+  it.each([
+    ["ok", { state: "ok", pausedSince: null, nextRetryAt: null, cause: null }],
+    ["an unreported (null)", null],
+  ] as const)(
+    "reads a ready lease with %s cross-host messaging as ready",
+    async (_label, messaging) => {
+      messagingRef.value = messaging;
+      seedHost("host-a", "Ada's Mac", "ready");
+      renderStrip();
+      await screen.findByTestId("side-tab-strip");
+
+      expect(
+        screen
+          .getByTestId("side-strip-host-health")
+          .getAttribute("data-health"),
+      ).toBe("ready");
+      expect(screen.queryByTestId("side-strip-host-degraded")).toBeNull();
+      expect(screen.getByTestId("side-strip-host-line").textContent).toBe(
+        "Ada's Mac",
+      );
+    },
+  );
+
+  it.each(["connecting", "degraded"] as const)(
+    "keeps a %s lease pending even when cross-host messages are paused",
+    async (status) => {
+      messagingRef.value = PAUSED;
+      seedHost("host-a", "Ada's Mac", status);
+      renderStrip();
+      await screen.findByTestId("side-tab-strip");
+      // Let the host.status query settle so the paused reading is available.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(
+        screen
+          .getByTestId("side-strip-host-health")
+          .getAttribute("data-health"),
+      ).toBe("pending");
+      expect(screen.queryByTestId("side-strip-host-degraded")).toBeNull();
+      expect(screen.getByTestId("side-strip-host-line").textContent).toBe(
+        "Ada's Mac",
+      );
     },
   );
 

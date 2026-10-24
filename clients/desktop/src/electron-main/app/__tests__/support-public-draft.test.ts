@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   SupportContextRegistrySnapshot,
+  SupportEnvironmentSection,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
 } from "../../../ipc-contracts/window-types";
@@ -14,6 +15,7 @@ const TRUNCATION_MARKER = " (truncated, see support report)";
 const emptyRegistry: SupportContextRegistrySnapshot = {
   routeTemplate: { status: "unavailable" },
   hostId: { status: "unavailable" },
+  tabHostId: { status: "unavailable" },
   epicId: { status: "unavailable" },
   tabId: { status: "unavailable" },
   artifactId: { status: "unavailable" },
@@ -50,6 +52,7 @@ function makeDiagnostics(
     fingerprint: null,
     stackFamily: null,
     correlationId: "corr-1",
+    environment: { status: "unavailable" },
     ...overrides,
   };
 }
@@ -553,6 +556,91 @@ describe("buildPublicDraftFields", () => {
         }),
       });
       expect(result.title).not.toContain(ANTHROPIC_KEY);
+    });
+  });
+
+  // The environment section is private-report content only. These names are
+  // distinctive on purpose: the draft is a public GitHub issue, and a person's
+  // own item and secret names must not be in it.
+  describe("environment section", () => {
+    const ITEM_KEY = "ZZ_SUPPORT_ENV_KEY";
+    const SECRET_NAME = "ZZ_SUPPORT_SECRET";
+    const SECTION: SupportEnvironmentSection = {
+      hostId: "ZZ_SUPPORT_HOST_ID",
+      principal: "team",
+      reachability: "reachable",
+      bindingGeneration: 3,
+      desiredRevision: 7,
+      receivedRevision: 7,
+      appliedRevision: 6,
+      receiptAgeMs: 1200,
+      items: [
+        {
+          kind: "env_var",
+          key: ITEM_KEY,
+          os: "all",
+          status: "applied",
+          code: "ok",
+          args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+        },
+      ],
+      setupAttempts: null,
+      policy: {
+        source: "account",
+        readState: "ready",
+        teamState: null,
+        teamPolicyVersion: null,
+      },
+      rotations: [
+        {
+          secretName: SECRET_NAME,
+          state: "rotating",
+          producers: [
+            {
+              producer: "host",
+              workerClass: null,
+              hostId: "ZZ_SUPPORT_PRODUCER_HOST",
+              hostName: null,
+              status: "pending",
+              evidence: null,
+            },
+          ],
+        },
+      ],
+      reachDenials: null,
+      servedTask: null,
+    };
+
+    it.each(["bug", "idea", "other"] as const)(
+      "carries no environment content into a %s draft",
+      (type) => {
+        const result = buildPublicDraftFields({
+          ...baseInput,
+          type,
+          privateDiagnostics: makeDiagnostics({
+            environment: { status: "known", value: SECTION },
+          }),
+        });
+        const serialized = JSON.stringify(result);
+        expect(serialized).not.toContain(ITEM_KEY);
+        expect(serialized).not.toContain(SECRET_NAME);
+        expect(serialized).not.toContain("ZZ_SUPPORT_HOST_ID");
+        expect(serialized).not.toContain("ZZ_SUPPORT_PRODUCER_HOST");
+      },
+    );
+
+    it("is byte-identical with and without an environment section", () => {
+      const without = buildPublicDraftFields({
+        ...baseInput,
+        privateDiagnostics: makeDiagnostics({}),
+      });
+      const withSection = buildPublicDraftFields({
+        ...baseInput,
+        privateDiagnostics: makeDiagnostics({
+          environment: { status: "known", value: SECTION },
+        }),
+      });
+      expect(withSection).toEqual(without);
     });
   });
 });

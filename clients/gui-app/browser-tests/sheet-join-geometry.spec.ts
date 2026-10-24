@@ -199,6 +199,13 @@ test.describe("offsets: the arcs meet the bridge's true inner edge", () => {
   }
 });
 
+/**
+ * The account group this spec puts on the shared page, and takes off again.
+ * Groups are the account's: a client cannot create one, so the fixture seeds
+ * the organization projection's own result (`organization-seed.ts`).
+ */
+const JUNCTION_GROUP_ID = "fixture-junction-group";
+
 // A tab group's colour line runs under its inactive members and meets the
 // joined active member's outline at its feet, so the group reads as one line.
 // The feet sit on the task frame's top border (the bridge's bottom), 3px below
@@ -212,15 +219,15 @@ test("top: a group's line meets the joined tab's feet on both sides", async ({
   await setWindow(1700, DESKTOP_WINDOW.height, 1);
   await prepareCanvas(page, "top", "left");
   await page.evaluate(`(async () => {
-    const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-    const store = useTabsStore.getState();
+    const { seedOrganizationGroup } = await import("/src/__tests__/browser/organization-seed.ts");
     const ref = (id) => ({ kind: "epic", id: "fixture-" + id });
-    const groupId = store.createGroup(ref("delta"));
-    if (groupId === null) throw new Error("tab group was not created");
-    store.setTabGroup(ref("epsilon"), groupId);
-    store.setTabGroup(ref("zeta"), groupId);
-    store.updateGroup(groupId, { name: "Group", color: "#fdd663", collapsed: false });
-    window.__junctionGroupId = groupId;
+    seedOrganizationGroup({
+      groupId: ${JSON.stringify(JUNCTION_GROUP_ID)},
+      name: "Group",
+      color: "#fdd663",
+      collapsed: false,
+      refs: [ref("delta"), ref("epsilon"), ref("zeta")],
+    });
   })()`);
   try {
     await activateEpsilon(page);
@@ -274,8 +281,8 @@ test("top: a group's line meets the joined tab's feet on both sides", async ({
     );
   } finally {
     await page.evaluate(`(async () => {
-      const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-      useTabsStore.getState().ungroup(window.__junctionGroupId);
+      const { clearOrganizationGroup } = await import("/src/__tests__/browser/organization-seed.ts");
+      clearOrganizationGroup(${JSON.stringify(JUNCTION_GROUP_ID)});
     })()`);
   }
 });

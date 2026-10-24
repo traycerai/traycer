@@ -1,21 +1,29 @@
 /**
  * Main's subscription to THIS machine's host for the account's registry.
  *
- * ## What it replaces, and what it does not
+ * ## What it adds, and what it does not replace
  *
  * `registerRegisteredHostsBroadcast` polls `GET /api/v3/hosts` once a minute
- * for the whole app. The local host reads the same endpoint on the same
- * cadence for its own reasons (`host-inventory.ts`), with a device-bound
- * credential it holds anyway. So a desktop with its host running makes two
- * reads a minute of one Redis lease, and one of them can be had for free.
+ * for the whole app, with the user's bearer. The local host reads the same
+ * endpoint on the same cadence for its own reasons (`host-inventory.ts`), with
+ * a device-bound credential it holds anyway, and pushes its answer when it
+ * changes.
  *
  * This subscribes to the host's answer and feeds it to the fleet source
- * through the same adoption path a fetch takes. It does NOT delete the poll:
- * the poll is the fallback, and it is the whole reason this is safe to add.
+ * through the same adoption path a fetch takes. It does NOT replace the poll,
+ * and cannot: authn scopes the device credential to the owner's personal
+ * hosts, so the host's rows never include a team's hosts. The fleet takes the
+ * push as the PERSONAL rows only and keeps the team rows the poll last read
+ * (`RegistryScope` in `desktop-selection-ports.ts`); what the push buys is
+ * personal rows fresher than the poll's interval.
  *
- * ## The fallback is the design, not the error path
+ * ## Coverage is reported, and gates nothing
  *
- * Every way this can fail ends in the poll running exactly as it does today:
+ * `onPushActiveChanged` says whether the push is currently covering the
+ * personal rows. It used to stand the poll down, which froze every team row
+ * while the push was healthy; the poll now runs regardless, and coverage is a
+ * diagnostic. It reads `false` for every way the push can be less than
+ * healthy:
  *
  *  - a host that predates the method never advertises it, support reads
  *    `unsupported`, and no session is opened at all;
@@ -25,14 +33,17 @@
  *    restart reports a non-`open` status;
  *  - a snapshot the host marks STALE means the host's own read failed and it
  *    is serving last-known rows. The rows are still adopted - they are the
- *    freshest anyone has - but the push stops counting as coverage, because
- *    the host reads with a device credential and this process reads with the
- *    user's bearer: a host whose credential needs re-auth is stale in a way
- *    the poll is not.
+ *    freshest anyone has - but they do not count as coverage, because the host
+ *    reads with a device credential and this process reads with the user's
+ *    bearer: a host whose credential needs re-auth is stale in a way the poll
+ *    is not;
+ *  - a host that negotiated only @1.0 of the method (it predates sandboxes)
+ *    sends the personal hosts alone, every sandbox row stripped. That is not
+ *    the personal registry, so its snapshots are neither adopted nor counted
+ *    as coverage.
  *
- * In each case `onPushActiveChanged(false)` fires and the poll resumes on its
- * next tick; a later healthy snapshot arms it again. Nothing here retries on
- * its own beyond the transport's own reconnect ladder - the poll is the retry.
+ * Nothing here retries on its own beyond the transport's own reconnect ladder
+ * - the poll is the retry.
  *
  * ## One stated limit: a TERMINAL close is not re-opened
  *
@@ -44,7 +55,8 @@
  * re-open loop against a host refusing us is worse than the thing it would be
  * trying to restore. The push stays down until this machine publishes a
  * different host id or the app restarts, and the poll - which reads with the
- * renderer's own bearer, not this stream's - carries the registry meanwhile.
+ * renderer's own bearer, not this stream's - carries the personal rows
+ * meanwhile, as it always carries the team rows.
  * That is the status quo, which is the worst this module is allowed to cost.
  */
 import {
@@ -112,7 +124,7 @@ export interface LocalHostInventorySubscriptionDeps {
    *
    * A port rather than a `new WsStreamClient(...)` inside `attach`, and not
    * for symmetry: everything this module actually decides - when to open, when
-   * to stand the poll back up, what a stale snapshot means - is reachable only
+   * coverage ends, what a stale snapshot means - is reachable only
    * through a client, and a module that builds its own can be exercised only
    * against a real socket. {@link createLocalHostInventoryStreamClient} is the
    * production one, and the composition passes it explicitly.
@@ -147,9 +159,9 @@ export interface LocalHostInventorySubscriptionDeps {
     readonly openedAtGeneration: number;
   }) => void;
   /**
-   * Whether the push is currently covering the registry. `false` is a
-   * statement that the poll must keep running, and it is made whenever this
-   * module is not certain of the opposite.
+   * Whether the push is currently covering the personal rows. `false` is made
+   * whenever this module is not certain of the opposite. A diagnostic: the
+   * poll runs whatever this says (see the module header).
    */
   readonly onPushActiveChanged: (active: boolean) => void;
   readonly log: AuthorityLog;
@@ -226,8 +238,8 @@ export function startLocalHostInventorySubscription(
      * Two conditions, and they fail in different situations: the token catches
      * a stream that has been torn down or replaced, and the generation catches
      * an account change that has not reached the teardown yet. Only arming
-     * needs this - `setPushActive(false)` is always safe, since the worst it
-     * costs is a poll nobody needed.
+     * needs this - `setPushActive(false)` never claims anything a retired
+     * stream could make untrue.
      */
     const speaksForTheSubscription = (): boolean =>
       currentStreamToken === token &&
@@ -237,6 +249,16 @@ export function startLocalHostInventorySubscription(
       callbacks: {
         onSnapshot: (snapshot) => {
           if (disposed) return;
+          // A @1.0 host strips every sandbox row, so its rows are the
+          // personal hosts without their sandboxes. Adopted, they would
+          // replace the personal rows and remove every personal sandbox each
+          // time one arrived, until the next poll restored them. Such a
+          // snapshot covers nothing here: it is not forwarded, and the poll
+          // keeps reading the whole registry.
+          if (!snapshot.includesSandboxRows) {
+            setPushActive(false);
+            return;
+          }
           // Forwarded whatever its staleness, and whatever stream it came
           // from: rows the host could not refresh are still rows, and a
           // retired stream's rows are fenced by the generation they carry, at
@@ -252,10 +274,10 @@ export function startLocalHostInventorySubscription(
             setPushActive(false);
             return;
           }
-          // Arming is a claim that the POLL can stand down, made on one shared
-          // flag. A retired stream making it - a late frame after an account
-          // switch, whose rows the consumer has just rejected - would leave
-          // the new account with no snapshot and no poll either.
+          // Arming is a claim that THIS account's personal rows are covered,
+          // made on one shared flag. A retired stream making it - a late frame
+          // after an account switch, whose rows the consumer has just
+          // rejected - would report coverage the new account does not have.
           if (!speaksForTheSubscription()) return;
           setPushActive(true);
         },
@@ -333,9 +355,8 @@ export function startLocalHostInventorySubscription(
    * resolver captured the subscribing user at subscribe time and keeps
    * answering for that user, so the socket would go on serving A's registry
    * under B's credential, and this process would publish and adopt it as B's
-   * membership. The teardown also clears coverage, which matters on its own -
-   * A's `pushActive` would otherwise keep suppressing B's poll, leaving B with
-   * one identity-triggered fetch and then nothing.
+   * membership. The teardown also clears coverage, so A's stream is never
+   * reported as covering B.
    *
    * The SAME account with a new token is an in-place update. The host closes
    * an admitted connection at its bearer's own `exp`

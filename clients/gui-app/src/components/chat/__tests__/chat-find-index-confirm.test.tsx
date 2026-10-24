@@ -2218,6 +2218,7 @@ const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
       spawnToolCallId: null,
       parentId: null,
       workflowMeta: null,
+      toolImageResults: [],
       children: [
         {
           id: "nested-tool-1",
@@ -2230,6 +2231,7 @@ const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
+          agentMessageDelivery: null,
           isStreaming: false,
           endState: null,
           stopped: false,
@@ -2237,7 +2239,7 @@ const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
           backgroundOutput: null,
           backgroundTask: false,
           imageResults: [],
-          page: null,
+          artifact: null,
           mcpApp: null,
           durationMs: null,
           startedAt: 0,

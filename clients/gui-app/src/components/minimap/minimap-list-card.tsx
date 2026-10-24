@@ -3,6 +3,7 @@ import {
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
 
 export interface MinimapListEntry {
@@ -51,11 +52,12 @@ export function MinimapListCard({
     event: ReactKeyboardEvent<HTMLButtonElement>,
     index: number,
   ): void => {
-    if (event.key === "ArrowDown") {
+    const navigationKey = listNavigationKey(event);
+    if (navigationKey === "ArrowDown") {
       event.preventDefault();
       event.stopPropagation();
       moveFocus(index + 1);
-    } else if (event.key === "ArrowUp") {
+    } else if (navigationKey === "ArrowUp") {
       event.preventDefault();
       event.stopPropagation();
       moveFocus(index - 1);

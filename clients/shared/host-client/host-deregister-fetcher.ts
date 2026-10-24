@@ -1,3 +1,5 @@
+import { composeRequestAbort } from "../auth/request-abort";
+
 /**
  * "Remove from account" — the raw `POST /api/v3/hosts/:hostId/deregister` call.
  * Transport-only, a sibling of `fetchRegisteredHostsViaHttp`
@@ -72,6 +74,9 @@ export async function deregisterHostViaHttp(
   bearerToken: string,
   hostId: string,
 ): Promise<DeregisterHostFetchResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. No body is read, so it is cleared once fetch settles.
+  const abort = composeRequestAbort(null, HOST_DEREGISTER_FETCH_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(hostDeregisterUrl(authnBaseUrl, hostId), {
@@ -80,12 +85,14 @@ export async function deregisterHostViaHttp(
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
       },
-      signal: AbortSignal.timeout(HOST_DEREGISTER_FETCH_TIMEOUT_MS),
+      signal: abort.signal,
     });
   } catch {
     // A thrown `fetch` — transport failure or the per-attempt timeout — is
     // transient and retriable.
     return { kind: "network-error" };
+  } finally {
+    abort.clear();
   }
 
   if (response.status === 401 || response.status === 403) {

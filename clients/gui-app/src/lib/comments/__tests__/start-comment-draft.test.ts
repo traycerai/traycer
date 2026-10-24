@@ -45,7 +45,7 @@ describe("startCommentDraft", () => {
     const editor = makeEditor("hello world");
     editor.commands.setTextSelection({ from: 1, to: 6 });
 
-    let captured: DraftRange | null = null;
+    const drafts: Array<DraftRange | null> = [];
     const result = startCommentDraft(
       editor,
       {
@@ -55,12 +55,17 @@ describe("startCommentDraft", () => {
         artifactId: "spec-a",
       },
       (_epicId, draft) => {
-        captured = draft;
+        drafts.push(draft);
       },
     );
 
     expect(result.started).toBe(true);
-    expect(captured).toEqual({
+    expect(drafts).toHaveLength(1);
+    const captured = drafts[0];
+    if (captured === null) throw new Error("the draft was cleared, not stored");
+    expect(captured.draftId.length).toBeGreaterThan(0);
+    expect({ ...captured, draftId: "" }).toEqual({
+      draftId: "",
       tileId: "tile-a",
       artifactId: "spec-a",
       from: 1,

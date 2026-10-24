@@ -12,9 +12,11 @@ import {
   prepareTuiLaunchResponseSchema,
   recordTuiAgentActivityRequestSchema,
   recordTuiAgentActivityRequestSchemaV11,
+  recordTuiAgentActivityRequestSchemaV12,
   recordTuiAgentActivityResponseSchema,
   tuiAgentPromptSubmittedRequestSchema,
   tuiAgentPromptSubmittedRequestSchemaV11,
+  tuiAgentPromptSubmittedRequestSchemaV12,
   tuiAgentPromptSubmittedResponseSchema,
   tuiAgentTurnEndedRequestSchema,
   tuiAgentTurnEndedResponseSchema,
@@ -138,6 +140,38 @@ export const agentTuiRecordActivityUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
+ * `agent.tui.recordActivity@1.2` - adds the request-side idle evidence
+ * (`spawnToken`, `turnId`, `inFlight`) and the `started` and
+ * `idle-confirmed` events. The response is unchanged. See the schema note in
+ * `unary-schemas.ts`.
+ */
+export const agentTuiRecordActivityV12 = defineRpcContract({
+  method: "agent.tui.recordActivity",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: recordTuiAgentActivityRequestSchemaV12,
+  responseSchema: recordTuiAgentActivityResponseSchema,
+});
+
+// A v1.1 request reported no evidence, so the upgrade fills all three fields
+// with `null` (the host keeps the agent). The response is byte-identical. A
+// v1.2 peer projects onto a v1.1 host by the non-strict re-parse, which strips
+// the fields on the wire; the two new events cannot be projected at all.
+export const agentTuiRecordActivityUpgradeV11ToV12 = defineUpgradePath<
+  typeof agentTuiRecordActivityV11,
+  typeof agentTuiRecordActivityV12
+>({
+  from: agentTuiRecordActivityV11.schemaVersion,
+  to: agentTuiRecordActivityV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    spawnToken: null,
+    turnId: null,
+    inFlight: null,
+  }),
+  upgradeResponse: (response) => response,
+});
+
+/**
  * Optional (non-floor) capability: the `UserPromptSubmit` hook's combined
  * activity-edge + roles-digest-pull call (roles-snapshot-delivery pull point
  * 1). Registered with a `degrade: unsupported` strategy in `registry.ts` so
@@ -173,6 +207,30 @@ export const agentTuiPromptSubmittedUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: (request) => ({
     ...request,
     worktreeIntent: null,
+  }),
+  upgradeResponse: (response) => response,
+});
+
+export const agentTuiPromptSubmittedV12 = defineRpcContract({
+  method: "agent.tui.promptSubmitted",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: tuiAgentPromptSubmittedRequestSchemaV12,
+  responseSchema: tuiAgentPromptSubmittedResponseSchema,
+});
+
+// A v1.1 start edge carried no spawn token or turn id, so it forms no idle
+// evidence: the upgrade fills both with `null`. A v1.2 peer projects onto a
+// v1.1 host by the non-strict re-parse, which strips them.
+export const agentTuiPromptSubmittedUpgradeV11ToV12 = defineUpgradePath<
+  typeof agentTuiPromptSubmittedV11,
+  typeof agentTuiPromptSubmittedV12
+>({
+  from: agentTuiPromptSubmittedV11.schemaVersion,
+  to: agentTuiPromptSubmittedV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    spawnToken: null,
+    turnId: null,
   }),
   upgradeResponse: (response) => response,
 });

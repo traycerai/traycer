@@ -483,8 +483,8 @@ describe("<EpicRootDragOverlayContent />", () => {
         "split-focus-indicator-split-1",
       );
       expect(indicator.dataset.focusedSide).toBe("right");
-      // F4 round 2 dropped the group underline; the focused member's own box
-      // is now what says which side is focused.
+      // The focused member is raised, and the underline runs under the
+      // other one.
       const leftMember = overlay.querySelector<HTMLElement>(
         '[data-split-member="left"]',
       );
@@ -494,8 +494,18 @@ describe("<EpicRootDragOverlayContent />", () => {
       if (leftMember === null || rightMember === null) {
         throw new Error("expected both split members");
       }
-      expect(within(leftMember).queryByTestId("tab-chrome-box")).toBeNull();
-      expect(within(rightMember).getByTestId("tab-chrome-box")).toBeTruthy();
+      expect(
+        within(leftMember).queryByTestId("split-member-raised-tab"),
+      ).toBeNull();
+      expect(
+        within(leftMember).getByTestId("split-underline-segment"),
+      ).toBeTruthy();
+      expect(
+        within(rightMember).getByTestId("split-member-raised-tab"),
+      ).toBeTruthy();
+      expect(
+        within(rightMember).queryByTestId("split-underline-segment"),
+      ).toBeNull();
     });
 
     it("carries the captured manual appearance and notification snapshot into the split preview", () => {
@@ -527,12 +537,12 @@ describe("<EpicRootDragOverlayContent />", () => {
 
       const overlay = screen.getByTestId("header-tab-drag-overlay");
       expect(within(overlay).getByText("🚀")).toBeTruthy();
-      // `--swatch-border`, not `borderTopColor` - see the note in
+      // The custom property, not a computed border colour - see the note in
       // `tab-strip-drag-overlay.test.tsx`.
       expect(
         within(overlay)
-          .getByTestId("tab-chrome-box")
-          .style.getPropertyValue("--swatch-border"),
+          .getByTestId("split-member-raised-tab")
+          .style.getPropertyValue("--swatch"),
       ).toBe("#654321");
       expect(
         within(overlay).getByTestId("header-tab-approval-epic-left"),
@@ -904,7 +914,12 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(
         within(overlay).getByTestId("split-tab-divider-split-1"),
       ).toBeTruthy();
-      expect(within(overlay).queryByTestId("tab-chrome-box")).toBeNull();
+      expect(
+        within(overlay).queryByTestId("split-member-raised-tab"),
+      ).toBeNull();
+      expect(
+        within(overlay).queryByTestId("split-underline-control-split-1"),
+      ).toBeNull();
 
       act(() => {
         useTabsStore.setState({ activeItemId: "split-1" });
@@ -913,7 +928,14 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(
         within(overlay).queryByTestId("split-tab-divider-split-1"),
       ).toBeNull();
-      expect(within(overlay).getByTestId("tab-chrome-box")).toBeTruthy();
+      // The overlay joins as the dragged pair does, so its box paints the
+      // pane behind the raised member from md.
+      expect(
+        within(overlay).getByTestId("split-member-raised-tab").dataset.fill,
+      ).toBe("below-md");
+      expect(
+        within(overlay).getByTestId("split-underline-control-split-1"),
+      ).toBeTruthy();
     });
 
     [
@@ -1070,6 +1092,7 @@ describe("<EpicRootDragOverlayContent />", () => {
             createdAt: 1,
             updatedAt: 1,
             userId: null,
+            ownedByViewer: true,
             hostId: "host-a",
             isTitleEditedByUser: false,
             docResident: null,

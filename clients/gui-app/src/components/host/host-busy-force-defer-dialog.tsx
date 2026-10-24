@@ -75,15 +75,22 @@ export interface HostBusyForceDeferDialogProps {
  * "activate"` outcome (post-commit, packaged macOS) submits
  * `activateInstalled{force}` instead, never re-running the already-consumed
  * apply/pin.
+ *
+ * Closing during `isForcing` dismisses the offer without cancelling the
+ * caller's dispatched action. Keep Force and the idle action disabled to
+ * prevent a second dispatch.
+ *
+ * A pending idle action still locks dismissal until its verdict arrives.
  */
 export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
   const idleAction = props.idleAction;
   const acting = props.isForcing || idleAction?.isPending === true;
+  const closeLocked = idleAction?.isPending === true;
   return (
     <Dialog
       open={props.open}
       onOpenChange={
-        acting
+        closeLocked
           ? undefined
           : (open) => {
               if (!open) props.onDefer();
@@ -115,11 +122,11 @@ export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
             type="button"
             variant="ghost"
             size="sm"
-            disabled={acting}
+            disabled={closeLocked}
             onClick={props.onDefer}
             data-testid="host-busy-defer"
           >
-            Defer
+            {props.isForcing ? "Close" : "Defer"}
           </Button>
           {idleAction === null ? null : (
             <Button

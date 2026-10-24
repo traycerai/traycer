@@ -1,12 +1,24 @@
-import { arch, platform, release } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import { arch, platform, release, tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
+import { STDERR_FATAL_KINDS } from "../crash-diagnostics";
 import type {
   HostCrashEvent,
   HostCrashIdentity,
   HostCrashTelemetry,
 } from "../crash-telemetry";
 import type { HostPidMetadata } from "../pid-metadata";
+
+// The crash throttle keeps its state under the CLI home, which `store/paths`
+// binds from `os.homedir()` at module load. Point it at a directory of this
+// file's own so no test reads or writes a real `~/.traycer`.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
 
 // Fake Sentry scope surface: only the methods `captureHostCrashEvent`
 // actually calls, mirroring how the module narrows `Sentry.Scope` itself.
@@ -122,6 +134,10 @@ function sampleTelemetry(
     exitMeaning: "some crash meaning",
     hasDiagnosticReport: true,
     uptimeMs: 1500,
+    stopRequested: false,
+    stderrEmpty: false,
+    stderrFatal: "other",
+    reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
     ...overrides,
   };
 }
@@ -190,10 +206,15 @@ describe("buildHostCrashEvent", () => {
         "cli_version",
         "crash_kind",
         "host_environment",
+        "host_fatal",
+        "host_output",
+        "host_phase",
         "host_running_version",
         "host_version",
         "os_release",
         "platform",
+        "stop_requested",
+        "uptime_bucket",
       ].sort(),
     );
     expect(Object.keys(event.extra).sort()).toEqual(
@@ -244,6 +265,11 @@ describe("buildHostCrashEvent", () => {
       arch: arch(),
       os_release: release(),
       crash_kind: "1",
+      stop_requested: "no",
+      host_output: "wrote",
+      host_fatal: "other",
+      host_phase: "published",
+      uptime_bucket: "lt-10s",
     });
   });
 
@@ -261,6 +287,100 @@ describe("buildHostCrashEvent", () => {
     expect(event.tags.host_running_version).toBe("unknown");
     expect(event.hostId).toBe("host-mismatched");
     expect(event.extra.hostIdKnown).toBe(true);
+  });
+
+  describe("external termination", () => {
+    it("reports DBG_TERMINATE_PROCESS as a warning under its own fingerprint, tagged host_exit_kind", () => {
+      const event = buildHostCrashEvent(
+        sampleTelemetry({
+          exitCode: 0x40010004,
+          signal: null,
+          exitMeaning:
+            "0x40010004 DBG_TERMINATE_PROCESS (terminated from outside)",
+        }),
+        null,
+      );
+      expect(event.level).toBe("warning");
+      expect(event.fingerprint).toEqual([
+        HOST_CRASH_FINGERPRINT_ROOT,
+        platform(),
+        "external-termination",
+      ]);
+      expect(event.tags.host_exit_kind).toBe("external-termination");
+      expect(event.tags.crash_kind).toBe("0x40010004");
+    });
+
+    it("keeps every other exit status an error under the crash fingerprint with no host_exit_kind", () => {
+      const event = buildHostCrashEvent(
+        sampleTelemetry({ exitCode: 0xc0000005, exitMeaning: null }),
+        null,
+      );
+      expect(event.level).toBe("error");
+      expect(event.fingerprint).toEqual([
+        HOST_CRASH_FINGERPRINT_ROOT,
+        platform(),
+        "0xC0000005",
+      ]);
+      expect(event.tags).not.toHaveProperty("host_exit_kind");
+    });
+  });
+
+  describe("exit-cause tags", () => {
+    it("tags a requested stop and a silent child as closed-set verdicts", () => {
+      const event = buildHostCrashEvent(
+        sampleTelemetry({ stopRequested: true, stderrEmpty: true }),
+        null,
+      );
+      expect(event.tags.stop_requested).toBe("yes");
+      expect(event.tags.host_output).toBe("silent");
+    });
+
+    it.each(STDERR_FATAL_KINDS)(
+      "carries the stderr fatal kind %s as the host_fatal tag, and nothing else of the capture",
+      (kind) => {
+        const event = buildHostCrashEvent(
+          sampleTelemetry({ stderrFatal: kind }),
+          null,
+        );
+        expect(event.tags.host_fatal).toBe(kind);
+        expect(JSON.stringify(event)).not.toContain("heap out of memory");
+      },
+    );
+
+    it("derives host_phase from whether the child published its own pid.json", () => {
+      const published = buildHostCrashEvent(sampleTelemetry({}), {
+        hostId: "host-a",
+        runningVersion: "1.2.4",
+      });
+      const beforePublish = buildHostCrashEvent(sampleTelemetry({}), {
+        hostId: "host-a",
+        runningVersion: null,
+      });
+      const unknown = buildHostCrashEvent(sampleTelemetry({}), null);
+      expect(published.tags.host_phase).toBe("published");
+      expect(beforePublish.tags.host_phase).toBe("before-publish");
+      expect(unknown.tags.host_phase).toBe("unknown");
+      // A spawn that yielded no pid cannot be compared with the file's pid.
+      const noChildPid = buildHostCrashEvent(
+        sampleTelemetry({ childPid: null }),
+        { hostId: "host-a", runningVersion: null },
+      );
+      expect(noChildPid.tags.host_phase).toBe("unknown");
+    });
+
+    it.each([
+      [0, "lt-10s"],
+      [9_999, "lt-10s"],
+      [10_000, "lt-1m"],
+      [59_999, "lt-1m"],
+      [60_000, "lt-10m"],
+      [10 * 60_000, "lt-1h"],
+      [60 * 60_000, "lt-24h"],
+      [24 * 60 * 60_000, "gte-24h"],
+    ])("buckets an uptime of %d ms as %s", (uptimeMs, bucket) => {
+      const event = buildHostCrashEvent(sampleTelemetry({ uptimeMs }), null);
+      expect(event.tags.uptime_bucket).toBe(bucket);
+    });
   });
 
   describe("cli_version tag", () => {
@@ -298,6 +418,38 @@ describe("buildHostCrashEvent", () => {
     expect(event.extra.supervisorPid).toBe(9999);
     expect(event.extra.hasDiagnosticReport).toBe(false);
     expect(event.extra.uptimeMs).toBe(42);
+  });
+
+  it("carries the report's heap limit, heap used and rss as plain numbers", () => {
+    const event = buildHostCrashEvent(
+      sampleTelemetry({
+        reportMemory: {
+          heapLimitBytes: 4831838208,
+          heapUsedBytes: 4100000000,
+          rssBytes: 4750000000,
+        },
+      }),
+      null,
+    );
+    expect(event.extra.heapLimitBytes).toBe(4831838208);
+    expect(event.extra.heapUsedBytes).toBe(4100000000);
+    expect(event.extra.rssBytes).toBe(4750000000);
+  });
+
+  it("leaves out a memory value the report did not give, never a zero or -1", () => {
+    const event = buildHostCrashEvent(
+      sampleTelemetry({
+        reportMemory: {
+          heapLimitBytes: 4831838208,
+          heapUsedBytes: null,
+          rssBytes: null,
+        },
+      }),
+      null,
+    );
+    expect(event.extra.heapLimitBytes).toBe(4831838208);
+    expect("heapUsedBytes" in event.extra).toBe(false);
+    expect("rssBytes" in event.extra).toBe(false);
   });
 
   it("puts the telemetry's childPid in extra.childPid, and -1 when the spawn yielded no pid", () => {
@@ -393,6 +545,20 @@ describe("captureHostCrashEvent", () => {
     );
   });
 
+  it("sends an externally terminated host at warning level, not error", () => {
+    const event = buildHostCrashEvent(
+      sampleTelemetry({ exitCode: 0x40010004, signal: null }),
+      null,
+    );
+    captureHostCrashEvent(event);
+
+    expect(sentryMocks.setLevel).toHaveBeenCalledWith("warning");
+    expect(sentryMocks.captureMessage).toHaveBeenCalledWith(
+      event.message,
+      "warning",
+    );
+  });
+
   it("sets the Sentry user to the host id when hostId is known", () => {
     const identity: HostCrashIdentity = {
       hostId: "host-known",
@@ -413,7 +579,11 @@ describe("captureHostCrashEvent", () => {
 });
 
 describe("reportHostCrashToSentry", () => {
+  let workHome: string;
+
   beforeEach(() => {
+    workHome = mkdtempSync(join(tmpdir(), "traycer-crash-telemetry-test-"));
+    osHome.current = workHome;
     pidMetadataMocks.readHostPidMetadata.mockReset();
     sentryMocks.setLevel.mockReset();
     sentryMocks.setFingerprint.mockReset();
@@ -431,6 +601,8 @@ describe("reportHostCrashToSentry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    osHome.current = "";
+    rmSync(workHome, { recursive: true, force: true });
   });
 
   // Every test below imports a FRESH crash-telemetry module instance rather

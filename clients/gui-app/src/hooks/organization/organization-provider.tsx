@@ -32,8 +32,12 @@ import {
 import { useHostClient } from "@/lib/host";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
+import {
+  usePoolTierHostClient,
+  usePoolTierStreamClient,
+} from "@/hooks/host/use-pool-tier";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -62,9 +66,19 @@ export function OrganizationProvider({
     value: OrganizationDialog;
     returnFocusTo: HTMLElement | null;
   } | null>(null);
-  const client = useHostClient();
+  // Organization is account-wide: the pool's family (see `usePoolTierHostClient`).
+  const client = usePoolTierHostClient(useHostClient());
+  const binding = useSurfaceHostStreamBinding(null);
   const readiness = useReactiveHostReadiness(client);
   const { hostId, requestContextUserId: userId } = readiness;
+  // The SAME stream the subscription below rides, not the surface's own. In a
+  // pool build those are different hosts: commands and frames would go to the
+  // pool while a refused draft intent waited on a recovery from somewhere
+  // else, and the recovery that actually concerns it would never arrive.
+  const streamClient = usePoolTierStreamClient(
+    binding?.wsStreamClient ?? null,
+    userId,
+  );
   const accountUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
@@ -85,12 +99,14 @@ export function OrganizationProvider({
     state.repair();
   }, [accountUserId]);
   const authorized = useAuthStore((s) => authorizesCloudCapability(s.status));
-  const supportsCommand = useHostSupportsMethod(hostId, "organization.command");
-  const supported =
-    supportsCommand &&
-    authorized &&
-    userId !== null &&
-    userId === accountUserId;
+  const hostSupport = useHostMethodSupport(hostId, "organization.command");
+  // The projection is this account's or it is nobody's. Identity is the only
+  // part of `supported` that governs whether the cached view may be SHOWN:
+  // losing cloud authorization, or a handshake that has not landed, must not
+  // empty a menu whose groups are still the signed-in account's, but a host
+  // whose request context belongs to someone else must never be drawn.
+  const ownAccount = userId !== null && userId === accountUserId;
+  const supported = hostSupport === true && authorized && ownAccount;
   const queryClient = useQueryClient();
   const key = useMemo(
     () => organizationKeys.view(hostId, userId),
@@ -195,16 +211,45 @@ export function OrganizationProvider({
         client.getActiveHostId() !== hostId
       )
         throw new Error("Organization account changed.");
+      retireSupersededDraftIntents(action);
     },
     [mutateAsync, client, userId, hostId],
   );
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
+  // How many times this provider has tried each tab's draft group intent,
+  // and which of those sends has not come back - owned by one scope, and
+  // replaced wholesale when the host or account changes. A send closes over
+  // the object it started under, so a reply from the old scope settles that
+  // object and can neither free nor strand a tab the new one is tracking.
+  const draftTracking = useRef<DraftIntentTracking>(newDraftTracking());
   // Opening is a local tab transition, independent of the selected host's
   // organization projection. Switching that host must not reopen closed siblings.
   const openedTasks = useRef(new Set<string>());
   useEffect(() => {
     lifecycle.current = createLifecycle();
   }, [scope]);
+  // The host's own recovery evidence, and the only thing that reports a
+  // session reopening after a drop or a stall: the client is NOT rebuilt for
+  // either, so its identity cannot stand in for this. It both gives a
+  // refused draft intent its attempts back and WAKES the send, because the
+  // consuming effect is keyed on the view and a recovery frame that carries
+  // the same data is structurally shared into the same object - no change,
+  // no re-run. The epoch is that missing edge.
+  const [recoveries, setRecoveries] = useState(0);
+  // The same count, readable from inside a send's settlement callback, which
+  // closes over the render it started in and cannot see the state.
+  const recoveryCount = useRef(0);
+  useEffect(() => {
+    draftTracking.current = newDraftTracking();
+  }, [scope]);
+  useEffect(() => {
+    if (streamClient === null) return;
+    return streamClient.subscribeAvailabilityRecovered(() => {
+      draftTracking.current.attempts.clear();
+      recoveryCount.current += 1;
+      setRecoveries((seen) => seen + 1);
+    });
+  }, [streamClient]);
   const refresh = useCallback(async () => {
     const auth = useAuthStore.getState();
     if (
@@ -286,9 +331,15 @@ export function OrganizationProvider({
         }
       }
     }
-    consumeDraftGroupIntents(query.data, command);
+    consumeDraftGroupIntents(query.data, command, {
+      tracking: draftTracking.current,
+      recoveries: recoveryCount,
+      wake: () => setRecoveries((seen) => seen + 1),
+    });
     projectOrganizationToTabs(query.data, userId);
-  }, [supported, query.data, openIds, command, lifecycle, userId]);
+    // `command` changes with the host/account scope, so scope changes also
+    // re-run this effect.
+  }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
       const opener = captureOrganizationDialogOpener();
@@ -304,9 +355,10 @@ export function OrganizationProvider({
   const value = useMemo(
     () => ({
       supported,
+      hostSupport,
       client,
       userId,
-      view: supported ? query.data : undefined,
+      view: ownAccount ? query.data : undefined,
       register,
       command,
       refresh,
@@ -314,6 +366,8 @@ export function OrganizationProvider({
     }),
     [
       supported,
+      hostSupport,
+      ownAccount,
       client,
       userId,
       query.data,
@@ -353,9 +407,12 @@ function OrganizationSubscription(props: {
   readonly taskIds: string[];
   readonly accept: (view: OrganizationView, ids: readonly string[]) => void;
 }) {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const binding = useSurfaceHostStreamBinding(null);
-  const streamClient = binding?.wsStreamClient ?? null;
+  const streamClient = usePoolTierStreamClient(
+    binding?.wsStreamClient ?? null,
+    props.userId,
+  );
   const { taskIds, accept } = props;
   const receivedFrame = useRef(false);
   const refresh = useHostQuery({
@@ -370,9 +427,17 @@ function OrganizationSubscription(props: {
     ),
     options: { staleTime: Infinity, refetchOnMount: "always" },
   });
+  // Only this mount's own successful answer is accepted. A task set that was
+  // subscribed before keeps its earlier answer in the query cache, and a
+  // remount is handed that answer at once, ahead of the refetch: a group
+  // dissolved since then would be projected onto the strip again until the
+  // fresh view lands. A failed refetch also counts as fetched after mount
+  // while `data` stays the cached answer, so success is required too.
+  const refreshedAfterMount = refresh.isFetchedAfterMount && refresh.isSuccess;
   useEffect(() => {
-    if (refresh.data && !receivedFrame.current) accept(refresh.data, taskIds);
-  }, [refresh.data, accept, taskIds]);
+    if (refresh.data && refreshedAfterMount && !receivedFrame.current)
+      accept(refresh.data, taskIds);
+  }, [refresh.data, refreshedAfterMount, accept, taskIds]);
   useEffect(() => {
     let active = true;
     if (streamClient === null)
@@ -465,30 +530,76 @@ function organizationFiltersChanged(
   );
 }
 
+/**
+ * How many times one tab's draft group intent is sent before this provider
+ * leaves it alone.
+ *
+ * Relevant view/open changes or a transport recovery wake the sender; no
+ * timer retries a refusal. The count prevents repeated frames from spending
+ * unbounded attempts on a reachable host that keeps refusing. Recovery or a
+ * host/account scope change resets the count. An exhausted intent stays in
+ * the layout for a later recovery or launch.
+ */
+const DRAFT_INTENT_MAX_ATTEMPTS = 3;
+
+/**
+ * Sends the group a draft tab was started in, once that draft has become a
+ * task.
+ *
+ * The stored intent is the only record of the user's choice, so it is cleared
+ * when the command is ACKNOWLEDGED, never when it is sent: clearing first lost
+ * the choice outright whenever the send failed or the renderer reloaded while
+ * it was in flight. It is also no longer withheld until the task has cloud
+ * metadata - the host accepts the assignment for a task it can prove this
+ * account created here, and holds delivery itself.
+ */
 function consumeDraftGroupIntents(
   view: OrganizationView,
   command: (action: OrganizationAction) => Promise<void>,
+  context: {
+    readonly tracking: DraftIntentTracking;
+    readonly recoveries: { current: number };
+    readonly wake: () => void;
+  },
 ): void {
+  const { attempts, inFlight } = context.tracking;
+  const { recoveries, wake } = context;
   const tabs = useEpicCanvasStore.getState();
   for (const tabId of tabs.openTabOrder) {
     const task = tabs.tabsById[tabId];
     const customization =
       useTabsStore.getState().customizations?.[`epic:${tabId}`];
     const pendingGroupId = customization?.pendingGroupId;
-    if (
-      !task ||
-      !pendingGroupId ||
-      !view.appearances.some((a) => a.taskId === task.epicId)
-    )
+    if (!task || !pendingGroupId) continue;
+    // A send that has not come back is still this tab's send. Frames keep
+    // arriving while it is in flight, and without this each one would start
+    // another command for the same assignment.
+    if (inFlight.has(tabId)) continue;
+    const spent = attempts.get(tabId) ?? 0;
+    if (spent >= DRAFT_INTENT_MAX_ATTEMPTS) continue;
+    const clearIntent = (): void => {
+      useTabsStore
+        .getState()
+        .setTabCustomization(
+          { kind: "epic", id: tabId },
+          { pendingGroupId: null },
+        );
+    };
+    if (!view.groups.groups.some((group) => group.groupId === pendingGroupId)) {
+      // The group the draft named is gone from the account. Nothing to send,
+      // and nothing left for the intent to mean.
+      clearIntent();
       continue;
-    useTabsStore
-      .getState()
-      .setTabCustomization(
-        { kind: "epic", id: tabId },
-        { pendingGroupId: null },
-      );
-    if (!view.groups.groups.some((group) => group.groupId === pendingGroupId))
-      continue;
+    }
+    attempts.set(tabId, spent + 1);
+    inFlight.add(tabId);
+    // A recovery that lands WHILE this is in flight is skipped by the guard
+    // above, and the settlement below is the last thing that happens for
+    // this tab - no frame, no further recovery. So the send remembers how
+    // many recoveries it started after, and asks for one more pass if that
+    // moved while it was out. Without it a stream that reconnects faster
+    // than a unary request times out leaves the intent inert.
+    const startedAfter = recoveries.current;
     void command({
       kind: "groups",
       operations: [
@@ -501,8 +612,66 @@ function consumeDraftGroupIntents(
           ).length,
         },
       ],
-    }).catch(() => undefined);
+    })
+      .then(clearIntent)
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight.delete(tabId);
+        if (recoveries.current !== startedAfter) wake();
+      });
   }
+}
+
+/**
+ * Forgets a draft's group intent once the account has DURABLY accepted a
+ * later choice for the same task.
+ *
+ * The intent deliberately survives a refusal - that is what it is for - so
+ * the only thing allowed to retire it is a newer decision that actually
+ * landed. A membership in the view is NOT that: the view is this host's own
+ * projection and carries the optimistic edit, so retiring on it would throw
+ * the intent away on the first frame after the send it was meant to outlive.
+ * An accepted `moveTask` or `removeTask` naming the task is a newer
+ * decision, and by the time this runs it has been written durably and the
+ * account and host have been checked. Reordering is not: it moves a task
+ * inside the group it is already in, and decides nothing about joining one.
+ *
+ * Every route - the menu, a new group, a drag - reaches this through the
+ * same command, so there is nothing per-route to keep in step.
+ */
+function retireSupersededDraftIntents(action: OrganizationAction): void {
+  if (action.kind !== "groups") return;
+  const decided = new Set(
+    action.operations.flatMap((operation) =>
+      operation.operation === "moveTask" || operation.operation === "removeTask"
+        ? [operation.taskId]
+        : [],
+    ),
+  );
+  if (decided.size === 0) return;
+  const tabs = useEpicCanvasStore.getState();
+  const customizations = useTabsStore.getState().customizations;
+  for (const tabId of tabs.openTabOrder) {
+    const task = tabs.tabsById[tabId];
+    if (!task || !decided.has(task.epicId)) continue;
+    if (!customizations?.[`epic:${tabId}`]?.pendingGroupId) continue;
+    useTabsStore
+      .getState()
+      .setTabCustomization(
+        { kind: "epic", id: tabId },
+        { pendingGroupId: null },
+      );
+  }
+}
+
+/** One scope's draft-intent bookkeeping: attempts spent, and sends still out. */
+interface DraftIntentTracking {
+  readonly attempts: Map<string, number>;
+  readonly inFlight: Set<string>;
+}
+
+function newDraftTracking(): DraftIntentTracking {
+  return { attempts: new Map(), inFlight: new Set() };
 }
 
 function createLifecycle(): OrganizationLifecycle {

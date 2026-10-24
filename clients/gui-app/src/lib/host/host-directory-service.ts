@@ -1,7 +1,10 @@
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import {
   isHostReachable,
+  poolHostDirectoryEntry,
+  POOL_HOST_ID,
   type HostDirectoryEntry,
+  type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
@@ -142,6 +145,16 @@ export type HostDirectoryListener = (
  */
 export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
+  /**
+   * The server pool's entry, built once from this build's own configuration,
+   * or `null` when it has none. RESOLVED by id like any host (`findById`) and
+   * never ENUMERATED: it is not part of `snapshot()`, so `list()`, the
+   * cardinality, the default entry and every surface that walks the directory
+   * stay hosts only. That is what keeps the exclusion central - the pool is
+   * addressable at the requester seam and absent from every list a person
+   * picks from or a sweep walks.
+   */
+  private readonly poolEntry: PoolHostDirectoryEntry | null;
   private readonly remoteFetcher: RemoteHostFetcher;
   private readonly onRegistryPollTick: (() => void) | null;
   private readonly authContextId: () => string | null;
@@ -309,6 +322,7 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
+    this.poolEntry = poolHostDirectoryEntry(options.runnerHost.poolBaseUrl);
     this.hasLocalHost = options.runnerHost.hasLocalHost;
     this.lastKnownLocalHostId = this.hasLocalHost
       ? loadPersistedLocalHostId()
@@ -613,6 +627,9 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   findById(hostId: string): HostDirectoryEntry | null {
+    if (hostId === POOL_HOST_ID) {
+      return this.poolEntry;
+    }
     for (const entry of this.snapshot()) {
       if (entry.hostId === hostId) {
         return entry;
@@ -1035,22 +1052,28 @@ export class HostDirectoryService implements IHostDirectoryService {
     // `unknown-host`: the user is told a machine they just registered is "no
     // longer registered to this account".
     //
-    // ADDED ids only. A REMOVED id is the deregister mutation's own
-    // announcement and must not be made twice; a first fetch that finds hosts
-    // fires once, which is correct rather than noise - main's fleet can be
-    // exactly as stale at cold start as at any other moment, and the cost is
-    // one refetch.
+    // REMOVED ids too, for the same staleness the other way round. A sandbox
+    // leaves the registry well after anything in this client asked it to: a
+    // destroy answers `202` with the row still `destroying`, and the server
+    // destroys on its own (the day-30 freeze, a lost machine). Nothing else
+    // tells the fleet, so a gone sandbox would stay the selection's target. A
+    // removal this client did announce itself (a deregister) costs one more
+    // refetch, which is the price of not needing to know which.
     //
-    // The `hosts` check is DOCUMENTARY, not load-bearing, and a mutation probe
-    // proved it: `failed` returns above this line, and `signed-out` commits an
-    // empty set, so neither can ever satisfy the added-ids predicate. It stays
-    // because it states the rule a future edit has to keep - but no test pins
-    // it, because no mutation of it can go red.
-    if (
-      outcome.kind === "hosts" &&
-      outcome.entries.some((entry) => !previousRemoteIds.has(entry.hostId))
-    ) {
-      requestFleetRefresh(this.runnerHost);
+    // A first fetch that finds hosts fires once, which is correct rather than
+    // noise - main's fleet can be exactly as stale at cold start as at any
+    // other moment.
+    //
+    // The `hosts` check IS load-bearing for removals: `signed-out` commits an
+    // empty set, which would otherwise read as every host removed (`failed`
+    // returns above this line).
+    if (outcome.kind === "hosts") {
+      const listedIds = new Set(outcome.entries.map((entry) => entry.hostId));
+      const added = outcome.entries.some(
+        (entry) => !previousRemoteIds.has(entry.hostId),
+      );
+      const removed = [...previousRemoteIds].some((id) => !listedIds.has(id));
+      if (added || removed) requestFleetRefresh(this.runnerHost);
     }
     await this.reseedLocalHostIdIfUnknown();
     if (observedChanged || concludedChanged) {
@@ -1458,8 +1481,20 @@ function hostDirectoryEntriesEqual(
     // every consumer kept a `relayFuseGrace: true` entry forever - recovery
     // dials permitted indefinitely past the documented 4h cap.
     isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
-    remotePublicKeyOf(a) === remotePublicKeyOf(b)
+    remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
+    // A sandbox's lifecycle word and frozen flag. Most state moves also move
+    // connectivity, but not all (a frozen flag set on an already-suspended
+    // row moves nothing else), and a surface deciding whether a tab open may
+    // wake the sandbox must see the move.
+    sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
   );
+}
+
+function sandboxStateKeyOf(entry: HostDirectoryEntry): string | null {
+  if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
+    return null;
+  }
+  return `${entry.sandbox.state ?? "none"}:${entry.sandbox.frozen ? "frozen" : "thawed"}`;
 }
 
 function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {

@@ -10,7 +10,10 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
+  AlarmClock,
+  Brain,
   Cable,
+  ClipboardList,
   GripVertical,
   ChevronDown,
   Inbox,
@@ -91,6 +94,7 @@ import {
 } from "@/stores/chats/queue-edit-custody";
 import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
 import { formatClockTime } from "@/lib/relative-time";
+import { isDrainingQueueItem } from "@/lib/chat/draining-queue-item";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import {
@@ -123,6 +127,7 @@ interface QueuedMessageRowActionStateInput {
 interface QueuedMessageRowChrome {
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
+  readonly showSignInParkCancel: boolean;
   readonly canAbortSteer: boolean;
 }
 
@@ -206,9 +211,13 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
   // alike. Received items render read-only (see QueuedMessageRow) - the user
   // can reorder them but cannot edit, delete, or hand-steer them.
   const items = props.queue.items;
-  const reorderableCount = useMemo(
-    () => items.filter(queueItemAllowsReorder).length,
+  const actionableItems = useMemo(
+    () => items.filter((item) => !isDrainingQueueItem(item)),
     [items],
+  );
+  const reorderableCount = useMemo(
+    () => actionableItems.filter(queueItemAllowsReorder).length,
+    [actionableItems],
   );
   const agentCount = useMemo(
     () => items.filter(isReceivedAgentResponse).length,
@@ -218,19 +227,38 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
   const pausedAfterErrorTooltip = queuePausedAfterErrorTooltip(props.queue);
   const hasSteerRestartPending = useMemo(
     () =>
-      items.some(
+      actionableItems.some(
         (item) =>
           item.kind === "prompt" &&
           item.status === "steer_requested" &&
           item.steerRequest?.mode === "interrupt_restart",
       ),
-    [items],
+    [actionableItems],
   );
-  const { hasPausableHumanItems, hasPausedItems } = useQueuePauseState(items);
+  const { hasPausableHumanItems, hasPausedItems } =
+    useQueuePauseState(actionableItems);
   const reorderDnd = useQueuedMessageReorderDnd({
-    items,
+    items: actionableItems,
     onReorder: props.onReorder,
   });
+  const sortableIndexById = useMemo(
+    () =>
+      new Map<string, number>(
+        reorderDnd.sortableItemIds.map((id, index) => [id, index]),
+      ),
+    [reorderDnd.sortableItemIds],
+  );
+  const displayDropPreview = useMemo(() => {
+    const preview = reorderDnd.dropPreview;
+    if (preview === null) return null;
+    const index =
+      preview.beforeQueueItemId === null
+        ? items.length
+        : items.findIndex(
+            (item) => item.queueItemId === preview.beforeQueueItemId,
+          );
+    return index < 0 ? null : { ...preview, index };
+  }, [items, reorderDnd.dropPreview]);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
@@ -284,6 +312,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                 key={item.queueItemId}
                 item={item}
                 index={index}
+                sortableIndex={sortableIndexById.get(item.queueItemId) ?? -1}
                 orderKey={reorderDnd.orderKey}
                 queueStatus={queueStatus}
                 pausedAfterErrorTooltip={pausedAfterErrorTooltip}
@@ -295,7 +324,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                 editing={props.editingQueueItemId === item.queueItemId}
                 expanded={expandedQueueItemIds.has(item.queueItemId)}
                 onToggleExpanded={toggleExpanded}
-                dropPreview={reorderDnd.dropPreview}
+                dropPreview={displayDropPreview}
                 itemCount={items.length}
                 registerRowElement={registerRowElement}
                 onEdit={props.onEdit}
@@ -700,6 +729,8 @@ export function QueuedMessageHeader(props: {
 const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly item: OpenChatQueuedItem;
   readonly index: number;
+  /** Host-actionable order, excluding display-only carry rows. */
+  readonly sortableIndex: number;
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
   /**
@@ -730,12 +761,13 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   const {
     item,
     index,
+    sortableIndex,
     orderKey,
     queueStatus,
     pausedAfterErrorTooltip,
     canReorder,
     canAct,
-    readOnly,
+    readOnly: panelReadOnly,
     activeTurnStatus,
     hasSteerRestartPending,
     editing,
@@ -749,6 +781,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onAbortSteer,
     onSteerNow,
   } = props;
+  const readOnly = panelReadOnly || isDrainingQueueItem(item);
   const stages = use(QueuedMessageStagesContext);
   const inFlight = stages.inFlight.get(item.queueItemId) ?? null;
   const optimisticActionId = optimisticQueuedItemClientActionId(
@@ -769,7 +802,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   });
   const rowSortable = useQueuedMessageRowSortable({
     queueItemId: item.queueItemId,
-    index,
+    index: sortableIndex,
     orderKey,
     disabled: !actionState.canReorder,
   });
@@ -878,6 +911,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         actionState={actionState}
         showOwnerActions={chrome.showOwnerActions}
         showManagedCommandCancel={chrome.showManagedCommandCancel}
+        showSignInParkCancel={chrome.showSignInParkCancel}
         canAbortSteer={chrome.canAbortSteer}
         agentFold={
           receivedAgentResponse
@@ -906,6 +940,7 @@ function QueuedMessageRowContent(props: {
   readonly actionState: QueuedMessageRowActionState;
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
+  readonly showSignInParkCancel: boolean;
   readonly canAbortSteer: boolean;
   /**
    * A received agent row's fold (#2441), or `null` for every other row. Such
@@ -920,10 +955,10 @@ function QueuedMessageRowContent(props: {
   readonly handleSteerNow: () => void;
 }) {
   const item = props.item;
+  const showCancelOnly =
+    props.showManagedCommandCancel || props.showSignInParkCancel;
   const framed =
-    props.showOwnerActions ||
-    props.showManagedCommandCancel ||
-    props.canAbortSteer;
+    props.showOwnerActions || showCancelOnly || props.canAbortSteer;
   const showFloatingChrome = framed || props.statusLabel !== null;
   const compact = agentFoldCompact(props.agentFold);
 
@@ -967,9 +1002,9 @@ function QueuedMessageRowContent(props: {
                 onSteerNow={props.handleSteerNow}
               />
             ) : null}
-            {props.showManagedCommandCancel ? (
+            {showCancelOnly ? (
               <ManagedCommandCancelButton
-                kind={item.kind === "port-forward" ? "port-forward" : "shell"}
+                kind={cancelOnlyKind(item)}
                 onCancel={props.handleCancel}
               />
             ) : null}
@@ -1209,6 +1244,10 @@ function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
       />
     );
   if (item.kind === "port-forward") return <PortForwardBadge />;
+  if (item.kind === "conversation-message") return <ConversationMessageBadge />;
+  if (item.kind === "task-checkin") return <TaskCheckinBadge />;
+  if (item.kind === "task-overdue") return <TaskOverdueBadge />;
+  if (item.kind === "memory-curation") return <MemoryCurationBadge />;
   return null;
 }
 
@@ -1311,16 +1350,172 @@ function PortForwardBadge() {
 }
 
 /**
- * The only affordance a host-authored row offers. For a shell, cancelling is
- * not destructive to the underlying output: the host leaves the delivery
- * cursor where it is, so the next output from that command re-queues a fresh
- * digest. For a forward it IS final - the notice is raised once, so dismissing
- * it means the agent is not told - and the copy says which.
+ * A human's message in a bot conversation waiting to reach the bot (a
+ * `conversation-message` item on the bot's trunk). Content-free like the
+ * port-forward chip: the message itself is read from the conversation record
+ * when it is delivered.
+ */
+function ConversationMessageBadge() {
+  return (
+    <TooltipWrapper
+      label="A message from a conversation is waiting for the bot's next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-conversation-message-badge">
+        <Inbox aria-hidden />
+        Conversation
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A check-in on the tasks a bot tracks, waiting for the bot's next turn (a
+ * `task-checkin` item on the bot's trunk). Content-free like the two chips
+ * above it: the report is composed when the item is delivered, from whatever
+ * has changed by then.
+ */
+function TaskCheckinBadge() {
+  return (
+    <TooltipWrapper
+      label="A check-in on the bot's tasks is waiting for its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-task-checkin-badge">
+        <ClipboardList aria-hidden />
+        Check-in
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A notice that one of the bot's tasks is overdue for its check-in, waiting
+ * for the bot's next turn (a `task-overdue` item on the bot's trunk).
+ * Content-free like the check-in chip: which tasks are overdue is read when
+ * the item is delivered.
+ */
+function TaskOverdueBadge() {
+  return (
+    <TooltipWrapper
+      label="A task's check-in is overdue; the bot is told on its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-task-overdue-badge">
+        <AlarmClock aria-hidden />
+        Overdue
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * The ask that the main bot tidy the environment's shared memory, waiting for
+ * its next turn (a `memory-curation` item on the main bot's trunk).
+ * Content-free like the check-in chip: how far over the memory is is read
+ * when the item is delivered.
+ */
+function MemoryCurationBadge() {
+  return (
+    <TooltipWrapper
+      label="The shared memory is over its limit; the bot is asked to tidy it on its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-memory-curation-badge">
+        <Brain aria-hidden />
+        Memory
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+type CancelOnlyKind =
+  | "shell"
+  | "port-forward"
+  | "conversation-message"
+  | "task-checkin"
+  | "task-overdue"
+  | "memory-curation"
+  | "sign-in-park";
+
+const CANCEL_COPY: Record<
+  CancelOnlyKind,
+  { readonly ariaLabel: string; readonly tooltip: string }
+> = {
+  shell: {
+    ariaLabel: "Cancel queued command output",
+    tooltip: "Skip this delivery — later output still arrives",
+  },
+  "port-forward": {
+    ariaLabel: "Dismiss port forward notice",
+    tooltip:
+      "Dismiss this notice — the agent won't be told about the interruption",
+  },
+  "conversation-message": {
+    ariaLabel: "Dismiss conversation message",
+    tooltip:
+      "Dismiss this message — the bot won't see it, and its request stays open",
+  },
+  "task-checkin": {
+    ariaLabel: "Dismiss task check-in",
+    tooltip:
+      "Dismiss this check-in — the bot won't see it; the next one covers what it would have",
+  },
+  "task-overdue": {
+    ariaLabel: "Dismiss overdue notice",
+    tooltip: "Dismiss this notice — the bot won't see it",
+  },
+  "memory-curation": {
+    ariaLabel: "Dismiss memory notice",
+    tooltip: "Dismiss this notice — the bot won't be asked to tidy the memory",
+  },
+  "sign-in-park": {
+    ariaLabel: "Cancel agent message waiting for sign-in",
+    tooltip: "Cancel this message — it won't run when you sign back in",
+  },
+};
+
+/**
+ * Which cancel-only toolbar a row offers. A prompt row reaches it only while
+ * held for a provider sign-in (`queuedMessageRowChrome`).
+ */
+function cancelOnlyKind(item: OpenChatQueuedItem): CancelOnlyKind {
+  switch (item.kind) {
+    case "port-forward":
+    case "conversation-message":
+    case "task-checkin":
+    case "task-overdue":
+    case "memory-curation":
+      return item.kind;
+    case "prompt":
+      return "sign-in-park";
+    case "managed-command":
+      return "shell";
+  }
+}
+
+/**
+ * The only affordance a host-authored row, or an agent prompt held for a
+ * sign-in, offers. For a shell, cancelling is not destructive to the
+ * underlying output: the host leaves the delivery cursor where it is, so the
+ * next output from that command re-queues a fresh digest. For a forward or a
+ * held prompt it IS final - the notice is raised once, so dismissing it means
+ * the agent is not told, and a cancelled prompt never runs - and the copy says
+ * which.
  */
 function ManagedCommandCancelButton(props: {
-  readonly kind: "shell" | "port-forward";
+  readonly kind: CancelOnlyKind;
   readonly onCancel: () => void;
 }) {
+  const { ariaLabel, tooltip } = CANCEL_COPY[props.kind];
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1330,22 +1525,14 @@ function ManagedCommandCancelButton(props: {
             size="icon-xs"
             variant="muted"
             className="shrink-0"
-            aria-label={
-              props.kind === "shell"
-                ? "Cancel queued command output"
-                : "Dismiss port forward notice"
-            }
+            aria-label={ariaLabel}
             onClick={props.onCancel}
           >
             <Trash2 className="size-3.5" />
           </Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent sideOffset={6}>
-        {props.kind === "shell"
-          ? "Skip this delivery — later output still arrives"
-          : "Dismiss this notice — the agent won't be told about the interruption"}
-      </TooltipContent>
+      <TooltipContent sideOffset={6}>{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
@@ -1398,6 +1585,12 @@ function shouldShowDropIndicatorAfter(input: {
  * single-action toolbar (cancel only) rather than the prompt row's
  * edit/delete/steer trio.
  *
+ * A received A2A row gets that same cancel-only toolbar in one state: paused
+ * with the host's `signInParked` mark (`chat.subscribe@1.28`), held until its
+ * provider is signed in again. It runs unattended once the sign-in returns,
+ * and this control is the only place a person can stop it first. A host
+ * below `1.28` never sends the mark, so its rows stay without one.
+ *
  * Only a user-owned safe-point steer still "Waiting for steer" can be
  * un-staged: an interrupt_restart ("Restart pending") has already torn the turn
  * down, and received-agent rows are system-owned. The host re-checks and rejects
@@ -1408,10 +1601,12 @@ function queuedMessageRowChrome(
 ): QueuedMessageRowChrome {
   const { promptItem, readOnly, canAct, isLocked } = input;
   const userOwned = promptItem !== null && !input.receivedAgentResponse;
+  const canCancelOnly = !readOnly && canAct && !isLocked;
   return {
     showOwnerActions: userOwned && !readOnly && !isLocked,
-    showManagedCommandCancel:
-      promptItem === null && !readOnly && canAct && !isLocked,
+    showManagedCommandCancel: promptItem === null && canCancelOnly,
+    showSignInParkCancel:
+      canCancelOnly && heldForSignIn(promptItem, input.receivedAgentResponse),
     canAbortSteer:
       userOwned &&
       !readOnly &&
@@ -1422,6 +1617,18 @@ function queuedMessageRowChrome(
       promptItem.status === "steer_requested" &&
       promptItem.steerRequest?.mode === "safe_point",
   };
+}
+
+function heldForSignIn(
+  promptItem: OpenChatQueuedPromptItem | null,
+  receivedAgentResponse: boolean,
+): boolean {
+  return (
+    promptItem !== null &&
+    receivedAgentResponse &&
+    promptItem.signInParked === true &&
+    promptItem.status === "paused"
+  );
 }
 
 /**
@@ -1505,6 +1712,7 @@ function queuedMessageStatusLabel(
     readonly queuePaused: boolean;
   },
 ): string | null {
+  if (isDrainingQueueItem(item)) return "Starting";
   const pausedLabel = pausedAfterError
     ? QUEUE_PAUSED_AFTER_ERROR_LABEL
     : "Paused";
@@ -1577,6 +1785,9 @@ function queuedMessageStatusTooltip(
     readonly pausedAfterErrorTooltip: string | null;
   },
 ): string | null {
+  if (isDrainingQueueItem(item)) {
+    return "The host has taken this prompt out of the queue to start it.";
+  }
   // Ahead of the paused reason, to match the pill: a paused row with an
   // unanswered save says "Saving", and its tooltip has to explain that.
   if (input.inFlight !== null && !isOptimisticQueuedItem(item)) {

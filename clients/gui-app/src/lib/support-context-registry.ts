@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 
 /**
  * Availability of one captured field. `known` is a fresh, currently-observed
@@ -36,7 +37,14 @@ export function staleField<T>(value: T): CapturedField<T> {
 export interface SupportContextSnapshot {
   /** Route template, e.g. `/epics/$epicId/$tabId` - never a full URL/path. */
   readonly routeTemplate: CapturedField<string>;
+  /** The app-wide effective host - NOT the host a chat tab is bound to. */
   readonly hostId: CapturedField<string>;
+  /**
+   * The host the active chat / terminal-agent tab is bound to for life, or
+   * `unavailable` outside such a tab. Differs from `hostId` whenever the tab
+   * was opened on a host other than the app default.
+   */
+  readonly tabHostId: CapturedField<string>;
   readonly epicId: CapturedField<string>;
   readonly tabId: CapturedField<string>;
   readonly artifactId: CapturedField<string>;
@@ -54,6 +62,7 @@ export interface SupportContextSnapshot {
 export const EMPTY_SUPPORT_CONTEXT_SNAPSHOT: SupportContextSnapshot = {
   routeTemplate: UNAVAILABLE,
   hostId: UNAVAILABLE,
+  tabHostId: UNAVAILABLE,
   epicId: UNAVAILABLE,
   tabId: UNAVAILABLE,
   artifactId: UNAVAILABLE,
@@ -69,6 +78,15 @@ export const EMPTY_SUPPORT_CONTEXT_SNAPSHOT: SupportContextSnapshot = {
 interface SupportContextRegistryState {
   readonly snapshot: SupportContextSnapshot;
   readonly setSnapshot: (patch: Partial<SupportContextSnapshot>) => void;
+  /**
+   * The selected host's environment section, written by
+   * `SupportEnvironmentBridge`. Kept beside the snapshot, not in it: the
+   * snapshot is the registry's own closed key set.
+   */
+  readonly environment: CapturedField<SupportEnvironmentSection>;
+  readonly setEnvironment: (
+    environment: CapturedField<SupportEnvironmentSection>,
+  ) => void;
 }
 
 /**
@@ -87,6 +105,10 @@ export const useSupportContextRegistry = create<SupportContextRegistryState>(
     setSnapshot: (patch) => {
       set((state) => ({ snapshot: { ...state.snapshot, ...patch } }));
     },
+    environment: UNAVAILABLE,
+    setEnvironment: (environment) => {
+      set({ environment });
+    },
   }),
 );
 
@@ -104,9 +126,21 @@ export function setSupportContextSnapshot(
   useSupportContextRegistry.getState().setSnapshot(patch);
 }
 
+/** The last environment section written, read at report-open like the snapshot. */
+export function getSupportEnvironmentSection(): CapturedField<SupportEnvironmentSection> {
+  return useSupportContextRegistry.getState().environment;
+}
+
+export function setSupportEnvironmentSection(
+  environment: CapturedField<SupportEnvironmentSection>,
+): void {
+  useSupportContextRegistry.getState().setEnvironment(environment);
+}
+
 /** Test-only reset back to the all-`unavailable` initial state. */
 export function __resetSupportContextRegistryForTests(): void {
   useSupportContextRegistry.setState({
     snapshot: EMPTY_SUPPORT_CONTEXT_SNAPSHOT,
+    environment: UNAVAILABLE,
   });
 }

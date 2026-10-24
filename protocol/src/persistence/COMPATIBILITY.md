@@ -18,6 +18,14 @@ Production code can read and write those Yjs subtrees independently, but that
 runtime access pattern does not make them separate versioned contracts. A
 change anywhere under the registered epic schema is a persistence change.
 
+### Epic 3 to 4: HTML, canvas and file artifacts
+
+Epic 4.0 adds three artifact and tombstone variants, plus layout metadata on
+live entries. The new union members need a major because 3.0 readers reject
+unknown kinds. The 3-to-4 arm parses the existing record; the 4-to-3 arm refuses
+kinds 3.0 cannot represent with `DOWNGRADE_UNSUPPORTED`. The direct 4-to-2 arm
+also checks that older line's harness vocabulary. No data moves between maps.
+
 ## Same-major changes
 
 Readers treat newer records in the same persistence major as compatible. A
@@ -84,6 +92,59 @@ treatment entirely — `permissionMode` is reopened to a checked string there
 reopening landed at chat-sync 1.5 and the readers in the field are on 1.3, so it
 covers the modes after `auto`, not `auto` itself.
 
+### Logged removal: the unreleased page stamp
+
+`tool_call.page` existed in the shared epic chats leaf between the files-plane
+change (#6233) and its removal here. No release carried it: host-v1.5.1 cut
+epic 3.0 before that change, and epic 4.0 is uncut. The generated fixture removes
+only that property and its required-key entry; no released record changes.
+
+### Logged change: the delivery stamp's offline hint
+
+`tool_call.agentMessageDelivery` gained `targetHostOffline` (traycer#2421), a
+boolean defaulted `false`, in the epic chats leaf, chat-sync 1.7 and
+`chat.subscribe@1.29`. No stable release carries the stamp: host-v1.5.1 ships
+chat-sync 1.6 and a `chat.subscribe` line below 1.29. A stamp written before
+the key parses as `false`, and a reader built before it strips the key and
+renders the card it already did. The state enum keeps all four members:
+current hosts never write `delivered`, but staging hosts built before
+traycer#2421 did, and trimming the member would make every current reader
+reject their frames. The fixtures and the 1.29–1.32 frame digests move with
+it; every released line reproduces its value.
+
+### Logged change: compaction not applied
+
+`compaction.notApplied` distinguishes an unsuccessful attempt that did not apply
+from an execution failure. It is optional on `compaction.errored` runtime events
+and defaults to `false` on the live persisted block. Missing input remains a
+failure; no reader infers the flag from an error message, and old rows are not
+rewritten. Started and completed events reset the live flag to `false`.
+
+The flag opens `chat.subscribe` 1.37 and chat-sync 1.11. The selected main's
+1.36 is the OpenCode client-line capability marker and aliases 1.35's frames;
+both retain their unchanged contracts. Every older stream through 1.36 binds
+the pre-notApplied event and block leaves through its complete message,
+snapshot-tail and range paths, retaining that minor's settings, queue,
+accumulated-change vocabulary and other capability semantics.
+
+Both persistence contracts were considered. Registered epic 4.0 still reaches
+the pre-HTML message/block chain, whose compaction leaf stays frozen without
+this key; its generated storage and domain surfaces must remain identical.
+Chat-sync's live interpreted block gains the defaulted boolean, and both
+chat-head and chat-shard move together to 1.11. Neither a new major nor a new
+minimum-reader floor is needed: old input is accepted, while an older reader
+still interprets the errored status conservatively as failed.
+
+Preservation comes from the message/block's raw envelope, not the old reader's
+interpreted value. The canonical writer re-emits that raw subtree, so an older
+reader can lack the flag in its view while retaining it for publication and a
+later live read. Byte identity applies to already canonical input. Current
+cloud/doc fork paths likewise carry raw message bodies into target-store seed
+ops; streaming-boundary finalization overlays changed fields instead of
+rebuilding a block from its known fields. A historical fork that rebuilt a
+block may already have lost the key in that copy, and this change does not
+repair that copy or change an older published renderer's label.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the
@@ -108,6 +169,10 @@ Never edit the generated fixture by hand. Commit its diff with the schema
 change so reviewers can see the complete persistence-contract change.
 
 ## Chat-sync contract
+
+Logged removal: `tool_call.page` existed on chat-sync 1.7 and 1.8 in the
+source tree and was removed before any release shipped it. The MCP App stamp
+remains; released records through 1.6 are unchanged.
 
 A published chat is two registered records: `chat-head`, the small mutable
 pointer stored as opaque JSON on the chat's cloud row, and `chat-shard`, one
@@ -315,7 +380,7 @@ which §1 puts in the opaque `hostPrivate` section. An anchor a writer leaves on
 the message anyway is just an unmodeled key: it rides the message's preserved
 `raw` and never reaches a schema that could reject it.
 
-**Two non-harness leaves are reopened on the same reasoning.**
+**Three non-harness leaves are reopened on the same reasoning.**
 
 `core.settings.permissionMode` is a plain non-empty string here. The mode
 roster grows too — `auto` is its third member added after v1 — and this leaf is
@@ -355,6 +420,12 @@ which fails on the enum and takes the whole shard with it. Renderers read
 `tone` / `title` / `message` / `details` and none switches on the kind, so the
 enum bought type precision this record cannot afford. Adding a kind therefore
 needs nothing here — like adding a harness id.
+
+`blocks[].artifact_operation.kind` is a non-empty string from 1.8. A new
+artifact kind must not reject an entire shard containing the known operation
+block. A reader that does not know the kind renders no block and preserves its
+raw value. Earlier readers retain their closed enum; there is no host emission
+gate for them, as with the other reopened leaves above.
 
 **Logged decision — remaining nested unions stay closed.**
 `userMessagePayload.kind`, `toolInputDetail.kind` and the provider-notice
@@ -497,6 +568,28 @@ set-shaped delta could not express a reorder. Domain-level sharding is what make
 "dumb whole-file sync" applicable where byte-level chunking of a canonical JSON
 document could not be.
 
+### Canvas annotations at chat-sync 1.10
+
+The `browserAnnotations` carrier now accepts a canvas source with artifact,
+board and page identity. Canvas records may have no crop; browser records
+retain required image fields and infer an absent source from their legacy
+browser identity. Source ranges and text ranges are defaulted only on canvas
+elements. No fake tab or session identity is written for a canvas selection.
+
+This is nested-union growth inside a known user message, outside §2's
+unknown-role passthrough. Pre-1.10 readers cannot interpret it, even when a
+crop exists; the missing browser identity already fails their schema. Every
+publication containing a canvas annotation (including a prompt carried only
+by queue-event metadata before acceptance) therefore takes the 1.10 reader
+floor. The head gate refuses it before shard fetch, so an older reader neither
+partially reads nor re-publishes it. Browser-only publications are unchanged.
+
+Legacy epic Yjs chats and draft-head 1.0 keep the frozen browser-only annotation
+leaf. Canvas evidence lives in chat.db and chat-sync. Canvas draft cards remain
+window-local and are omitted before a stash is mirrored; their local draft and
+send records retain the complete annotation. Growing mirrored drafts requires
+its own versioned change. The epic and draft fixtures must remain unchanged.
+
 ### 7. The coupled bump ritual
 
 A change to any schema reachable from either record is not done until every
@@ -505,12 +598,13 @@ coupled surface moves with it. Work the list top to bottom:
 | Change                                                                                     | What else has to move                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add a field to `core` (or to any captured level)                                           | record minor bump; regenerate the chat-sync fixture; confirm the input schema accepts absence (`.default(...)` / `.optional()`). Older readers preserve it mechanically (§3) — there is nothing to justify and no loss to document                                                                                                                                                                                                                                                                                                                                          |
-| Add a field older readers cannot safely INTERPRET                                          | the row above, **plus** `minReaderVersion` on every head that carries it, with the justification recorded. Reserve this for changes that would make an old reader act on a chat wrongly — never merely for preservation                                                                                                                                                                                                                                                                                                                                                     |
+| Add a field older readers cannot safely INTERPRET                                          | the row above, **plus** `minReaderVersion` on every head that carries it, with the justification recorded. Reserve this for changes that would make an old reader act on a chat wrongly — never merely for preservation. **Canvas annotation exception (1.10):** the new nested source union has no older-reader passthrough; every head containing canvas evidence stamps `minReaderVersion: { major: 1, minor: 10 }`, refusing older readers at the head before any shard fetch. Browser-only publications retain their existing floor                                    |
 | Add a field to `hostPrivate.data`                                                          | nothing in protocol — that is the point of the opaque section                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Promote `hostPrivate` → `core`                                                             | this IS a core-field addition: take the first row (and the second only if interpretation is required for correctness). Plus: regenerate the fixture, and note the field is now permanent (one-way door). If the value stays authoritative for old readers, keep dual-writing the `hostPrivate` copy until they are out of support                                                                                                                                                                                                                                           |
 | Add a content-block type / message role / chat-event type                                  | add it to `KNOWN_CONTENT_BLOCK_TYPES` / `KNOWN_CHAT_MESSAGE_ROLES` / the event enum, or every entry of that variant silently degrades to unknown; record minor bump; regenerate **both** the chat-sync and epic fixtures (the leaves are shared); confirm the passthrough round-trip test still re-emits the new variant losslessly                                                                                                                                                                                                                                         |
 | Change a shared epic leaf (`contentBlockSchema`, `chatEventSchema`, senders, run settings) | both fixtures; both contracts' compatibility arguments — the change really is a change to both. The chat-sync copies derive from the live shape, so a field addition flows through; only a change to one of the two RE-APPLIED refinements in `open-harness.ts` needs mirroring by hand                                                                                                                                                                                                                                                                                     |
 | Add a provider-notice `noticeKind`                                                         | nothing here — chat-sync notice kinds are open strings (§5). In the epic tree it is an ordinary enum growth: freeze it out of every RELEASED line's copy (`providerNoticeKindSchemaPreHarnessMessage`, and the `chat.subscribe` frozen event), regenerate the epic fixture, and gate host EMISSION on the negotiated minor — a frozen schema stops an old peer decoding the value, not the host sending it. Give the kind a `providerNoticeNormalizedMetadataSchema` variant only if it has structured facts; a metadata-less kind stays readable to a reader that lacks it |
+| Add an artifact kind carried by `artifact_operation`                                       | no chat-sync bump after 1.8: the kind is open. Keep the epic record and RPC/stream frozen lines versioned separately                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Add a harness id                                                                           | nothing here — chat-sync harness ids are open strings. Add it to the epic enums as usual                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Add a field carrying a harness id to `core`                                                | reopen it in `open-harness.ts`, or the sweep test fails                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Add a `chat-shard` `section`                                                               | breaking: the enum is closed and shipped readers fail on an unlisted section, by design. New major, plus the assembly branch and the head's own part list for it                                                                                                                                                                                                                                                                                                                                                                                                            |

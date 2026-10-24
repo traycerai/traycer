@@ -72,9 +72,13 @@ function useScope(): HostScope {
     host: hostScopeOptionFixture({ hostId }),
   });
 }
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () => useScope(),
-}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () => useScope();
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 vi.mock(
   "@/components/settings/host-scope/use-scoped-host-binding",
   async () => {

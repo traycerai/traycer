@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { CommentSidebarPanel } from "@/components/comments";
 import { SwitcherListEmpty } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 
 interface SwitcherCommentsListProps {
@@ -34,14 +34,14 @@ export function SwitcherCommentsList(props: SwitcherCommentsListProps) {
     [canvas],
   );
   const artifactId =
-    shownTile !== null && isEpicArtifactKind(shownTile.type)
+    shownTile !== null && isCommentArtifactKind(shownTile.type)
       ? shownTile.id
       : null;
 
   if (artifactId === null) {
     return (
       <SwitcherListEmpty
-        message="Open an artifact to see and add comments on it."
+        message="Open an artifact to read its comments."
         description={null}
       />
     );

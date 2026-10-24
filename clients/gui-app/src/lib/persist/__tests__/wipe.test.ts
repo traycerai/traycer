@@ -23,6 +23,20 @@ vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
 vi.mock("@/lib/tab-recovery/history", () => ({
   resetTabRecoveryHistory: () => resetTabRecoveryHistory(),
 }));
+// The real adapter reaches idb-keyval on first use; the wipe's own handling of
+// it (retiring queued saves, deleting its fixed database) is what runs here.
+const { retireCanvasBrowserStorage, CANVAS_BROWSER_DB_NAME } = vi.hoisted(
+  () => ({
+    retireCanvasBrowserStorage: vi.fn<() => Promise<void>>(() =>
+      Promise.resolve(),
+    ),
+    CANVAS_BROWSER_DB_NAME: "traycer-gui-app:epic-canvas",
+  }),
+);
+vi.mock("@/stores/epics/canvas/canvas-browser-storage", () => ({
+  CANVAS_BROWSER_DB_NAME,
+  retireCanvasBrowserStorage: () => retireCanvasBrowserStorage(),
+}));
 
 // The real module reaches `idb-keyval` on first use, which jsdom has no
 // native support for. Mocked wholesale; the wipe's OWN handling of it
@@ -47,6 +61,7 @@ import { persistKey } from "@/lib/persist/keys";
 import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
+import { VIEW_REPLICA_DB_NAME } from "@/lib/view-replica/view-replica-store";
 
 const SKELETON_RESUME_PRESENT_KEY = persistKey(
   "chat-skeleton-resume-present-v1",
@@ -136,6 +151,8 @@ beforeEach(() => {
   drainDesktopTabsPersistence.mockClear();
   resetTabRecoveryHistory.mockReset();
   resetTabRecoveryHistory.mockResolvedValue(undefined);
+  retireCanvasBrowserStorage.mockReset();
+  retireCanvasBrowserStorage.mockResolvedValue(undefined);
   clearAppearanceCache.mockClear();
   clearAppearanceCache.mockResolvedValue(undefined);
 
@@ -379,7 +396,9 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         "traycer-gui-app:anon:transcript-image-meta",
         "traycer-gui-app:user-1:transcript-image-meta",
         SKELETON_RESUME_DB_NAME,
+        VIEW_REPLICA_DB_NAME,
         "traycer-gui-app:tab-recovery",
+        CANVAS_BROWSER_DB_NAME,
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
@@ -617,6 +636,109 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         // authoritative: a stuck recovery connection must stop before reload.
         queueMicrotask(() =>
           name === "traycer-gui-app:tab-recovery"
+            ? request.onblocked?.()
+            : request.onsuccess?.(),
+        );
+        return request;
+      }),
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+
+    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
+      "blocked",
+    );
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+  it("deletes the fixed canvas database by name even when nothing enumerates it", async () => {
+    const { deleted } = installIndexedDB({
+      databases: () => Promise.resolve([]),
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(deleted).toContain(CANVAS_BROWSER_DB_NAME);
+  });
+
+  it("deletes the fixed canvas database even when the engine cannot enumerate databases", async () => {
+    const deleted: string[] = [];
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value: {
+        deleteDatabase: vi.fn((name: string) => {
+          deleted.push(name);
+          const { request, fire } = fakeDeleteRequest();
+          queueMicrotask(fire);
+          return request;
+        }),
+      },
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(deleted).toContain(CANVAS_BROWSER_DB_NAME);
+  });
+
+  it("retires queued canvas saves before the canvas database is deleted", async () => {
+    const order: string[] = [];
+    retireCanvasBrowserStorage.mockImplementation(() => {
+      order.push("retire-canvas-saves");
+      return Promise.resolve();
+    });
+    const value = {
+      databases: vi.fn(() => Promise.resolve([])),
+      deleteDatabase: vi.fn((name: string) => {
+        order.push(`deleteDatabase:${name}`);
+        const { request, fire } = fakeDeleteRequest();
+        queueMicrotask(fire);
+        return request;
+      }),
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(order.indexOf("retire-canvas-saves")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("retire-canvas-saves")).toBeLessThan(
+      order.indexOf(`deleteDatabase:${CANVAS_BROWSER_DB_NAME}`),
+    );
+  });
+
+  it("stops before the sweep and reload when queued canvas saves cannot be retired", async () => {
+    retireCanvasBrowserStorage.mockRejectedValueOnce(
+      new Error("canvas retire failed"),
+    );
+
+    await expect(clearAllPersistedStores({ hostClear: null })).rejects.toThrow(
+      "canvas retire failed",
+    );
+
+    expect(localStorageMock.getItem("traycer-gui-app:settings")).toBe("{}");
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects and does not reload when the canvas database deletion is blocked", async () => {
+    const value = {
+      databases: vi.fn(() => Promise.resolve([])),
+      deleteDatabase: vi.fn((name: string) => {
+        const request = {
+          onsuccess: null as (() => void) | null,
+          onerror: null as (() => void) | null,
+          onblocked: null as (() => void) | null,
+          error: null as DOMException | null,
+        };
+        // Like tab recovery, saved tabs must be gone before the reload or the
+        // old layout comes straight back.
+        queueMicrotask(() =>
+          name === CANVAS_BROWSER_DB_NAME
             ? request.onblocked?.()
             : request.onsuccess?.(),
         );

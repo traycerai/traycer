@@ -228,6 +228,7 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   ],
   "agent stop": ["--agent-id", "agent-1"],
   "agent archive": ["--agent-id", "agent-1"],
+  "agent rename": ["agent-1", "New name"],
   "agent send": ["--to", "agent-1", "--message", "hi"],
   "agent role claim": ["--role", "role-1", "--scope", "scope-1"],
   // `claimId` is validated as a UUID by the protocol request schema before
@@ -239,6 +240,8 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
     "11111111-1111-4111-8111-111111111111",
   ],
   "worktree delete": ["--path", "/tmp/some-worktree"],
+  "bot post": ["Tracy", "hi"],
+  "bot reply": ["Tracy", "thread-1", "hi"],
   "profile add": ["claude"],
   "profile login": ["claude", "ambient"],
   "profile rename": ["claude", "profile-1", "Work"],
@@ -248,7 +251,22 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   // host call - refused where stdin is not a terminal, and waiting on a
   // person where it is.
   "profile remove": ["claude", "profile-1", "--yes"],
+  "task create": [
+    "--message",
+    "hi",
+    "--harness",
+    "claude",
+    "--model",
+    "model-1",
+  ],
 };
+
+// Commands that refuse inside ANY agent session on their own, readonly or
+// not: `task create` is the person's command (an agent starts a Task with its
+// `traycer_create_task` tool). This suite runs with `TRAYCER_AGENT_ID` set, so
+// on the full surface such a command's body is proven reached by that refusal
+// rather than by the sign-in read behind it.
+const AGENT_SESSION_REFUSED: ReadonlySet<string> = new Set(["task create"]);
 
 // Reads that stay runnable on the readonly surface: hidden from `--help`
 // (a WIDER set than the capability boundary - see `agent-surface.ts`) but
@@ -262,6 +280,9 @@ const UNGATED_READS: ReadonlyArray<{
   { path: ["agent", "inbox"], args: [] },
   { path: ["agent", "role", "list"], args: [] },
   { path: ["worktree", "list"], args: [] },
+  { path: ["bot", "list"], args: [] },
+  { path: ["bot", "threads"], args: ["Tracy"] },
+  { path: ["bot", "checkins"], args: ["Tracy"] },
 ];
 
 describe("readonly-surface gate: table coverage is complete", () => {
@@ -286,6 +307,43 @@ describe("readonly-surface gate: table coverage is complete", () => {
   });
 });
 
+describe("readonly-surface gate: task create", () => {
+  it("refuses 'task create' on the readonly surface before the sign-in is read", async () => {
+    await withEnvSurface("readonly", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, [
+        "task",
+        "create",
+        ...REQUIRED_ARGS["task create"],
+      ]);
+      expect(thrown).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: expect.stringContaining("cannot start Tasks"),
+      });
+      expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// Driven from argv rather than from the table, so dropping either entry
+// from `READONLY_REFUSED_COMMANDS` fails here: both message a bot.
+describe("readonly-surface gate: posting to and replying in a bot", () => {
+  it.each([
+    ["bot", "post", "Tracy", "hi"],
+    ["bot", "reply", "Tracy", "thread-1", "hi"],
+  ])("refuses '%s %s' before the body runs", async (...argv) => {
+    await withEnvSurface("readonly", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, argv);
+      expect(thrown).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: expect.stringContaining("cannot message them"),
+      });
+      expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe("readonly-surface gate: refuses every table entry before the body runs", () => {
   for (const commandPath of Object.keys(READONLY_REFUSED_COMMANDS)) {
     it(`refuses '${commandPath}' with E_FORBIDDEN under the readonly surface, before the body runs`, async () => {
@@ -306,6 +364,13 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
         const program = buildProgramWithAgentRoles(true);
         const argv = [...commandPath.split(" "), ...REQUIRED_ARGS[commandPath]];
         const thrown = await parseAndCapture(program, argv);
+        if (AGENT_SESSION_REFUSED.has(commandPath)) {
+          expect(thrown).toMatchObject({
+            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+            message: expect.stringContaining("traycer_create_task"),
+          });
+          return;
+        }
         // Every gated command bottoms out in the mocked `resolveHostAuth`
         // returning null, which throws AUTH_NO_CREDENTIALS - proof the body
         // was reached rather than refused. Assert on "not E_FORBIDDEN" (per

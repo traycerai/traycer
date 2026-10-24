@@ -121,12 +121,16 @@ const DEFINITION_FILES = new Set(
  * string; every call site targeting it is treated as satisfied.
  */
 const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
+  "epic.editArtboard":
+    "sibling-method proxy gate: an edit needs a selection on a served board (servedSha256), and board bytes come only from epic.readArtifactObject on the same tab-host client, which host-object-reader.ts degrades to 'missing' on E_HOST_UNSUPPORTED so no board renders and nothing can be selected (canvas-artifact-surface.tsx, canvas-selection-provider.tsx); both methods entered the registry together on html-artifacts, and refusals render inline in the properties panel (use-artboard-edit.ts)",
   "epic.updateChatRunSettings":
     'documented fire-and-forget: no onError, E_HOST_UNSUPPORTED degrades to "persists on next send" (use-epic-chat-mutations.ts)',
   "epic.updateChatProfile":
     "documented fire-and-forget, same convention as epic.updateChatRunSettings (use-epic-chat-mutations.ts)",
   "epic.listChatRecords":
     "reachable only as a post-write consistency read inside the already-gated useEpicArchiveChatMutation (use-epic-chat-mutations.ts)",
+  "chat.continueHere":
+    "target-choice gate plus call-and-catch: continueTargetHostId skips a host whose negotiated manifest (getNegotiatedHostMethods) lacks the method, and onError turns E_HOST_UNSUPPORTED into the Clone fallback (use-chat-continue-here.ts)",
   "epic.recordViewed":
     "doc comment: the local-home arm exists on every host this client negotiates with, unlike epic.setPinned's cloud arm (use-epic-record-viewed-mutation.ts)",
   "epic.setPinned":
@@ -153,6 +157,28 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "same cloud-feed-gated path as host.notifications.cloudFeed.markRead",
   "host.notifications.cloudFeed.clearAll":
     "same cloud-feed-gated path as host.notifications.cloudFeed.markRead",
+  // The `bot.*` namespace is registered as one block whose own comment says a
+  // host that predates bots advertises none of it, so one presence gate on
+  // `bot.list` stands for the family: the sibling-method proxy pattern of
+  // worktree.setAutoCleanupPolicy above.
+  "bot.create":
+    "sibling-method proxy gate: CreateBotForm renders only inside HomeBotsSection (home-bots-group.tsx), which gates on bot.list (home-bots-section.tsx), and inside a bot tab's channel sidebar (bot-channel-sidebar.tsx), which BotTabSurface draws only under bot.open of the same block (bot-tab-surface.tsx); onError toasts an E_HOST_UNSUPPORTED like any other refusal (use-bot-mutations.ts)",
+  "bot.delete":
+    "same bot.list proxy as bot.create: a bot tab is created only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a tab restored from bot-tabs-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
+  "bot.updateTitle":
+    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
+  "bot.updateRunSettings":
+    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
+  "bot.conversation.send":
+    "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-message-composer.tsx)",
+  "bot.onboarding.choose":
+    "sibling-method proxy gate: BotOnboardingCard draws its checkboxes only from a bot.onboarding.read answer, and that read is enabled only under useHostSupportsMethod(tabHostId, 'bot.onboarding.read') on the same tab-host client the choose goes through; the three methods entered the registry together (home/bots/bot-onboarding-card.tsx)",
+  "bot.onboarding.complete":
+    "target-choice gate: BotOnboardingCard sends it only to the host chooseBotCreateHost picks from useHostsAdvertisingMethod(connectableHostIds, 'bot.onboarding.complete'), so a host without it is never the target (home/bots/bot-onboarding-card.tsx)",
+  "epic.attachEnvironment":
+    "call-and-catch degrade: a host that predates it answers E_HOST_UNSUPPORTED, which the hook does not toast and the fork dialog answers by forking as it did before the method existed (use-epic-attach-environment-mutation.ts, chat-fork-dialog.tsx)",
+  "environment.host.bind":
+    "sibling-method proxy gate: host-environment-section.tsx renders the picker only under useHostMethodSupport(hostId, 'environment.host.read'), registered in the same block as bind; the refusal is the picker's inline notice (use-environment-host-bind-mutation.ts)",
 };
 
 /**

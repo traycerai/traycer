@@ -14,6 +14,7 @@ import {
   type AvailabilityRecoveryKind,
 } from "../host-transport/availability-recovery-kind";
 import type { HostDirectoryEntry } from "./host-directory";
+import { anyAbortSignal } from "../auth/request-abort";
 import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
 import {
@@ -21,6 +22,11 @@ import {
   type HostRequestAuthorityDomain,
 } from "./host-request-coordinator";
 import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
+import {
+  decideHostRpcDispatch,
+  hostRpcRouteOf,
+  type HostRpcTierPlan,
+} from "./host-rpc-routing";
 
 /**
  * Narrow port the client calls to invalidate host-scoped query state.
@@ -150,6 +156,20 @@ export interface HostClientOptions<Registry extends VersionedRpcRegistry> {
   readonly authorityRegistry?: HostBindingAuthorityRegistry;
   /** Reads the live directory entry to reject stale routed captures. */
   readonly findHostById?: (hostId: string) => HostDirectoryEntry | null;
+  /**
+   * Which peer each method is sent to (`host-rpc-routing.ts`). Absent keeps
+   * every call on the host its requester names: no pool, and `selected-host`
+   * methods follow the caller. Only `HostRuntime` wires it; a client built
+   * without it is a test or a standalone tool.
+   */
+  readonly routing?: HostClientRouting;
+}
+
+export interface HostClientRouting {
+  /** Frozen at load from build configuration; see `HostRpcTierPlan`. */
+  readonly plan: HostRpcTierPlan;
+  /** The person's selected host, read at dispatch. */
+  readonly selectedHostId: () => string | null;
 }
 
 /** Narrow request surface shared by the default client and routed facades. */
@@ -266,6 +286,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   private readonly invalidator: IHostQueryInvalidator;
   private readonly authorityRegistry: HostBindingAuthorityRegistry;
   private readonly findHostById: (hostId: string) => HostDirectoryEntry | null;
+  private readonly routing: HostClientRouting | null;
   private readonly schedulingPolicy: RpcSchedulingPolicy<Registry>;
   private readonly requestCoordinator: HostRequestCoordinator<Registry>;
   private readonly ownsRequestCoordinator: boolean;
@@ -307,6 +328,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     // nothing is implicitly a host - and it is what makes an unrouted request
     // fail loudly at the preflight instead of landing on whatever was bound.
     this.findHostById = options.findHostById ?? (() => null);
+    this.routing = options.routing ?? null;
   }
 
   /** Returns the registry this client was constructed with (for type callers). */
@@ -373,6 +395,11 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       return null;
     }
     return this.requestContext.identity.userId;
+  }
+
+  /** The frozen serving-tier plan, or `null` for an unrouted client. */
+  getRpcTierPlan(): HostRpcTierPlan | null {
+    return this.routing?.plan ?? null;
   }
 
   getAuthorityRegistry(): HostBindingAuthorityRegistry {
@@ -1066,9 +1093,13 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       if (entry === null || this.requestContext === null) {
         return Promise.reject(new StaleHostBindingAuthorityError("unbound"));
       }
-      const captured = this.captureAuthority(entry, this.requestContext);
+      const routed = this.routeRequest(method, entry);
+      if (routed instanceof HostRpcErrorCtor) {
+        return Promise.reject(routed);
+      }
+      const captured = this.captureAuthority(routed, this.requestContext);
       return this.requestCoordinator.request({
-        hostId: entry.hostId,
+        hostId: routed.hostId,
         userId: this.requestContext.identity.userId,
         method,
         params,
@@ -1088,6 +1119,40 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     }
   }
 
+  /**
+   * The peer this call is sent to, from the routing table, or the typed
+   * refusal that ends it before anything leaves. Every unary call passes here,
+   * whichever requester carried it, so no caller can reach a pool-only method
+   * on a host or a host method on the pool. A refusal is terminal: nothing
+   * re-sends the call to another peer.
+   */
+  private routeRequest(
+    method: string,
+    target: HostDirectoryEntry,
+  ): HostDirectoryEntry | HostRpcError {
+    const route = hostRpcRouteOf(method);
+    if (route === null || this.routing === null) {
+      return target;
+    }
+    const selectedHostId = this.routing.selectedHostId();
+    const decision = decideHostRpcDispatch(
+      route,
+      target,
+      this.routing.plan,
+      selectedHostId === null ? null : this.findHostById(selectedHostId),
+    );
+    if (decision.kind === "dispatch") {
+      return decision.entry;
+    }
+    return new HostRpcErrorCtor({
+      code: decision.code,
+      message: decision.message,
+      requestId: "client-preflight",
+      method,
+      fatalDetails: null,
+    });
+  }
+
   private captureAuthority(
     entry: HostDirectoryEntry,
     context: RequestContext,
@@ -1103,10 +1168,8 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       authority: {
         endpoint: binding.endpoint,
         bearer: context.credentials,
-        abortSignal: AbortSignal.any([
-          binding.abortSignal,
-          context.abortSignal,
-        ]),
+        // Not `AbortSignal.any`, which the iOS WebView floor lacks.
+        abortSignal: anyAbortSignal([binding.abortSignal, context.abortSignal]),
         // A READER over this exact context, not its value at capture. The
         // earlier version snapshotted here and argued that pairing it with the
         // bearer made them "one snapshot"; that was wrong in the one direction

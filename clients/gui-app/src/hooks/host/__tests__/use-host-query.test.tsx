@@ -173,6 +173,160 @@ describe("useHostQuery auth readiness", () => {
     expect(calls.requestWithOptions).toHaveLength(0);
   });
 
+  describe("required host method version", () => {
+    const floor = {
+      method: "host.status" as const,
+      version: { major: 1, minor: 0 },
+    };
+
+    function renderStatusQuery(
+      fixture: {
+        readonly client: HostClient<HostRpcRegistry>;
+        readonly Wrapper: (props: {
+          readonly children: ReactNode;
+        }) => ReactNode;
+      },
+      client: HostRequester<HostRpcRegistry>,
+      extra: {
+        readonly requiredHostMethodVersion: () => typeof floor | null;
+        readonly responseTimeoutMs?: number;
+      },
+    ) {
+      fixture.client.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-1",
+        }),
+      );
+      return renderHook(
+        () =>
+          useHostQueryWithResponseMap({
+            cacheKeyIdentity: undefined,
+            client,
+            method: "host.status",
+            params: {},
+            options: null,
+            mapResponse: (mapArgs) => mapArgs.response,
+            ...extra,
+          }),
+        { wrapper: fixture.Wrapper },
+      );
+    }
+
+    it("carries the floor through the floor-requiring entry to the transport", async () => {
+      const fixture = createHostQueryFixture();
+      const { requester, calls } = recordingRequester(
+        fixture.client.createRequester(mockLocalHostEntry),
+      );
+
+      const rendered = renderStatusQuery(fixture, requester, {
+        requiredHostMethodVersion: () => floor,
+      });
+
+      await waitFor(() => {
+        expect(rendered.result.current.data?.ready).toBe(true);
+      });
+      expect(calls.requestWithSignal).toHaveLength(0);
+      expect(calls.requestWithOptions).toHaveLength(0);
+      expect(calls.requestWithSignalRequiringHostMethodVersion).toHaveLength(1);
+      expect(fixture.messenger.calls).toHaveLength(1);
+      expect(fixture.messenger.calls[0]).toMatchObject({
+        method: "host.status",
+        requiredHostMethodVersion: floor,
+      });
+    });
+
+    it("carries the floor and the method's response budget together", async () => {
+      const fixture = createHostQueryFixture();
+      fixture.client.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-1",
+        }),
+      );
+      const { requester, calls } = recordingRequester(
+        fixture.client.createRequester(mockLocalHostEntry),
+      );
+      const usageFloor = {
+        method: "host.usage.summary" as const,
+        version: { major: 1, minor: 0 },
+      };
+
+      renderHook(
+        () =>
+          useHostQueryWithResponseMap({
+            cacheKeyIdentity: undefined,
+            client: requester,
+            method: "host.usage.summary",
+            params: buildUsageSummaryRequest({
+              windowDays: 30,
+              epicId: null,
+              plane: null,
+            }),
+            options: null,
+            mapResponse: (mapArgs) => mapArgs.response,
+            responseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+            requiredHostMethodVersion: () => usageFloor,
+          }),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // The fixture's usage handler never answers, so the dispatch is the
+      // observable outcome.
+      await waitFor(() => {
+        expect(fixture.messenger.calls).toHaveLength(1);
+      });
+      expect(calls.requestWithSignal).toHaveLength(0);
+      expect(calls.requestWithSignalRequiringHostMethodVersion).toHaveLength(0);
+      expect(calls.requestWithOptions).toHaveLength(1);
+      expect(calls.requestWithOptions[0]?.[2]).toMatchObject({
+        responseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+        requiredHostMethodVersion: usageFloor,
+        idempotencyKey: null,
+      });
+      expect(fixture.messenger.calls[0]).toMatchObject({
+        method: "host.usage.summary",
+        requiredHostMethodVersion: usageFloor,
+      });
+    });
+
+    it("sends nothing when the budget is not the method's declared one", async () => {
+      const fixture = createHostQueryFixture();
+      const { requester } = recordingRequester(
+        fixture.client.createRequester(mockLocalHostEntry),
+      );
+
+      const rendered = renderStatusQuery(fixture, requester, {
+        requiredHostMethodVersion: () => floor,
+        responseTimeoutMs: 45_000,
+      });
+
+      await waitFor(() => {
+        expect(rendered.result.current.isError).toBe(true);
+      });
+      expect(fixture.messenger.calls).toHaveLength(0);
+    });
+
+    it("stays on requestWithSignal, sending no floor, when the resolver answers null", async () => {
+      const fixture = createHostQueryFixture();
+      const { requester, calls } = recordingRequester(
+        fixture.client.createRequester(mockLocalHostEntry),
+      );
+
+      const rendered = renderStatusQuery(fixture, requester, {
+        requiredHostMethodVersion: () => null,
+      });
+
+      await waitFor(() => {
+        expect(rendered.result.current.data?.ready).toBe(true);
+      });
+      expect(calls.requestWithSignal).toHaveLength(1);
+      expect(calls.requestWithSignalRequiringHostMethodVersion).toHaveLength(0);
+      expect(calls.requestWithOptions).toHaveLength(0);
+      expect(fixture.messenger.calls[0]?.requiredHostMethodVersion).toBeNull();
+    });
+  });
+
   it("does not refetch active host queries when auth context is removed", async () => {
     const fixture = createHostQueryFixture();
     fixture.client.setRequestContext(
@@ -415,6 +569,8 @@ describe("useHostQuery auth readiness", () => {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
+            crossHostMessaging: null,
           };
         },
       },
@@ -923,6 +1079,51 @@ describe("useHostQuery fixed cadence wiring", () => {
   });
 });
 
+describe("host.status pollers", () => {
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // Two surfaces poll `host.status` (the side strip's indicator and the
+  // Overview). Each observer asks for the 10 s cadence, but they share one
+  // query, and the query realigns every observer's interval on each update,
+  // so a second poller does not double the traffic.
+  it("two host.status pollers mounted 3 s apart share one 10 s cadence", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    const fixture = createFixedHostQueryFixture("host.status");
+    const useStatusPoller = () =>
+      useHostQuery({
+        cacheKeyIdentity: undefined,
+        client: fixture.client,
+        method: "host.status",
+        params: {},
+        options: { poll: true, staleTime: 30_000 },
+      });
+
+    renderHook(useStatusPoller, { wrapper: fixture.Wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fixture.requestCount.value).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    renderHook(useStatusPoller, { wrapper: fixture.Wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    // One poller alone makes 1 + 6 requests over these 63 s; two staggered
+    // timers that did not realign would make about 12.
+    expect(fixture.requestCount.value).toBeGreaterThanOrEqual(6);
+    expect(fixture.requestCount.value).toBeLessThanOrEqual(8);
+  });
+});
+
 function speechQuery(queryClient: QueryClient): Query {
   return queryForMethod(queryClient, "speech.getModelStatus");
 }
@@ -1000,6 +1201,8 @@ function createHostQueryFixture(): {
           updateTransaction: null,
           storeFormats: null,
           install: null,
+          processMemory: null,
+          crossHostMessaging: null,
         };
       },
     },
@@ -1063,6 +1266,8 @@ function createEndpointGatedHostQueryFixture(): {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
+            crossHostMessaging: null,
           };
         },
       },
@@ -1154,7 +1359,7 @@ function createConditionHostQueryFixture(): {
 }
 
 function createFixedHostQueryFixture(
-  method: "epic.listCollaborators" | "host.getRateLimitUsage",
+  method: "epic.listCollaborators" | "host.getRateLimitUsage" | "host.status",
 ): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
@@ -1180,6 +1385,12 @@ function createFixedHostQueryFixture(
             collaborators: [],
             collaboratorsAvailable: true,
           };
+        },
+        "host.status": () => {
+          if (method === "host.status") {
+            requestCount.value += 1;
+          }
+          return STATUS_RESPONSE;
         },
         "host.getRateLimitUsage": () => {
           if (method === "host.getRateLimitUsage") {
@@ -1221,6 +1432,8 @@ const STATUS_RESPONSE = {
   updateTransaction: null,
   storeFormats: null,
   install: null,
+  processMemory: null,
+  crossHostMessaging: null,
 } as const;
 
 /**

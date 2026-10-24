@@ -39,7 +39,7 @@ interface UsePackVersionMutationContext {
  *  - a thrown transport/host failure → `onError` below;
  *  - a success → the confirmation toast below;
  *  - a typed refusal (`verification-failed`, `below-security-floor`,
- *    `host-ineligible`), which is a SUCCESSFUL response and so never reaches
+ *    `host-ineligible`, `macos-ineligible`), which is a SUCCESSFUL response and so never reaches
  *    `onError` at all.
  *
  * The panel still draws a refusal inline - on the row, or in the header for a
@@ -109,7 +109,7 @@ export function useProvidersUsePackVersionForClient(
         // Another pack's panel being open is not a substitute - it never made
         // the request and has no row to anchor the refusal to.
         if (!versionManagerPanelIsMounted(context.panel)) {
-          toast.error(packVersionUseRefusalMessage(response.result.code));
+          toast.error(packVersionUseRefusalMessage(response.result));
         }
       },
       onError: (error, variables) => {

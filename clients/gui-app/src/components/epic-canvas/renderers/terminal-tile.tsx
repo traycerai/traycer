@@ -73,8 +73,7 @@ import { useLandingTerminalDurableLifecycle } from "@/components/home/terminal-p
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
 import {
   adoptWarmSessionInstance,
-  peekXtermHostGrid,
-  peekXtermHostGridForSession,
+  peekKeptAliveXtermHostGrid,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
@@ -594,12 +593,14 @@ function HostTerminalTileLive(
     return () => window.clearTimeout(timer);
   }, [measureTimedOut, measuredGrid]);
   const gridReady = measuredGrid !== null || measureTimedOut;
+  const peekedGrid = gridReady
+    ? peekKeptAliveXtermHostGrid(props.node.instanceId, {
+        hostId,
+        sessionId: props.node.id,
+      })
+    : null;
   const openingGrid = measuredGrid ??
-    peekXtermHostGrid(props.node.instanceId) ??
-    peekXtermHostGridForSession({
-      hostId,
-      sessionId: props.node.id,
-    }) ?? {
+    peekedGrid ?? {
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
     };
@@ -1062,7 +1063,9 @@ function SignInRestartButton(props: {
       type="button"
       variant="outline"
       size="sm"
-      disabled={terminalLogin.isPending}
+      disabled={
+        terminalLogin.isPending || terminalLogin.credentialRefusal !== null
+      }
       onClick={terminalLogin.start}
     >
       Start again

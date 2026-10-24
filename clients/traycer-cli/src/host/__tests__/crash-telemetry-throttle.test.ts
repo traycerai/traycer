@@ -5,7 +5,11 @@ import {
   HOST_CRASH_REPORTS_BEFORE_THROTTLE,
   HOST_CRASH_SUMMARY_WINDOW_MS,
   HostCrashReportThrottle,
+  parsePersistedHostCrashThrottle,
+  serializeHostCrashThrottle,
   type HostCrashEvent,
+  type PersistedHostCrashKind,
+  type PersistedHostCrashThrottle,
   type HostCrashTelemetry,
 } from "../crash-telemetry";
 
@@ -25,6 +29,10 @@ function sampleTelemetry(
     exitMeaning: "some crash meaning",
     hasDiagnosticReport: true,
     uptimeMs: 1500,
+    stopRequested: false,
+    stderrEmpty: false,
+    stderrFatal: "other",
+    reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
     ...overrides,
   };
 }
@@ -63,6 +71,7 @@ interface Harness {
     ) => void
   >;
   readonly schedule: Mock<(callback: () => void, delayMs: number) => void>;
+  readonly persist: Mock<(state: PersistedHostCrashThrottle) => void>;
   readonly scheduled: ScheduledCall[];
   advance(deltaMs: number): void;
   now(): number;
@@ -85,14 +94,17 @@ function createHarness(): Harness {
       scheduled.push({ callback, delayMs });
     },
   );
+  const persist = vi.fn<(state: PersistedHostCrashThrottle) => void>();
   const throttle = new HostCrashReportThrottle({
     now: () => currentTimeMs,
     capture,
     captureSummary,
     schedule,
+    persist,
   });
   return {
     throttle,
+    persist,
     capture,
     captureSummary,
     schedule,
@@ -313,5 +325,233 @@ describe("HostCrashReportThrottle", () => {
     h.scheduled[0].callback();
     expect(h.captureSummary).toHaveBeenCalledTimes(1);
     expect(h.schedule).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("HostCrashReportThrottle across processes", () => {
+  // The state an earlier supervisor left after 3 full reports and 2 held back.
+  function leftBehind(at: number): Map<string, PersistedHostCrashKind> {
+    const first = createHarness();
+    first.advance(at);
+    for (let i = 1; i <= 5; i += 1) {
+      first.advance(1_000);
+      first.throttle.report(kindAEvent(`crash-${i}`));
+    }
+    return parsePersistedHostCrashThrottle(
+      serializeHostCrashThrottle(first.throttle.snapshot()),
+    );
+  }
+
+  it("carries the spent budget into a new process", () => {
+    const persisted = leftBehind(0);
+    const next = createHarness();
+    next.advance(10_000);
+    next.throttle.restore(persisted);
+    next.throttle.report(kindAEvent("later"));
+    expect(next.capture).not.toHaveBeenCalled();
+  });
+
+  it("schedules the open count for the rest of its window, then sends it once", () => {
+    const persisted = leftBehind(0);
+    const next = createHarness();
+    next.advance(10_000);
+    next.throttle.restore(persisted);
+    expect(next.captureSummary).not.toHaveBeenCalled();
+    expect(next.scheduled).toHaveLength(1);
+    // Window opened at 4_000 (the first held-back crash).
+    expect(next.scheduled[0].delayMs).toBe(
+      4_000 + HOST_CRASH_SUMMARY_WINDOW_MS - 10_000,
+    );
+    next.scheduled[0].callback();
+    expect(next.captureSummary).toHaveBeenCalledTimes(1);
+    expect(next.captureSummary.mock.calls[0][1]).toBe(2);
+    next.scheduled[0].callback();
+    expect(next.captureSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends an overdue count at once, and then reports the kind in full again", () => {
+    const persisted = leftBehind(0);
+    const next = createHarness();
+    next.advance(3 * HOST_CRASH_SUMMARY_WINDOW_MS);
+    next.throttle.restore(persisted);
+    expect(next.captureSummary).toHaveBeenCalledTimes(1);
+    expect(next.captureSummary.mock.calls[0][1]).toBe(2);
+    next.throttle.report(kindAEvent("fresh"));
+    expect(next.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a clock that stepped back mute a kind", () => {
+    const persisted = leftBehind(10 * HOST_CRASH_SUMMARY_WINDOW_MS);
+    const next = createHarness();
+    next.throttle.restore(persisted);
+    // Its window opened "in the future": it is sent when one window from now ends.
+    expect(next.scheduled).toHaveLength(1);
+    expect(next.scheduled[0].delayMs).toBe(HOST_CRASH_SUMMARY_WINDOW_MS);
+  });
+
+  it("writes the clamped times back, so the next process counts from them too", () => {
+    const persisted = leftBehind(10 * HOST_CRASH_SUMMARY_WINDOW_MS);
+    const next = createHarness();
+    next.throttle.restore(persisted);
+    expect(next.persist).toHaveBeenCalledTimes(1);
+    const written = [...next.persist.mock.calls[0][0].values()][0];
+    expect(written.lastCrashAt).toBeLessThanOrEqual(next.now());
+    expect(written.windowStartedAt).toBeLessThanOrEqual(next.now());
+    expect(written.suppressedCount).toBe(2);
+  });
+
+  it("writes nothing back for a state that needed no clamping", () => {
+    const persisted = leftBehind(0);
+    const next = createHarness();
+    next.advance(10_000);
+    next.throttle.restore(persisted);
+    expect(next.persist).not.toHaveBeenCalled();
+  });
+
+  it("keeps its own state for a kind it has seen more recently", () => {
+    const next = createHarness();
+    next.advance(5_000);
+    for (let i = 0; i < 3; i += 1) next.throttle.report(kindAEvent("own"));
+    next.advance(5_000);
+    next.throttle.report(kindAEvent("own-4"));
+    const before = next.throttle.snapshot();
+    next.throttle.restore(leftBehind(0));
+    expect(next.throttle.snapshot()).toEqual(before);
+  });
+
+  it("persists after a capture, a held-back crash and a sent summary, but not after a failed capture", () => {
+    const h = createHarness();
+    h.capture.mockImplementationOnce(() => {
+      throw new Error("capture failed");
+    });
+    expect(() => h.throttle.report(kindAEvent("a"))).toThrow();
+    expect(h.persist).not.toHaveBeenCalled();
+    for (let i = 0; i < 4; i += 1) h.throttle.report(kindAEvent(`c-${i}`));
+    expect(h.persist).toHaveBeenCalledTimes(4);
+    h.scheduled[0].callback();
+    expect(h.persist).toHaveBeenCalledTimes(5);
+    const last = h.persist.mock.calls[4][0];
+    expect([...last.values()][0].suppressedCount).toBe(0);
+  });
+
+  it("carries on when persisting throws", () => {
+    const h = createHarness();
+    h.persist.mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    expect(() => h.throttle.report(kindAEvent("a"))).not.toThrow();
+    expect(h.capture).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HostCrashReportThrottle.snapshot", () => {
+  function kindEvent(exitCode: number): HostCrashEvent {
+    return buildHostCrashEvent(
+      sampleTelemetry({ exitCode, signal: null }),
+      null,
+    );
+  }
+
+  it("leaves out a kind that has been quiet for a whole window, and keeps one with a count open", () => {
+    const h = createHarness();
+    h.throttle.report(kindEvent(1));
+    for (let i = 0; i < 4; i += 1) h.throttle.report(kindEvent(2));
+    h.advance(HOST_CRASH_SUMMARY_WINDOW_MS - 1);
+    expect(h.throttle.snapshot().size).toBe(2);
+    h.advance(1);
+    // Kind 1 is quiet; kind 2 still has an unsent count.
+    const kept = [...h.throttle.snapshot().values()];
+    expect(kept).toHaveLength(1);
+    expect(kept[0].suppressedCount).toBe(1);
+  });
+
+  it("keeps the most recently crashed kinds when there are more than it will write", () => {
+    const h = createHarness();
+    for (let code = 1; code <= 40; code += 1) {
+      h.advance(1_000);
+      h.throttle.report(kindEvent(code));
+    }
+    const kept = h.throttle.snapshot();
+    expect(kept.size).toBe(32);
+    const newest = kindEvent(40).fingerprint.join("|");
+    const oldest = kindEvent(1).fingerprint.join("|");
+    expect(kept.has(newest)).toBe(true);
+    expect(kept.has(oldest)).toBe(false);
+  });
+});
+
+describe("parsePersistedHostCrashThrottle", () => {
+  const kind = {
+    reported: 3,
+    lastCrashAt: 10,
+    suppressedCount: 0,
+    windowStartedAt: 5,
+    lastSuppressed: null,
+  };
+
+  it("round-trips what the throttle writes", () => {
+    const h = createHarness();
+    for (let i = 0; i < 5; i += 1) h.throttle.report(kindAEvent(`c-${i}`));
+    const parsed = parsePersistedHostCrashThrottle(
+      serializeHostCrashThrottle(h.throttle.snapshot()),
+    );
+    expect(parsed).toEqual(h.throttle.snapshot());
+  });
+
+  it("cuts a tag longer than the cap instead of dropping the kind", () => {
+    const longVersion = "local-" + "x".repeat(600);
+    const parsed = parsePersistedHostCrashThrottle(
+      JSON.stringify({
+        version: 1,
+        kinds: {
+          k: {
+            ...kind,
+            suppressedCount: 2,
+            lastSuppressed: {
+              message: "Host crashed: 1",
+              level: "error",
+              fingerprint: ["host-crash", "linux", "1"],
+              hostId: null,
+              tags: { host_version: longVersion },
+            },
+          },
+        },
+      }),
+    );
+    const held = parsed.get("k")?.lastSuppressed;
+    expect(parsed.get("k")?.suppressedCount).toBe(2);
+    expect(held?.tags.host_version).toBe(longVersion.slice(0, 256));
+  });
+
+  it.each([
+    ["empty", ""],
+    ["torn", '{"version":1,"kinds":{"a|b":{"reported":3'],
+    ["not an object", "[1,2]"],
+    ["other version", JSON.stringify({ version: 2, kinds: { k: kind } })],
+    ["kinds an array", JSON.stringify({ version: 1, kinds: [kind] })],
+    ["oversized", " ".repeat(300 * 1024)],
+  ])("reads %s as no state", (_name, text) => {
+    expect(parsePersistedHostCrashThrottle(text).size).toBe(0);
+  });
+
+  it("drops only the kinds that are malformed", () => {
+    const parsed = parsePersistedHostCrashThrottle(
+      JSON.stringify({
+        version: 1,
+        kinds: {
+          good: kind,
+          negative: { ...kind, reported: -1 },
+          fractional: { ...kind, suppressedCount: 1.5 },
+          text: { ...kind, lastCrashAt: "10" },
+          countWithoutEvent: { ...kind, suppressedCount: 2 },
+          badEvent: {
+            ...kind,
+            suppressedCount: 2,
+            lastSuppressed: { message: 1 },
+          },
+        },
+      }),
+    );
+    expect([...parsed.keys()]).toEqual(["good"]);
   });
 });

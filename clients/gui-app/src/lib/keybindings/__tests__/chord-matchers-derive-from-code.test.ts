@@ -103,16 +103,24 @@ const CODE_DERIVED_MATCHERS: ReadonlyArray<{
 const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.ts": 3,
   "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 2,
+  // Enter sends the bot channel or thread message; Shift+Enter inserts a
+  // newline. This is a named editor key, not a registered shortcut.
+  "gui-app/src/components/bots/bot-message-composer.tsx": 1,
   // These reads drive viewport editing and resize-handle navigation. They do
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
+  // Escape on a canvas artifact: the overlay clears the selected element
+  // before the board itself deselects, and the structure gesture abandons a
+  // drag or resize in flight. A named key, not a registered chord.
+  "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 1,
+  "gui-app/src/components/canvas-artifact/use-canvas-structure-gesture.ts": 1,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
   // Bare ArrowRight accepts an offered suggestion: a named platform
   // navigation/acceptance key, not a registered physical chord.
   "gui-app/src/components/chat/composer/chat-composer-editor-slot.tsx": 1,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
-  "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
+  "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 3,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
   "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
   // Enter and Space activate a folded agent row's `role="button"` text (#2441):
@@ -124,7 +132,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // Escape steps the open-as-chat view back one breadcrumb level; a named
   // non-printable key, not a registered shortcut.
   "gui-app/src/components/chat/subagent-chat-view.tsx": 1,
-  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 8,
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 5,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
@@ -136,7 +144,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/renderers/terminal-tile-xterm.tsx": 5,
   "gui-app/src/components/epic-canvas/sidebar/epic-browser-sidebar-row.tsx": 1,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-tree.tsx": 2,
-  "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-search.tsx": 9,
+  "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-search.tsx": 7,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx": 3,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
   // First-use dropdown mounting: Enter/Space/ArrowDown open a row dropdown on
@@ -146,9 +154,8 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
-  // Enter/Space on a row's overlay link, plus the search box's Escape (clears a
-  // non-empty query; not a registered chord).
-  "gui-app/src/components/epics/epics-list-panel.tsx": 3,
+  // The search box's Escape (clears a non-empty query; not a registered chord).
+  "gui-app/src/components/epics/epics-list-panel.tsx": 1,
   // The layout editor's sortable list: Space grabs a row (or activates it in
   // an unordered list), Enter activates, arrows move a grabbed row or, with
   // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of
@@ -169,12 +176,12 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // a registered chord.
   // Arrows, Home and End walking the minimap's own list - named keys inside an
   // open card, not chords.
-  "gui-app/src/components/minimap/minimap-list-card.tsx": 4,
+  "gui-app/src/components/minimap/minimap-list-card.tsx": 2,
   "gui-app/src/components/onboarding/onboarding-coachmark.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
-  "gui-app/src/components/remote-folder-picker-dialog.tsx": 4,
-  "gui-app/src/components/resources/resource-monitor-popover.tsx": 9,
+  "gui-app/src/components/remote-folder-picker-dialog.tsx": 2,
+  "gui-app/src/components/resources/resource-monitor-popover.tsx": 6,
   "gui-app/src/components/sandbox/sandbox-frame.tsx": 1,
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
@@ -184,8 +191,23 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 4,
   "gui-app/src/lib/keybindings/bare-key-owner.ts": 1,
   "gui-app/src/lib/keybindings/chord.ts": 4,
+  // The macOS Ctrl+N/P/J/K list aliases are a platform text-editing
+  // convention, so they follow the letter the layout produces, the same way
+  // the system text bindings they stand in for do.
+  "gui-app/src/lib/keybindings/list-navigation-key.ts": 3,
   "gui-app/src/lib/notifications/notification-feed-keyboard-navigation.ts": 1,
-  "gui-app/src/lib/sandbox/sandbox-loader.ts": 1,
+  // The sandboxed pages forward a press to the app. Both MATCH on `code` and
+  // only copy `key` into the forwarded payload beside it.
+  "gui-app/src/lib/sandbox/canvas-bootstrap.ts": 1,
+  // A plain page's focused scrollbar thumb scrolls on the named navigation
+  // keys (arrows and Page Up/Down). These are platform navigation keys,
+  // not registered app shortcuts.
+  "gui-app/src/lib/sandbox/html-viewer-bootstrap.ts": 6,
+  "gui-app/src/lib/sandbox/sandbox-document.ts": 1,
+  // The simulator surface forwards keys to a device by the character they
+  // produce, and keeps Tab for the app's own focus order; both are reads of
+  // the key, not chords.
+  "gui-app/src/lib/simulator-view/simulator-input-encoding.ts": 2,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
   // The mac/non-mac history-modifier check, kept separate from every

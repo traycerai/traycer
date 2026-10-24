@@ -16,6 +16,20 @@ import {
   chatSubscribeV121,
   chatSubscribeV122,
   chatSubscribeV123,
+  chatSubscribeV124,
+  chatSubscribeV125,
+  chatSubscribeV126,
+  chatSubscribeV127,
+  chatSubscribeV128,
+  chatSubscribeV129,
+  chatSubscribeV130,
+  chatSubscribeV131,
+  chatSubscribeV132,
+  chatSubscribeV133,
+  chatSubscribeV134,
+  chatSubscribeV135,
+  chatSubscribeV136,
+  chatSubscribeV137,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -48,9 +62,13 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.23", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.37", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(23);
+    expect(line.latestMinor).toBe(37);
+    expect(line.versions[37].contract).toBe(chatSubscribeV137);
+    expect(line.versions[36].contract).toBe(chatSubscribeV136);
+    expect(line.versions[35].contract).toBe(chatSubscribeV135);
+    expect(line.versions[34].contract).toBe(chatSubscribeV134);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -62,8 +80,66 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(line.versions[15].contract).toBe(chatSubscribeV115);
   });
 
-  it("1.23's server frame is the open windowed schema; 1.22's and 1.21's are their own frozen pre-page ones; 1.20's, 1.19's, 1.18's, 1.17's, 1.16's and 1.15's are distinct, frozen ones", () => {
-    expect(chatSubscribeV123.serverFrameSchema).toBe(
+  it("1.37's server frame is the open windowed schema; older lines are frozen", () => {
+    expect(chatSubscribeV124.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV125.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV126.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV127.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.28 froze when 1.29 added the tool-call `agentMessageDelivery` stamp
+    // above it.
+    expect(chatSubscribeV128.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.29 froze when 1.30 opened the html, canvas and file artifact kinds
+    // above it.
+    expect(chatSubscribeV129.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.30 froze when 1.31 added the tool-call `artifact` stamp above it.
+    expect(chatSubscribeV130.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.31 froze when 1.32 grew the browser annotation record above it.
+    expect(chatSubscribeV131.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.32 froze when 1.33 widened the accumulated-change `artifact` tag's
+    // kind above it; 1.33 binds the live windowed schema.
+    expect(chatSubscribeV132.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 froze when
+    // 1.35 added the memory-curation queue item above it; 1.35 froze when
+    // 1.37 added the compaction `notApplied` flag above it; 1.36 aliases
+    // 1.35's frozen frames; 1.37 binds the live windowed schema.
+    expect(chatSubscribeV133.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV134.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV135.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV136.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV137.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.36 carries 1.35's frames unchanged.
+    expect(chatSubscribeV136.serverFrameSchema).toBe(
+      chatSubscribeV135.serverFrameSchema,
+    );
+    expect(chatSubscribeV123.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV122.serverFrameSchema).not.toBe(

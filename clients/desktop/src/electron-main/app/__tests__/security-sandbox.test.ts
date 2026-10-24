@@ -119,7 +119,7 @@ beforeEach(() => {
 describe("content security policy hook", () => {
   it.each([
     [LOADER, "mainFrame"],
-    ["traycer-sandbox://page/loader.js", "script"],
+    ["traycer-sandbox://page/other.js", "script"],
     [APP_URL, "subFrame"],
     ["https://example.com/embed", "subFrame"],
   ])("leaves %s (%s) to its own policy", (url, resourceType) => {
@@ -187,7 +187,7 @@ describe("isSandboxSubframePermissionGranted", () => {
     expect(
       isSandboxSubframePermissionGranted(
         "geolocation",
-        "traycer-sandbox://page/loader.js?perm=geolocation",
+        "traycer-sandbox://page/other.js?perm=geolocation",
         [],
       ),
     ).toBe(false);
@@ -269,7 +269,7 @@ describe("isAllowedAppSubframeNavigation", () => {
       true,
     );
     expect(
-      isAllowedAppSubframeNavigation("traycer-sandbox://page/loader.js", true),
+      isAllowedAppSubframeNavigation("traycer-sandbox://page/other.js", true),
     ).toBe(false);
     expect(isAllowedAppSubframeNavigation("https://example.com/", true)).toBe(
       false,

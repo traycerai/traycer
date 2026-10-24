@@ -5,6 +5,7 @@ import {
   BrowserWindow,
   app,
   dialog,
+  powerMonitor,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
   type Session,
@@ -380,6 +381,8 @@ export function registerBrowserViewIpc(
         bridge.windowRegistry.off("geometry", listener);
       };
     },
+    // The lock wins over the idle threshold, which is only a required argument.
+    isScreenLocked: () => powerMonitor.getSystemIdleState(60) === "locked",
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
       // The renderer's tab bindings die with it, so the host-side rebind is

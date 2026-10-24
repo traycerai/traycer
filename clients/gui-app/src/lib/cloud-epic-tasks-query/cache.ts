@@ -1,4 +1,8 @@
-import type { Query, QueryClient } from "@tanstack/react-query";
+import type {
+  Query,
+  QueryCacheNotifyEvent,
+  QueryClient,
+} from "@tanstack/react-query";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -22,6 +26,10 @@ import {
   setEpicLocalHomeInCloudTasksResponse,
   setEpicPinnedInCloudTasksResponse,
 } from "@/lib/cloud-epic-tasks-query/response-patches";
+import {
+  taskOwningTeamId,
+  tasksIncludeTeamTask,
+} from "@/lib/epics/team-task-owner";
 
 export {
   removeDeletedEpicsFromCloudTasksResponse,
@@ -143,6 +151,78 @@ export function readEpicTitlesFromCloudTaskCaches(
   return titles;
 }
 
+/**
+ * Calls `onChange` for a cache event on a task list
+ * `readEpicTitlesFromCloudTaskCaches` reads for `scope`, and for no other: a
+ * render reading that scan through `useSyncExternalStore` re-runs it only when
+ * one of its own sources moved, not on every query in the app.
+ */
+export function subscribeToCloudTaskListCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (
+      cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(queryKey, scope)
+    ) {
+      onChange();
+    }
+  });
+}
+
+/**
+ * The team that owns `epicId` as the cached task lists read it: the first
+ * cached row's `taskOwningTeamId`. `null` when no cached row names the epic, or
+ * the row names no team.
+ */
+export function readEpicOwningTeamIdFromCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+): string | null {
+  for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const task = response.tasks.find(
+      (candidate) => candidate.epic?.light?.id === epicId,
+    );
+    if (task !== undefined) return taskOwningTeamId(task.epic?.permission);
+  }
+  return null;
+}
+
+/**
+ * Whether any cached task row for the person is owned by `teamId`. `false` when
+ * nothing cached says so.
+ */
+export function cloudTaskCachesIncludeTeamTask(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  teamId: string,
+): boolean {
+  return queryClient
+    .getQueriesData<ListTasksResponse>({
+      predicate: (query) =>
+        cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+        epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+        currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+    })
+    .some(
+      ([, response]) =>
+        response !== undefined && tasksIncludeTeamTask(response.tasks, teamId),
+    );
+}
+
 export function updateEpicTitleInCloudTaskCaches(
   queryClient: QueryClient,
   scope: CloudEpicTasksCacheScope,
@@ -251,6 +331,36 @@ export function findCachedTaskContext(
     };
   }
   return null;
+}
+
+/**
+ * Calls `onChange` for a cache event on an `epic.getTaskContexts` batch
+ * `findCachedTaskContext` reads for `scope`, and for no other.
+ */
+export function subscribeToTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (epicTaskContextsQueryKeyMatchesScope(queryKey, scope)) onChange();
+  });
+}
+
+/**
+ * A query added, removed or updated. Observer events (an observer mounting,
+ * its options or result moving) fire on ordinary renders and never change
+ * what a cache scan reads.
+ */
+function movesQueryState(event: QueryCacheNotifyEvent): boolean {
+  return (
+    event.type === "added" ||
+    event.type === "removed" ||
+    event.type === "updated"
+  );
 }
 
 export function setEpicPinnedInCloudTaskCaches(

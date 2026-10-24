@@ -276,4 +276,607 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       "chatId",
     ],
   },
+  secret_grant_request: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "secret_grant_request",
+      },
+      requestId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      secretName: {
+        anyOf: [
+          {
+            type: "string",
+            minLength: 1,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      destination: {
+        anyOf: [
+          {
+            type: "string",
+            minLength: 1,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      port: {
+        anyOf: [
+          {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      protocol: {
+        anyOf: [
+          {
+            type: "string",
+            minLength: 1,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      reason: {
+        type: "string",
+      },
+      sandboxName: {
+        type: "string",
+      },
+      agentId: {
+        anyOf: [
+          {
+            type: "string",
+            minLength: 1,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      epicId: {
+        type: "string",
+        minLength: 1,
+      },
+      chatId: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: [
+      "kind",
+      "requestId",
+      "hostId",
+      "secretName",
+      "destination",
+      "protocol",
+      "reason",
+    ],
+  },
+  secret_export_minted: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "secret_export_minted",
+      },
+      secretName: {
+        type: "string",
+        minLength: 1,
+      },
+      exportKind: {
+        type: "string",
+        minLength: 1,
+      },
+      expiresAt: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      agentId: {
+        anyOf: [
+          {
+            type: "string",
+            minLength: 1,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      epicId: {
+        type: "string",
+        minLength: 1,
+      },
+      chatId: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: ["kind", "secretName", "exportKind", "expiresAt", "hostId"],
+  },
+  secret_rotated: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "secret_rotated",
+      },
+      secretName: {
+        type: "string",
+        minLength: 1,
+      },
+      secretId: {
+        anyOf: [
+          {
+            type: "string",
+            minLength: 1,
+          },
+          {
+            type: "null",
+          },
+        ],
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      rotationId: {
+        type: "string",
+        minLength: 1,
+      },
+      state: {
+        type: "string",
+        minLength: 1,
+      },
+      evidence: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            producer: {
+              type: "string",
+              minLength: 1,
+            },
+            workerClass: {
+              anyOf: [
+                {
+                  type: "string",
+                  minLength: 1,
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            hostId: {
+              anyOf: [
+                {
+                  type: "string",
+                  minLength: 1,
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            hostName: {
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            status: {
+              type: "string",
+              minLength: 1,
+            },
+            evidence: {
+              anyOf: [
+                {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      kind: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      count: {
+                        anyOf: [
+                          {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          {
+                            type: "null",
+                          },
+                        ],
+                      },
+                    },
+                    required: ["kind", "count"],
+                    additionalProperties: {},
+                  },
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+          },
+          required: [
+            "producer",
+            "workerClass",
+            "hostId",
+            "hostName",
+            "status",
+            "evidence",
+          ],
+          additionalProperties: {},
+        },
+      },
+    },
+    required: [
+      "kind",
+      "secretName",
+      "secretId",
+      "environmentId",
+      "rotationId",
+      "state",
+      "evidence",
+    ],
+  },
+  team_member_removed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_member_removed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      memberName: {
+        type: "string",
+      },
+      hosts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            hostId: {
+              type: "string",
+              minLength: 1,
+            },
+            hostName: {
+              type: "string",
+            },
+            stopped: {
+              type: "string",
+              minLength: 1,
+            },
+            credentialClosed: {
+              type: "string",
+              minLength: 1,
+            },
+            replacementDelivered: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          required: [
+            "hostId",
+            "hostName",
+            "stopped",
+            "credentialClosed",
+            "replacementDelivered",
+          ],
+          additionalProperties: {},
+        },
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "memberName", "hosts"],
+  },
+  team_member_joined: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_member_joined",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      memberName: {
+        type: "string",
+      },
+      toNewcomer: {
+        type: "boolean",
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "memberName", "toNewcomer"],
+  },
+  team_policy_unapplied: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_policy_unapplied",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      policyVersion: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "policyVersion"],
+  },
+  team_policy_authority_expired: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_policy_authority_expired",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostName: {
+        type: "string",
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "hostId", "hostName"],
+  },
+  team_installing_admin_gone: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_installing_admin_gone",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      adminName: {
+        type: "string",
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "adminName", "reason"],
+  },
+  team_plan_unlinked: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_plan_unlinked",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+    },
+    required: ["kind", "environmentId", "teamName"],
+  },
+  team_pods_full: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_pods_full",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      podCount: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "podCount"],
+  },
+  environment_move_stalled: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "environment_move_stalled",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostName: {
+        type: "string",
+      },
+      remaining: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: [
+      "kind",
+      "environmentId",
+      "hostId",
+      "hostName",
+      "remaining",
+      "reason",
+    ],
+  },
+  environment_apply_failed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "environment_apply_failed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostName: {
+        type: "string",
+      },
+      itemKey: {
+        type: "string",
+        minLength: 1,
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: [
+      "kind",
+      "environmentId",
+      "hostId",
+      "hostName",
+      "itemKey",
+      "reason",
+    ],
+  },
+  team_role_changed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_role_changed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      from: {
+        type: "string",
+        minLength: 1,
+      },
+      to: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "from", "to"],
+  },
+  team_host_returned: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_host_returned",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      hostName: {
+        type: "string",
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "hostName"],
+  },
+  secret_removed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "secret_removed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      secretName: {
+        type: "string",
+      },
+      outcome: {
+        type: "string",
+        enum: ["revoked", "cleanup_requested", "destroyed"],
+      },
+    },
+    required: ["kind", "environmentId", "secretName", "outcome"],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;

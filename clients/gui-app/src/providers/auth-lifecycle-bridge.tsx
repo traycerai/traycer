@@ -9,8 +9,13 @@ import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
+import { resetSandboxesPage } from "@/stores/sandboxes/sandboxes-page-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
@@ -111,12 +116,28 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
+      // A staged sandbox names the outgoing account's configuration, its
+      // create key and the host it made; account B would otherwise send into
+      // A's team or resubmit A's create.
+      useStagedSandboxStore.getState().clearAll();
+      // So does a terminal a sandbox row asked the landing panel for: account
+      // B's panel would otherwise open one on A's sandbox.
+      useLandingPanelStore.getState().clearTerminalRequest();
+      // The Details drawer is mounted at the app root and the Sandboxes page's
+      // store holds a team selection and a pending reveal: account B would
+      // otherwise see A's sandbox id in the drawer and A's team on the page.
+      closeSandboxDetails();
+      resetSandboxesPage();
       // The Sync profiles dialog is mounted at the app root and survives a
       // switch, so its module-level store is on this boundary too: left
       // standing, account B would see A's open dialog - A's profile names and
       // A's captured source host id, which it would then dial under B's
       // session.
       useProfileSyncModalStore.getState().close();
+      // The provider Link dialog's target names one of the outgoing account's
+      // profiles; left set, account B's Providers would mount A's dialog and
+      // send A's profile id through B's host.
+      useProviderLinkDialogStore.getState().close();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the

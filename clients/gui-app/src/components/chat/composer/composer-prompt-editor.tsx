@@ -59,7 +59,10 @@ import type {
   ImageAttachmentRewrite,
 } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
-import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
+import {
+  bumpComposerDraftGeneration,
+  composerDraftGeneration,
+} from "@/lib/composer/composer-draft-generation";
 
 const composerEditorIncarnations = new WeakMap<
   Editor,
@@ -97,6 +100,12 @@ export interface ComposerPromptEditorHandle {
   readonly getJSON: () => JsonContent;
   readonly isEmpty: () => boolean;
   readonly clear: () => void;
+  /**
+   * Which draft the editor holds: bumped by `clear` (an accepted send) and
+   * by a content replacement, so work started against one draft can tell it
+   * has been superseded (`composer-draft-generation.ts`).
+   */
+  readonly draftGeneration: () => number;
   /**
    * Replace the document and notify the owner via the normal `onDocumentChange`
    * signal (a real editor-level document mutation). The landing and new-
@@ -197,6 +206,11 @@ export interface ComposerPromptEditorProps {
     selection: { readonly from: number; readonly to: number },
   ) => void;
   /**
+   * Input in the focused editor, or unfocused dictation; reports whether the
+   * document was empty beforehand. Excludes programmatic setContent/syncContent.
+   */
+  readonly onUserInput?: (wasEmpty: boolean) => void;
+  /**
    * Caret/selection moved with no document mutation. Deliberately carries no
    * `content` - a selection-only event must never serialize the document (it
    * can carry multi-megabyte inline images), so this never calls `getJSON()`.
@@ -291,6 +305,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     hasPastedImageBytes,
     ingestPastedComposerImages,
     onDocumentChange,
+    onUserInput,
     onSelectionChange,
     onSubmit,
     onPaste,
@@ -321,6 +336,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   );
   const onSubmitRef = useRef(onSubmit);
   const onDocumentChangeRef = useRef(onDocumentChange);
+  const onUserInputRef = useRef(onUserInput);
+  const applyingContentRef = useRef(false);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onEditorReadyRef = useRef(onEditorReady);
   const initialSelectionRef = useRef(normalizedInitial.selection);
@@ -328,6 +345,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useEffect(() => {
     onSubmitRef.current = onSubmit;
     onDocumentChangeRef.current = onDocumentChange;
+    onUserInputRef.current = onUserInput;
     onSelectionChangeRef.current = onSelectionChange;
     onEditorReadyRef.current = onEditorReady;
   });
@@ -385,7 +403,17 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       editorProps: {
         attributes: editorAttributesObject,
       },
-      onUpdate({ editor: updatedEditor }) {
+      onUpdate({ editor: updatedEditor, transaction }) {
+        // setContent can emit an update depending on emitUpdate; it is not user input.
+        if (!applyingContentRef.current && updatedEditor.isFocused) {
+          const before = transaction.before;
+          const wasEmpty =
+            before.childCount === 0 ||
+            (before.childCount === 1 &&
+              before.firstChild?.isTextblock === true &&
+              before.firstChild.content.size === 0);
+          onUserInputRef.current?.(wasEmpty);
+        }
         // Tiptap only fires `update` when a transaction actually changed the
         // document (gated internally on `docChanged` plus a structural
         // doc-equality check) - so every call here is a real mutation, never
@@ -458,7 +486,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         containsActiveElement: (activeElement) =>
           activeElement === editor.view.dom ||
           (activeElement !== null && editor.view.dom.contains(activeElement)),
-        isEligible: () => editor.view.dom.isConnected,
+        // A modal dialog aria-hides (and may inert) the chat behind it while
+        // its own new-agent composer stays mounted. Both editors can still
+        // claim `isActive` in the same pane; the hidden one's DOM is connected
+        // but cannot own keyboard focus. Let the registry skip it so a picker
+        // closing in the dialog returns focus to the dialog's editor.
+        isEligible: () =>
+          editor.view.dom.isConnected &&
+          editor.view.dom.closest('[aria-hidden="true"], [inert]') === null,
       },
       isActive,
       isPaneFocusedNow,
@@ -538,6 +573,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     return editor.isEmpty;
   }, [editor]);
 
+  const draftGeneration = useCallback(
+    () => (editor === null ? 0 : composerDraftGeneration(editor)),
+    [editor],
+  );
+
   const clear = useCallback(() => {
     if (editor === null) return;
     // Whatever async work was filling THIS draft (a cross-host tab screenshot
@@ -558,7 +598,12 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         selection,
       );
       bumpComposerDraftGeneration(editor);
-      editor.commands.setContent(normalized.content, { emitUpdate });
+      setProgrammaticContent({
+        editor,
+        content: normalized.content,
+        emitUpdate,
+        applyingContent: applyingContentRef,
+      });
       if (normalized.selection !== null) {
         editor.commands.setTextSelection({
           from: normalized.selection.from,
@@ -686,6 +731,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         // Editor has the caret: insert there so segments append in order.
         editor.chain().focus().insertContent(node).run();
       } else {
+        // Keyboard dictation controls can own focus while this composer stays
+        // active. The dictated insert is still the person's input.
+        onUserInputRef.current?.(editor.isEmpty);
         // Don't steal focus (e.g. user clicked Stop/another field, or a mid-
         // utterance auto-commit landed) - append at the end of the last text
         // block. Inserting at `doc.content.size` lands *after* the final
@@ -734,6 +782,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       getJSON,
       isEmpty,
       clear,
+      draftGeneration,
       setContent,
       syncContent,
       insertImageAttachments,
@@ -748,6 +797,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       beginPathInsertion,
       clear,
       dismissActiveSuggestion,
+      draftGeneration,
       focus,
       focusAtEnd,
       getEditorIncarnation,
@@ -779,6 +829,23 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       onBlur={onBlur}
     />
   );
+}
+
+// Keep try/finally outside the component: React Compiler cannot lower it yet.
+function setProgrammaticContent(input: {
+  readonly editor: Editor;
+  readonly content: JsonContent;
+  readonly emitUpdate: boolean;
+  readonly applyingContent: { current: boolean };
+}): void {
+  input.applyingContent.current = true;
+  try {
+    input.editor.commands.setContent(input.content, {
+      emitUpdate: input.emitUpdate,
+    });
+  } finally {
+    input.applyingContent.current = false;
+  }
 }
 
 function editorAttributes(

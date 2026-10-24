@@ -4,6 +4,7 @@
  * shape so sources, the registry, and the dispatcher never import
  * React and stay unit-testable.
  */
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ActionId } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -123,7 +124,7 @@ export interface CommandItem {
     readonly depth: number;
     readonly ancestorIds: ReadonlyArray<string>;
     readonly hasChildren: boolean;
-    readonly kind: "spec" | "ticket" | "story" | "review";
+    readonly kind: EpicArtifactKind;
     readonly status: number | null;
   };
   /** Directory/file presentation metadata for Files and Git Diff results. */

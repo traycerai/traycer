@@ -4,7 +4,9 @@ import { closeHistory } from "@tiptap/pm/history";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
+import { isCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { isPhoneLayoutOnly } from "@/lib/mobile-app";
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
@@ -50,13 +52,15 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
       Enter: ({ editor }) => {
         if (handlePickerEnter(pickerStore)) return true;
         if (handleOpeningCodeFence(editor)) return true;
-        // On a phone-width viewport the return key is the only way to break a
-        // line — there is no Shift to chord with — so Enter writes a newline
-        // and only the send button submits. Keyed to the VIEWPORT signal, not
-        // the installed-app one: the web app opened on a phone needs the same
-        // behavior. Read imperatively per keypress; the keymap is built once
-        // at editor creation and must not go stale across resizes.
-        if (isMobileViewport()) {
+        // On a phone the return key is the only way to break a line — there
+        // is no Shift to chord with — so Enter writes a newline and only the
+        // send button submits. A phone is a narrow viewport driven by a touch
+        // pointer, or the installed app: width alone is not enough, because
+        // zooming a desktop window under the breakpoint narrows it without
+        // taking its keyboard away. Read imperatively per keypress; the
+        // keymap is built once at editor creation and must not go stale
+        // across resizes.
+        if (enterInsertsNewline()) {
           return insertSoftNewline(editor);
         }
         onSubmit.current("enter");
@@ -120,8 +124,19 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
 });
 
 /**
- * The soft-newline path shared by Shift-Enter everywhere and plain Enter on a
- * mobile-width viewport.
+ * Whether plain Enter breaks the line instead of submitting: the installed
+ * phone-only app at any width, or a phone-width viewport on a touch-primary
+ * device (the web app opened on a phone). A narrow window under a fine pointer
+ * - a zoomed desktop app - keeps Enter-to-send.
+ */
+function enterInsertsNewline(): boolean {
+  if (isPhoneLayoutOnly()) return true;
+  return isMobileViewport() && isCoarsePointer();
+}
+
+/**
+ * The soft-newline path shared by Shift-Enter everywhere and plain Enter where
+ * `enterInsertsNewline` holds.
  */
 function insertSoftNewline(editor: Editor): boolean {
   moveCaretPastTrailingWhitespace(editor);

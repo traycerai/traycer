@@ -4,10 +4,16 @@ import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-sel
 import {
   RemoteSession as ProtocolRemoteSession,
   type IRemoteSession,
+  type PoolSessionOptions as ProtocolPoolSessionOptions,
+  type RemoteSessionEvidence,
   type RemoteSessionOptions as ProtocolRemoteSessionOptions,
   type SessionLivenessProbe,
 } from "@traycer/protocol/host-transport/remote/session";
-import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
+import type {
+  PoolSessionAuth,
+  RemoteSessionAuth,
+} from "@traycer/protocol/host-transport/remote/auth";
+import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -156,6 +162,38 @@ export interface RemoteSessionOptions<
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator | null;
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * `null` for a personal host: `OPEN` presents the user bearer. For a
+   * `kind: sandbox` host, the reader of the session grant minted with the
+   * current attach grant: `OPEN` presents it in `authz` v2 with an EMPTY
+   * bearer, and the session never sends a `CREDENTIAL_UPDATE` - no user
+   * credential reaches a sandbox.
+   */
+  readonly sessionGrant: (() => string | null) | null;
+}
+
+/**
+ * The client's options for a session to the server pool. The bearer source
+ * serves `open` directly: there is no grant to mint, no session grant and no
+ * member credential, so a pool session carries the user bearer and nothing
+ * else.
+ */
+export interface PoolSessionOptions<
+  RpcRegistry extends
+    import("@traycer/protocol/framework/index").VersionedRpcRegistry,
+  StreamRegistry extends
+    import("@traycer/protocol/framework/versioned-stream-rpc").VersionedStreamRpcRegistry,
+> extends Omit<
+  ProtocolPoolSessionOptions<RpcRegistry, StreamRegistry>,
+  | "auth"
+  | "onNegotiatedMethods"
+  | "onNegotiatedStreamMethodVersions"
+  | "servedStreamMajors"
+  | "unaryResponseMs"
+> {
+  readonly bearer: BearerSourceProvider;
+  readonly auth: StreamAuthRevalidator | null;
+  readonly evidence: RemoteSessionEvidence<"pool-direct">;
 }
 
 /**
@@ -169,21 +207,12 @@ export class RemoteSession<
   StreamRegistry extends
     import("@traycer/protocol/framework/versioned-stream-rpc").VersionedStreamRpcRegistry,
 > extends ProtocolRemoteSession<RpcRegistry, StreamRegistry> {
-  constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
-    const { bearer, auth, ...coreOptions } = options;
-    super({
-      ...coreOptions,
-      auth: createClientRemoteSessionAuth(bearer, auth),
-      onNegotiatedMethods: recordNegotiatedHostManifest,
-      // The stream sibling of the line above, and installed here for the same
-      // reason: BOTH transports must publish, or every per-host gate built on
-      // the registry fails closed forever for the hosts one of them serves -
-      // which for a stream-version gate means every remote host, i.e. the ones
-      // the gate exists for.
-      onNegotiatedStreamMethodVersions: recordNegotiatedStreamMethodVersions,
-      servedStreamMajors: CLIENT_SERVED_STREAM_MAJORS,
-      unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
-    });
+  constructor(
+    options:
+      | RemoteSessionOptions<RpcRegistry, StreamRegistry>
+      | PoolSessionOptions<RpcRegistry, StreamRegistry>,
+  ) {
+    super(toProtocolSessionOptions(options));
     if (remoteTrafficDebugEnabled() && this.enableTrafficAccounting()) {
       const reader = this.trafficSnapshotReader();
       if (reader !== null) {
@@ -200,17 +229,21 @@ export class RemoteSession<
   }
 }
 
-function createClientRemoteSessionAuth(
-  bearer: BearerSourceProvider,
-  auth: StreamAuthRevalidator | null | undefined,
-): RemoteSessionAuth {
-  const readBearer = (): string | null => {
+function bearerReader(bearer: BearerSourceProvider): () => string | null {
+  return () => {
     try {
       return extractBearerForOpenFrame(bearer());
     } catch {
       return null;
     }
   };
+}
+
+function createClientRemoteSessionAuth(
+  bearer: BearerSourceProvider,
+  auth: StreamAuthRevalidator | null | undefined,
+): RemoteSessionAuth {
+  const readBearer = bearerReader(bearer);
   return {
     missingOpenAuthCause: "missing-bearer",
     readOpenAuth: () => {
@@ -226,5 +259,103 @@ function createClientRemoteSessionAuth(
       auth === null || auth === undefined
         ? null
         : () => auth.revalidateForReconnect(),
+  };
+}
+
+function createSessionGrantRemoteSessionAuth(
+  readSessionGrant: () => string | null,
+  auth: StreamAuthRevalidator | null,
+): RemoteSessionAuth {
+  return {
+    missingOpenAuthCause: "missing-session-grant",
+    readOpenAuth: () => {
+      const grant = readSessionGrant();
+      if (grant === null) {
+        return null;
+      }
+      return {
+        bearer: "",
+        authz: { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant },
+        fingerprint: grant,
+      };
+    },
+    readCredentialUpdateBearer: () => null,
+    // Unknown until the next attach mints one: the reader still holds the
+    // grant that was just refused, because only the next attach replaces it.
+    // A grant refusal is therefore never evidence of no progress. The loop
+    // stays bounded the way a rotating bearer's is (the reconnect backoff),
+    // and the `local-plane-retained` bound is untouched.
+    currentFingerprint: () => null,
+    // A refused session grant is recovered the way a refused bearer is: the
+    // user bearer that mints the next pair is revalidated, then the session
+    // redials and the provider mints a fresh attach and session grant.
+    revalidateForReconnect:
+      auth === null ? null : () => auth.revalidateForReconnect(),
+  };
+}
+
+/**
+ * The pool's `open` presents the user bearer, as a personal host's does, with
+ * nowhere to put anything else: no `authz`, no session grant.
+ */
+function createClientPoolSessionAuth(
+  bearer: BearerSourceProvider,
+  auth: StreamAuthRevalidator | null,
+): PoolSessionAuth {
+  const readBearer = bearerReader(bearer);
+  return {
+    missingOpenAuthCause: "missing-bearer",
+    readOpenAuth: () => {
+      const token = readBearer();
+      return token === null ? null : { bearer: token, fingerprint: token };
+    },
+    readCredentialUpdateBearer: readBearer,
+    currentFingerprint: readBearer,
+    revalidateForReconnect:
+      auth === null ? null : () => auth.revalidateForReconnect(),
+  };
+}
+
+/**
+ * The protocol session's options for either client shape. The client-side
+ * wiring is the same for both: BOTH transports must publish what they
+ * negotiated, or every per-host gate built on those registries fails closed
+ * forever for the hosts one of them serves - which for a stream-version gate
+ * means every remote host, i.e. the ones the gate exists for.
+ */
+function toProtocolSessionOptions<
+  RpcRegistry extends
+    import("@traycer/protocol/framework/index").VersionedRpcRegistry,
+  StreamRegistry extends
+    import("@traycer/protocol/framework/versioned-stream-rpc").VersionedStreamRpcRegistry,
+>(
+  options:
+    | RemoteSessionOptions<RpcRegistry, StreamRegistry>
+    | PoolSessionOptions<RpcRegistry, StreamRegistry>,
+):
+  | ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>
+  | ProtocolPoolSessionOptions<RpcRegistry, StreamRegistry> {
+  const clientWiring = {
+    onNegotiatedMethods: recordNegotiatedHostManifest,
+    onNegotiatedStreamMethodVersions: recordNegotiatedStreamMethodVersions,
+    servedStreamMajors: CLIENT_SERVED_STREAM_MAJORS,
+    unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
+  };
+  if ("poolUrl" in options) {
+    const { bearer, auth, ...coreOptions } = options;
+    return {
+      ...coreOptions,
+      ...clientWiring,
+      auth: createClientPoolSessionAuth(bearer, auth),
+    };
+  }
+  const { bearer, auth, sessionGrant, ...coreOptions } = options;
+  return {
+    ...coreOptions,
+    ...clientWiring,
+    auth:
+      sessionGrant === null
+        ? createClientRemoteSessionAuth(bearer, auth)
+        : createSessionGrantRemoteSessionAuth(sessionGrant, auth),
   };
 }

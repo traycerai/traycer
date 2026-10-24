@@ -631,10 +631,11 @@ describe("HostLifecyclePolicyStore.readSupervisorRun", () => {
       state: "enforcing",
       supervisorPid: RUN_RECORDED_PID,
       admittedAs: "foreground",
+      cliVersion: "1.0.0",
     });
   });
 
-  it("a live service record reads enforcing with admittedAs 'service'", async () => {
+  it("a live service record reads enforcing with admittedAs 'service' and its CLI version", async () => {
     const store = makeStore(OWN_IDENTITY);
     await writeRawSupervisorRun(
       store,
@@ -651,6 +652,7 @@ describe("HostLifecyclePolicyStore.readSupervisorRun", () => {
       state: "enforcing",
       supervisorPid: RUN_RECORDED_PID,
       admittedAs: "service",
+      cliVersion: "1.0.0",
     });
   });
 
@@ -663,6 +665,7 @@ describe("HostLifecyclePolicyStore.readSupervisorRun", () => {
       state: "enforcing",
       supervisorPid: RUN_RECORDED_PID,
       admittedAs: null,
+      cliVersion: "1.0.0",
     });
   });
 
@@ -683,6 +686,7 @@ describe("HostLifecyclePolicyStore.readSupervisorRun", () => {
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     });
   });
 });

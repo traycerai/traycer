@@ -28,6 +28,7 @@ import {
 import {
   unionPendingChatCreations,
   type PendingChatCreation,
+  type PendingChatCreationCloudRow,
   type RetainedChatCreation,
 } from "../pending-chat-creations";
 import {
@@ -111,6 +112,13 @@ export interface ChatRecordTable {
     pending: PendingChatCreation,
   ): ChatRecordPublication | null;
   clearPendingCreation(chatId: string): ChatRecordPublication | null;
+  /**
+   * Retires the stand-in for a chat a PUBLISHED cloud row now serves, on the
+   * row's `(chatId, ownerHostId)`. `null` when no stand-in matched.
+   */
+  expirePendingCreationForCloudRow(
+    row: PendingChatCreationCloudRow,
+  ): ChatRecordPublication | null;
   /**
    * Rebuild for the CURRENTLY signed-in user from the retained raw rows.
    *
@@ -227,16 +235,72 @@ export function createChatRecordTable(
   const pendingCreations = new Map<string, RetainedChatCreation>();
 
   /**
+   * The identity this table's rows were answered for, and the only one the
+   * host's `own` word is trusted for - see `isChatVisibleToUser`. Table-level:
+   * every list SNAPSHOT re-stamps it with the signed-in user, and any other
+   * ingest that lands rows (a delta, a touch, a confirmed point read) stamps it
+   * only while it is still `null`. So rows that arrived under A keep the stamp
+   * A, and after a switch to B the previous identity's `own` rows stop
+   * admitting until B's first snapshot lands. `null` until some ingest ran
+   * with a profile signed in.
+   */
+  let answeredForViewer: string | null = null;
+  const stampIfUnanswered = (): void => {
+    if (answeredForViewer === null) answeredForViewer = getCurrentUserId();
+  };
+
+  /**
+   * Drops this session's creations of `chatId` on `hostId`, whoever they were
+   * filed under. A host mints its chat ids, so the pair names one chat.
+   */
+  const dropPendingCreationsOnHost = (
+    chatId: string,
+    hostId: string,
+  ): boolean => {
+    let dropped = false;
+    for (const [key, retained] of pendingCreations) {
+      if (retained.pending.chatId !== chatId) continue;
+      if (retained.pending.hostId !== hostId) continue;
+      pendingCreations.delete(key);
+      dropped = true;
+    }
+    return dropped;
+  };
+
+  /**
    * Retires the stand-in that an ARRIVING RECORD has just made redundant.
    *
    * Keyed on the record's full identity, not on its id: `chatId` is not
    * globally unique, and a collaborator's legitimate same-id row must not be
    * able to retire the viewer's own in-flight creation - the row that replaces
    * a stand-in has to be the SAME chat, not merely a chat with the same id.
+   *
+   * One record retires a stand-in filed under ANOTHER owner: an `own` row from
+   * the host the creation was sent to. A team host keys the task chat it
+   * creates by its environment id, which the create's answer does not carry,
+   * so the stand-in is filed under the viewer and the real row arrives under
+   * the environment. The host minted the chat and names it `own`, and one host
+   * never holds two own rows with one `chatId`, so `(chatId, host)` is that
+   * same chat.
    */
   const expirePendingCreationForRecord = (record: HeldChatRecordRow): void => {
     pendingCreations.delete(recordKey(record.ownerUserId, record.chatId));
+    if (record.origin !== "own") return;
+    dropPendingCreationsOnHost(record.chatId, record.originHostId);
   };
+
+  /**
+   * Retires the stand-in a PUBLISHED cloud row has made redundant, for the
+   * chat whose record never reaches this table: a team host's
+   * environment-owned chat, which a member's client sees only as the
+   * environment arm's cloud row. The row is filed under the environment and
+   * the stand-in under the creator, so the owner cannot match; a host mints
+   * its chat ids, so `(chatId, ownerHostId)` is the same chat, the same
+   * argument as the `own` arm of {@link expirePendingCreationForRecord}.
+   */
+  const expirePendingCreationForCloudRow = (
+    row: PendingChatCreationCloudRow,
+  ): boolean => dropPendingCreationsOnHost(row.chatId, row.ownerHostId);
 
   /**
    * Drops every retained creation for `chatId`, whoever it was registered for.
@@ -287,14 +351,23 @@ export function createChatRecordTable(
        * frame's addressing is COARSER than a record identity and a removal
        * retracts every retained row with that id in this epic.
        *
-       * Bounded and invisible today - the display filter already withholds
-       * every row whose owner is not the signed-in user, so the only rows that
-       * can render are ones for which `chatId` IS unique. Widening the frame is
-       * a protocol change, not something to guess at here.
+       * Bounded and invisible today - the display filter withholds every row
+       * that is not the viewer's: one whose owner is not the signed-in user,
+       * unless its serving host lists it as `origin: "own"` (a team host's
+       * environment-owned task chat). A host serves its own rows only to a
+       * viewer who may act on them and never holds two own rows with one
+       * `chatId`, so the only rows that can render are ones for which `chatId`
+       * IS unique. Widening the frame is a protocol change, not something to
+       * guess at here.
        */
       retractionIdOf: (row) => row.chatId,
       isVisibleToUser: (row, currentUserId) =>
-        isChatVisibleToUser(row.ownerUserId, currentUserId),
+        isChatVisibleToUser(
+          row.origin,
+          row.ownerUserId,
+          currentUserId,
+          answeredForViewer,
+        ),
       supersedesOnSnapshot: chatRowSupersedesOnSnapshot,
       /**
        * The bare guard, and deliberately NOT the snapshot rule - the twin
@@ -332,7 +405,7 @@ export function createChatRecordTable(
        */
       buildSlice: (visibleRows, currentUserId) => {
         const next = unionPendingChatCreations(
-          chatRecordsSlice(visibleRows),
+          chatRecordsSlice(visibleRows, currentUserId, answeredForViewer),
           pendingCreations.values(),
           currentUserId,
         );
@@ -382,8 +455,9 @@ export function createChatRecordTable(
 
     // `@1.1` states the home for every row it carries, so the answer is
     // authoritative and the held row takes it verbatim.
-    applyRecords: (records, issuedAtSeq) =>
-      published(
+    applyRecords: (records, issuedAtSeq) => {
+      answeredForViewer = getCurrentUserId();
+      return published(
         table.applySnapshot(
           records.flatMap<HeldChatRecordRow>((record) => {
             if (!confirmedDeletions.has(identityKey(record))) return [record];
@@ -397,13 +471,18 @@ export function createChatRecordTable(
           }),
           issuedAtSeq,
         ),
-      ),
+      );
+    },
 
-    applyTouches: (patches) => published(table.applyTouches(patches)),
+    applyTouches: (patches) => {
+      stampIfUnanswered();
+      return published(table.applyTouches(patches));
+    },
 
     applyConfirmedMutation: (mutation) => {
       if (mutation.kind === "upsert") {
         if (confirmedDeletions.has(identityKey(mutation.record))) return null;
+        stampIfUnanswered();
         const held = table.retainedRow(
           recordKey(mutation.record.ownerUserId, mutation.record.chatId),
         );
@@ -418,9 +497,10 @@ export function createChatRecordTable(
       }
       confirmedDeletions.add(identityKey(mutation));
       const key = recordKey(mutation.ownerUserId, mutation.chatId);
-      const pending = pendingCreations.get(key);
-      if (pending?.pending.hostId === mutation.originHostId)
-        pendingCreations.delete(key);
+      // By `(chatId, host)` rather than by `key`: the removal is filed under the
+      // row's owner, and a stand-in for an environment-owned chat is filed
+      // under the viewer who created it (see `expirePendingCreationForRecord`).
+      dropPendingCreationsOnHost(mutation.chatId, mutation.originHostId);
       const held = table.retainedRow(key);
       if (held !== null && held.originHostId === mutation.originHostId) {
         return published(table.removeRow(key));
@@ -433,6 +513,7 @@ export function createChatRecordTable(
         return published(table.applyRemoval(delta.chatId, delta.reason));
       }
       if (confirmedDeletions.has(identityKey(delta.record))) return null;
+      stampIfUnanswered();
       // `host.chatRecords.subscribe` carries the BASE row, which says nothing
       // about the home - and unlike the terminal twin, "a doc-homed row cannot
       // produce a delta" is FALSE here: `ChatRegistryService.acquire` calls
@@ -540,6 +621,11 @@ export function createChatRecordTable(
 
     clearPendingCreation(chatId) {
       if (!dropPendingCreationsForChat(chatId)) return null;
+      return published(table.republish());
+    },
+
+    expirePendingCreationForCloudRow(row) {
+      if (!expirePendingCreationForCloudRow(row)) return null;
       return published(table.republish());
     },
 

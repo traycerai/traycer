@@ -1,10 +1,11 @@
 import type {
   NativeAuthResult,
   NativeListResult,
-  NativeMutationResult,
+  NativeMutationResultV14,
   ProviderMcpServer,
-  ProviderNativeErrorCode,
-  ProviderNativeErrorResult,
+  ProviderMcpNotice,
+  ProviderMcpCoverage,
+  ProviderNativeMutateErrorCode,
   ProviderPlugin,
   ProviderPluginIcon,
   ProviderSkill,
@@ -31,6 +32,8 @@ export type ProvidersMcpAuthWireResponse = ResponseOfMethod<
 /** Cached list shapes for tab consumers. */
 export type McpListData = {
   readonly servers: readonly ProviderMcpServer[];
+  readonly notices: readonly ProviderMcpNotice[];
+  readonly coverage: ProviderMcpCoverage | null;
   /** A failed full-list refresh retained when other responses update rows. */
   readonly refreshError: HostRpcError | null;
 };
@@ -61,11 +64,11 @@ export type SkillsMutateData = SkillsInspectData | SkillsListMutateData;
 export type McpAuthData = { readonly result: NativeAuthResult };
 
 export class ProviderNativeRpcError extends HostRpcError {
-  readonly nativeCode: ProviderNativeErrorCode;
+  readonly nativeCode: ProviderNativeMutateErrorCode;
   readonly nativeDetail: string | null;
 
   constructor(args: {
-    readonly code: ProviderNativeErrorCode;
+    readonly code: ProviderNativeMutateErrorCode;
     readonly detail: string | null;
     readonly method: string;
   }) {
@@ -96,13 +99,12 @@ export function isProviderNativeRpcError(
   return error instanceof ProviderNativeRpcError;
 }
 
-function throwIfNativeError(
-  result: NativeListResult | NativeMutationResult | null,
+function throwIfNativeError<
+  Result extends NativeListResult | NativeMutationResultV14,
+>(
+  result: Result | null,
   method: string,
-): asserts result is Exclude<
-  NativeListResult | NativeMutationResult,
-  ProviderNativeErrorResult
-> | null {
+): asserts result is Exclude<Result, { readonly ok: false }> | null {
   if (result !== null && !result.ok) {
     throw new ProviderNativeRpcError({
       code: result.code,
@@ -118,14 +120,24 @@ export function mapProvidersListToMcpServers(args: {
   const native = args.response.native;
   throwIfNativeError(native, "providers.list");
   if (native === null || native.kind !== "mcp") {
-    return completeMcpList([]);
+    return completeMcpList([], [], null);
   }
-  return completeMcpList(native.servers);
+  return completeMcpList(
+    native.servers,
+    native.notices ?? [],
+    native.coverage ?? null,
+  );
 }
 
-function completeMcpList(servers: readonly ProviderMcpServer[]): McpListData {
+function completeMcpList(
+  servers: readonly ProviderMcpServer[],
+  notices: readonly ProviderMcpNotice[],
+  coverage: ProviderMcpCoverage | null,
+): McpListData {
   return {
     servers,
+    notices,
+    coverage,
     refreshError: null,
   };
 }
@@ -201,7 +213,11 @@ export function mapNativeMutateToMcpMutate(args: {
       method: "providers.nativeMutate",
     });
   }
-  return completeMcpList(result.servers);
+  return completeMcpList(
+    result.servers,
+    result.notices ?? [],
+    result.coverage ?? null,
+  );
 }
 
 export function mapNativeMutateToPluginsMutate(args: {

@@ -16,6 +16,7 @@ import {
   GitPullRequest,
   Globe,
   Lock,
+  Smartphone,
   Trash2,
 } from "lucide-react";
 import { LeftPanelRailIcon } from "@/components/epic-canvas/sidebar/left-panel-rail-icon";
@@ -51,13 +52,13 @@ import {
   isBrowserSessionTileRef,
   isCommGraphTileRef,
   isDeletedArtifactsTileRef,
-  isEpicFileTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
+  isSimulatorTileRef,
   type BlankTileRef,
   type BrowserSessionTileRef,
   type ManagedCommandOutputTileRef,
@@ -69,7 +70,6 @@ import {
   type SnapshotDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
-import { epicFileViewer } from "@/lib/files/viewer-registry";
 import {
   gitBundleGroupLabel,
   gitDiffRepositoryContextLabel,
@@ -319,21 +319,18 @@ function EpicCanvasNodeDragOverlay(props: {
       </m.div>
     );
   }
-  if (isEpicFileTileRef(props.node)) {
-    const viewer = epicFileViewer(props.node.path);
-    return (
-      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
-        <viewer.Icon
-          className={cn("size-3.5 shrink-0", viewer.iconClassName)}
-        />
-        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
-      </m.div>
-    );
-  }
   if (isPublishedChatTileRef(props.node)) {
     return (
       <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
         <Lock className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      </m.div>
+    );
+  }
+  if (isSimulatorTileRef(props.node)) {
+    return (
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+        <Smartphone className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
     );

@@ -70,6 +70,7 @@ const handleCopyError = (): void => {
 };
 
 interface AssistantBodyProps {
+  workingVerbSeed?: string;
   segments: ReadonlyArray<MessageSegment>;
   backgroundToolBlockIds: ReadonlySet<string>;
   /**
@@ -232,6 +233,7 @@ export function AssistantMessageBody({
   backgroundToolBlockIds,
   runState,
   messageId,
+  workingVerbSeed,
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
   autonomousResumeOwed,
@@ -350,7 +352,7 @@ export function AssistantMessageBody({
           createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
-          messageId={messageId}
+          messageId={indicatorMessageId({ workingVerbSeed, messageId })}
           meta={meta}
         />
       );
@@ -375,6 +377,7 @@ export function AssistantMessageBody({
               <SubagentSegment
                 id={item.id}
                 cardId={item.segment.id}
+                toolImageResults={item.segment.toolImageResults}
                 name={item.segment.name}
                 agentType={item.segment.agentType}
                 task={item.segment.task}
@@ -452,7 +455,7 @@ export function AssistantMessageBody({
           createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
-          messageId={messageId}
+          messageId={indicatorMessageId({ workingVerbSeed, messageId })}
           meta={meta}
         />
       ) : null}
@@ -809,7 +812,6 @@ function AssistantMetaTooltip({
   completedAt: number | null;
 }) {
   const reasoning = meta?.reasoningEffortLabel ?? null;
-  const fastModeEnabled = meta !== null && isFastModeEnabled(meta.serviceTier);
   return (
     // Tooltip surface is `bg-foreground text-background`, so all text here must
     // be tinted off `background` (using `foreground` would be invisible).
@@ -839,9 +841,7 @@ function AssistantMetaTooltip({
           {reasoning === null ? null : (
             <AssistantMetaRow label="Reasoning" value={reasoning} />
           )}
-          {fastModeEnabled ? (
-            <AssistantMetaRow label="Fast mode" value="On" />
-          ) : null}
+          <AssistantSpeedMetaRow meta={meta} />
           {meta.costUsd !== null && meta.costUsd > 0 ? (
             <AssistantMetaRow label="Cost" value={formatUsd(meta.costUsd)} />
           ) : null}
@@ -860,6 +860,17 @@ function AssistantMetaTooltip({
         dividerAbove={meta !== null || startedAt !== null}
       />
     </div>
+  );
+}
+
+function AssistantSpeedMetaRow(props: { readonly meta: AssistantTurnMeta }) {
+  const { meta } = props;
+  if (!isFastModeEnabled(meta.serviceTier)) return null;
+  return (
+    <AssistantMetaRow
+      label="Speed"
+      value={meta.serviceTierLabel ?? meta.serviceTier ?? ""}
+    />
   );
 }
 
@@ -1077,11 +1088,7 @@ function AssistantRunIndicator({
   messageId: string;
   meta: AssistantTurnMeta | null;
 }) {
-  // Resolved once per turn by the chat tile (seeded on the chat + turn ordinal,
-  // not the row id) so the word stays fixed for the whole turn even as the
-  // pre-turn placeholder swaps to the real turn id. Freeze on "Stopping" the
-  // moment a stop is requested. Falls back to a `messageId` seed outside a chat
-  // (isolated component tests).
+  // The tile latches the send-seeded verb across the host row remount.
   const runVerb = use(WorkingVerbContext);
   const verb =
     runState === "stopping"
@@ -1100,13 +1107,16 @@ function AssistantRunIndicator({
         <HarnessIcon harnessId={meta.provider} className="size-3.5" />
       )}
       <span className="inline-flex items-baseline gap-1">
-        <WorkingShimmerText className="text-ui-sm">{verb}</WorkingShimmerText>
+        <WorkingShimmerText className="text-ui-sm" animationOrigin={createdAt}>
+          {verb}
+        </WorkingShimmerText>
         {/* 3-dot typing loader rather than the braille spinner: three steady,
             sequentially-pulsing dots instead of a morphing glyph. */}
         <AgentSpinningDots
           className={undefined}
           testId="assistant-run-dots"
           variant="typing"
+          animationOrigin={createdAt}
         />
       </span>
       {/* Separate node so the once-per-second tick re-renders ONLY the timer,
@@ -1274,6 +1284,7 @@ export function AssistantSegment({
           agentMessageSend={segment.agentMessageSend}
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
+          agentMessageDelivery={segment.agentMessageDelivery}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}
@@ -1283,7 +1294,7 @@ export function AssistantSegment({
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
-          page={segment.page}
+          artifact={segment.artifact}
           mcpApp={segment.mcpApp}
           variant="card"
           headerFindUnitId={
@@ -1337,6 +1348,7 @@ export function AssistantSegment({
         <SubagentSegment
           id={id}
           cardId={segment.id}
+          toolImageResults={segment.toolImageResults}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}
@@ -1387,6 +1399,7 @@ export function AssistantSegment({
       return (
         <CompactionSegment
           status={segment.status}
+          notApplied={segment.notApplied}
           trigger={segment.trigger}
           preTokens={segment.preTokens}
           postTokens={segment.postTokens}
@@ -1463,4 +1476,11 @@ export function AssistantSegment({
       return null;
     }
   }
+}
+
+function indicatorMessageId(input: {
+  readonly workingVerbSeed: string | undefined;
+  readonly messageId: string;
+}): string {
+  return input.workingVerbSeed ?? input.messageId;
 }

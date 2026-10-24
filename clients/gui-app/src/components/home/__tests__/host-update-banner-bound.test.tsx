@@ -308,6 +308,8 @@ function attemptStatus(
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
     install: null,
+    processMemory: null,
+    crossHostMessaging: null,
   };
 }
 
@@ -791,6 +793,8 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
                 updateTransaction: null,
                 storeFormats: null,
                 install: null,
+                processMemory: null,
+                crossHostMessaging: null,
               }
             : { ...attemptStatus(operation), updateProgress },
       });

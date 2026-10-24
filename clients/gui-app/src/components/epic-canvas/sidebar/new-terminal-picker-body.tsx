@@ -12,6 +12,12 @@
  * select from, but a terminal can still be launched "folderless" - bound to
  * the active host's default cwd from `worktree.listBindingsForEpic@1.1`.
  * `launchTarget` unifies both paths so callers only ever handle one shape.
+ *
+ * A picked New sandbox row stages a create (sandboxes redesign D9): the
+ * folder list gives way to the consequences block, and `Open terminal`
+ * creates the sandbox and settles with the setup line here. The launch on
+ * the new host is the tab's (`NewTerminalStagedHandoff`), so it happens
+ * whether or not this popover is still open.
  */
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
@@ -31,6 +37,23 @@ import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import {
+  useSandboxStaging,
+  useSandboxStagingTask,
+  type SandboxStaging,
+} from "@/components/composer/use-sandbox-staging";
+import {
+  useStagedSandboxSend,
+  type StagedSandboxSend,
+} from "@/components/composer/use-staged-sandbox-send";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { OPEN_TERMINAL } from "@/lib/sandboxes/sandbox-strings";
+import type { ConsequencesInput } from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  useStagedSandboxStore,
+  type StagedSandbox,
+} from "@/stores/composer/staged-sandbox-store";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 export interface NewTerminalPickerBodyProps {
@@ -106,13 +129,27 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   // A double-click on Launch fires the handler twice before React can flush
   // the state update that unmounts this body, so each click would mint a
   // fresh terminal. This synchronous latch collapses one open->launch session
-  // to a single terminal.
+  // to a single terminal, whichever path launches it: Launch, the shortcut,
+  // or the setup line's Open terminal.
   const hasLaunchedRef = useRef(false);
+  const launchOnce = useCallback(
+    (target: TerminalLaunchTarget) => {
+      if (hasLaunchedRef.current) return;
+      hasLaunchedRef.current = true;
+      onLaunch(target);
+    },
+    [onLaunch],
+  );
+  const { staging, stage, consequences, stagedSend } = useTerminalStagedLaunch({
+    epicId,
+    surfaceKey,
+    resolvedHostId: pin.resolvedHostId,
+    onLaunch: launchOnce,
+  });
   const handleLaunch = useCallback(() => {
-    if (hasLaunchedRef.current || launchTarget === null) return;
-    hasLaunchedRef.current = true;
-    onLaunch(launchTarget);
-  }, [launchTarget, onLaunch]);
+    if (stagedSend.intercept("terminal", null)) return;
+    if (launchTarget !== null) launchOnce(launchTarget);
+  }, [launchOnce, launchTarget, stagedSend]);
   usePrimaryActionShortcut(true, handleLaunch);
 
   let folderlessCwdStatus: ReactNode = null;
@@ -157,17 +194,28 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
           host's own row is still in the list, worded `offline` by the shared
           health vocabulary, so the pin is reselectable the moment it returns.
         */}
-        <WorktreePickerHostSection surfaceKey={surfaceKey} />
-        <WorktreeFolderListBody
-          isPending={bindingsQuery.isPending}
-          isError={bindingsQuery.isError}
-          rows={rows}
-          selectedRow={selectedRow}
-          secondaryLabel={(row) => row.runningDir}
-          onSelect={setExplicitRow}
-          autoFocusSearch={autoFocusSearch}
-          emptyMessage="No directories available. Open a workspace in the epic first."
+        <WorktreePickerHostSection
+          surfaceKey={surfaceKey}
+          composer={staging === null ? null : staging.composer}
         />
+        {consequences === null ? (
+          <WorktreeFolderListBody
+            isPending={bindingsQuery.isPending}
+            isError={bindingsQuery.isError}
+            rows={rows}
+            selectedRow={selectedRow}
+            secondaryLabel={(row) => row.runningDir}
+            onSelect={setExplicitRow}
+            autoFocusSearch={autoFocusSearch}
+            emptyMessage="No directories available. Open a workspace in the epic first."
+          />
+        ) : (
+          <div className="flex flex-col gap-2 p-2.5">
+            {stagedSend.line}
+            <ConsequencesBlock input={consequences} onMoveFirst={null} />
+          </div>
+        )}
+        {staging?.sheet}
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
         <div className="min-w-0 text-xs text-muted-foreground">
@@ -194,17 +242,13 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
             folderlessCwdStatus
           )}
         </div>
-        <Button
-          type="button"
-          size="sm"
-          aria-label="Launch"
-          aria-keyshortcuts="Meta+Enter Control+Enter"
-          disabled={launchTarget === null}
+        <TerminalLaunchButton
+          staged={stage !== null}
+          disabled={
+            stage === null ? launchTarget === null : stage.phase !== "staged"
+          }
           onClick={handleLaunch}
-        >
-          Launch
-          <PrimaryActionShortcutHint />
-        </Button>
+        />
       </div>
     </>
   );
@@ -254,4 +298,76 @@ function resolveFolderlessTerminalTarget(
     return null;
   }
   return { hostId, cwd };
+}
+
+/**
+ * The staging of the terminal picker's New sandbox rows: the picker's
+ * composer mode, and the send that creates the sandbox on `Open terminal`.
+ */
+function useTerminalStagedLaunch(input: {
+  readonly epicId: string;
+  readonly surfaceKey: string;
+  readonly resolvedHostId: string | null;
+  readonly onLaunch: (target: TerminalLaunchTarget) => void;
+}): {
+  readonly staging: SandboxStaging | null;
+  readonly stage: StagedSandbox | null;
+  readonly consequences: ConsequencesInput | null;
+  readonly stagedSend: StagedSandboxSend;
+} {
+  const { onLaunch, surfaceKey } = input;
+  const hostOptions = useHostOptions();
+  const task = useSandboxStagingTask(input.epicId);
+  const surface = useMemo(() => ({ surfaceKey, task }), [surfaceKey, task]);
+  const staging = useSandboxStaging({
+    surface,
+    memoryHostId: input.resolvedHostId,
+    hosts: hostOptions.hosts,
+  });
+  // Opened from the line before the handoff, the terminal is the one this
+  // stage was for: the stage ends so the handoff opens no second one.
+  const stagedTerminal = useMemo(
+    () => ({
+      epicId: input.epicId,
+      open: (target: TerminalLaunchTarget) => {
+        onLaunch(target);
+        useStagedSandboxStore.getState().clear(surfaceKey);
+      },
+    }),
+    [input.epicId, onLaunch, surfaceKey],
+  );
+  const stagedSend = useStagedSandboxSend({
+    surfaceKey,
+    terminal: stagedTerminal,
+    taskId: input.epicId,
+    ownerId: null,
+    claimsSend: false,
+  });
+  return {
+    staging,
+    stage: staging === null ? null : staging.stage,
+    consequences: staging === null ? null : staging.consequences,
+    stagedSend,
+  };
+}
+
+/** `Launch`, or `Open terminal` while a sandbox is staged. */
+function TerminalLaunchButton(props: {
+  readonly staged: boolean;
+  readonly disabled: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      aria-label={props.staged ? undefined : "Launch"}
+      aria-keyshortcuts="Meta+Enter Control+Enter"
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      {props.staged ? OPEN_TERMINAL : "Launch"}
+      <PrimaryActionShortcutHint />
+    </Button>
+  );
 }

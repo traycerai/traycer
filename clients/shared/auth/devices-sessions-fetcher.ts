@@ -14,6 +14,7 @@ import {
   type VerifyStepUpResponse,
 } from "@traycer/protocol/auth/devices-sessions";
 import type { z } from "zod";
+import { composeRequestAbort } from "./request-abort";
 
 const DEVICES_SESSIONS_FETCH_TIMEOUT_MS = 10_000;
 const STEP_UP_REQUIRED_REASON = "step_up_required";
@@ -90,19 +91,22 @@ function jsonHeaders(bearerToken: string): Record<string, string> {
   };
 }
 
+/** Statuses whose `Response` cannot carry a body, even an empty one. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([
+  101, 103, 204, 205, 304,
+]);
+
 /**
  * Every call is bounded by the same timeout. `callerSignal` additionally lets a
  * caller abandon the request early - today only the session list, whose reader
  * is a TanStack query that can be cancelled by a refetch, an unmount, or an
  * account switch. Callers with no cancellation of their own pass `null`.
+ *
+ * The timeout is `composeRequestAbort`, not `AbortSignal.timeout`/`any`, which
+ * the iOS WebView floor lacks (see `request-abort.ts`). It must be cleared
+ * once the request settles, so the body is read here, under the same bound,
+ * and handed back buffered; a body that cannot be read is a failed request.
  */
-function requestSignal(callerSignal: AbortSignal | null): AbortSignal {
-  const timeout = AbortSignal.timeout(DEVICES_SESSIONS_FETCH_TIMEOUT_MS);
-  return callerSignal === null
-    ? timeout
-    : AbortSignal.any([callerSignal, timeout]);
-}
-
 async function fetchAuthn(
   authnBaseUrl: string,
   path: string,
@@ -110,14 +114,26 @@ async function fetchAuthn(
   init: Omit<RequestInit, "headers" | "signal">,
   callerSignal: AbortSignal | null,
 ): Promise<Response | null> {
+  const abort = composeRequestAbort(
+    callerSignal,
+    DEVICES_SESSIONS_FETCH_TIMEOUT_MS,
+  );
   try {
-    return await fetch(authnApiUrl(authnBaseUrl, path), {
+    const response = await fetch(authnApiUrl(authnBaseUrl, path), {
       ...init,
       headers: jsonHeaders(bearerToken),
-      signal: requestSignal(callerSignal),
+      signal: abort.signal,
+    });
+    const text = await response.text();
+    return new Response(NULL_BODY_STATUSES.has(response.status) ? null : text, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
     });
   } catch {
     return null;
+  } finally {
+    abort.clear();
   }
 }
 

@@ -23,15 +23,28 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 import { useOfferableEditors } from "../use-offerable-editors";
 
 const ALL_EDITOR_IDS = EDITORS.map((editor) => editor.id);
+const NEWER_THAN_V11_IDS = ["code-oss"];
 
 describe("useOfferableEditors", () => {
-  it("offers every registry editor, vscodium included, on a 1.1 host", () => {
-    state.version = { major: 1, minor: 1 };
+  it("offers every registry editor on a 1.3 host", () => {
+    state.version = { major: 1, minor: 3 };
     const { result } = renderHook(() => useOfferableEditors("host-A"));
     expect(result.current.map((editor) => editor.id)).toEqual(ALL_EDITOR_IDS);
-    expect(result.current.some((editor) => editor.id === "vscodium")).toBe(
+    expect(result.current.some((editor) => editor.id === "code-oss")).toBe(
       true,
     );
+  });
+
+  it("offers vscodium but not code-oss on a 1.1 or 1.2 host", () => {
+    for (const minor of [1, 2]) {
+      state.version = { major: 1, minor };
+      const { result } = renderHook(() => useOfferableEditors("host-A"));
+      const offeredIds = result.current.map((editor) => editor.id);
+      expect(offeredIds).toContain("vscodium");
+      for (const id of NEWER_THAN_V11_IDS) {
+        expect(offeredIds).not.toContain(id);
+      }
+    }
   });
 
   it("excludes vscodium on a 1.0 host while keeping every other registry editor", () => {
@@ -39,21 +52,23 @@ describe("useOfferableEditors", () => {
     const { result } = renderHook(() => useOfferableEditors("host-A"));
     const offeredIds = result.current.map((editor) => editor.id);
     expect(offeredIds).not.toContain("vscodium");
+    expect(offeredIds).not.toContain("code-oss");
     for (const id of ALL_EDITOR_IDS) {
-      if (id === "vscodium") continue;
+      if (id === "vscodium" || id === "code-oss") continue;
       expect(offeredIds).toContain(id);
     }
-    expect(offeredIds).toHaveLength(ALL_EDITOR_IDS.length - 1);
+    expect(offeredIds).toHaveLength(ALL_EDITOR_IDS.length - 2);
   });
 
   it("excludes vscodium before any handshake has completed (fails closed)", () => {
     state.version = null;
     const { result } = renderHook(() => useOfferableEditors("host-A"));
     expect(result.current.map((editor) => editor.id)).not.toContain("vscodium");
+    expect(result.current.map((editor) => editor.id)).not.toContain("code-oss");
   });
 
   it("returns a referentially stable array across re-renders with an unchanged version", () => {
-    state.version = { major: 1, minor: 1 };
+    state.version = { major: 1, minor: 3 };
     const { result, rerender } = renderHook(() =>
       useOfferableEditors("host-A"),
     );

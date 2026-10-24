@@ -23,7 +23,7 @@ import {
   type ModelOption,
 } from "@/components/home/data/landing-options";
 import {
-  useGuiHarnessCatalogForClient,
+  useGuiHarnessCatalogForClientLine,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
@@ -34,6 +34,7 @@ import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-com
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
 import {
   getActiveModelPicker,
+  getActiveModelPickerSummary,
   subscribeActiveModelPicker,
 } from "@/lib/commands/active-model-picker-registry";
 import type {
@@ -87,6 +88,11 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     getActiveModelPicker,
     getActiveModelPicker,
   );
+  const selectionSummary = useSyncExternalStore(
+    subscribeActiveModelPicker,
+    getActiveModelPickerSummary,
+    getActiveModelPickerSummary,
+  );
 
   // Provider/model leaves fetch live host data only when their sub-pages
   // render, so opening the top-level palette does not eagerly hit SDKs.
@@ -98,10 +104,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     if (kind === null) return items;
     if (activeModelPicker !== null) {
       items.push(
-        buildChangeModelItem(
-          modelPickerShortcut ?? null,
-          activeModelPicker.getSelectionSummary(),
-        ),
+        buildChangeModelItem(modelPickerShortcut ?? null, selectionSummary),
       );
     }
     items.push(buildSwitchProviderItem());
@@ -125,6 +128,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     draftsShortcut,
     draftsControlActive,
     activeModelPicker,
+    selectionSummary,
   ]);
 }
 
@@ -312,10 +316,12 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   // provider on the focused composer's host. The subpages list what the host's
   // cache already holds: at least the focused composer's selected harness,
   // which its toolbar query warms on mount, growing as the user browses
-  // providers in that picker.
-  return useGuiHarnessCatalogForClient(
+  // providers in that picker. OpenCode's models are the focused chat's line,
+  // the entries its toolbar warms.
+  return useGuiHarnessCatalogForClientLine(
     entry === null ? defaultClient : entry.hostClient,
     null,
+    entry === null ? null : entry.opencodeLine,
     { enabled: true, subscribed: true, modelsFetch: "cached-only" },
   );
 }

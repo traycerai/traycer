@@ -1,5 +1,11 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 
 /**
@@ -81,7 +87,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return { ...actual, useHostClient: () => APP_WIDE_HOST_CLIENT };
 });
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -90,6 +96,19 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => TAB_HOST_ID,
+}));
+
+// The attachment before a fork onto a team's host: passed straight through,
+// so every fork here goes on to `epic.createChat` as it did before.
+vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
+  isAttachEnvironmentUnsupported: () => false,
+  toastAttachEnvironmentNeedsOwnHost: () => undefined,
+  useEpicAttachEnvironment: () => ({
+    isPending: false,
+    mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {
+      options.onSuccess();
+    },
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -157,6 +176,32 @@ vi.mock(
 
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
 
+// The app-wide client (`useHostClient()`), which the dialog reads its active
+// host from; no RPC of it is answered here.
+function buildAppWideHostClient(): HostClient<HostRpcRegistry> {
+  const entry = {
+    hostId: "app-wide-host-id",
+    label: "app-wide-host-id",
+    kind: "local" as const,
+    websocketUrl: "ws://127.0.0.1:0/app-wide-host-id",
+    version: "0.0.0-mock",
+    transportDialability: "dialable" as const,
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => {} },
+    findHostById: (id) => (id === entry.hostId ? entry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-app-wide",
+      handlers: {},
+    }),
+  });
+  return spine.createRequester(entry);
+}
+
+const APP_WIDE_HOST_CLIENT = buildAppWideHostClient();
+
 function forkTarget(): ChatForkDialogTarget {
   return {
     sourceChatId: "source-chat",
@@ -181,6 +226,7 @@ function forkTarget(): ChatForkDialogTarget {
     carriedInterviews: "settled",
     forkMode: "plain",
     initialHostId: null,
+    onlyHostIds: null,
   };
 }
 

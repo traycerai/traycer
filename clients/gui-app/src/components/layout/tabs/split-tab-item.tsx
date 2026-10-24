@@ -73,9 +73,9 @@ export interface SplitTabItemProps {
 }
 
 /**
- * One reorder frame owns the split control and both members. A persistent
- * accent underline communicates their group membership, while only the
- * focused member draws ordinary selected-tab chrome.
+ * One reorder frame owns the split control and both members. While the pair
+ * is selected, the focused member is raised and the accent underline runs
+ * under the control and the other member (`SplitMemberChrome`).
  */
 export const SplitTabItem = memo(function SplitTabItem(
   props: SplitTabItemProps,

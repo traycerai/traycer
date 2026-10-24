@@ -29,7 +29,12 @@ export function holdEpicBatchDelete(
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const variables: BatchDeleteEpicVariables = { ids, worktreeCleanup: null };
+  const variables: BatchDeleteEpicVariables = {
+    ids,
+    isLocalHomedNow: () => false,
+    boundUserId: "user-1",
+    worktreeCleanup: null,
+  };
   const mutation = queryClient
     .getMutationCache()
     .build<void, Error, BatchDeleteEpicVariables, unknown>(queryClient, {

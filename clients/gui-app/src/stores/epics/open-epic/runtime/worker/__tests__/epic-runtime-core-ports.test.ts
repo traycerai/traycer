@@ -81,6 +81,7 @@ function createSource(
     markChatRecordListNotAuthoritative: () => {},
     beginPendingChatCreation: () => {},
     clearPendingChatCreation: () => {},
+    expirePendingChatCreationForCloudRow: () => {},
     republishRecordsForCurrentUser: () => {},
     reprojectForViewerChange: () => {},
     discardUnsyncedEdits: () => {},

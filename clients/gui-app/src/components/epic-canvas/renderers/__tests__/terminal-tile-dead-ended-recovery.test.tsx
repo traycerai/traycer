@@ -33,6 +33,11 @@ const testState = vi.hoisted(() => ({
     unavailability: null as string | null,
   },
   onSessionLost: vi.fn(),
+  handleArgs: [] as Array<{
+    readonly enabled: boolean;
+    readonly cols: number;
+    readonly rows: number;
+  }>,
 }));
 
 // A handle whose lifecycle status starts healthy and is flipped in-test, to
@@ -113,8 +118,14 @@ vi.mock(
       >();
     return {
       ...actual,
-      useTerminalSessionHandle: (args: { readonly enabled: boolean }) =>
-        args.enabled ? recoveryHandle : null,
+      useTerminalSessionHandle: (args: {
+        readonly enabled: boolean;
+        readonly cols: number;
+        readonly rows: number;
+      }) => {
+        testState.handleArgs.push(args);
+        return args.enabled ? recoveryHandle : null;
+      },
     };
   },
 );
@@ -199,6 +210,8 @@ vi.mock("../terminal-quote/terminal-quote-overlay", () => ({
   TerminalQuoteOverlay: () => null,
 }));
 
+import { __disposeAllXtermHostsForTests } from "../xterm-host-registry";
+import { acquireMountedXtermEngine } from "./xterm-host-entry-fixture";
 import { TerminalTile } from "../terminal-tile";
 
 const EPIC_ID = "epic-1";
@@ -273,6 +286,7 @@ describe("<TerminalTile /> automatic recovery on a dead-ended handle", () => {
     testState.canMutate = true;
     testState.closeMutateAsync.mockReset();
     testState.onSessionLost.mockReset();
+    testState.handleArgs = [];
     testState.reachability = {
       status: "reachable",
       hostLabel: "Host A",
@@ -284,6 +298,7 @@ describe("<TerminalTile /> automatic recovery on a dead-ended handle", () => {
 
   afterEach(() => {
     cleanup();
+    __disposeAllXtermHostsForTests();
     vi.useRealTimers();
   });
 
@@ -319,4 +334,40 @@ describe("<TerminalTile /> automatic recovery on a dead-ended handle", () => {
       expect(testState.onSessionLost).toHaveBeenCalledTimes(1);
     },
   );
+
+  // A reopened terminal in a pane that cannot measure itself falls back to the
+  // kept-alive engine's grid after the measure wait. The engine's grid moves
+  // while the tile waits (the host echoes a new effective size); a stale memo
+  // of the first peek subscribed the session at the old grid.
+  it("subscribes at the kept-alive engine's grid as it is when the measure wait ends", () => {
+    const fixture = openHostTerminalFixture();
+    const term = acquireMountedXtermEngine({
+      instanceId: "inst-terminal-previous",
+      sessionId: fixture.node.id,
+      hostId: HOST_ID,
+      cols: 110,
+      rows: 35,
+    });
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.node}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+    term.resize(140, 45);
+    act(() => {
+      vi.advanceTimersByTime(MEASURE_GRID_TIMEOUT_MS);
+    });
+
+    expect(testState.handleArgs.at(-1)).toMatchObject({
+      enabled: true,
+      cols: 140,
+      rows: 45,
+    });
+  });
 });

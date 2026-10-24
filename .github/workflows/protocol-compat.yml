@@ -36,8 +36,8 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
-  # Check a branch against the released baselines before merging it:
-  # `gh workflow run protocol-compat.yml --ref <branch>`.
+  # A manual trigger for a sparing branch run, when a check is actually
+  # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:
@@ -52,13 +52,13 @@ concurrency:
 
 jobs:
   protocol-compat:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # `labeled` is only needed so `guarded-files-tripwire` can re-evaluate once
     # the override label is added, without waiting for a new push. This job
     # doesn't read labels at all, so skip it there - otherwise every unrelated
     # label add reruns the full multi-baseline dump/check for nothing.
-    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
-    # PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main` skips this job: the merge to `main` runs it once.
+    # A fork PR, a bot PR and a PR into any other branch run it in full.
     if: >-
       (
         github.event_name != 'pull_request'
@@ -180,7 +180,7 @@ jobs:
           bunx vitest run host-transport/__tests__/released-baseline-handshake.test.ts
 
   guarded-files-tripwire:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Runs only where CI runs on a pull request: a fork PR, a bot PR, or a PR
     # into a base other than `main`. On the push run no job reports a guarded-file
     # edit as an edit: the `protocol-compat` job reads the edited exceptions and

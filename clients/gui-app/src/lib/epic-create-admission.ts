@@ -1,4 +1,10 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { EpicCreateOwner } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 
 /**
  * The `epic.create` minor from which the create is known to be LOCAL-FIRST -
@@ -43,4 +49,68 @@ export function negotiatedCreateServesLocalFirst(
 ): boolean {
   if (version === null || version === false) return false;
   return version.major === 1 && version.minor >= EPIC_CREATE_LOCAL_FIRST_MINOR;
+}
+
+/**
+ * The `epic.create` minor that carries `owner`. A `@1.2` host's frozen request
+ * strips the key, so a team create sent to it would land as the person's own
+ * epic.
+ */
+export const EPIC_CREATE_TEAM_OWNER_MINOR = 3;
+
+/** Verbatim: the host predates `epic.create@1.3`. */
+export const TEAM_CREATE_HOST_TOO_OLD =
+  "This host can't create team tasks yet. Update the host.";
+
+/** Verbatim: the cloud refused a team create (`FORBIDDEN`). */
+export function teamCreateForbiddenLine(slug: string): string {
+  return `You're not a member of ${slug}.`;
+}
+
+/**
+ * The floor a create pays before any frame: a team owner requires
+ * `epic.create@1.3`, which is also above the local-first floor; otherwise the
+ * local-first floor for a session with no cloud verdict, and none for a
+ * signed-in one.
+ */
+export function epicCreateFloor(input: {
+  readonly owner: EpicCreateOwner | null;
+  readonly cloudAuthorized: boolean;
+}): RequiredHostMethodVersion | null {
+  if (input.owner?.kind === "team") {
+    return {
+      method: "epic.create",
+      version: { major: 1, minor: EPIC_CREATE_TEAM_OWNER_MINOR },
+    };
+  }
+  if (input.cloudAuthorized) return null;
+  return {
+    method: "epic.create",
+    version: { major: 1, minor: EPIC_CREATE_LOCAL_FIRST_MINOR },
+  };
+}
+
+/**
+ * What a rejected team create says, or `null` to leave the error to the
+ * generic toast: the transport's `@1.3` floor refusal, and the cloud's
+ * `FORBIDDEN` keyed on the code alone, never on the message.
+ */
+export function teamCreateRejectionMessage(
+  error: unknown,
+  teamSlug: string | null,
+): string | null {
+  if (error instanceof HostMethodVersionUnsatisfiedError) {
+    return error.requirement.method === "epic.create" &&
+      error.requirement.version.minor >= EPIC_CREATE_TEAM_OWNER_MINOR
+      ? TEAM_CREATE_HOST_TOO_OLD
+      : null;
+  }
+  if (
+    error instanceof HostRpcError &&
+    error.code === "FORBIDDEN" &&
+    teamSlug !== null
+  ) {
+    return teamCreateForbiddenLine(teamSlug);
+  }
+  return null;
 }

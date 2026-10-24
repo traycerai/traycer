@@ -102,6 +102,22 @@ export interface RemoteSessionIdentity {
    * would be wrong.
    */
   readonly authEpoch: string;
+  /**
+   * What `OPEN` presents: the user bearer (a personal host) or a host-bound
+   * session grant (a `kind: sandbox` host). Part of the identity
+   * because the factory wires the grant provider and a cache hit never re-runs
+   * it: a sandbox row that briefly projects as a personal host (a stale
+   * directory read) would otherwise build a user-bearer session that every
+   * later session-grant consumer adopts, sending the user's bearer to a
+   * machine whose kernel the user does not own. A host's kind is fixed for
+   * its life, so a mismatch means the other entry came from a stale read, and
+   * it is superseded like a rotated key.
+   *
+   * `pool-bearer` is a session to the server pool (`createPoolHostTransport`):
+   * the user bearer on a direct leg with no grant behind it. It never shares a
+   * connection with a host's session, whatever else matches.
+   */
+  readonly openAuth: "user-bearer" | "session-grant" | "pool-bearer";
 }
 
 interface CacheEntry {
@@ -278,6 +294,7 @@ export function remoteSessionCacheKey(identity: RemoteSessionIdentity): string {
     identity.relayAttachUrl,
     identity.authRecovery,
     identity.authEpoch,
+    identity.openAuth,
   ].join(KEY_SEPARATOR);
 }
 
@@ -652,7 +669,8 @@ function closeSupersededIdentities(
       entry.identity.userId === identity.userId &&
       entry.identity.hostPublicKey === identity.hostPublicKey &&
       entry.identity.relayAttachUrl === identity.relayAttachUrl &&
-      entry.identity.authEpoch === identity.authEpoch
+      entry.identity.authEpoch === identity.authEpoch &&
+      entry.identity.openAuth === identity.openAuth
     ) {
       // Same user, same physical identity AND the same auth context.
       // `key !== currentKey` therefore means it differs ONLY in `authRecovery`

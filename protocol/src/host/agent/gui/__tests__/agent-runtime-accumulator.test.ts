@@ -468,6 +468,107 @@ describe("accumulateEvent", () => {
     expect((blocks[0] as ToolCallBlock).agentMessageReceipt).toEqual(receipt);
   });
 
+  describe("agentMessageDelivery (cross-host send state)", () => {
+    const queued = {
+      targetHostId: "host-2",
+      eventId: "evt-1",
+      state: "queued" as const,
+      targetHostOffline: false,
+    };
+
+    it("tool_call.completed stamps the delivery onto the started block", () => {
+      let blocks = makeBlocks();
+      blocks = accumulateEvent(blocks, {
+        type: "tool_call.started",
+        blockId: "tc1",
+        timestamp: 1,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "tool_call.completed",
+        blockId: "tc1",
+        timestamp: 2,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+        agentMessageDelivery: queued,
+        imageResults: [],
+      });
+      expect((blocks[0] as ToolCallBlock).agentMessageDelivery).toEqual(queued);
+    });
+
+    it("tool_call.completed stamps the delivery onto a block with no prior started event", () => {
+      const blocks = accumulateEvent(makeBlocks(), {
+        type: "tool_call.completed",
+        blockId: "tc-delivery-only",
+        timestamp: 3,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+        agentMessageDelivery: queued,
+        imageResults: [],
+      });
+      expect(blocks).toHaveLength(1);
+      expect((blocks[0] as ToolCallBlock).agentMessageDelivery).toEqual(queued);
+    });
+
+    it("a re-completion without it keeps the delivery, and a later one moves the state", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "tool_call.completed",
+        blockId: "tc1",
+        timestamp: 2,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+        agentMessageDelivery: queued,
+        imageResults: [],
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "tool_call.completed",
+        blockId: "tc1",
+        timestamp: 3,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+        imageResults: [],
+      });
+      expect((blocks[0] as ToolCallBlock).agentMessageDelivery).toEqual(queued);
+
+      blocks = accumulateEvent(blocks, {
+        type: "tool_call.completed",
+        blockId: "tc1",
+        timestamp: 4,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+        agentMessageDelivery: { ...queued, state: "delivered" },
+        imageResults: [],
+      });
+      expect((blocks[0] as ToolCallBlock).agentMessageDelivery).toEqual({
+        ...queued,
+        state: "delivered",
+      });
+    });
+
+    it("started and errored blocks carry a null delivery", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "tool_call.started",
+        blockId: "tc1",
+        timestamp: 1,
+        toolName: "traycer_send_message",
+        agentMessageSend: null,
+      });
+      expect((blocks[0] as ToolCallBlock).agentMessageDelivery).toBeNull();
+
+      blocks = accumulateEvent(makeBlocks(), {
+        type: "tool_call.errored",
+        blockId: "tc2",
+        timestamp: 2,
+        toolName: "traycer_send_message",
+        error: "boom",
+        terminationReason: "error",
+        agentMessageSend: null,
+      });
+      expect((blocks[0] as ToolCallBlock).agentMessageDelivery).toBeNull();
+    });
+  });
+
   it("tool_call events preserve detached background task timing", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
@@ -1667,6 +1768,256 @@ describe("accumulateEvent", () => {
 
     expect(blocks[0].status).toBe("completed");
     expect((blocks[0] as CompactionBlock).error).toBeNull();
+  });
+
+  describe("compaction notApplied outcome", () => {
+    function expectCompactionBlock(
+      block: ContentBlock | undefined,
+    ): CompactionBlock {
+      if (block?.type !== "compaction") {
+        throw new Error("Expected a compaction block");
+      }
+      return block;
+    }
+
+    it("inserts an errored compaction with an absent flag as a plain failure", () => {
+      const blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-plain",
+        timestamp: 1,
+        error: "boom",
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.status).toBe("errored");
+      expect(block.error).toBe("boom");
+      expect(block.notApplied).toBe(false);
+    });
+
+    it("inserts an errored compaction with an explicit false flag as a plain failure", () => {
+      const blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-false",
+        timestamp: 1,
+        error: "boom",
+        notApplied: false,
+      });
+
+      expect(expectCompactionBlock(blocks[0]).notApplied).toBe(false);
+    });
+
+    it("inserts an errored compaction with the flag set as not applied", () => {
+      const blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-true",
+        timestamp: 1,
+        trigger: "auto",
+        preTokens: 900,
+        error: "Copilot did not apply this compaction.",
+        notApplied: true,
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.status).toBe("errored");
+      expect(block.notApplied).toBe(true);
+      expect(block.trigger).toBe("auto");
+      expect(block.preTokens).toBe(900);
+      expect(block.error).toBe("Copilot did not apply this compaction.");
+    });
+
+    it("updates an existing streaming compaction to errored with each flag value", () => {
+      const started = accumulateEvent(makeBlocks(), {
+        type: "compaction.started",
+        blockId: "compact-update",
+        timestamp: 1,
+        trigger: "manual",
+        preTokens: 500,
+      });
+
+      const absent = accumulateEvent(started, {
+        type: "compaction.errored",
+        blockId: "compact-update",
+        timestamp: 2,
+        error: "boom",
+      });
+      const explicitFalse = accumulateEvent(started, {
+        type: "compaction.errored",
+        blockId: "compact-update",
+        timestamp: 2,
+        error: "boom",
+        notApplied: false,
+      });
+      const flagged = accumulateEvent(started, {
+        type: "compaction.errored",
+        blockId: "compact-update",
+        timestamp: 2,
+        error: "not applied",
+        notApplied: true,
+      });
+
+      expect(absent).toHaveLength(1);
+      expect(expectCompactionBlock(absent[0]).notApplied).toBe(false);
+      expect(explicitFalse).toHaveLength(1);
+      const explicitFalseBlock = expectCompactionBlock(explicitFalse[0]);
+      expect(explicitFalseBlock.status).toBe("errored");
+      expect(explicitFalseBlock.notApplied).toBe(false);
+      expect(flagged).toHaveLength(1);
+      const flaggedBlock = expectCompactionBlock(flagged[0]);
+      expect(flaggedBlock.status).toBe("errored");
+      expect(flaggedBlock.notApplied).toBe(true);
+      expect(flaggedBlock.trigger).toBe("manual");
+      expect(flaggedBlock.preTokens).toBe(500);
+    });
+
+    it("a later errored event with no flag clears an earlier true", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-flip",
+        timestamp: 1,
+        error: "not applied",
+        notApplied: true,
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "compaction.errored",
+        blockId: "compact-flip",
+        timestamp: 2,
+        error: "real failure",
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.notApplied).toBe(false);
+      expect(block.error).toBe("real failure");
+    });
+
+    it("a later errored event with an explicit false clears an earlier true", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-flip-false",
+        timestamp: 1,
+        error: "not applied",
+        notApplied: true,
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "compaction.errored",
+        blockId: "compact-flip-false",
+        timestamp: 2,
+        error: "real failure",
+        notApplied: false,
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.notApplied).toBe(false);
+      expect(block.error).toBe("real failure");
+    });
+
+    it("compaction.started clears a stale true flag on the existing block", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-retry",
+        timestamp: 1,
+        error: "not applied",
+        notApplied: true,
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "compaction.started",
+        blockId: "compact-retry",
+        timestamp: 2,
+        trigger: "manual",
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.status).toBe("streaming");
+      expect(block.notApplied).toBe(false);
+    });
+
+    it("compaction.completed clears a stale true flag on the existing block", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.errored",
+        blockId: "compact-recovered",
+        timestamp: 1,
+        error: "not applied",
+        notApplied: true,
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "compaction.completed",
+        blockId: "compact-recovered",
+        timestamp: 2,
+        postTokens: 100,
+        durationMs: 10,
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.status).toBe("completed");
+      expect(block.notApplied).toBe(false);
+    });
+
+    it("started and completed inserts without a prior block carry a false flag", () => {
+      const started = accumulateEvent(makeBlocks(), {
+        type: "compaction.started",
+        blockId: "compact-new-started",
+        timestamp: 1,
+        trigger: "auto",
+      });
+      const completed = accumulateEvent(makeBlocks(), {
+        type: "compaction.completed",
+        blockId: "compact-new-completed",
+        timestamp: 1,
+        postTokens: 1,
+        durationMs: 1,
+      });
+
+      expect(expectCompactionBlock(started[0]).notApplied).toBe(false);
+      expect(expectCompactionBlock(completed[0]).notApplied).toBe(false);
+    });
+
+    it("turn finalization of a streaming compaction preserves a true flag", () => {
+      // A block adopted from persisted state can already be streaming with the
+      // flag set; no event sequence builds that, so the input is seeded.
+      const seeded: CompactionBlock = {
+        blockId: "compact-finalize",
+        timestamp: 1,
+        parentBlockId: null,
+        type: "compaction",
+        status: "streaming",
+        trigger: "manual",
+        preTokens: 10,
+        postTokens: null,
+        durationMs: null,
+        summary: null,
+        error: null,
+        notApplied: true,
+      };
+
+      const blocks = accumulateEvent([seeded], {
+        type: "turn.completed",
+        blockId: "turn",
+        timestamp: 5,
+        turnId: "turn",
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.status).toBe("errored");
+      expect(block.error).toBe("Compaction did not finish");
+      expect(block.notApplied).toBe(true);
+    });
+
+    it("turn finalization of a streaming compaction without the flag stays a failure", () => {
+      let blocks = accumulateEvent(makeBlocks(), {
+        type: "compaction.started",
+        blockId: "compact-finalize-plain",
+        timestamp: 1,
+      });
+      blocks = accumulateEvent(blocks, {
+        type: "turn.completed",
+        blockId: "turn",
+        timestamp: 5,
+        turnId: "turn",
+      });
+
+      const block = expectCompactionBlock(blocks[0]);
+      expect(block.status).toBe("errored");
+      expect(block.notApplied).toBe(false);
+    });
   });
 
   it("backfills framing when interview.resolved arrives before interview.requested", () => {

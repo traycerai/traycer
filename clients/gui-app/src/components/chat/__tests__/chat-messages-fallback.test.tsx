@@ -3033,12 +3033,14 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
 
   const R1_DISPLAY_CONTEXT: RenderedMessagesDisplayContext = {
     resolveUserSenderLabel: () => "You",
+    resolveUserSenderAvatarUrl: () => null,
     resolveAgentSenderDisplay: () => ({
       senderLabel: "Codex",
       providerLabel: "Codex",
       modelLabel: null,
     }),
     resolveAgentReasoningLabel: () => null,
+    resolveAgentServiceTierLabel: () => null,
     contentBlocksPreview: () => "",
   };
 

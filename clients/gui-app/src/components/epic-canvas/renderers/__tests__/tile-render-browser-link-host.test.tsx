@@ -99,9 +99,18 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
+vi.mock("@/hooks/host/use-request-context-user-id", () => ({
+  useRequestContextUserId: (client: object | null) =>
+    client === null ? null : "user-test",
+}));
+vi.mock("@/lib/host/transport-key", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/transport-key")>()),
+  remoteAwareOwnerIdentityKey: (_entry: unknown, userId: string | null) =>
+    userId === null ? null : "owner-key",
+}));
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  authenticatedHostStreamKey: () => "stream-key",
-  authenticatedOwnerIdentityKey: () => "owner-key",
+  hostStreamTransportKeyFor: (_entry: unknown, userId: string | null) =>
+    userId === null ? null : "stream-key",
 }));
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-const testState = vi.hoisted(() => ({ pathname: "/epics" }));
+const testState = vi.hoisted(() => ({ pathname: "/epics", mobile: false }));
 
 vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({ navigate: vi.fn() }),
@@ -14,8 +14,14 @@ vi.mock("@tanstack/react-router", () => ({
   }) => select({ location: { pathname: testState.pathname } }),
 }));
 
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => testState.mobile,
+}));
+
 vi.mock("@/components/settings/settings-sidebar", () => ({
-  SettingsSidebar: () => <div data-testid="settings-sidebar-probe" />,
+  SettingsSidebar: (props: { readonly variant: string }) => (
+    <div data-testid="settings-sidebar-probe" data-variant={props.variant} />
+  ),
 }));
 
 vi.mock("@/components/settings/settings-modal-content", () => ({
@@ -30,6 +36,7 @@ describe("<SettingsSurface />", () => {
   afterEach(() => {
     cleanup();
     testState.pathname = "/epics";
+    testState.mobile = false;
   });
 
   it("keeps its remembered section while a split partner owns the route", () => {
@@ -60,5 +67,28 @@ describe("<SettingsSurface />", () => {
         .getByTestId("settings-panel-probe")
         .closest("[data-settings-panel-pane]"),
     ).not.toBeNull();
+  });
+
+  it("renders the rail on a wide layout and no sidebar on a phone with a section open", () => {
+    testState.pathname = "/settings/appearance";
+    const wide = render(<SettingsSurface lastPath={null} />);
+    expect(screen.getByTestId("settings-sidebar-probe").dataset.variant).toBe(
+      "rail",
+    );
+    wide.unmount();
+
+    testState.mobile = true;
+    render(<SettingsSurface lastPath={null} />);
+    expect(screen.queryByTestId("settings-sidebar-probe")).toBeNull();
+  });
+
+  it("renders the section list on a phone at the index", () => {
+    testState.mobile = true;
+    testState.pathname = "/settings";
+    render(<SettingsSurface lastPath={null} />);
+
+    expect(screen.getByTestId("settings-sidebar-probe").dataset.variant).toBe(
+      "mobile-list",
+    );
   });
 });

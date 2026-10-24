@@ -10,6 +10,7 @@ import {
   type HostNotificationKind,
   type HostNotificationsSurface,
 } from "@traycer/protocol/host/notifications/contracts";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Cross-surface conformance: for EVERY registered serving path and EVERY
@@ -105,6 +106,188 @@ const REPRESENTATIVE_ENTRIES: Readonly<
     outcome: null,
     resolvedAt: null,
     payload: { sessionId: "session-1", tabId: "tab-1", reason: "Sign in" },
+  },
+  "secret.grant.requested": {
+    ...ENTRY_BASE,
+    kind: "secret.grant.requested",
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    payload: { requestId: "request-1", hostId: "host-1" },
+  },
+  "secret.export.minted": {
+    ...ENTRY_BASE,
+    kind: "secret.export.minted",
+    severity: "info",
+    outcome: "completed",
+    payload: { secretName: "deploy-key", hostId: "host-1" },
+  },
+  "secret.rotated": {
+    ...ENTRY_BASE,
+    kind: "secret.rotated",
+    severity: "done",
+    outcome: "completed",
+    payload: {
+      kind: "secret_rotated",
+      secretName: "deploy-key",
+      secretId: "secret-1",
+      environmentId: "env-1",
+      rotationId: "rotation-1",
+      state: "enforced",
+      evidence: [],
+    },
+  },
+  "team.member.removed": {
+    ...ENTRY_BASE,
+    kind: "team.member.removed",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_member_removed",
+      environmentId: "env-1",
+      teamName: "Acme",
+      memberName: "Sam",
+      hosts: [],
+    },
+  },
+  "team.member.joined": {
+    ...ENTRY_BASE,
+    kind: "team.member.joined",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_member_joined",
+      environmentId: "env-1",
+      teamName: "Acme",
+      memberName: "Sam",
+      toNewcomer: false,
+    },
+  },
+  "team.policy.unapplied": {
+    ...ENTRY_BASE,
+    kind: "team.policy.unapplied",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_policy_unapplied",
+      environmentId: "env-1",
+      teamName: "Acme",
+      policyVersion: 3,
+    },
+  },
+  "team.policy.authority_expired": {
+    ...ENTRY_BASE,
+    kind: "team.policy.authority_expired",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_policy_authority_expired",
+      environmentId: "env-1",
+      teamName: "Acme",
+      hostId: "host-1",
+      hostName: "Build host",
+    },
+  },
+  "team.installing_admin.gone": {
+    ...ENTRY_BASE,
+    kind: "team.installing_admin.gone",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_installing_admin_gone",
+      environmentId: "env-1",
+      teamName: "Acme",
+      adminName: "Sam",
+      reason: "left",
+    },
+  },
+  "team.plan.unlinked": {
+    ...ENTRY_BASE,
+    kind: "team.plan.unlinked",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_plan_unlinked",
+      environmentId: "env-1",
+      teamName: "Acme",
+    },
+  },
+  "team.pods.full": {
+    ...ENTRY_BASE,
+    kind: "team.pods.full",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_pods_full",
+      environmentId: "env-1",
+      teamName: "Acme",
+      podCount: 4,
+    },
+  },
+  "environment.move.stalled": {
+    ...ENTRY_BASE,
+    kind: "environment.move.stalled",
+    severity: "failure",
+    outcome: "errored",
+    payload: {
+      kind: "environment_move_stalled",
+      environmentId: "env-1",
+      hostId: "host-1",
+      hostName: "MacBook Pro",
+      remaining: 3,
+      reason: "upload_timed_out",
+    },
+  },
+  "environment.apply.failed": {
+    ...ENTRY_BASE,
+    kind: "environment.apply.failed",
+    severity: "failure",
+    outcome: "errored",
+    payload: {
+      kind: "environment_apply_failed",
+      environmentId: "env-1",
+      hostId: "host-1",
+      hostName: "dev-box",
+      itemKey: "PATH",
+      reason: "native_write_failed",
+    },
+  },
+  "team.role.changed": {
+    ...ENTRY_BASE,
+    kind: "team.role.changed",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_role_changed",
+      environmentId: "env-1",
+      teamName: "Acme",
+      from: "viewer",
+      to: "editor",
+    },
+  },
+  "team.host.returned": {
+    ...ENTRY_BASE,
+    kind: "team.host.returned",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_host_returned",
+      environmentId: "env-1",
+      teamName: "Acme",
+      hostName: "MacBook Pro",
+    },
+  },
+  "secret.removed": {
+    ...ENTRY_BASE,
+    kind: "secret.removed",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "secret_removed",
+      environmentId: "env-1",
+      secretName: "STRIPE_KEY",
+      outcome: "destroyed",
+    },
   },
   "host.operation.finished": {
     ...ENTRY_BASE,
@@ -221,7 +404,7 @@ function carriesNotificationEntries(contract: unknown): boolean {
   );
   return schemas.some(([, schema]) => {
     const dump = JSON.stringify(
-      z.toJSONSchema(schema as z.ZodType, { unrepresentable: "any" }),
+      toCanonicalJsonSchema(schema as z.ZodType, { unrepresentable: "any" }),
     );
     return ALL_HOST_NOTIFICATION_KINDS.some((kind) =>
       dump.includes(`"${kind}"`),

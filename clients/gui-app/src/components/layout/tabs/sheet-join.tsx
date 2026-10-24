@@ -12,6 +12,7 @@ import {
   type SheetJoin,
 } from "./sheet-join-context";
 import { useJoinGlowStore } from "./join-glow";
+import { useBackdropDimStore } from "@/stores/layout/backdrop-dim-store";
 
 /** The bridge follows the latest remaining eligible row or drag overlay. */
 export function SheetJoinScope(props: {
@@ -33,6 +34,32 @@ export function SheetJoinScope(props: {
         {props.children}
       </JoinContext>
     </PublishJoinContext>
+  );
+}
+
+/**
+ * The joined top tab's share of a modal's dim. In the desktop window a
+ * modal's backdrop starts under the title band (`window-chrome.css`), and the
+ * joined tab is in that band, so it stayed bright over the page it joins.
+ * One layer per open backdrop, in the order they opened, each its backdrop's
+ * strength and fading with it, so stacked modals darken the tab as their
+ * backdrops darken the page. `window-chrome.css` anchors the layers like the
+ * bridge and shows them only in the desktop window.
+ */
+export function JoinedTabDim(): ReactNode {
+  const join = use(JoinContext);
+  const backdrops = useBackdropDimStore((state) => state.backdrops);
+  if (join === null || backdrops.length === 0) return null;
+  return (
+    <span aria-hidden data-joined-tab-dim="">
+      {backdrops.map((backdrop) => (
+        <span
+          key={backdrop.id}
+          data-dim-layer={backdrop.strength}
+          data-state={backdrop.closing ? "closed" : "open"}
+        />
+      ))}
+    </span>
   );
 }
 

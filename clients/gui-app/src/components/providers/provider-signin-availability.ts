@@ -15,6 +15,8 @@ import { providerDisplayName } from "@/lib/provider-ordering";
  * - `disabled`: the provider is turned off. The host fetches a managed pack
  *   only for a provider that is on, so for most providers this is also why
  *   there is nothing to run.
+ * - `macos`: settled discovery found no runnable binary because the Mac
+ *   needs a newer macOS version, as reported by the executing host.
  * - `pack`: the managed pack is on its way or its install failed, and nothing
  *   else on the machine can stand in for it.
  * - `cli-checking`: the host has not finished looking for a CLI.
@@ -26,6 +28,11 @@ import { providerDisplayName } from "@/lib/provider-ordering";
  */
 export type ProviderHostBlock =
   | { readonly kind: "disabled" }
+  | {
+      readonly kind: "macos";
+      readonly requiredMacos: string;
+      readonly runningMacos: string;
+    }
   | { readonly kind: "pack"; readonly preparing: ProviderPackPreparing }
   | { readonly kind: "cli-checking" }
   | { readonly kind: "cli-selection-unavailable" }
@@ -59,6 +66,14 @@ export function providerHostBlock(
 ): ProviderHostBlock | null {
   if (gesture === "sign-in" && !state.enabled) return { kind: "disabled" };
   if (hostResolvedCli(state)) return null;
+  const requirement = state.macosRequirement;
+  if (requirement?.launch !== null && requirement?.launch !== undefined) {
+    return {
+      kind: "macos",
+      requiredMacos: requirement.launch.requiredMacos,
+      runningMacos: requirement.runningMacos,
+    };
+  }
   const preparing = providerPackPreparingForProvider(state);
   if (preparing !== null) {
     // The host resolved nothing, so nothing stands in for the pack whatever
@@ -105,6 +120,8 @@ export function providerHostBlockLabel(
   switch (block.kind) {
     case "disabled":
       return `${providerLabel} is turned off. Turn it on to sign in or manage its profiles.`;
+    case "macos":
+      return `${providerLabel} needs macOS ${block.requiredMacos} or later. This Mac runs macOS ${block.runningMacos}.`;
     case "pack":
       return providerPackPreparingLabel(block.preparing, providerLabel);
     case "cli-checking":

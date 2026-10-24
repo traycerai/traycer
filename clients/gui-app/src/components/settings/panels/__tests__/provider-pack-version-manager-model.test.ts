@@ -603,22 +603,45 @@ describe("labels and helpers", () => {
     expect(installPackVersionRefusalMessage("yanked")).toMatch(/withdrawn/i);
   });
 
-  it("maps every use/pin refusal code without inviting retry or saying withdrawn", () => {
-    expect(packVersionUseRefusalMessage("verification-failed")).toMatch(
-      /verif/i,
-    );
-    expect(packVersionUseRefusalMessage("below-security-floor")).toMatch(
-      /security minimum/i,
-    );
+  it("maps every use/pin refusal arm without inviting retry or saying withdrawn", () => {
+    const refusal = (
+      code: "verification-failed" | "below-security-floor" | "host-ineligible",
+    ) => ({ ok: false as const, code, detail: null });
     expect(
-      packVersionUseRefusalMessage("below-security-floor").toLowerCase(),
+      packVersionUseRefusalMessage(refusal("verification-failed")),
+    ).toMatch(/verif/i);
+    expect(
+      packVersionUseRefusalMessage(refusal("below-security-floor")),
+    ).toMatch(/security minimum/i);
+    expect(
+      packVersionUseRefusalMessage(
+        refusal("below-security-floor"),
+      ).toLowerCase(),
     ).not.toMatch(/right now|withdrawn|try again/);
-    expect(packVersionUseRefusalMessage("host-ineligible")).toMatch(
+    expect(packVersionUseRefusalMessage(refusal("host-ineligible"))).toMatch(
       /cannot run/i,
     );
     expect(
-      packVersionUseRefusalMessage("host-ineligible").toLowerCase(),
+      packVersionUseRefusalMessage(refusal("host-ineligible")).toLowerCase(),
     ).not.toMatch(/withdrawn|right now/);
+  });
+
+  it("renders the macos-ineligible arm from its typed fields and never from detail", () => {
+    const arm = {
+      ok: false as const,
+      code: "macos-ineligible" as const,
+      requiredMacos: "15.0",
+      runningMacos: "14.2",
+    };
+    expect(packVersionUseRefusalMessage(arm)).toBe(
+      "Needs macOS 15.0 or later. This Mac runs macOS 14.2.",
+    );
+    // A variable, not a literal: the arm models no `detail`, and a host may
+    // still send one.
+    const withDetail = { ...arm, detail: "operator text" };
+    expect(packVersionUseRefusalMessage(withDetail)).not.toContain(
+      "operator text",
+    );
   });
 
   it("maps every discovery-check outcome to its exact kind and copy", () => {

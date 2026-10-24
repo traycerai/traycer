@@ -68,13 +68,13 @@ export function MobileAppHeader(): ReactNode {
       // the two cannot drift apart.
       className={cn(
         APP_HEADER_HEIGHT_CLASS,
-        "relative z-20 flex shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
+        "relative z-20 flex shrink-0 items-center gap-2 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
       )}
     >
       <Button
         type="button"
         variant="muted"
-        size="icon-sm"
+        size="icon-touch"
         aria-label="Open menu"
         data-testid="mobile-nav-trigger"
         onClick={() => setNavOpen(true)}
@@ -194,9 +194,14 @@ type MobileHeaderSurface =
   | { readonly kind: "history" }
   | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
-  | { readonly kind: "composer" };
+  | { readonly kind: "composer" }
+  // A bot tab draws its own header band (title, host, environment), so the
+  // app header presents no title for it - the same answer the composer
+  // surfaces give, kept as its own kind so nothing mistakes it for one.
+  | { readonly kind: "bot" };
 
 const COMPOSER_SURFACE: MobileHeaderSurface = { kind: "composer" };
+const BOT_SURFACE: MobileHeaderSurface = { kind: "bot" };
 const HISTORY_SURFACE: MobileHeaderSurface = { kind: "history" };
 const HOME_SURFACE: MobileHeaderSurface = { kind: "home" };
 
@@ -240,6 +245,8 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
             kind: "settings",
             path: state.systemTabs.settings?.lastPath ?? null,
           };
+        case "bot":
+          return BOT_SURFACE;
         case "sample-workspace":
         case "draft":
           return COMPOSER_SURFACE;

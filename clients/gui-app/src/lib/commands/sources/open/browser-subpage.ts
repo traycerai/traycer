@@ -7,6 +7,10 @@ import {
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+  credentialedUrlRefusal,
+} from "@/hooks/host/use-host-credential-refusal";
 import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-active-epic-surface-host-pin";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
@@ -14,7 +18,9 @@ import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionStatusWord,
   isHostOptionSelectable,
+  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { usePaletteLiveQuery } from "@/lib/commands/palette-query-context";
 import {
@@ -62,27 +68,34 @@ function useBrowserHostItems(
         ? `Selected · ${followingHostName}`
         : followingHostName,
   };
-  const hosts = options.hosts.map((host) => {
-    const status = hostChoiceStatus(
-      hostPin.selection === host.hostId,
-      host.isActive,
-      hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
-    );
-    const item = {
-      ...openerActionLeaf({
-        id: `open:browser:host:${host.hostId}`,
-        label: host.name,
-        keywords: ["browser", "host", host.name],
-        run: () => hostPin.setSelection(host.hostId),
-      }),
-      disabled: !isHostOptionSelectable(
-        host,
-        "pin",
-        AVAILABLE_HOST_ROW_SURFACE_STATE,
-      ),
-    };
-    return status === undefined ? item : { ...item, statusBadge: status };
-  });
+  // A picker: no burst sandbox and no Automations pod (see
+  // `pickableHostOptions`); the pinned host always keeps its row.
+  const hosts = pickableHostOptions(options.hosts, hostPin.selection).map(
+    (host) => {
+      const status = hostChoiceStatus(
+        hostPin.selection === host.hostId,
+        host.isActive,
+        hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE),
+      );
+      const item = {
+        ...openerActionLeaf({
+          id: `open:browser:host:${host.hostId}`,
+          label: host.name,
+          keywords: ["browser", "host", host.name],
+          run: () => {
+            wakeSandboxOnPick(host);
+            hostPin.setSelection(host.hostId);
+          },
+        }),
+        disabled: !isHostOptionSelectable(
+          host,
+          "pin",
+          AVAILABLE_HOST_ROW_SURFACE_STATE,
+        ),
+      };
+      return status === undefined ? item : { ...item, statusBadge: status };
+    },
+  );
   const loading = options.isLoading
     ? [
         {
@@ -187,6 +200,15 @@ export function useBrowserOpenerItems(
   const openNewTab = (url: string): void => {
     if (sessions.lifecycle !== "live" || sessions.hostId === null) {
       toast.error(browserSessionsRefusal(sessions));
+      return;
+    }
+    // A pasted URL reaches the host's browser here: a sandbox's is never sent
+    // one carrying a sign-in.
+    const refusal = credentialedUrlRefusal(hostEntry, url);
+    if (refusal !== null) {
+      toast.warning(refusal, {
+        description: CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+      });
       return;
     }
     const hostId = sessions.hostId;

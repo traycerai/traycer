@@ -113,26 +113,6 @@ const ACCEPTED_LIVE_ENUM_PATHS: readonly string[] = [
   "managedVersions.available[].installState|4.reason",
   "managedVersionsUnavailable.reason",
   "nativeCapabilities.envOverrideScope",
-  "nativeCapabilities.mcp.actionScopes.add[]",
-  "nativeCapabilities.mcp.actionScopes.auth[]",
-  "nativeCapabilities.mcp.actionScopes.discover[]",
-  "nativeCapabilities.mcp.actionScopes.list[]",
-  "nativeCapabilities.mcp.actionScopes.remove[]",
-  "nativeCapabilities.mcp.actionScopes.toggleServer[]",
-  "nativeCapabilities.mcp.actionScopes.toggleTool[]",
-  "nativeCapabilities.mcp.actionScopes.update[]",
-  "nativeCapabilities.mcp.addServer",
-  "nativeCapabilities.mcp.authActions[]",
-  "nativeCapabilities.mcp.authTypes[]",
-  "nativeCapabilities.mcp.instructionsSource",
-  "nativeCapabilities.mcp.oauthFields[]",
-  "nativeCapabilities.mcp.perToolBacking",
-  "nativeCapabilities.mcp.removeServer",
-  "nativeCapabilities.mcp.schemasSource",
-  "nativeCapabilities.mcp.statusSource",
-  "nativeCapabilities.mcp.toolsSource",
-  "nativeCapabilities.mcp.transports[]",
-  "nativeCapabilities.mcp.updateServer",
   "nativeCapabilities.modelProviders.actions[]",
   "nativeCapabilities.plugins.actionScopes.add[]",
   "nativeCapabilities.plugins.actionScopes.list[]",
@@ -154,7 +134,6 @@ const ACCEPTED_LIVE_ENUM_PATHS: readonly string[] = [
   "native|0|3.server.status",
   "native|0|3.server.statusSource",
   "native|0|3.server.tools[].denySources[]",
-  "native|1.code",
   "nextRunBinary.kind",
   "profiles[].accentColor",
   "profiles[].auth.status",
@@ -376,9 +355,9 @@ function liveEnumPaths(row: z.ZodType): string[] {
     if (!live.has(enumSchema)) continue;
     // EVERY path, not one representative per enum. A representative would make
     // this blind to the case that matters most: a NEW field wired to an enum
-    // already on the list. `nativeCapabilities.mcp.removeServer`,
-    // `.schemasSource`, `.toolsSource`, every `actionScopes.*` variant and
-    // `profiles[].reusedTombstone.accentColor` are all real paths a
+    // already on the list. The MCP capability paths were measured here until
+    // remedies pinned the released MCP descriptor; the remaining
+    // `profiles[].reusedTombstone.accentColor` is a real path a
     // one-per-enum list hid: the set went 29 -> 54 when this was fixed, and
     // 54 -> 58 when identity dedup came out of `collectEnums`. So the two
     // shortcuts between them were hiding 29 of the 58 real paths - half the

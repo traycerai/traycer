@@ -11,11 +11,8 @@ import { TextQuote } from "lucide-react";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { chatBottomOverlayClampedRect } from "@/components/chat/chat-scroll-region-geometry";
 import { cn } from "@/lib/utils";
-import {
-  appendQuoteToDraft,
-  buildQuoteBlockquote,
-} from "./append-quote-to-draft";
 import { firstLineRect, firstVisibleLineRect } from "./quote-anchor-rect";
+import { quoteSnapshotIntoDraft } from "./quote-snapshot-into-draft";
 import type { QuoteSelectionSnapshot } from "./use-quote-selection";
 
 interface QuoteSelectionPopoverProps {
@@ -134,14 +131,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
 
   const handleQuote = (): void => {
     // Consume the mouseup snapshot; NEVER read the live Selection here.
-    appendQuoteToDraft(
-      taskId,
-      buildQuoteBlockquote({
-        text: snapshot.text,
-        fenceLanguage: snapshot.fenceLanguage,
-      }),
-    );
-    clearBrowserSelection();
+    quoteSnapshotIntoDraft(taskId, snapshot);
     onQuoted();
     onDismiss();
   };
@@ -204,10 +194,4 @@ function isSelectionLiveInRoot(root: Element): boolean {
     return false;
   }
   return root.contains(selection.getRangeAt(0).startContainer);
-}
-
-function clearBrowserSelection(): void {
-  const selection = window.getSelection();
-  if (selection === null) return;
-  selection.removeAllRanges();
 }

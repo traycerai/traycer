@@ -1,3 +1,4 @@
+import { buildSandboxArtifactBridge } from "./sandbox-artifact-bridge";
 import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
@@ -64,6 +65,7 @@ window.addEventListener("paste", nativeClipboardReadGate.observePaste, true);
 contextBridge.exposeInMainWorld("runnerHost", {
   authnBaseUrl: config.authnBaseUrl,
   relayBaseUrl: config.relayBaseUrl,
+  poolBaseUrl: config.poolBaseUrl,
   // Runtime-resolved in main (dev loopback port is dynamic), so it must be a
   // sync read rather than a compile-time `config` value. Empty → the renderer
   // uses its compile-time custom-scheme redirect.
@@ -89,6 +91,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   power: buildPowerBridge(),
   ...buildZoomBridge(),
   ...buildBrowserViewBridge(),
+  sandboxArtifacts: buildSandboxArtifactBridge(),
   selectionAuthority: buildSelectionAuthorityBridge(),
   refreshSelectionFleet: buildSelectionFleetRefresh(),
   hostManagement: buildHostManagementBridge(),

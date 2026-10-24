@@ -33,14 +33,18 @@ async function openGroup(page: Page): Promise<void> {
     `${fixture("layout-editor-canvas")}?tabs=top&header=app&surface=epic`,
   );
   await page.waitForFunction("window.__layoutCanvasProbe?.ready === true");
+  // Groups are the account's and a client cannot create one, so the fixture
+  // seeds what the organization projection writes (`organization-seed.ts`).
   await page.evaluate(`(async () => {
-    const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-    const store = useTabsStore.getState();
+    const { seedOrganizationGroup } = await import("/src/__tests__/browser/organization-seed.ts");
     const ref = (id) => ({ kind: "epic", id: "fixture-" + id });
-    const groupId = store.createGroup(ref("epsilon"));
-    if (groupId === null) throw new Error("tab group was not created");
-    store.setTabGroup(ref("zeta"), groupId);
-    store.updateGroup(groupId, { name: "test", color: "#ff8bcb", collapsed: false });
+    seedOrganizationGroup({
+      groupId: "fixture-travel-group",
+      name: "test",
+      color: "#ff8bcb",
+      collapsed: false,
+      refs: [ref("epsilon"), ref("zeta")],
+    });
     window.__layoutCanvasProbe.activateEpicTab("fixture-zeta");
   })()`);
   await page.waitForSelector(

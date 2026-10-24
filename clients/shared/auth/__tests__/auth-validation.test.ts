@@ -14,6 +14,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "./no-native-abort-helpers";
+import {
   AUTH_FETCH_MAX_ATTEMPTS,
   SUPPORTED_USER_RECORD_MAJORS,
   authRetryDelayMs,
@@ -78,7 +83,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
 }
 
 // A real `Response` (so it stays `Response`-typed with no casts) whose body read
-// rejects with a `TimeoutError` - mirrors `AbortSignal.timeout` firing during
+// rejects with a `TimeoutError` - mirrors a per-attempt timeout firing during
 // `response.json()`, after the status/headers have already arrived.
 function responseWithAbortingBody(status: number): Response {
   const response = new Response("{}", { status });
@@ -115,7 +120,7 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
         body: typeof init?.body === "string" ? init.body : null,
         hasSignal: init?.signal instanceof AbortSignal,
       });
-      // Mirror what a fired `AbortSignal.timeout` throws into `fetch`.
+      // Mirror what a fired per-attempt timeout throws into `fetch`.
       throw new DOMException("The operation timed out.", "TimeoutError");
     }) as typeof fetch;
 
@@ -206,7 +211,7 @@ describe("refreshOnceAbortable", () => {
 
   it("returns network-error when the caller supplies a pre-aborted AbortSignal", async () => {
     // Production currently only passes `signal: null` (FileTokenStore + mock),
-    // so the `AbortSignal.any([caller, timeout])` combine branch is otherwise
+    // so the caller-signal-plus-timeout combine branch is otherwise
     // dormant. A pre-aborted signal exercises that path: fetch throws →
     // network-error (nothing spent).
     let fetchCalls = 0;
@@ -312,6 +317,76 @@ describe("refreshOnceAbortable", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("maps authn's own 404 - its error envelope on the body - to an ACCOUNT rejection", async () => {
+    // The shape authn's error handler gives a deleted user's refresh: a
+    // `UserNotFoundError` serialized as `{ statusCode, error }`. This is the
+    // one 404 that is a verdict about the account.
+    installMockFetch([
+      { status: 404, body: { statusCode: 404, error: "User not found" } },
+    ]);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      clientKind: null,
+      signal: null,
+    });
+
+    expect(result).toEqual({
+      kind: "rejected",
+      rejection: { kind: "account" },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "an empty 404 from another process on authn's port",
+      spec: { status: 404, body: "" },
+    },
+    {
+      name: "Fastify's route-not-found (a deployment without the route)",
+      spec: {
+        status: 404,
+        body: {
+          message: "Route POST:/api/v3/auth/refresh not found",
+          error: "Not Found",
+          statusCode: 404,
+        },
+      },
+    },
+    {
+      name: "a gateway's HTML 403",
+      spec: { status: 403, body: "<html><body>Forbidden</body></html>" },
+    },
+    {
+      name: "an envelope answered for a different status than the one sent",
+      spec: { status: 404, body: { statusCode: 401, error: "Unauthorized" } },
+    },
+  ])(
+    "maps $name to network-error, never to an account verdict",
+    async ({ spec }) => {
+      // The account verdict latches the renderer and tells the person their
+      // account is gone, so a 403/404 that authn did not answer must hold and
+      // keep recovering exactly like an outage. One of these - the empty 404 -
+      // is what a dev stack answered when a capture proxy held authn's port,
+      // and every renderer on it reported a deleted account.
+      installMockFetch([spec]);
+
+      const result = await refreshOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "stale-bearer",
+        refreshToken: "stale-refresh",
+        clientKind: null,
+        signal: null,
+      });
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(1);
+    },
+  );
+
   it("makes exactly one attempt on a transient 5xx (no retry → no double-spend)", async () => {
     // installMockFetch replays the last spec for every call, so a retry would
     // surface as calls.length > 1. The single-attempt property is what keeps a
@@ -408,7 +483,9 @@ describe("negotiated user record route, and frozen-route recovery", () => {
    * round-trip through `JSON.stringify` as an ISO string too, but relying on
    * that would be testing `Date#toJSON`, not this file's wire contract.
    */
-  function authenticatedUserRawBody(providerType: "GITHUB" | "APPLE"): unknown {
+  function authenticatedUserRawBody(
+    providerType: "GITHUB" | "APPLE",
+  ): Record<string, unknown> {
     return {
       user: {
         id: "user-1",
@@ -455,7 +532,7 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     vi.useRealTimers();
   });
 
-  it("1: negotiated success at major 2 is valid off a single request advertising both majors", async () => {
+  it("1: negotiated success at major 2 is valid off a single request advertising every major", async () => {
     installUrlKeyedMockFetch(
       new Map([
         [
@@ -485,8 +562,80 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     expect(urlCalls).toHaveLength(1);
     expect(urlCalls[0].url).toBe(NEGOTIATED_URL);
     expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
-      "1,2",
+      "1,2,3",
     );
+  });
+
+  it("1a: negotiated success at major 3 is valid and keeps the served environments", async () => {
+    const environments = {
+      personal: "env-personal",
+      teams: [{ teamId: "team-1", environmentId: "env-team-1" }],
+    };
+    installUrlKeyedMockFetch(
+      new Map([
+        [
+          NEGOTIATED_URL,
+          [
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                [USER_RECORD_VERSION_RESPONSE_HEADER]: "3.0",
+              },
+              body: {
+                ...authenticatedUserRawBody("GITHUB"),
+                environments,
+                actingAs: { environmentId: "env-team-1" },
+              },
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await validateAuthTokenIdentityAccessOnly(
+      AUTHN_BASE_URL,
+      "token",
+    );
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") throw new Error("expected valid");
+    expect(result.user.environments).toEqual(environments);
+    expect(result.user.actingAs).toEqual({ environmentId: "env-team-1" });
+    expect(urlCalls).toHaveLength(1);
+    expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
+      "1,2,3",
+    );
+  });
+
+  it("1b: a served major-2 body still validates and reads as no environments", async () => {
+    installUrlKeyedMockFetch(
+      new Map([
+        [
+          NEGOTIATED_URL,
+          [
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                [USER_RECORD_VERSION_RESPONSE_HEADER]: "2.0",
+              },
+              body: authenticatedUserRawBody("GITHUB"),
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await validateAuthTokenIdentityAccessOnly(
+      AUTHN_BASE_URL,
+      "token",
+    );
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") throw new Error("expected valid");
+    expect(result.user.environments).toEqual({ personal: null, teams: [] });
+    expect(result.user.actingAs).toBeNull();
   });
 
   it("2: negotiated success at major 1 is valid off a single request", async () => {
@@ -715,7 +864,7 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     );
     await validateAuthTokenIdentityAccessOnly(AUTHN_BASE_URL, "token");
     expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
-      "1,2",
+      "1,2,3",
     );
   });
 
@@ -776,5 +925,238 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     // fallback that multiplied with the retry ceiling would produce).
     expect(result.kind).toBe("network-error");
     expect(urlCalls).toHaveLength(2 * AUTH_FETCH_MAX_ATTEMPTS);
+  });
+});
+
+describe("the abortable auth calls on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  const TOKEN_PAIR = {
+    status: 200,
+    body: { token: "exchanged-bearer", refreshToken: "exchanged-refresh" },
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  describe("exchangeCodeForTokens", () => {
+    it("still makes the exchange request", async () => {
+      installMockFetch([TOKEN_PAIR]);
+
+      const result = await exchangeCodeForTokens(
+        AUTHN_BASE_URL,
+        "pkce-code",
+        "pkce-verifier",
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(result.kind).toBe("exchanged");
+    });
+
+    it("aborts an exchange that never answers after 10 s, and resolves to network-error without retrying", async () => {
+      const fetchMock = stubHangingFetch();
+
+      const pending = exchangeCodeForTokens(
+        AUTHN_BASE_URL,
+        "pkce-code",
+        "pkce-verifier",
+      );
+      const signal = signalOfLastFetch(fetchMock);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal.aborted).toBe(true);
+      expect((await pending).kind).toBe("network-error");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("refreshOnceAbortable", () => {
+    const ARGS = {
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      clientKind: null,
+    } as const;
+
+    it("still makes the refresh request", async () => {
+      installMockFetch([TOKEN_PAIR]);
+
+      const result = await refreshOnceAbortable({ ...ARGS, signal: null });
+
+      expect(calls).toHaveLength(1);
+      expect(result.kind).toBe("refreshed");
+    });
+
+    it("aborts a refresh that never answers after 10 s, and resolves to network-error", async () => {
+      const fetchMock = stubHangingFetch();
+
+      const pending = refreshOnceAbortable({ ...ARGS, signal: null });
+      const signal = signalOfLastFetch(fetchMock);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal.aborted).toBe(true);
+      expect(await pending).toEqual({ kind: "network-error" });
+    });
+
+    it("aborts the request when the caller's signal aborts, well before the timeout", async () => {
+      const fetchMock = stubHangingFetch();
+      const caller = new AbortController();
+
+      const pending = refreshOnceAbortable({ ...ARGS, signal: caller.signal });
+      const signal = signalOfLastFetch(fetchMock);
+      expect(signal.aborted).toBe(false);
+
+      caller.abort();
+
+      expect(signal.aborted).toBe(true);
+      expect(await pending).toEqual({ kind: "network-error" });
+    });
+  });
+
+  describe("validateAuthTokenIdentityAccessOnceAbortable", () => {
+    it("still makes the identity request", async () => {
+      const fetchMock = vi.fn<typeof fetch>(
+        async () => new Response("{}", { status: 503 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "token",
+        signal: null,
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+    });
+
+    it("aborts an identity request that never answers after 10 s, and resolves to network-error", async () => {
+      const fetchMock = stubHangingFetch();
+
+      const pending = validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "token",
+        signal: null,
+      });
+      const signal = signalOfLastFetch(fetchMock);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal.aborted).toBe(true);
+      expect((await pending).kind).toBe("network-error");
+    });
+
+    it("aborts the request when the caller's signal aborts, well before the timeout", async () => {
+      const fetchMock = stubHangingFetch();
+      const caller = new AbortController();
+
+      const pending = validateAuthTokenIdentityAccessOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "token",
+        signal: caller.signal,
+      });
+      const signal = signalOfLastFetch(fetchMock);
+
+      caller.abort();
+
+      expect(signal.aborted).toBe(true);
+      expect((await pending).kind).toBe("network-error");
+    });
+  });
+});
+
+describe("caller signal composition without AbortSignal.any", () => {
+  // `AbortSignal.any` is Chromium 116 / iOS 17.4. Older WebViews throw a
+  // TypeError out of the call, which for these async helpers is a rejected
+  // promise instead of the `network-error` they document (#2308).
+  const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+
+  beforeEach(() => {
+    Object.defineProperty(AbortSignal, "any", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (nativeAny === undefined) {
+      Reflect.deleteProperty(AbortSignal, "any");
+    } else {
+      Object.defineProperty(AbortSignal, "any", nativeAny);
+    }
+  });
+
+  function installHangingFetch(): { readonly signals: AbortSignal[] } {
+    const signals: AbortSignal[] = [];
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) {
+        throw new Error("fetch was called without a signal");
+      }
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          reject(signal.reason);
+        });
+      });
+    }) as typeof fetch;
+    return { signals };
+  }
+
+  it("refreshOnceAbortable still sends the request and aborts it with the caller", async () => {
+    const { signals } = installHangingFetch();
+    const caller = new AbortController();
+
+    const pending = refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "access",
+      refreshToken: "refresh",
+      clientKind: null,
+      signal: caller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    expect(signals[0].aborted).toBe(false);
+
+    caller.abort();
+
+    expect(signals[0].aborted).toBe(true);
+    await expect(pending).resolves.toEqual({ kind: "network-error" });
+  });
+
+  it("validateAuthTokenIdentityAccessOnceAbortable still sends the request and aborts it with the caller", async () => {
+    const { signals } = installHangingFetch();
+    const caller = new AbortController();
+
+    const pending = validateAuthTokenIdentityAccessOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "access",
+      signal: caller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    expect(signals[0].aborted).toBe(false);
+
+    caller.abort();
+
+    expect(signals[0].aborted).toBe(true);
+    expect((await pending).kind).toBe("network-error");
   });
 });

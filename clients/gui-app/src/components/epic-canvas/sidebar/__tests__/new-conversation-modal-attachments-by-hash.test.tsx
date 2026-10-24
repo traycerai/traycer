@@ -44,6 +44,28 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: () => null,
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => null,
+  }),
+);
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
@@ -258,6 +280,7 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }
@@ -337,6 +360,16 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     hostLabelFor: () => PLACEMENT_TARGET.hostLabel,
     followsEffective: true,
   }),
+}));
+
+// The mirror line reads the task's hosts and the host registry, which this
+// suite's `@/lib/host` mock does not carry; it has its own suite
+// (`composer-mirror-line.test.tsx`), so here it shows nothing.
+const NO_MIRROR_LINE = vi.hoisted(() =>
+  Object.freeze({ notice: null, markSeen: (): void => undefined }),
+);
+vi.mock("@/hooks/composer/use-composer-mirror-line", () => ({
+  useComposerMirrorLine: () => NO_MIRROR_LINE,
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({

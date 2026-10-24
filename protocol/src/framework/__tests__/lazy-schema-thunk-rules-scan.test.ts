@@ -128,6 +128,22 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
     },
   ],
   [
+    "method-on-non-schema sendClientFrameSchemaPreCanvas.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaOptionsPreCanvas (an array of zod schemas); `.extend` clones",
+    },
+  ],
+  [
+    "method-on-non-schema EpicArtifactKindSchemaPreHtml.nullable (protocol/src/common/registry.ts)",
+    {
+      count: 1,
+      reason:
+        "an alias of epicArtifactKindRecordV100.schema, the frozen epic-artifact-kind 1.0 record's stand-in; `.nullable` clones",
+    },
+  ],
+  [
     "method-on-non-schema chatSubscribeClientFrameSchemaOptionsBeforeInterview.extend (protocol/src/host/agent/gui/subscribe.ts)",
     {
       count: 4,
@@ -144,17 +160,17 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
   [
     "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.catch (protocol/src/host/provider-schemas.ts)",
     {
-      count: 4,
+      count: 5,
       reason:
-        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones (the third site is the listHarnesses@9.1 freeze copy, the fourth the listHarnesses@9.2 freeze copy)",
+        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.catch` clones (the third site is the listHarnesses@9.1 freeze copy, the fourth the listHarnesses@9.2 freeze copy, the fifth the listHarnesses@10.0 freeze copy)",
     },
   ],
   [
     "method-on-non-schema PROVIDER_AUTH_STATUS_SCHEMA.optional (protocol/src/host/provider-schemas.ts)",
     {
-      count: 4,
+      count: 5,
       reason:
-        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones (the third site is the listHarnesses@9.1 freeze copy, the fourth the listHarnesses@9.2 freeze copy)",
+        "an alias of PROVIDER_AUTH_STATUS_SCHEMA_V20; `.optional` clones (the third site is the listHarnesses@9.1 freeze copy, the fourth the listHarnesses@9.2 freeze copy, the fifth the listHarnesses@10.0 freeze copy)",
     },
   ],
   [
@@ -195,6 +211,20 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
   ],
   [
     "method-on-non-schema hostStatusV15.extend (protocol/src/host/status/contracts.ts)",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
+  ],
+  [
+    "method-on-non-schema hostStatusV16.extend (protocol/src/host/status/contracts.ts)",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
+  ],
+  [
+    "method-on-non-schema hostStatusV17.extend (protocol/src/host/status/contracts.ts)",
     {
       count: 1,
       reason: "a contract object; `.responseSchema.extend` clones",

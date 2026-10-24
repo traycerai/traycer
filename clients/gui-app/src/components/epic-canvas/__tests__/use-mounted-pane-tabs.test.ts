@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
 import {
+  MOUNTED_PANE_HTML_CAP,
   MOUNTED_PANE_TAB_LRU_CAP,
-  RETAINED_PANE_PAGE_CAP,
   useMountedPaneTabs,
   type UseMountedPaneTabsInput,
 } from "@/components/epic-canvas/canvas/use-mounted-pane-tabs";
@@ -20,6 +20,17 @@ function specTab(n: number): EpicCanvasTileRef {
   };
 }
 
+/** A tab whose body runs page script: an html artifact or a canvas board. */
+function scriptedTab(kind: "html" | "canvas", n: number): EpicCanvasTileRef {
+  return {
+    id: `${kind}-${n}`,
+    instanceId: `inst-${kind}-${n}`,
+    type: kind,
+    name: `${kind} ${n}`,
+    hostId: "host-A",
+  };
+}
+
 function chatTab(n: number): EpicCanvasTileRef {
   return {
     id: `chat-${n}`,
@@ -27,19 +38,6 @@ function chatTab(n: number): EpicCanvasTileRef {
     type: "chat",
     name: `Chat ${n}`,
     hostId: "host-A",
-  };
-}
-
-function epicFileTab(n: number, extension: string): EpicCanvasTileRef {
-  return {
-    id: `files/pages/page-${n}.${extension}`,
-    instanceId: `inst-file-${n}`,
-    type: "epic-file",
-    name: `Page ${n}`,
-    hostId: "host-A",
-    path: `files/pages/page-${n}.${extension}`,
-    sha256: "a".repeat(64),
-    via: null,
   };
 }
 
@@ -395,62 +393,69 @@ describe("useMountedPaneTabs", () => {
     expect([...result.current]).toEqual(["inst-term-1", "inst-chat-1"]);
   });
 
-  describe("page tabs", () => {
-    it("keeps the most recent pages mounted past the LRU, and only up to their cap", () => {
-      const pages = [1, 2, 3, 4, 5].map((n) => epicFileTab(n, "html"));
-      const specs = [specTab(1), specTab(2), specTab(3), specTab(4)];
-      const tabs = [...pages, ...specs];
-      const { result, rerender } = renderMounted({
-        activeTabId: "inst-file-1",
-        tabs,
-        paneVisible: true,
-      });
-      for (const page of pages.slice(1)) {
-        rerender({ activeTabId: page.instanceId, tabs, paneVisible: true });
-      }
-      // Enough editor visits to have evicted every page from a shared LRU.
-      for (const spec of specs) {
-        rerender({ activeTabId: spec.instanceId, tabs, paneVisible: true });
-      }
-
-      const mountedPages = [...result.current].filter((id) =>
-        id.startsWith("inst-file-"),
-      );
-      expect(mountedPages).toHaveLength(RETAINED_PANE_PAGE_CAP);
-      expect(mountedPages).toEqual([
-        "inst-file-5",
-        "inst-file-4",
-        "inst-file-3",
-        "inst-file-2",
-      ]);
+  it("retains html and canvas tabs up to their own cap, evicting only the oldest of them", () => {
+    const tabs = [
+      specTab(1),
+      specTab(2),
+      scriptedTab("html", 1),
+      scriptedTab("canvas", 1),
+      scriptedTab("html", 2),
+      scriptedTab("html", 3),
+    ];
+    const { result, rerender } = renderMounted({
+      activeTabId: "inst-spec-1",
+      tabs,
+      paneVisible: true,
     });
+    for (const active of [
+      "inst-spec-2",
+      "inst-html-1",
+      "inst-canvas-1",
+      "inst-html-2",
+      "inst-html-3",
+    ]) {
+      rerender({ activeTabId: active, tabs, paneVisible: true });
+    }
 
-    it("keeps pages mounted while the pane is hidden", () => {
-      const tabs = [epicFileTab(1, "html"), epicFileTab(2, "html"), specTab(1)];
-      const { result, rerender } = renderMounted({
-        activeTabId: "inst-file-1",
-        tabs,
-        paneVisible: true,
-      });
-      rerender({ activeTabId: "inst-file-2", tabs, paneVisible: true });
-      rerender({ activeTabId: "inst-spec-1", tabs, paneVisible: false });
+    // Four scripted tabs were visited: the oldest lost its script state, the
+    // other three kept it.
+    const mountedScripted = [...result.current].filter(
+      (id) => id.startsWith("inst-html-") || id.startsWith("inst-canvas-"),
+    );
+    expect(mountedScripted.length).toBe(MOUNTED_PANE_HTML_CAP);
+    expect(result.current.has("inst-html-1")).toBe(false);
+    // They were not charged to the ordinary LRU, which still holds the specs
+    // it had before the scripted tabs took the foreground.
+    expect(result.current.has("inst-spec-1")).toBe(true);
+    expect(result.current.has("inst-spec-2")).toBe(true);
+  });
 
-      expect(result.current.has("inst-file-1")).toBe(true);
-      expect(result.current.has("inst-file-2")).toBe(true);
+  it("keeps a scripted tab mounted while ordinary tabs churn past the LRU cap", () => {
+    const tabs = [
+      scriptedTab("html", 1),
+      specTab(1),
+      specTab(2),
+      specTab(3),
+      specTab(4),
+    ];
+    const { result, rerender } = renderMounted({
+      activeTabId: "inst-html-1",
+      tabs,
+      paneVisible: true,
     });
+    for (const active of [
+      "inst-spec-1",
+      "inst-spec-2",
+      "inst-spec-3",
+      "inst-spec-4",
+    ]) {
+      rerender({ activeTabId: active, tabs, paneVisible: true });
+    }
 
-    it("leaves a non-HTML epic file to the ordinary LRU", () => {
-      const tabs = [epicFileTab(1, "png"), specTab(1), specTab(2), specTab(3)];
-      const { result, rerender } = renderMounted({
-        activeTabId: "inst-file-1",
-        tabs,
-        paneVisible: true,
-      });
-      for (const spec of [specTab(1), specTab(2), specTab(3)]) {
-        rerender({ activeTabId: spec.instanceId, tabs, paneVisible: true });
-      }
-
-      expect(result.current.has("inst-file-1")).toBe(false);
-    });
+    expect(result.current.has("inst-html-1")).toBe(true);
+    const mountedSpecs = [...result.current].filter((id) =>
+      id.startsWith("inst-spec-"),
+    );
+    expect(mountedSpecs.length).toBe(MOUNTED_PANE_TAB_LRU_CAP);
   });
 });

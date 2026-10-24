@@ -22,6 +22,7 @@ import * as Sentry from "@sentry/electron/main";
 import { parseRetryAfterHeader } from "@sentry/core";
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "../host/host-paths";
+import type { HostEnsureFailure } from "../host/host-controller-types";
 import { readHostLayer0Record } from "../host/host-state";
 import { log, resolveDesktopLogPath } from "./logger";
 import {
@@ -35,6 +36,8 @@ import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-type
 import type {
   DesktopAuthSessionSnapshot,
   SupportBuildPublicDraftResult,
+  SupportCapturedField,
+  SupportEnvironmentSection,
   SupportHostLayer0Snapshot,
   SupportFreezeEvidenceResult,
   SupportImageAttachmentInput,
@@ -83,10 +86,11 @@ const SENTRY_FLUSH_TIMEOUT_MS = 10_000;
 // outcome is chained off that same settlement through its own, separately
 // registered `.then()`s - close, but not guaranteed to fire before `flush`
 // resolves. This only bounds the (practically unreachable, since nothing in
-// this app's Sentry init samples or filters feedback events) case where the
-// hook never fires at all despite `flush` saying the queue is empty; in the
-// normal case the hook resolves within a handful of microtasks, nowhere near
-// this window.
+// this app's Sentry init samples or filters feedback events - the size guard
+// in `support-report-size-guard.ts` trims a report, never drops it) case
+// where the hook never fires at all despite `flush` saying the queue is
+// empty; in the normal case the hook resolves within a handful of
+// microtasks, nowhere near this window.
 const SEND_OUTCOME_GRACE_MS = 500;
 // A draft's frozen evidence is dropped explicitly on cancel/replacement; this
 // is only a backstop against a lost discard message (e.g. a window force-
@@ -150,6 +154,7 @@ const SIGHTING_DEDUPE_MAX_ENTRIES = 200;
 export class DesktopSupportService {
   private readonly appName: string;
   private readonly host: SupportHostSnapshotProvider;
+  private readonly readHostEnsureFailure: () => Promise<HostEnsureFailure | null>;
   private readonly authSession: SupportAuthSessionProvider;
   private readonly hostLayout: HostFsLayout;
   private readonly frozenEvidenceByKey = new Map<string, FrozenEvidenceEntry>();
@@ -159,6 +164,7 @@ export class DesktopSupportService {
   constructor(options: {
     readonly appName: string;
     readonly host: SupportHostSnapshotProvider;
+    readonly readHostEnsureFailure: () => Promise<HostEnsureFailure | null>;
     readonly authSession: SupportAuthSessionProvider;
     // Environment-scoped layout matching the host supervisor's writes.
     // Production passes the prod layout; `make dev-desktop` passes the
@@ -167,6 +173,7 @@ export class DesktopSupportService {
   }) {
     this.appName = options.appName;
     this.host = options.host;
+    this.readHostEnsureFailure = options.readHostEnsureFailure;
     this.authSession = options.authSession;
     this.hostLayout = options.hostLayout;
   }
@@ -174,6 +181,8 @@ export class DesktopSupportService {
   async getSnapshot(): Promise<SupportSnapshot> {
     const host = this.host.getSnapshot();
     const authSession = this.authSession.get();
+    // A failed status probe must not prevent a report of that failure.
+    const ensureFailure = await this.readHostEnsureFailure().catch(() => null);
     const layer0 = await readHostLayer0Record(this.hostLayout);
     const browserLogs = await existingBrowserLogDescriptors(this.hostLayout);
     return {
@@ -197,6 +206,7 @@ export class DesktopSupportService {
         pid: host?.pid ?? null,
         hostId: host?.hostId ?? null,
         layer0,
+        ensureFailure,
       },
       logs: [
         {
@@ -442,6 +452,9 @@ export class DesktopSupportService {
     // consent toggle is off, not just individually omitted per-key.
     const contexts: Record<string, Record<string, unknown>> = includeDiagnostics
       ? deepScrubSupportValue({
+          ...(snapshot.host.ensureFailure === null
+            ? {}
+            : { hostStartup: { ...snapshot.host.ensureFailure } }),
           ...(snapshot.host.layer0 === null
             ? {}
             : { layer0: { ...snapshot.host.layer0 } }),
@@ -469,15 +482,24 @@ export class DesktopSupportService {
           ...(privateDiagnostics?.cause == null
             ? {}
             : { errorCause: { ...privateDiagnostics.cause } }),
-          // D10: the registry's `hostId` is the tab-bound host, which can
-          // differ from the "local host" this file attaches logs and
-          // version from below - named `registry`, never `host`, so the
-          // two can't be read as one.
+          // D10: the registry's `hostId` is the app-wide effective host and
+          // `tabHostId` the tab's binding; either can differ from the
+          // "local host" this file attaches logs and version from below -
+          // named `registry`, never `host`, so the two can't be read as one.
           ...(privateDiagnostics === undefined
             ? {}
             : { registry: { ...privateDiagnostics.registry } }),
         })
       : {};
+    // The selected host's environment section, under the same consent gate as
+    // everything above, and never in the public draft or the saved bundle.
+    // Scrubbed leaf by leaf inside `environmentContextForSentry`, not by the
+    // deep scrub above.
+    if (includeDiagnostics && privateDiagnostics !== undefined) {
+      contexts.environment = environmentContextForSentry(
+        privateDiagnostics.environment,
+      );
+    }
     // Registered after context construction but before `captureFeedback`, so
     // the listener is live when the envelope goes out and every later exit is
     // covered by the `finally` below. `afterSendEvent` carries the transport's
@@ -681,6 +703,10 @@ export class DesktopSupportService {
             host: {
               status: snapshot.host.status,
               version: snapshot.host.version,
+              ensureFailure:
+                snapshot.host.ensureFailure === null
+                  ? null
+                  : deepScrubSupportValue({ ...snapshot.host.ensureFailure }),
             },
           }
         : {}),
@@ -1426,6 +1452,142 @@ function flattenAppMetricsForSentry(
       memoryWorkingSetKb: metric.memory.workingSetSize,
       memoryPeakWorkingSetKb: metric.memory.peakWorkingSetSize,
     })),
+  };
+}
+
+/**
+ * The environment section as one Sentry context within the depth budget
+ * above: its scalars as fields, each list or record as JSON text, so an
+ * item's args or a rotation's evidence never collapse to "[Object]". The
+ * section is already closed and bounded by `support-ipc.ts`.
+ *
+ * Every text leaf goes through `scrubSupportText` here, field by field,
+ * before any JSON is made. Not `deepScrubSupportValue`: its key rule redacts
+ * any field named like a secret, and this record's `secretName` is the
+ * secret's name, the one thing a rotation row is for; the record is closed,
+ * so no key of it can hold a value. Nor a scrub of the JSON text afterwards,
+ * which reads `"secretName":"STRIPE_KEY"` as an assignment and redacts it
+ * into invalid JSON.
+ */
+function environmentContextForSentry(
+  environment: SupportCapturedField<SupportEnvironmentSection>,
+): Record<string, unknown> {
+  if (environment.status === "unavailable") return { status: "unavailable" };
+  const section = scrubEnvironmentSection(environment.value);
+  return {
+    status: environment.status,
+    hostId: section.hostId,
+    principal: section.principal,
+    reachability: section.reachability,
+    bindingGeneration: section.bindingGeneration,
+    desiredRevision: section.desiredRevision,
+    receivedRevision: section.receivedRevision,
+    appliedRevision: section.appliedRevision,
+    receiptAgeMs: section.receiptAgeMs,
+    items: JSON.stringify(section.items),
+    setupAttempts: JSON.stringify(section.setupAttempts),
+    policy: JSON.stringify(section.policy),
+    rotations: JSON.stringify(section.rotations),
+    reachDenials: JSON.stringify(section.reachDenials),
+    servedTask: JSON.stringify(section.servedTask),
+  };
+}
+
+function scrubNullableText(value: string | null): string | null {
+  return value === null ? null : scrubSupportText(value);
+}
+
+/** Every text leaf of the closed section, scrubbed in place of its shape. */
+function scrubEnvironmentSection(
+  section: SupportEnvironmentSection,
+): SupportEnvironmentSection {
+  return {
+    ...section,
+    hostId: scrubSupportText(section.hostId),
+    reachability: scrubSupportText(section.reachability),
+    items: section.items.map((item) => {
+      // Destructured, not `item.key` / `item.code`: the keyboard-read
+      // inventory counts a `.key` read beside a `.code` read as a key event.
+      const { key, code } = item;
+      return {
+        kind: scrubSupportText(item.kind),
+        key: scrubSupportText(key),
+        os: scrubSupportText(item.os),
+        status: scrubSupportText(item.status),
+        code: scrubSupportText(code),
+        args: {
+          ...item.args,
+          stage: scrubNullableText(item.args.stage),
+          kind: scrubNullableText(item.args.kind),
+        },
+      };
+    }),
+    setupAttempts:
+      section.setupAttempts === null
+        ? null
+        : section.setupAttempts.map((attempt) => ({
+            ...attempt,
+            attemptId: scrubSupportText(attempt.attemptId),
+            scriptHash: scrubSupportText(attempt.scriptHash),
+            trigger: scrubSupportText(attempt.trigger),
+            stageReached: scrubNullableText(attempt.stageReached),
+            result: scrubNullableText(attempt.result),
+          })),
+    policy:
+      section.policy === null
+        ? null
+        : {
+            source: scrubSupportText(section.policy.source),
+            readState: scrubSupportText(section.policy.readState),
+            teamState: scrubNullableText(section.policy.teamState),
+            teamPolicyVersion: scrubNullableText(
+              section.policy.teamPolicyVersion,
+            ),
+          },
+    rotations:
+      section.rotations === null
+        ? null
+        : section.rotations.map((rotation) => ({
+            secretName: scrubSupportText(rotation.secretName),
+            state: scrubSupportText(rotation.state),
+            producers: rotation.producers.map((producer) => ({
+              producer: scrubSupportText(producer.producer),
+              workerClass: scrubNullableText(producer.workerClass),
+              hostId: scrubNullableText(producer.hostId),
+              hostName: null,
+              status: scrubSupportText(producer.status),
+              evidence:
+                producer.evidence === null
+                  ? null
+                  : producer.evidence.map((entry) => ({
+                      kind: scrubSupportText(entry.kind),
+                      count: entry.count,
+                    })),
+            })),
+          })),
+    reachDenials:
+      section.reachDenials === null
+        ? null
+        : section.reachDenials.map((denial) => ({
+            denialId: scrubSupportText(denial.denialId),
+            at: denial.at,
+            sourceHostRef: scrubSupportText(denial.sourceHostRef),
+            targetHostRef: scrubSupportText(denial.targetHostRef),
+            taskRef: scrubNullableText(denial.taskRef),
+            reason: scrubSupportText(denial.reason),
+            sourcePrincipal: scrubSupportText(denial.sourcePrincipal),
+            targetPrincipal: scrubSupportText(denial.targetPrincipal),
+            count: denial.count,
+          })),
+    servedTask:
+      section.servedTask === null
+        ? null
+        : {
+            taskRef: scrubSupportText(section.servedTask.taskRef),
+            otherHostPrincipals: section.servedTask.otherHostPrincipals.map(
+              (category) => scrubSupportText(category),
+            ),
+          },
   };
 }
 

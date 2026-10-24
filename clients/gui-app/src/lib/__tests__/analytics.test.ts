@@ -150,6 +150,7 @@ describe("analytics", () => {
       "app-diagnostics",
       "app-notifications",
       "appearance",
+      "browser-agent-access",
       "devices",
       "diagnostics",
       "general",
@@ -158,6 +159,11 @@ describe("analytics", () => {
       "notifications",
       "permissions",
       "providers",
+      "mcp-servers",
+      "skills",
+      "agent-definitions",
+      "machine-setup",
+      "secrets",
       "shell",
       "usage",
       "worktrees",
@@ -228,6 +234,49 @@ describe("analytics", () => {
         requested_count: 3,
         succeeded_count: 1,
         failed_count: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the voice transcription succeeded payload and rejects values outside its schema", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.VoiceTranscriptionSucceeded, {
+        duration_bucket: "under_10s",
+        had_text: true,
+        decode_bucket: "1_to_5s",
+      }),
+    ).toEqual({
+      duration_bucket: "under_10s",
+      had_text: true,
+      decode_bucket: "1_to_5s",
+    });
+    for (const decodeBucket of ["under_1s", "1_to_5s", "over_5s"]) {
+      expect(
+        sanitizeAnalyticsProperties(
+          AnalyticsEvent.VoiceTranscriptionSucceeded,
+          {
+            duration_bucket: "over_30s",
+            had_text: false,
+            decode_bucket: decodeBucket,
+          },
+        ),
+      ).not.toBeNull();
+    }
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.VoiceTranscriptionSucceeded, {
+        duration_bucket: "under_10s",
+        had_text: true,
+        decode_bucket: "fast",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.VoiceTranscriptionSucceeded, {
+        duration_bucket: "under_10s",
+        had_text: "yes",
+        decode_bucket: "1_to_5s",
       }),
     ).toBeNull();
   });

@@ -33,6 +33,7 @@ import {
 } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   readStagedWorktreeIntent,
@@ -195,6 +196,15 @@ const ABSENT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
   resolvedAt: 1,
   presence: "absent",
 };
+
+// The picker's sandbox staging reads the account and the catalogue; this suite
+// stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: undefined }),
+}));
 
 vi.mock("@/components/ui/select", () => ({
   Select: (props: { readonly children: ReactNode }) => (
@@ -410,6 +420,7 @@ function renderControl(layout: "inline" | "stacked") {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          sandboxStaging={null}
           disabled={false}
           stagingKey={{
             surface: "landing",
@@ -460,6 +471,7 @@ function renderControlInWorkspaceRow(rowWidth: number): QueryClient {
         <ComposerWorkspaceRow
           workspaceControls={
             <ActiveHostWorkspaceControls
+              sandboxStaging={null}
               disabled={false}
               stagingKey={{
                 surface: "landing",
@@ -508,6 +520,7 @@ function DelayedBranchValidationHarness() {
   return (
     <>
       <ActiveHostWorkspaceControls
+        sandboxStaging={null}
         disabled={false}
         stagingKey={{ surface: "landing", hostId: "host-home", draftId: null }}
         workspaceSeed={null}
@@ -523,6 +536,9 @@ function DelayedBranchValidationHarness() {
             draftId: null,
             editor: editorHandleForPrompt("Investigate the worktree race"),
             slashCatalog: null,
+            owner: null,
+            teamSandboxHarnessBlocked: false,
+            settled: null,
             toolbar: {
               selection: {
                 harnessId: "codex",
@@ -713,6 +729,81 @@ describe("landing workspace summary empty state", () => {
     fireEvent.click(screen.getByTestId("folder-add"));
     expect(mocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
 
+    queryClient.clear();
+  });
+
+  it("reads Empty sandbox in the workspace slot while a sandbox is staged, keeping the host picker mounted", () => {
+    const surfaceKey = "landing:window-test";
+    const stageSandbox = () =>
+      useStagedSandboxStore.getState().stage(surfaceKey, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "",
+        wakeString: null,
+      });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ActiveHostWorkspaceControls
+            sandboxStaging={{ surfaceKey, task: null }}
+            disabled={false}
+            stagingKey={{
+              surface: "landing",
+              hostId: "host-home",
+              draftId: null,
+            }}
+            workspaceSeed={null}
+            seedIntent={null}
+            seedIntentOverride={null}
+            layout="inline"
+            hostScope={{ kind: "active" }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    const hostTrigger = screen.getByRole("button", { name: /^Host:/ });
+
+    act(() => {
+      stageSandbox();
+    });
+
+    expect(
+      screen.getByTestId("workspace-summary-empty-sandbox").textContent,
+    ).toBe("Empty sandbox");
+    expect(screen.queryByTestId("folder-add")).toBeNull();
+    // The picker that staged is the same element: its focus is not lost.
+    expect(screen.getByRole("button", { name: /^Host:/ })).toBe(hostTrigger);
+
+    useStagedSandboxStore.setState({ bySurface: {} });
+    queryClient.clear();
+  });
+
+  it("renders no Belongs to chip beside the host picker for a person in teams", () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+        [{ teamId: "t1", slug: "acme", avatarUrl: null }],
+      );
+
+    const queryClient = renderControl("inline");
+
+    expect(screen.getByRole("button", { name: /^Host:/ })).toBeTruthy();
+    expect(screen.queryByTestId("landing-owner-chip")).toBeNull();
     queryClient.clear();
   });
 
@@ -1545,6 +1636,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }

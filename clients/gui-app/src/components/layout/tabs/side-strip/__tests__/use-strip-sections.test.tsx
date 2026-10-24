@@ -9,7 +9,7 @@ import { createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
-  HostNotificationsCloudFeedRowV11,
+  HostNotificationsCloudFeedRowV14,
   HostNotificationsIndicatorState,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -100,7 +100,7 @@ function cloudRow(input: {
         readonly agentTitle: string;
       }
     | { readonly kind: "agent.stopped"; readonly failed: boolean };
-}): HostNotificationsCloudFeedRowV11 {
+}): HostNotificationsCloudFeedRowV14 {
   const { entryId, at, epicId, entry } = input;
   const chatId = `chat-${entryId}`;
   const base = {
@@ -304,8 +304,14 @@ describe("useStripSections", () => {
       tabItem(needsReply),
       splitItem(splitIdle, splitFailed),
     ];
+    // The account's group: only a stamped one is drawn (`drawnTabGroup`).
     const groups: TabGroups = {
-      "group-1": { name: "Later", color: "#8ab4f8", collapsed: true },
+      "group-1": {
+        name: "Later",
+        color: "#8ab4f8",
+        collapsed: true,
+        organizationOwnerId: "user-1",
+      },
     };
     __setAgentActivityStateForTests(
       {

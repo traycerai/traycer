@@ -1,15 +1,17 @@
 /**
  * Source of truth for epic node kinds, display registries, and tree
- * conversion. The GUI treats chat + the four backend artifact kinds
- * (spec, ticket, story, review) as a single "EpicNode" concept.
+ * conversion for chats, terminals, Markdown artifacts and object artifacts.
  * `Record<EpicNodeKind, …>` tables below fail compilation until every
  * key is filled in when a kind is added.
  */
 import {
+  FileCode,
   BookOpen,
   Bot,
   ClipboardCheck,
   FileText,
+  File,
+  PanelsTopLeft,
   MessageSquare,
   Terminal,
   Ticket,
@@ -17,16 +19,12 @@ import {
 } from "lucide-react";
 import type { TreeNodeNested } from "@/lib/tree-types";
 import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
-import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  markdownArtifactKindSchema,
+  type MarkdownArtifactKind,
+  type EpicArtifactKind,
+} from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
-
-const epicArtifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
-);
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
@@ -39,19 +37,37 @@ export type EpicNodeKind =
 export const EPIC_NODE_KINDS: ReadonlyArray<EpicNodeKind> = [
   "chat",
   "terminal-agent",
-  ...epicArtifactKindSchema.options,
+  ...markdownArtifactKindSchema.options,
+  "html",
+  "canvas",
+  "file",
   "terminal",
 ];
 
-const EPIC_ARTIFACT_KIND_SET: ReadonlySet<string> = new Set(
-  epicArtifactKindSchema.options,
-);
+const EPIC_ARTIFACT_KIND_SET: ReadonlySet<string> = new Set([
+  ...markdownArtifactKindSchema.options,
+  "html",
+  "canvas",
+  "file",
+]);
 
 export function isEpicArtifactKind(
   value: string | null | undefined,
 ): value is EpicArtifactKind {
   return (
     value !== null && value !== undefined && EPIC_ARTIFACT_KIND_SET.has(value)
+  );
+}
+
+// Markdown editing, sidebar comments and composer mentions require a Markdown body.
+export function isMarkdownArtifactKind(
+  value: string | null | undefined,
+): value is MarkdownArtifactKind {
+  return (
+    value === "spec" ||
+    value === "ticket" ||
+    value === "story" ||
+    value === "review"
   );
 }
 
@@ -88,6 +104,9 @@ export const EPIC_NODE_ICONS: Readonly<Record<EpicNodeKind, LucideIcon>> = {
   ticket: Ticket,
   story: BookOpen,
   review: ClipboardCheck,
+  html: FileCode,
+  canvas: PanelsTopLeft,
+  file: File,
   terminal: Terminal,
 };
 
@@ -98,6 +117,9 @@ export const EPIC_NODE_LABELS: Readonly<Record<EpicNodeKind, string>> = {
   ticket: "Ticket",
   story: "Story",
   review: "Review",
+  html: "HTML",
+  canvas: "Canvas",
+  file: "File",
   terminal: "Terminal",
 };
 
@@ -119,6 +141,9 @@ export const EPIC_NODE_SENTENCE_NOUNS: Readonly<Record<EpicNodeKind, string>> =
     ticket: "ticket",
     story: "story",
     review: "review",
+    html: "HTML artifact",
+    canvas: "canvas",
+    file: "file",
     terminal: "terminal",
   };
 
@@ -131,6 +156,9 @@ export const DEFAULT_EPIC_NODE_ICON_COLORS: EpicNodeIconColors = {
   ticket: "#a78bfa",
   story: "#34d399",
   review: "#fb7185",
+  html: "#38bdf8",
+  canvas: "#a78bfa",
+  file: "#94a3b8",
   terminal: "#94a3b8",
 };
 function createEpicNodeIconColors(
@@ -143,6 +171,9 @@ function createEpicNodeIconColors(
     ticket: getColor("ticket"),
     story: getColor("story"),
     review: getColor("review"),
+    html: getColor("html"),
+    canvas: getColor("canvas"),
+    file: getColor("file"),
     terminal: getColor("terminal"),
   };
 }
@@ -171,7 +202,7 @@ export function normalizeEpicNodeIconColors(
  * artifact kind fails compilation until its hint is written.
  */
 export const EPIC_NODE_PLACEHOLDER_TEXT: Readonly<
-  Record<EpicArtifactKind, string>
+  Record<MarkdownArtifactKind, string>
 > = {
   spec: "Describe what you want to build — goals, requirements, constraints…",
   ticket: "Describe this ticket — what needs to change and how to verify it…",
@@ -186,6 +217,9 @@ export const DEFAULT_EPIC_NODE_NAMES: Readonly<Record<EpicNodeKind, string>> = {
   ticket: "New ticket",
   story: "New story",
   review: "New review",
+  html: "New HTML artifact",
+  canvas: "New canvas",
+  file: "New file",
   terminal: "Terminal",
 };
 

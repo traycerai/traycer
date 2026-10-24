@@ -14,11 +14,13 @@ import type { ConfigShellProbeResponse } from "@traycer/protocol/host/config/ind
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { configMutationKeys, queryKeys } from "@/lib/query-keys";
 import type {
   ShellConfigController,
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -55,7 +57,7 @@ export function useRpcShellConfigController(props: {
   // null-gated, so a shell with no runtime renders the page inert rather than
   // crashing it.
   const client = useHostBinding()?.hostClient ?? null;
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
 
   const configQuery = useHostQuery<HostRpcRegistry, "config.shell.get">({
     cacheKeyIdentity: undefined,
@@ -86,32 +88,40 @@ export function useRpcShellConfigController(props: {
     options: { enabled: props.enabled },
   });
 
+  // Every write below can choose what starts on the host (a shell, a
+  // launch-sensitive variable), so each carries the executable-write grant.
+  const grant = useExecutableWriteGrant();
   const setMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.set",
+    prepareRequest: grant,
     mutationKey: configMutationKeys.shellSet(),
     errorMessage: "Couldn't update the shell configuration",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const resetMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.reset",
+    prepareRequest: grant,
     mutationKey: configMutationKeys.shellReset(),
     errorMessage: "Couldn't use the system default shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const addMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.add",
+    prepareRequest: grant,
     mutationKey: configMutationKeys.shellAdd(),
     errorMessage: "Couldn't add that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const removeMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.remove",
+    prepareRequest: grant,
     mutationKey: configMutationKeys.shellRemove(),
     errorMessage: "Couldn't remove that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const revertMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.revertArgs",
+    prepareRequest: grant,
     mutationKey: configMutationKeys.shellRevertArgs(),
     errorMessage: "Couldn't restore the default flags",
     invalidateMethods: ["config.shell.get"],
@@ -119,14 +129,15 @@ export function useRpcShellConfigController(props: {
   const queryClient = useQueryClient();
   const envSetMutation = useHostScopedMutationForClient(client, {
     method: "config.env.set",
+    prepareRequest: grant,
     mutationKey: configMutationKeys.envSet(),
-    errorMessage: "Couldn't save the environment variable",
+    errorMessage: "Couldn't save the variable",
     invalidateMethods: ["config.env.list"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
     mutationKey: configMutationKeys.envDelete(),
-    errorMessage: "Couldn't remove the environment variable",
+    errorMessage: "Couldn't remove the variable",
     invalidateMethods: ["config.env.list"],
   });
 
@@ -153,10 +164,17 @@ export function useRpcShellConfigController(props: {
           "config.env.set",
         );
       }
-      await client.request("config.env.set", {
-        key: rename.newKey,
-        value: rename.value,
-      });
+      await client.request(
+        "config.env.set",
+        await grant(
+          {
+            key: rename.newKey,
+            value: rename.value,
+            executableWriteGrant: null,
+          },
+          client,
+        ),
+      );
       if (rename.oldKey.length === 0) return;
       await client.request("config.env.delete", { key: rename.oldKey });
     },
@@ -172,7 +190,7 @@ export function useRpcShellConfigController(props: {
       });
     },
     onError: (error) => {
-      toastFromHostError(error, "Couldn't rename the environment variable");
+      toastFromHostError(error, "Couldn't rename the variable");
     },
   });
 
@@ -218,14 +236,21 @@ export function useRpcShellConfigController(props: {
       envDeleteMutation.isPending ||
       envRenameMutation.isPending,
     probeSource,
-    setShell: (request, callbacks) => setMutation.mutate(request, callbacks),
-    resetShell: (callbacks) => resetMutation.mutate({}, callbacks),
-    addShell: (path, callbacks) => addMutation.mutate({ path }, callbacks),
+    setShell: (request, callbacks) =>
+      setMutation.mutate({ ...request, executableWriteGrant: null }, callbacks),
+    resetShell: (callbacks) =>
+      resetMutation.mutate({ executableWriteGrant: null }, callbacks),
+    addShell: (path, callbacks) =>
+      addMutation.mutate({ path, executableWriteGrant: null }, callbacks),
     removeShell: (path, callbacks) =>
-      removeMutation.mutate({ path }, callbacks),
+      removeMutation.mutate({ path, executableWriteGrant: null }, callbacks),
     revertShellArgs: (path, callbacks) =>
-      revertMutation.mutate({ path }, callbacks),
-    setEnv: (entry, callbacks) => envSetMutation.mutate(entry, callbacks),
+      revertMutation.mutate({ path, executableWriteGrant: null }, callbacks),
+    setEnv: (entry, callbacks) =>
+      envSetMutation.mutate(
+        { ...entry, executableWriteGrant: null },
+        callbacks,
+      ),
     deleteEnv: (key, callbacks) => envDeleteMutation.mutate({ key }, callbacks),
     renameEnv: (rename, callbacks) =>
       envRenameMutation.mutate(rename, callbacks),

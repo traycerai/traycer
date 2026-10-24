@@ -41,6 +41,14 @@ export function createStreamAuthRevalidator(
         });
         return "rotated";
       }
+      if (outcome.kind === "superseded") {
+        // The answer is stale under a live context: something newer overtook
+        // the check, or an interactive sign-in is settling the session. Stay
+        // in the reconnect backoff, where the next re-dial revalidates the
+        // live state; `rejected` would close this stream for good.
+        appLogger.debug("[stream-auth] reconnect revalidation superseded", {});
+        return "network-error";
+      }
       if (outcome.kind === "network-error") {
         appLogger.warn(
           "[stream-auth] reconnect revalidation network error",
@@ -76,6 +84,10 @@ export function createStreamAuthRevalidator(
         appLogger.warn("[stream-auth] reconnect revalidation demoted", {
           reason: "cloud-verdict-withdrawn",
         });
+        // A host refused (or, pre-dial, would refuse) the held bearer. The
+        // service decides whether that ends the local plane, so the unary path
+        // and this one apply one rule.
+        authService.noteHostRefusedHeldBearer();
         return "local-plane-retained";
       }
       appLogger.warn("[stream-auth] reconnect revalidation rejected", {

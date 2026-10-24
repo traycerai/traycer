@@ -61,6 +61,7 @@
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
+  EpicArtifactRecord,
   EpicDeletedArtifactRecord,
   EpicMeta,
 } from "@traycer/protocol/host/epic/state-subscribe";
@@ -84,13 +85,11 @@ import type {
   DeletedArtifactProjection,
   DeletedArtifactsSlice,
   EpicHeader,
-  FilesSlice,
 } from "../types";
 import {
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
-  EMPTY_FILES_SLICE,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "../types";
@@ -161,7 +160,6 @@ export interface EpicLaneStateSlices {
   readonly epicHeader: EpicHeader;
   readonly roleClaims: readonly RoleClaim[];
   readonly commentThreads: CommentThreadsSlice;
-  readonly files: FilesSlice;
 }
 
 /**
@@ -176,7 +174,6 @@ export const EMPTY_LANE_STATE_SLICES: EpicLaneStateSlices = Object.freeze({
   epicHeader: EMPTY_PROJECTED_SLICES.epic,
   roleClaims: Object.freeze([]),
   commentThreads: EMPTY_COMMENT_THREADS_SLICE,
-  files: EMPTY_FILES_SLICE,
 });
 
 export interface EpicLaneStateReplicaSources {
@@ -310,42 +307,8 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
       a.roleClaims.map((claim) => claim.claimId),
       b.roleClaims.map((claim) => claim.claimId),
     ) &&
-    commentThreadsEq(a.commentThreads, b.commentThreads) &&
-    filesSliceEq(a.files, b.files)
+    commentThreadsEq(a.commentThreads, b.commentThreads)
   );
-}
-
-/**
- * Files rows replace as a set, so identity is the common unchanged answer; a
- * replacement that restates the same records (a snapshot after a resume gap)
- * must not republish them, or every open Files panel re-renders for nothing.
- */
-function filesSliceEq(a: FilesSlice, b: FilesSlice): boolean {
-  if (a === b) return true;
-  if (a.served !== b.served || a.records.length !== b.records.length) {
-    return false;
-  }
-  return a.records.every((left, index) => {
-    const right = b.records[index];
-    return (
-      left.path === right.path &&
-      left.entry.v === right.entry.v &&
-      left.entry.kind === right.entry.kind &&
-      left.entry.mediaType === right.entry.mediaType &&
-      left.entry.title === right.entry.title &&
-      left.entry.derivedFrom === right.entry.derivedFrom &&
-      left.entry.sha256 === right.entry.sha256 &&
-      left.entry.status === right.entry.status &&
-      left.entry.deletedAt === right.entry.deletedAt &&
-      left.entry.byteLength === right.entry.byteLength &&
-      left.entry.createdAt === right.entry.createdAt &&
-      left.localState.kind === right.localState.kind &&
-      (left.localState.kind !== "downloading" ||
-        right.localState.kind !== "downloading" ||
-        (left.localState.received === right.localState.received &&
-          left.localState.total === right.localState.total))
-    );
-  });
 }
 
 /**
@@ -372,6 +335,44 @@ function projectTombstone(
   };
 }
 
+function projectArtifact(record: EpicArtifactRecord): ArtifactProjection {
+  return {
+    id: record.id,
+    kind: record.kind,
+    title: record.title,
+    folderName: record.folderName,
+    layout: record.layout,
+    ...(record.relativePath === undefined
+      ? {}
+      : { relativePath: record.relativePath }),
+    ...(record.kind === "html" || record.kind === "canvas"
+      ? { head: record.head }
+      : {}),
+    ...(record.kind === "file" ? { object: record.object } : {}),
+    parentId: record.parentId,
+    // ALWAYS `null` on this head, and structurally so: the lane's
+    // artifact row OMITS `artifactRoomId` (`epicArtifactRecordSchema`
+    // strips it from every arm), because room routing is not this
+    // wire's addressing model - a body is attached by ARTIFACT ID over
+    // `artifact.subscribe`, under an authority epoch, and there is no
+    // room name to carry. Synthesising one would be a fabricated
+    // authority-side fact; leaving it null says exactly what the lane
+    // knows. This is the one projected field the two heads cannot agree
+    // on, and the equivalence test states it rather than papering over
+    // it.
+    artifactRoomId: null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    // Only ticket and story carry a status; the union is discriminated on
+    // `kind`, exactly as the `@1` head's `projectArtifact` narrows it.
+    status:
+      record.kind === "ticket" || record.kind === "story"
+        ? record.status
+        : null,
+    createdManually: record.createdManually,
+  };
+}
+
 /**
  * Demultiplex the one keyed set into the five populations.
  *
@@ -389,46 +390,21 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   const threadsByArtifactId: Record<string, CommentThreadWire[]> = {};
   let roleClaims: readonly RoleClaim[] = EMPTY_LANE_STATE_SLICES.roleClaims;
   let epicHeader: EpicHeader = EMPTY_LANE_STATE_SLICES.epicHeader;
-  let files: FilesSlice = EMPTY_LANE_STATE_SLICES.files;
 
   for (const held of rows) {
     const row = held.row;
     switch (row.kind) {
       case "artifact": {
         const record = row.record;
-        artifactsById[record.id] = {
-          id: record.id,
-          kind: record.kind,
-          title: record.title,
-          folderName: record.folderName,
-          parentId: record.parentId,
-          // ALWAYS `null` on this head, and structurally so: the lane's
-          // artifact row OMITS `artifactRoomId` (`epicArtifactRecordSchema`
-          // strips it from every arm), because room routing is not this
-          // wire's addressing model - a body is attached by ARTIFACT ID over
-          // `artifact.subscribe`, under an authority epoch, and there is no
-          // room name to carry. Synthesising one would be a fabricated
-          // authority-side fact; leaving it null says exactly what the lane
-          // knows. This is the one projected field the two heads cannot agree
-          // on, and the equivalence test states it rather than papering over
-          // it.
-          artifactRoomId: null,
-          createdAt: record.createdAt,
-          updatedAt: record.updatedAt,
-          // Only ticket and story carry a status; the union is discriminated on
-          // `kind`, exactly as the `@1` head's `projectArtifact` narrows it.
-          status:
-            record.kind === "ticket" || record.kind === "story"
-              ? record.status
-              : null,
-          createdManually: record.createdManually,
-        };
+        const artifact = projectArtifact(record);
+        artifactsById[record.id] = artifact;
         artifactIds.push(record.id);
         break;
       }
       case "artifact-tombstone": {
         const record = row.record;
-        deletedById[record.id] = projectTombstone(record);
+        const tombstone = projectTombstone(record);
+        deletedById[record.id] = tombstone;
         deletedIds.push(record.id);
         break;
       }
@@ -447,9 +423,6 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       }
       case "role-claims":
         roleClaims = row.claims;
-        break;
-      case "files":
-        files = { served: true, records: row.files };
         break;
       case "epic-meta":
         epicHeader = { title: row.meta.title, updatedAt: row.meta.updatedAt };
@@ -481,7 +454,6 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       Object.keys(threadsByArtifactId).length === 0
         ? EMPTY_COMMENT_THREADS_SLICE
         : { byArtifactId: threadsByArtifactId },
-    files,
   };
 }
 

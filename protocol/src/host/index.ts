@@ -1,5 +1,6 @@
 export * from "./organization";
 export * from "./agent";
+export * from "./bot";
 export * from "./agent-session-state";
 export * from "./asset-stream-schemas";
 export * from "./browser";
@@ -37,6 +38,7 @@ export * from "./released-floor";
 export * from "./restart";
 export * from "./runtime-capabilities";
 export * from "./session-import";
+export * from "./simulator";
 export * from "./speech";
 export * from "./status";
 export * from "./store-formats";
@@ -114,9 +116,12 @@ export {
   worktreeSetRepoScriptsV10,
   worktreeSetRepoBranchPrefixV10,
   worktreeGetBindingV10,
+  PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
   type HostRpcRegistry,
   type HostStreamRpcRegistry,
 } from "./registry";
+export * from "./environment-schemas";
+export * from "./executable-write-grant";
 
 export {
   diskWorktreeEntrySchema,

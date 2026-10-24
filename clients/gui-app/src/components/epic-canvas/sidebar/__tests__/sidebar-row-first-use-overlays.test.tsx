@@ -23,6 +23,7 @@ import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { ArtifactTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
@@ -31,7 +32,10 @@ import {
   type CloudChatRowExpansion,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
-import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
+import {
+  CHAT_TREE_MESSAGE_HITS_NONE,
+  type ChatTreeMessageHits,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -70,6 +74,14 @@ const dndRegistrations = vi.hoisted(() => ({
   droppableIds: [] as string[],
 }));
 
+/**
+ * The task's hosts view, answered from here so the tree never reaches the host
+ * runtime for it.
+ */
+const taskHostsMount = vi.hoisted(() => ({
+  view: { kind: "none" } as TaskHostsView,
+}));
+
 const OWNER_PR_REFERENCES = vi.hoisted(() =>
   Object.freeze({
     references: [],
@@ -86,6 +98,10 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
     >();
   return { ...actual, useHostClientForHostId: () => null };
 });
+
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () => taskHostsMount.view,
+}));
 
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => OWNER_PR_REFERENCES,
@@ -610,6 +626,12 @@ function moreTriggerSnapshot(element: HTMLElement): {
 const opened: OpenedStoreForTest[] = [];
 
 function renderTree(): HTMLElement {
+  return renderTreeWithMessageHits(CHAT_TREE_MESSAGE_HITS_NONE);
+}
+
+function renderTreeWithMessageHits(
+  messageHits: ChatTreeMessageHits,
+): HTMLElement {
   const handle = createSession();
   opened.push(handle);
   render(
@@ -619,7 +641,7 @@ function renderTree(): HTMLElement {
           <ChatTreePanelBody
             epicId={EPIC_ID}
             tabId={TAB_ID}
-            messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+            messageHits={messageHits}
           />
         </DndContext>
       </EpicSessionContext.Provider>
@@ -731,6 +753,7 @@ afterEach(() => {
   for (const handle of opened.splice(0)) handle.dispose();
   dndRegistrations.draggableIds = [];
   dndRegistrations.droppableIds = [];
+  taskHostsMount.view = { kind: "none" };
   resetOverlayMounted();
   useNewConversationModalOpenStore.getState().close();
   vi.useRealTimers();
@@ -1433,5 +1456,61 @@ describe("sidebar row first-use overlays", () => {
     await hovered;
     expect(overlayMounted.tooltipWrapper).toBe(1);
     expect(screen.getByRole("tooltip").textContent).toMatch(/offline/i);
+  });
+});
+
+const TWO_MACHINES_VIEW: TaskHostsView = {
+  kind: "hosts",
+  hosts: [
+    {
+      hostId: "host-a",
+      label: "This machine",
+      principal: { kind: "user", id: USER_ID },
+      reach: "same_principal",
+    },
+    {
+      hostId: "host-b",
+      label: "Another machine",
+      principal: { kind: "user", id: USER_ID },
+      reach: "same_principal",
+    },
+  ],
+};
+
+/** The tree's own container: the parent of `role="tree"`. */
+function treeContainerClasses(): readonly string[] {
+  const container = screen.getByRole("tree").parentElement;
+  if (container === null) throw new Error("the tree has no container");
+  return [...container.classList];
+}
+
+describe("chat tree with the task on hosts", () => {
+  it("renders no Hosts section for a task with hosts on two machines, and keeps the rows", () => {
+    taskHostsMount.view = TWO_MACHINES_VIEW;
+    renderTree();
+
+    expect(screen.queryByText("Hosts")).toBeNull();
+    expect(screen.getByTestId(`epic-sidebar-item-${ROW_A}`)).toBeTruthy();
+    expect(screen.getByTestId(`epic-sidebar-item-${ROW_B}`)).toBeTruthy();
+  });
+
+  it("lets the tree fill the panel when no message hits follow it", () => {
+    renderTree();
+
+    const classes = treeContainerClasses();
+    expect(classes).toContain("flex-1");
+    expect(classes).not.toContain("shrink-0");
+  });
+
+  it("lets the rows shrink to their own height when message hits follow them", () => {
+    renderTreeWithMessageHits({
+      node: <div data-testid="message-hits-probe" />,
+      state: "hits",
+    });
+
+    expect(screen.getByTestId("message-hits-probe")).toBeTruthy();
+    const classes = treeContainerClasses();
+    expect(classes).toContain("shrink-0");
+    expect(classes).not.toContain("flex-1");
   });
 });

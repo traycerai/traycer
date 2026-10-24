@@ -30,12 +30,119 @@
    modal backdrops. Keep the window's top bar on the same undimmed surface
    while a modal owns focus; its content remains blocked by the modal
    focus/pointer trap. Fullscreen and browser shells retain the full-viewport
-   backdrop. */
+   backdrop. An overlay scoped to a surface below the band
+   (`data-overlay-scope="surface"`, the epic migration modal) already starts
+   under it, and covers its surface whole. */
 .wco
   :is(
     [data-slot="dialog-overlay"],
     [data-slot="sheet-overlay"],
     [data-slot="drawer-overlay"]
-  ) {
+  ):not([data-overlay-scope="surface"]) {
   top: var(--app-title-band-height);
+}
+
+/* The joined active tab is in that undimmed band, but it is the page's own
+   shape (the sheet join in index.css), so it takes the backdrop's dim.
+   `JoinedTabDim`, beside the join bridge in AppColumnFrame, holds one layer
+   per open backdrop, as the overlays publish themselves
+   (`backdrop-dim-store.ts`): no `:has()` on `.wco` here, which would
+   re-match the whole window on every change in it
+   (`style-invalidation-scope.test.ts`). Each layer copies the joined shape -
+   the tab from its top, the bridge down to the surface frame, its two concave
+   feet - and darkens it as its backdrop darkens the page, so stacked modals
+   stack their layers as they stack their backdrops. The holder fills the
+   window and clips the layers to the title band, below which the backdrops
+   themselves dim. A closing backdrop stays published through its exit, so
+   its layer fades with it. With no joined tab there is no anchor, and the
+   fallbacks leave the layers no width. */
+[data-joined-tab-dim] {
+  display: none;
+}
+
+.wco [data-joined-tab-dim] {
+  display: block;
+  position: fixed;
+  inset: 0;
+  /* Over the tab and the bridge (z-21), under the backdrop and the modal. */
+  z-index: 22;
+  clip-path: inset(0 0 calc(100% - var(--app-title-band-height)) 0);
+  pointer-events: none;
+}
+
+[data-dim-layer] {
+  --join-radius: var(--radius-lg);
+  --dim: transparent;
+  /* Fixed, not absolute: the holder is then no containing block for it, so
+     it can anchor to the tab as the bridge does. */
+  position: fixed;
+  position-anchor: --sheet-joined;
+  position-visibility: anchors-visible;
+  top: anchor(top, 0px);
+  left: anchor(left, 0px);
+  right: anchor(right, 100%);
+  bottom: calc(anchor(--task-frame top, 0px) - 1px);
+  border-start-start-radius: var(--radius-xl);
+  border-start-end-radius: var(--radius-xl);
+  background-color: var(--dim);
+  opacity: 0;
+  /* The backdrops' own fade: tw-animate's `animate-in` / `animate-out`, whose
+     default easing is `ease`. */
+  transition: opacity var(--panel-motion-duration) ease;
+
+  /* The bridge's feet (index.css), in the dim: the arc's line in the border,
+     the fill beyond it in the shadow. The bridge's offsets are taken from
+     inside its 1px side borders; this layer has none. */
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: var(--join-radius);
+    height: var(--join-radius);
+    border: 0 solid var(--dim);
+    border-bottom-width: 1px;
+    box-shadow: calc(var(--arc-x) * var(--join-radius) / 2)
+      calc(var(--join-radius) / 2) 0 calc(var(--join-radius) / 2 - 1px)
+      var(--dim);
+  }
+
+  /* Each foot shares the layer's outer column, as the bridge's foot shares
+     its border; a translucent dim drawn twice there would show, so the foot
+     leaves that column to the layer. */
+  &::before {
+    clip-path: inset(-1px 1px 0 -1px);
+    right: calc(100% - 1px);
+    border-right-width: 1px;
+    border-bottom-right-radius: var(--join-radius);
+    --arc-x: 1;
+  }
+
+  &::after {
+    clip-path: inset(-1px -1px 0 1px);
+    left: calc(100% - 1px);
+    border-left-width: 1px;
+    border-bottom-left-radius: var(--join-radius);
+    --arc-x: -1;
+  }
+}
+
+[data-dim-layer="10"] {
+  --dim: color-mix(in oklab, var(--color-black) 10%, transparent);
+}
+
+[data-dim-layer="30"] {
+  --dim: color-mix(in oklab, var(--color-black) 30%, transparent);
+}
+
+[data-dim-layer="40"] {
+  --dim: color-mix(in oklab, var(--color-black) 40%, transparent);
+}
+
+[data-dim-layer][data-state="open"] {
+  opacity: 1;
+
+  @starting-style {
+    opacity: 0;
+  }
 }

@@ -1,3 +1,5 @@
+import { composeRequestAbort } from "./request-abort";
+
 /**
  * Device push-token registration against authn-v3 (`/api/v3/user/push-tokens`).
  *
@@ -64,6 +66,9 @@ async function postPushTokens(
   bearerToken: string,
   body: Record<string, string>,
 ): Promise<PushTokenFetchResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. No body is read, so it is cleared once fetch settles.
+  const abort = composeRequestAbort(null, PUSH_TOKEN_FETCH_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(authnApiUrl(authnBaseUrl, path), {
@@ -74,10 +79,12 @@ async function postPushTokens(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(PUSH_TOKEN_FETCH_TIMEOUT_MS),
+      signal: abort.signal,
     });
   } catch {
     return { kind: "network-error" };
+  } finally {
+    abort.clear();
   }
   if (response.ok) return { kind: "ok" };
   if (response.status === 401 || response.status === 403) {

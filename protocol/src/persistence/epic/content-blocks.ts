@@ -1,4 +1,7 @@
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
@@ -6,6 +9,10 @@ import {
   userMessageSenderSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
+import {
+  artifactManifestPathSchema,
+  artifactObjectRefSchema,
+} from "./artifacts";
 import {
   imageByteLengthSchema,
   imageDimensionSchema,
@@ -84,16 +91,6 @@ const harnessIdSchemaPreReasonix = lazySchema(() =>
     "omp",
     "huggingface",
   ]),
-);
-
-// Canonical artifact-kind vocabulary (spec / ticket / story / review), shared
-// with the artifact metadata + tombstone schemas and the GUI node registries.
-// Reused here (not re-spelled) so the `artifact_operation` block can never drift
-// from the kinds the rest of the system recognizes.
-const artifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
 );
 
 // Durable provider-generated notice (Codex model reroute / safety
@@ -502,6 +499,43 @@ export const agentMessageReceiptSchema = lazySchema(() =>
 );
 export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
+// Where a cross-host `traycer_send_message` call stands. A send to an agent on
+// another host is queued through the cloud rather than delivered while the
+// call runs, and the sending host learns only of a failure (traycer#2421):
+//
+// - `queued`: sent, and no failure has been reported for it.
+// - `delivered`: written only by hosts built between the stamp's arrival and
+//   traycer#2421, from the receiving host's delivered report. Current hosts
+//   never write it, and the card reads it as `queued`.
+// - `expired`: it waited past the delivery window and was dropped unread.
+// - `failed`: it will not be delivered for any other terminal reason: the
+//   receiving host refused it, or that host was removed and its queue purged.
+//
+// `targetHostOffline` is the host directory's last observation of the
+// receiving host, read once at send time: a hint, never a guarantee either
+// way. Defaulted `false`, so a stamp written before the field parses unchanged.
+//
+// Stamped at `tool_call.completed` from the queued result, then moved by the
+// sending host as a terminal failure for `eventId` arrives - after the turn
+// has ended, as an ordinary row update. Null for a send delivered on the same
+// host and for every block persisted before this field.
+export const agentMessageDeliveryStateSchema = lazySchema(() =>
+  z.enum(["queued", "delivered", "expired", "failed"]),
+);
+export type AgentMessageDeliveryState = z.infer<
+  typeof agentMessageDeliveryStateSchema
+>;
+
+export const agentMessageDeliverySchema = lazySchema(() =>
+  z.object({
+    targetHostId: z.string(),
+    eventId: z.string(),
+    state: agentMessageDeliveryStateSchema,
+    targetHostOffline: z.boolean().default(false),
+  }),
+);
+export type AgentMessageDelivery = z.infer<typeof agentMessageDeliverySchema>;
+
 // Structured rendering of a tool call's input - the collapsed summary line
 // (`inputSummary`) plus this optional expand body. Computed on the host at
 // block-build time from the raw harness input, which is itself NOT persisted (it
@@ -685,41 +719,78 @@ export type ToolCallManagedCommand = z.infer<
 /** Lowercase hex sha256 - the only form a content address is written in. */
 const stampSha256Schema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
 
-/**
- * The page an agent showed with `traycer_show_page`, stamped on that call's
- * `tool_call` block (`chat.subscribe@1.23`). The bytes are an epic file
- * (`files/pages/<slug>-<id>.html`, written once); the stamp names them by path
- * and sha so a row renders exactly the page that was shown, whatever the path
- * holds later.
- *
- * - `height` is the agent's requested height (80-2000 px), used until the frame
- *   reports its own size.
- * - `heights` are publish-time measurements, one `{ width, height }` per
- *   measured width. Best effort: `[]` when the host could not measure.
- * - `derivedFrom` is the `"path@sha"` of the page this one replaced, or `null`.
- * - `originChatId` is the chat the tool ran in. A fork copies the block and
- *   KEEPS the source's id, which is what lets the host tell a copy from the
- *   original when it decides the page's network policy.
- *
- * Every string a renderer shows is agent-authored, so none is trusted.
- */
-export const toolCallPageStampSchema = lazySchema(() =>
-  z.object({
-    path: z.string().min(1),
-    sha256: stampSha256Schema,
-    title: z.string(),
-    height: z.number().int().min(80).max(2000),
-    heights: z.array(
-      z.object({
-        width: z.number().int().positive(),
-        height: z.number().int().nonnegative(),
-      }),
+export const ARTIFACT_STAMP_MAX_FILES = 1024;
+export const ARTIFACT_STAMP_MAX_PATH_CHARS = 1024;
+export const ARTIFACT_STAMP_MAX_MANIFEST_BYTES = 512 * 1024;
+
+/** Bound inline history independently of the capture plane's storage limits. */
+export const toolCallArtifactManifestSchema = lazySchema(() =>
+  z
+    .object({
+      files: z
+        .preprocess(
+          (value, ctx) => {
+            // z.record otherwise drops this key before its path can be checked.
+            if (typeof value === "object" && value !== null) {
+              if (Object.hasOwn(value, "__proto__")) {
+                ctx.addIssue({
+                  code: "custom",
+                  message: "Invalid artifact manifest path",
+                });
+                return z.NEVER;
+              }
+              const paths = Object.keys(value);
+              if (paths.length > ARTIFACT_STAMP_MAX_FILES) {
+                ctx.addIssue({
+                  code: "custom",
+                  message: "Inline artifacts support at most 1024 files.",
+                });
+                return z.NEVER;
+              }
+              if (
+                paths.some(
+                  (path) => path.length > ARTIFACT_STAMP_MAX_PATH_CHARS,
+                )
+              ) {
+                ctx.addIssue({
+                  code: "custom",
+                  message:
+                    "Inline artifact paths support at most 1024 characters.",
+                });
+                return z.NEVER;
+              }
+            }
+            return value;
+          },
+          z.record(
+            artifactManifestPathSchema.max(
+              ARTIFACT_STAMP_MAX_PATH_CHARS,
+              "Inline artifact paths support at most 1024 characters.",
+            ),
+            artifactObjectRefSchema.omit({ status: true }),
+          ),
+        )
+        .nonoptional(),
+      capturedAt: z.number(),
+    })
+    .refine(
+      (manifest) =>
+        new TextEncoder().encode(JSON.stringify(manifest)).byteLength <=
+        ARTIFACT_STAMP_MAX_MANIFEST_BYTES,
+      "Inline artifact manifests support at most 512 KiB.",
     ),
-    derivedFrom: z.string().nullable(),
+);
+
+/** The captured objects an inline artifact showed, independent of upload status. */
+export const toolCallArtifactStampSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string().min(1),
+    title: z.string(),
+    manifest: toolCallArtifactManifestSchema,
     originChatId: z.string().min(1),
   }),
 );
-export type ToolCallPageStamp = z.infer<typeof toolCallPageStampSchema>;
+export type ToolCallArtifactStamp = z.infer<typeof toolCallArtifactStampSchema>;
 
 /**
  * One origin an MCP App's CSP may name. Anything but an https or wss origin
@@ -769,6 +840,9 @@ export const mcpCallToolResultSchema = lazySchema(() =>
   }),
 );
 export type McpCallToolResult = z.infer<typeof mcpCallToolResultSchema>;
+
+/** Host-written MCP App snapshots keep their existing namespace. */
+export const EPIC_FILE_MCP_APPS_PREFIX = "files/mcp-apps/";
 
 /**
  * The MCP App a tool call rendered, stamped on its `tool_call` block
@@ -847,6 +921,12 @@ export const toolCallBlockSchema = lazySchema(() =>
     // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
     // never observe it.
     agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    // Where a cross-host send stands (`chat.subscribe@1.29`) - see
+    // `agentMessageDeliverySchema`. Null for every other tool call, for a
+    // same-host send and for blocks persisted before this field. Not on the
+    // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.28` and older
+    // never see it.
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
     // The shell a `traycer_run_shell` call created - see
     // `toolCallManagedCommandSchema`. Null for every other tool call.
     managedCommand: toolCallManagedCommandSchema.nullable().default(null),
@@ -892,23 +972,73 @@ export const toolCallBlockSchema = lazySchema(() =>
     // persisted before this field existed parse cleanly. See
     // `imageGenerationResultSchema`.
     imageResults: z.array(imageGenerationResultSchema).default([]),
-    // The page this call showed, or the MCP App it rendered
-    // (`chat.subscribe@1.23`) - see `toolCallPageStampSchema` and
-    // `toolCallMcpAppStampSchema`. Null for every other call and for blocks
-    // persisted before these fields. Deliberately NOT on the hand-frozen
-    // `toolCallBlockSchemaPrePage` below, so `1.21` and older never see them.
-    page: toolCallPageStampSchema.nullable().default(null),
+    // The artifact this call captured (`chat.subscribe@1.31`).
+    artifact: toolCallArtifactStampSchema.nullable().default(null),
+    // The MCP App this call rendered (`chat.subscribe@1.23`).
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
+// Frozen through chat.subscribe@1.30: keep the artifact stamp off older lines.
+export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
 );
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
+// Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.23` through
+// `@1.28` ship it: the live block without the `agentMessageDelivery` stamp
+// `1.29` added. Bound by the content-block unions those lines decode.
+// Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
+export const toolCallBlockSchemaPreDelivery = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
+
 // Wire-freeze copy of `toolCallBlockSchema` as every `chat.subscribe` line up to
-// `@1.21` ships it: the live block without the `page` / `mcpApp` stamps `1.23`
+// `@1.21` ships it: the live block without the `mcpApp` stamp `1.23`
 // added. Bound by every historical content-block union that used to reference
-// the live block, so those lines keep their vocabulary and lose only the two
-// keys. Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
-export const toolCallBlockSchemaPrePage = lazySchema(() =>
+// the live block, so those lines keep their vocabulary and omit this
+// key. Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
+export const toolCallBlockSchemaPreMcpApp = lazySchema(() =>
   z.object({
     ...baseBlockFields,
     status: actionBlockStatus,
@@ -1429,6 +1559,20 @@ export const errorBlockSchemaPreFallback = lazySchema(() =>
   }),
 );
 
+/** The compaction block shipped through chat.subscribe 1.35 and chat-sync 1.10. */
+export const compactionBlockSchemaPreNotApplied = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("compaction"),
+    trigger: z.enum(["auto", "manual"]).nullable(),
+    preTokens: z.number().nullable(),
+    postTokens: z.number().nullable(),
+    durationMs: z.number().nullable(),
+    summary: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+);
+
 export const compactionBlockSchema = lazySchema(() =>
   z.object({
     ...baseBlockFields,
@@ -1439,6 +1583,7 @@ export const compactionBlockSchema = lazySchema(() =>
     durationMs: z.number().nullable(),
     summary: z.string().nullable(),
     error: z.string().nullable(),
+    notApplied: z.boolean().default(false),
   }),
 );
 export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
@@ -2328,12 +2473,12 @@ export function artifactOperationBlockId(
 // reflects without rewriting persisted history. The fallback is for the short
 // delete window before the tombstone projects. `blockId` follows
 // {@link artifactOperationBlockId}.
-export const artifactOperationBlockSchema = lazySchema(() =>
+export const artifactOperationBlockSchemaPreHtml = lazySchema(() =>
   z.object({
     ...baseBlockFields,
     type: z.literal("artifact_operation"),
     operation: artifactOperationActionSchema,
-    kind: artifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     title: z.string().nullable().default(null),
     // Content-addressed snapshot refs for the artifact's merged change this turn
@@ -2347,9 +2492,35 @@ export const artifactOperationBlockSchema = lazySchema(() =>
     afterHash: z.string().nullable().default(null),
   }),
 );
+/** New artifact kinds are carried only by chat.subscribe 1.30 and later. */
+export const artifactOperationBlockSchema = lazySchema(() =>
+  artifactOperationBlockSchemaPreHtml.extend({
+    kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),
+  }),
+);
 export type ArtifactOperationBlock = z.infer<
   typeof artifactOperationBlockSchema
 >;
+
+export const contentBlockSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreArtifact,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchemaPreNotApplied,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
+  ]),
+);
 
 export const contentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
@@ -2466,7 +2637,7 @@ export const contentBlockSchemaPreReasonix = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreReasonix,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2474,11 +2645,11 @@ export const contentBlockSchemaPreReasonix = lazySchema(() =>
     todoBlockSchema,
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchemaPreReasonix,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2505,11 +2676,11 @@ export const contentBlockSchemaPreImage = lazySchema(() =>
     todoBlockSchema,
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
     steerBlockSchemaPreReasonix,
     interviewBlockSchemaPreSettlement,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2535,11 +2706,11 @@ export const contentBlockSchemaPreSettlement = lazySchema(() =>
     todoBlockSchema,
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
     steerBlockSchemaPreReasonix,
     interviewBlockSchemaPreSettlement,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2597,7 +2768,7 @@ export const contentBlockSchemaPreFallback = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreFallback,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2605,11 +2776,11 @@ export const contentBlockSchemaPreFallback = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreShellHost,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2625,7 +2796,7 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreBrowser,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2633,11 +2804,11 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreShellHost,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2649,7 +2820,7 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreBrowser,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2657,11 +2828,11 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2676,7 +2847,7 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreReceipt,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2684,26 +2855,26 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
-// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+// ── Wire-freeze variant (pre-MCP-App, `chat.subscribe@1.18`-`@1.21`) ──────────
 //
 // The live block vocabulary as those lines ship it, holding back exactly what
-// `1.23` added: the `page` / `mcpApp` stamps on a tool call
-// (`toolCallBlockSchemaPrePage`). Every older union above takes the same leaf
+// `1.23` added: the `mcpApp` stamp on a tool call
+// (`toolCallBlockSchemaPreMcpApp`). Every older union above takes the same leaf
 // in place of the live block. Every other member binds its live schema: freeze
 // the member here before adding a field to it.
-export const contentBlockSchemaPrePage = lazySchema(() =>
+export const contentBlockSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchema,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2711,11 +2882,11 @@ export const contentBlockSchemaPrePage = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -2747,7 +2918,7 @@ export const contentBlockSchemaV18 = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreFallback,
     reasoningBlockSchema,
-    toolCallBlockSchemaPrePage,
+    toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2755,10 +2926,10 @@ export const contentBlockSchemaV18 = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
     steerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );

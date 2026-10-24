@@ -7,7 +7,6 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
-  type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
 import { Terminal, type ITerminalOptions } from "@xterm/xterm";
@@ -19,7 +18,7 @@ import {
 } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { CanvasAddon } from "@xterm/addon-canvas";
-import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import "@xterm/xterm/css/xterm.css";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import {
@@ -41,6 +40,7 @@ import {
   uniquePaths,
 } from "@/lib/files/file-transfer-paths";
 import { isMobileApp } from "@/lib/mobile-app";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
 import {
@@ -87,6 +87,15 @@ import {
   type TerminalTileFindAdapter,
   type TerminalTileFindKind,
 } from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
+import {
+  TerminalTouchMenu,
+  type TerminalTouchMenuState,
+} from "@/components/epic-canvas/renderers/terminal-touch/terminal-touch-menu";
+import {
+  terminalWordAtPoint,
+  type TerminalClientPoint,
+} from "@/components/epic-canvas/renderers/terminal-touch/terminal-touch-selection";
+import { useTerminalTouchGestures } from "@/components/epic-canvas/renderers/terminal-touch/use-terminal-touch-gestures";
 
 const RESIZE_DEBOUNCE_MS = 50;
 const XTERM_STARTUP_DISPOSE_DELAY_MS = 0;
@@ -104,9 +113,6 @@ const GRID_LATCH_WARN_STREAK = 5;
 // grid, which must never reach the host's shared min-size grid. No usable
 // terminal pane is this small, so the floor only ever rejects degenerate boxes.
 const MIN_FIT_CONTAINER_PX = 48;
-
-/** Finger travel beyond this is a scroll gesture, not a tap-to-focus. */
-const TOUCH_TAP_SLOP_PX = 10;
 
 interface XtermInitialOptions extends ITerminalOptions {
   readonly vtExtensions: {
@@ -568,36 +574,53 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     termRef.current?.focus();
   }, []);
 
-  // Tap-to-focus for touch devices. xterm's own click-to-focus rides the
-  // compatibility mouse events iOS synthesizes after a tap, which don't
-  // arrive reliably over the terminal (xterm's touch scrolling swallows
-  // them) - so on a phone, tapping the terminal never focused it and the
-  // soft keyboard could not come up. Focus explicitly on a touch TAP, with a
-  // movement slop so finger-scrolling the buffer doesn't yank the keyboard
-  // open. Mouse/pen still use xterm's native mousedown focus path.
-  const touchTapStartRef = useRef<{ x: number; y: number } | null>(null);
-  const handleTouchPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>): void => {
-      if (event.pointerType !== "touch") return;
-      touchTapStartRef.current = { x: event.clientX, y: event.clientY };
-    },
-    [],
+  // Touch over the grid. xterm's own click-to-focus and drag-selection ride
+  // the compatibility mouse events iOS synthesizes after a tap, which never
+  // arrive over the terminal (xterm's touch recognizer cancels them to keep a
+  // pan a scroll) - so on a phone, tapping the terminal never focused it and
+  // the soft keyboard could not come up, and nothing could be selected at all.
+  // `useTerminalTouchGestures` owns all of it: a tap focuses (and drops a
+  // selection), a short hold then drag selects, a long press opens the edit
+  // menu. Mouse/pen still use xterm's native mouse paths.
+  const handleTouchTap = useCallback((): void => {
+    const term = termRef.current;
+    if (term === null) return;
+    if (term.hasSelection()) term.clearSelection();
+    term.focus();
+  }, []);
+  // The menu is a phone-layout affordance: in a wide window a touch-capable
+  // screen keeps the tap and the selection drag (neither changes anything
+  // for a mouse), but its long press opens nothing, as before.
+  const phoneLayout = useIsMobileViewport();
+  const [touchMenu, setTouchMenu] = useState<TerminalTouchMenuState | null>(
+    null,
   );
-  const handleTouchPointerUp = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>): void => {
-      if (event.pointerType !== "touch") return;
-      const start = touchTapStartRef.current;
-      touchTapStartRef.current = null;
-      if (start === null) return;
-      const movedPx = Math.hypot(
-        event.clientX - start.x,
-        event.clientY - start.y,
-      );
-      if (movedPx > TOUCH_TAP_SLOP_PX) return;
-      termRef.current?.focus();
+  const closeTouchMenu = useCallback((): void => setTouchMenu(null), []);
+  const handleTouchLongPress = useCallback(
+    (point: TerminalClientPoint): void => {
+      if (!phoneLayout) return;
+      const term = termRef.current;
+      const mount = mountRef.current;
+      if (term === null || mount === null) return;
+      // The anchor is a sibling of the mount inside the same positioned box,
+      // so the press point is expressed against the mount's own rect.
+      const rect = mount.getBoundingClientRect();
+      setTouchMenu({
+        left: point.x - rect.left,
+        top: point.y - rect.top,
+        word: terminalWordAtPoint(term, point),
+        selectionText: term.hasSelection() ? term.getSelection() : null,
+        restoreFocus: term.element?.contains(document.activeElement) === true,
+      });
     },
-    [],
+    [phoneLayout],
   );
+  const touchGestures = useTerminalTouchGestures({
+    termRef,
+    mountRef,
+    onTap: handleTouchTap,
+    onLongPress: handleTouchLongPress,
+  });
 
   const handleDragEnter = useCallback(
     (event: DragEvent<HTMLDivElement>): void => {
@@ -705,8 +728,15 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onPasteCapture={handlePaste}
-        onPointerDown={handleTouchPointerDown}
-        onPointerUp={handleTouchPointerUp}
+        onPointerDown={touchGestures.onPointerDown}
+        onPointerMove={touchGestures.onPointerMove}
+        onPointerUp={touchGestures.onPointerUp}
+        onPointerCancel={touchGestures.onPointerCancel}
+      />
+      <TerminalTouchMenu
+        state={touchMenu}
+        termRef={termRef}
+        onClose={closeTouchMenu}
       />
       {isDraggingFiles ? (
         <div
@@ -762,22 +792,25 @@ function createXtermEntry(
   containerEl.setAttribute("data-terminal-host", "");
 
   const term = new Terminal(initialOptions);
-  // Measure cells with the Unicode 11 width tables, not xterm's Unicode 6
-  // default. The host advertises `TERM_PROGRAM=kitty` to TUI sessions, so chat
-  // TUIs (claude-code, codex) lay out their frames with string-width
-  // semantics, where emoji like U+2705/U+274C are two columns wide. Unicode 6
-  // calls those one column, and the disagreement only shows up on INCREMENTAL
-  // repaints: the TUI moves the cursor relatively (column 1 + cursor-forward)
-  // to rewrite a span, lands one column short per emoji, and paints over its
-  // own table borders - garble that "fixes itself" on the next resize because
-  // that forces a full redraw with absolute positioning.
+  // Measure cells as grapheme clusters with the Unicode 15 width tables, not
+  // xterm's Unicode 6 default. The host advertises `TERM_PROGRAM=kitty` to TUI
+  // sessions, so chat TUIs (claude-code, codex) lay out their frames with
+  // string-width semantics: emoji like U+2705/U+274C, an emoji-style
+  // U+26A0 U+FE0F, a ZWJ family and a flag are each one two-column cluster.
+  // A per-code-point table gets some of those wrong (Unicode 11 counts the ZWJ
+  // family as eight columns and the U+FE0F warning sign as one), and the
+  // disagreement only shows up on INCREMENTAL repaints: the TUI moves the
+  // cursor relatively (column 1 + cursor-forward) to rewrite a span, lands
+  // short or long by the difference, and paints over its own table borders -
+  // garble that "fixes itself" on the next resize because that forces a full
+  // redraw with absolute positioning.
   //
   // This is one half of a width contract with the host's snapshot emulator
-  // (traycer-host `terminal-snapshot-emulator.ts`), which sets the same
-  // unicode version so a reattach snapshot replays into an identically
-  // measured grid. The two must move together.
-  term.loadAddon(new Unicode11Addon());
-  term.unicode.activeVersion = "11";
+  // (traycer-host `terminal-snapshot-emulator.ts`), which loads the same addon
+  // so a reattach snapshot replays into an identically measured grid. The two
+  // must move together.
+  term.loadAddon(new UnicodeGraphemesAddon());
+  term.unicode.activeVersion = "15-graphemes";
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   // Route every clicked link through the app's one link seam. Left at its

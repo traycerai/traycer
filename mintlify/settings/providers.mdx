@@ -30,6 +30,14 @@ The switch in the provider's header reads **Enabled** or **Disabled**. Only enab
 
 At least one provider must stay enabled. A provider with managed profiles needs at least one enabled profile before you can turn it on.
 
+## Reset Unreadable Provider Settings
+
+If Traycer cannot read a provider's saved settings, a warning in **Providers** offers **Reset &lt;provider&gt; settings**. Use it when the warning prevents you from saving that provider's key, on/off switch, or CLI choice.
+
+Read the confirmation before resetting. Traycer keeps a copy of the settings file in the same folder, then resets only that provider. Its saved key, CLI choice, environment overrides, and launch arguments stop being used; other providers' settings are kept.
+
+After the reset, turn the provider on if needed and enter its key again if you use a stored key. Reapply any custom CLI choice, environment overrides, or launch arguments you still need. The result message names the backup. If it asks you to restart the host, restart the host selected in Settings to finish applying the reset.
+
 ## Provider Tabs
 
 Tabs depend on the provider. A provider opens on its first tab.
@@ -151,6 +159,14 @@ For CLIs that Traycer manages, open the version menu on the managed row to see t
 Traycer does not manage the Amp, Hermes Agent, or Command Code CLIs; install them yourself, then pick the detected copy or add its path.
 
 For Claude Code, Codex, and OpenCode, this tab also has **Terminal interface CLI arguments**. They are appended to the CLI when you start an agent on the Terminal interface, and they pre-fill the launch picker, where you can change them for one launch. Use bypass or auto-approval flags deliberately. Codex permission flags such as `--approve-for-me`, `--ask-for-approval`, and `--sandbox` apply when a session starts; when Traycer reopens or forks a Codex session, the session keeps its own permissions, so Traycer leaves those flags out.
+
+### Native Subagents
+
+On **CLI & Args**, **Allow native subagents** is on by default. Turn it off to direct this provider's agents to delegate through [Traycer agents](/panels/agents) instead of the provider's built-in subagents. The setting applies to the host selected in Settings. If the switch is missing, update that host to a version that supports it.
+
+Traycer disables the built-in subagent tools where the provider supports it. For other providers, the agent receives instructions to use Traycer agents instead; this is not a tool-level restriction.
+
+Chat agents pick up the change on their next turn. Restart a running Terminal interface agent for it to pick up the change.
 
 ### Model List Timeout
 

@@ -317,6 +317,11 @@ import {
   PROVIDER_LOGIN_PACK_POLL_MS,
   PROVIDER_LOGIN_STILL_STARTING_CAP,
 } from "@/components/providers/provider-login-start";
+import {
+  KIMI_LIST_ROW,
+  PROJECTED_KIMI_AWAIT_LOGIN,
+  RAW_KIMI_AWAIT_LOGIN,
+} from "@/components/settings/panels/__tests__/__fixtures__/kimi-projected-auth";
 
 function latestStartLoginCall(): readonly [
   StartLoginVariables,
@@ -1961,5 +1966,80 @@ describe("SignInToEnableButton when the provider refuses the sign-in", () => {
 
     expect(screen.getByRole("alert").textContent).toContain("did not complete");
     expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+  });
+});
+
+// `traycerai/traycer#2363`: the host answers a successful Kimi sign-in's
+// `providers.awaitLogin` with top-level `authenticated` while `providers.list`
+// keeps the credential file's `configured`. Nothing in the GUI enables a
+// provider from an auth status; the one enablement an auth verdict reaches is
+// this button's own, written after the person pressed "Sign in & enable".
+describe("SignInToEnableButton with a Kimi sign-in", () => {
+  afterEach(resetFixtures);
+
+  // The catalog row exactly as `providers.list` serves it (raw `configured`),
+  // given the headless sign-in the button needs to render.
+  function kimiCatalogRow(): ProviderCliState {
+    return {
+      ...KIMI_LIST_ROW,
+      loginCapability: fixtures.signInProvider.loginCapability,
+    };
+  }
+
+  async function pressSignIn(): Promise<RenderResult> {
+    fixtures.providers = [kimiCatalogRow()];
+    const view = render(<OnboardingDetectedAgents />);
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    await act(() => {
+      startOptions.onSuccess({ started: true });
+      return Promise.resolve();
+    });
+    return view;
+  }
+
+  it("leaves a disabled Kimi row with a `configured` catalog reading off until the person acts", () => {
+    fixtures.providers = [kimiCatalogRow()];
+    render(<OnboardingDetectedAgents />);
+
+    expect(screen.getByText("Configured, not verified")).toBeTruthy();
+    expect(providerButton("Kimi", false)).toBeTruthy();
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+    expect(fixtures.startLoginMutate).not.toHaveBeenCalled();
+    expect(fixtures.awaitLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not enable on a completion the host did not project: the GUI lifts nothing itself", async () => {
+    const view = await pressSignIn();
+
+    act(() => {
+      latestAwaitLoginOptions().onSuccess(RAW_KIMI_AWAIT_LOGIN);
+    });
+    fixtures.awaitLoginSuccess = true;
+    fixtures.awaitLoginData = RAW_KIMI_AWAIT_LOGIN;
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+  });
+
+  it("enables only on the press's own projected completion, and not before it arrives", async () => {
+    await pressSignIn();
+    // Signing in has started and the catalog still reads `configured`:
+    // nothing is enabled yet.
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+
+    act(() => {
+      latestAwaitLoginOptions().onSuccess(PROJECTED_KIMI_AWAIT_LOGIN);
+    });
+
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
+      providerId: "kimi",
+      enabled: true,
+      profileAction: null,
+    });
   });
 });

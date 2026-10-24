@@ -4,6 +4,7 @@ import {
   applySlowDown,
   createPollSchedule,
   DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
+  describeDeviceRequestFailure,
   isDeviceExpired,
   pollDeviceToken,
   resetPollInterval,
@@ -155,6 +156,12 @@ export class DeviceFlowController {
       { signal: undefined, timeoutMs: DEFAULT_DEVICE_REQUEST_TIMEOUT_MS },
     );
     if (authorization.kind !== "started") {
+      // The renderer only learns "could not start sign-in"; this line is the
+      // one place the desktop log says why. Fixed words and a status number
+      // only (`describeDeviceRequestFailure`): the log travels in feedback.
+      log.warn(
+        `[device-flow] authorize failed cause=${describeDeviceRequestFailure(authorization.cause)}`,
+      );
       return { ok: false };
     }
     const attemptId = randomUUID();
@@ -252,6 +259,11 @@ async function runDevicePollLoop(
     expiresInSeconds: authorization.expiresInSeconds,
     startedAtMs: Date.now(),
   });
+  // The last poll failure this attempt logged, so a run of identical failures
+  // is one line, not one every interval until the device_code expires. Reset
+  // by any answered poll, so a failure that comes back after a recovery is
+  // logged again.
+  let lastLoggedFailure: string | null = null;
 
   while (true) {
     if (signal.aborted) {
@@ -275,6 +287,18 @@ async function runDevicePollLoop(
     );
     if (poll === "aborted") {
       return "aborted";
+    }
+    if (poll.kind === "network-error") {
+      // The poll loop retries these silently, so a sign-in that never
+      // completes said nothing about why. Same rendering as the authorize
+      // line: fixed words and a status number only.
+      const failure = describeDeviceRequestFailure(poll.cause);
+      if (failure !== lastLoggedFailure) {
+        log.warn(`[device-flow] poll failed cause=${failure}`);
+        lastLoggedFailure = failure;
+      }
+    } else {
+      lastLoggedFailure = null;
     }
 
     switch (poll.kind) {

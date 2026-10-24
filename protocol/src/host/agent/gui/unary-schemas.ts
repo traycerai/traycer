@@ -12,6 +12,7 @@ import {
   guiHarnessIdSchemaV90,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
+import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import {
   ALL_PERMISSION_MODES,
   ALL_PERMISSION_MODES_PRE_AUTO,
@@ -50,6 +51,27 @@ export const guiHarnessUnavailableReasonSchema = lazySchema(() =>
 );
 export type GuiHarnessUnavailableReason = z.infer<
   typeof guiHarnessUnavailableReasonSchema
+>;
+
+// How a harness reaches its provider on a SANDBOX host, where no user
+// credential is ever stored (`SANDBOX_HOST_REFUSES_CREDENTIALS`). The host
+// reads it off its launch-state table, one row per adapter:
+//
+//  - `placeholder`: the harness is launched with a placeholder in place of the
+//    key, and the egress gateway swaps the real credential in on the wire.
+//  - `process-scoped`: the harness is handed a short-lived token file scoped
+//    to its own process, rewritten before it expires.
+//  - `unsupported`: the way this harness authenticates cannot be brokered. The
+//    row stays in the catalog so the picker can say why; the mechanism is in
+//    `sandboxCredentialNote`.
+//
+// A harness the host does not offer on a sandbox at all is absent from the
+// catalog, so it has no member here.
+export const guiHarnessSandboxCredentialModeSchema = lazySchema(() =>
+  z.enum(["placeholder", "process-scoped", "unsupported"]),
+);
+export type GuiHarnessSandboxCredentialMode = z.infer<
+  typeof guiHarnessSandboxCredentialModeSchema
 >;
 
 export const guiHarnessOptionSchema = lazySchema(() =>
@@ -156,6 +178,27 @@ export const guiHarnessOptionSchema = lazySchema(() =>
     // the old-host path it already supports. See the fuller note on the same pair
     // in `provider-schemas.ts`.
     authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+    // How this harness reaches its provider on a sandbox host; see
+    // `guiHarnessSandboxCredentialModeSchema`. `null` or absent on every host
+    // that is not a sandbox, and on a host that predates the field: the picker
+    // then says nothing, which is the pre-feature rendering.
+    //
+    // Two new KEYS on `agent.gui.listHarnesses@10.1`. The frozen 10.0 row
+    // strips them on the within-major re-parse, so no emission gate is needed
+    // (the 9.2 `judgeDefaultModel` precedent). `.optional()` rather than
+    // defaulted, for the reason that one is: absent must stay absent so the
+    // keys are not required on OUTPUT at every row construction site.
+    //
+    // `.catch(null)` is the guard `unavailableReason` and `authStatus` carry: a
+    // mode from a newer host's wider enum reads as "told nothing" instead of
+    // failing the whole catalog.
+    sandboxCredentialMode: guiHarnessSandboxCredentialModeSchema
+      .nullable()
+      .optional()
+      .catch(null),
+    // For `unsupported`, the mechanism that cannot be brokered, as the host's
+    // launch-state row words it; `null` otherwise. Shown verbatim.
+    sandboxCredentialNote: z.string().nullable().optional(),
   }),
 );
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
@@ -209,6 +252,20 @@ export const guiAgentModelCapabilitiesSchema = lazySchema(() =>
 export type GuiAgentModelCapabilities = z.infer<
   typeof guiAgentModelCapabilitiesSchema
 >;
+
+// Narrow Cursor's Max Mode catalog metadata without changing the open
+// `guiAgentModelOptionSchema.metadata` wire field. Unknown fields are stripped
+// so an older GUI can still read the known selection keys from a newer host.
+export const guiAgentModelMaxModeSchema = lazySchema(() =>
+  z.object({
+    chat: z.array(
+      z.object({ reasoningEffort: z.string().nullable(), fast: z.boolean() }),
+    ),
+    judge: z.array(z.object({ reasoningEffort: z.string().nullable() })),
+    fastServiceTierId: z.string().nullable(),
+  }),
+);
+export type GuiAgentModelMaxMode = z.infer<typeof guiAgentModelMaxModeSchema>;
 
 export const guiAgentModelOptionSchema = lazySchema(() =>
   z.object({
@@ -578,7 +635,7 @@ export type ListGuiHarnessesResponseV80 = z.infer<
 // major 10 carries the ids added since.
 //
 // Do NOT add fields, modes or ids here; add them to `guiHarnessOptionSchema`
-// above, which only the head line (10.0 today) binds.
+// above, which only the head line (10.1 today) binds.
 export const guiHarnessOptionSchemaV90 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -610,7 +667,7 @@ export type ListGuiHarnessesResponseV90 = z.infer<
 // pinned to `guiHarnessIdSchemaV90` since `1.5.0` shipped major 9.
 //
 // Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
-// which only the head line (10.0 today) binds.
+// which only the head line (10.1 today) binds.
 export const guiHarnessOptionSchemaV91 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -653,7 +710,7 @@ export type ListGuiHarnessesResponseV91 = z.infer<
 // no minor of a major may grow a response enum over its predecessor.
 //
 // Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
-// which only 10.0 (the head line) binds.
+// which only 10.1 (the head line) binds.
 export const guiHarnessOptionSchemaV92 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -686,6 +743,52 @@ export type ListGuiHarnessesResponseV92 = z.infer<
   typeof listGuiHarnessesResponseSchemaV92
 >;
 
+// ── Frozen protocol-v10.0 catalog row + response (pre-sandbox-credentials) ──
+// 10.0 is the Command Code line. `host-v1.5.1` shipped it, so it stops binding
+// the live row here and 10.1 opens above it for `sandboxCredentialMode` and
+// `sandboxCredentialNote`.
+//
+// A field-for-field hand copy of the live row at the cut, in the live key
+// order, for the reason 9.1's and 9.2's copies are: a derived row keeps
+// reading every live leaf. The id is the live `guiHarnessIdSchema`, shared
+// with 10.1 - no minor of a major may grow a response enum over its
+// predecessor, so the next id opens major 11 and freezes this one's id then,
+// as `guiHarnessIdSchemaV90` was frozen for major 9.
+//
+// Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
+// only 10.1 (the head line) binds.
+export const guiHarnessOptionSchemaV100 = lazySchema(() =>
+  z.object({
+    id: guiHarnessIdSchema,
+    label: z.string(),
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    unavailableReason: guiHarnessUnavailableReasonSchema
+      .nullable()
+      .optional()
+      .catch("other"),
+    modes: z.array(harnessSurfaceSchema),
+    requiresApiKey: z.boolean(),
+    supportedPermissionModes: z
+      .array(permissionModeSchema)
+      .default([...ALL_PERMISSION_MODES]),
+    nativeAutoJudge: z.boolean().default(false),
+    judgeDefaultModel: z.string().nullable().optional(),
+    availabilityPending: z.boolean().catch(false),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+  }),
+);
+export type GuiHarnessOptionV100 = z.infer<typeof guiHarnessOptionSchemaV100>;
+export const listGuiHarnessesResponseSchemaV100 = lazySchema(() =>
+  z.object({
+    harnesses: z.array(guiHarnessOptionSchemaV100),
+  }),
+);
+export type ListGuiHarnessesResponseV100 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV100
+>;
+
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema
 >;
@@ -699,6 +802,18 @@ export const listGuiAgentModelsRequestSchema = lazySchema(() =>
 export type ListGuiAgentModelsRequest = z.infer<
   typeof listGuiAgentModelsRequestSchema
 >;
+
+/**
+ * 1.1 carries the OpenCode line of the chat the picker belongs to, so a chat
+ * bound to OpenCode 2 lists OpenCode 2's models. Absent (and every 1.0
+ * caller) means "a chat that has no line yet": the host answers with the line
+ * that chat's first send would record.
+ */
+export const listGuiAgentModelsRequestSchemaV11 = lazySchema(() =>
+  listGuiAgentModelsRequestSchema.extend({
+    opencodeLine: opencodeLineSchema.optional(),
+  }),
+);
 
 export const listGuiAgentModelsResponseSchema = lazySchema(() =>
   z.object({
@@ -720,6 +835,23 @@ export const listGuiAgentCommandsRequestSchema = lazySchema(() =>
 export type ListGuiAgentCommandsRequest = z.infer<
   typeof listGuiAgentCommandsRequestSchema
 >;
+
+/** 1.1 carries the account whose environment the command catalog describes. */
+export const listGuiAgentCommandsRequestSchemaV11 = lazySchema(() =>
+  listGuiAgentCommandsRequestSchema.extend({
+    profileId: z.string().nullable().default(null),
+  }),
+);
+
+/**
+ * 1.2 carries the chat's OpenCode line, with the meaning (and the absence) of
+ * `listGuiAgentModelsRequestSchemaV11`'s.
+ */
+export const listGuiAgentCommandsRequestSchemaV12 = lazySchema(() =>
+  listGuiAgentCommandsRequestSchemaV11.extend({
+    opencodeLine: opencodeLineSchema.optional(),
+  }),
+);
 
 export const listGuiAgentCommandsResponseSchema = lazySchema(() =>
   z.object({

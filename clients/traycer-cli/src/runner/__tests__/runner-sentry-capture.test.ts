@@ -137,6 +137,81 @@ describe("runner Sentry capture", () => {
     );
   }
 
+  async function runMappedHostRpcError(
+    code: "RPC_ERROR" | "VERB_NOT_ALLOWED",
+    message: string,
+  ): Promise<void> {
+    const { HostRpcError } =
+      await import("../../../../shared/host-transport/host-messenger");
+    const { toAgentCliError } = await import("../../internal/host-rpc");
+    const { runCommand } = await import("../runner");
+    const err = new HostRpcError({
+      code,
+      message,
+      requestId: "r1",
+      method: "agent.list",
+      fatalDetails: null,
+    });
+
+    await runCommand(() => toAgentCliError(Promise.reject(err)), {
+      json: true,
+      quiet: null,
+      noProgress: null,
+      noBootstrap: null,
+    });
+  }
+
+  it("maps the EntityMemoryManager shutdown refusal to expected host-busy output", async () => {
+    const message = "EntityMemoryManager is shutting down";
+
+    await runMappedHostRpcError("RPC_ERROR", message);
+
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+    expect(crumb.category).toBe("cli");
+    expect(crumb.data.code).toBe("E_HOST_BUSY");
+    const terminal = terminalEnvelope();
+    expect(terminal?.status).toBe("error");
+    const reported = terminal?.error as Record<string, unknown>;
+    expect(reported.code).toBe("E_HOST_BUSY");
+    expect(reported.message).toBe(message);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    "unrelated resolver failure",
+    "EntityMemoryManager is shutting down unexpectedly",
+  ])(
+    "captures RPC_ERROR message %j and leaves no expected-code breadcrumb",
+    async (message) => {
+      await runMappedHostRpcError("RPC_ERROR", message);
+
+      expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
+      expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+      const reported = terminalEnvelope()?.error as Record<string, unknown>;
+      expect(reported.code).toBe("E_UNEXPECTED");
+      expect(reported.message).toBe(message);
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
+  it("captures the shutdown message when the wire code is unrelated", async () => {
+    const message = "EntityMemoryManager is shutting down";
+
+    await runMappedHostRpcError("VERB_NOT_ALLOWED", message);
+
+    expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
+    expect(sentryMocks.captureException.mock.calls[0][0]).toMatchObject({
+      code: "E_UNEXPECTED",
+    });
+    expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+    const reported = terminalEnvelope()?.error as Record<string, unknown>;
+    expect(reported.code).toBe("E_UNEXPECTED");
+    expect(reported.message).toBe(message);
+    expect(process.exitCode).toBe(1);
+  });
+
   it("does not capture an expected code, and still answers the caller", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
 
@@ -176,36 +251,56 @@ describe("runner Sentry capture", () => {
     expect(crumb.data.code).toBe("E_HOST_BUSY");
   });
 
-  // HOST_UNREACHABLE is a connection-failed-or-went-quiet state the command
-  // has already reported to the user (see mapHostRpcError's comment in
-  // host-rpc.ts), not a CLI defect - so it belongs in EXPECTED_CLI_ERROR_CODES
-  // and must not reach Sentry.captureException. Mirrors the HOST_BUSY case
-  // above: same envelope/exit-code contract, distinct expected code.
-  it("does not capture HOST_UNREACHABLE, leaves a breadcrumb naming it, and still answers the caller", async () => {
-    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+  // Both codes report a state of the connection the command has already told
+  // the user about (see `mapHostRpcError` in host-rpc.ts), not a CLI defect,
+  // so neither may reach `Sentry.captureException`. What they differ in is
+  // what they tell a caller about the request - whether it can simply be sent
+  // again, or may already have been carried out - and not in how the runner
+  // reports them, so the runner's contract is pinned once over both: no
+  // capture, one breadcrumb naming the code, the code and the message on the
+  // NDJSON envelope, and the exit code the error carries.
+  it.each([
+    {
+      key: "HOST_UNREACHABLE" as const,
+      expected: "E_HOST_UNREACHABLE",
+      message: "WebSocket dial timed out after 10000ms",
+    },
+    {
+      key: "HOST_REQUEST_OUTCOME_UNKNOWN" as const,
+      expected: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+      message:
+        "traycer: WebSocket frame timed out after 15000ms - the request was sent and the host may have carried it out; check before sending it again.",
+    },
+  ])(
+    "answers the caller with $expected without capturing it as a defect",
+    async ({ key, expected, message }) => {
+      const { CLI_ERROR_CODES, CliError } = await import("../errors");
 
-    await runThrowing(
-      new CliError({
-        code: CLI_ERROR_CODES.HOST_UNREACHABLE,
-        message: "WebSocket frame timed out after 15000ms",
-        details: null,
-        exitCode: 1,
-      }),
-    );
+      await runThrowing(
+        new CliError({
+          code: CLI_ERROR_CODES[key],
+          message,
+          details: null,
+          exitCode: 1,
+        }),
+      );
 
-    expect(sentryMocks.captureException).not.toHaveBeenCalled();
-    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
-    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
-    expect(crumb.category).toBe("cli");
-    expect(crumb.data.code).toBe("E_HOST_UNREACHABLE");
+      expect(sentryMocks.captureException).not.toHaveBeenCalled();
+      expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+      const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+      expect(crumb.category).toBe("cli");
+      expect(crumb.data.code).toBe(expected);
 
-    const terminal = terminalEnvelope();
-    expect(terminal?.status).toBe("error");
-    expect((terminal?.error as Record<string, unknown>).code).toBe(
-      "E_HOST_UNREACHABLE",
-    );
-    expect(process.exitCode).toBe(1);
-  });
+      const terminal = terminalEnvelope();
+      expect(terminal?.status).toBe("error");
+      const reported = terminal?.error as Record<string, unknown>;
+      expect(reported.code).toBe(expected);
+      // The guidance the caller acts on travels on the envelope, not only in
+      // the human line.
+      expect(reported.message).toBe(message);
+      expect(process.exitCode).toBe(1);
+    },
+  );
 
   it("captures a code that means the machine is broken", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");

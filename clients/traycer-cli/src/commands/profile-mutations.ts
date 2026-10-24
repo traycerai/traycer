@@ -33,6 +33,8 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  reauthenticate: "always",
+  idempotencyKey: null,
 };
 
 async function applyProfileAction(

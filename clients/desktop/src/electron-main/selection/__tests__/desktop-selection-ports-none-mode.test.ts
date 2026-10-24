@@ -59,6 +59,9 @@ vi.mock("../../cli/traycer-cli", () => ({
 vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: vi.fn(async () => null),
   readCliManifest: vi.fn(async () => null),
+  // No version metadata, as in a local build: no supervisor predates it.
+  BUNDLED_CLI_LOCAL_VERSION: "0.0.0-local",
+  readBundledCliVersion: vi.fn(async () => "0.0.0-local"),
 }));
 
 vi.mock("../../app/host-login-item", () => ({
@@ -260,8 +263,8 @@ describe("DesktopHostFleetSource in none mode", () => {
     const snapshot = fleet.snapshot();
     expect(snapshot.localHostId).toBe("local-host");
     expect(snapshot.hosts).toEqual([
-      { hostId: "local-host", kind: "local" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
     ]);
     fleet.dispose();
   });
@@ -276,8 +279,8 @@ describe("DesktopHostFleetSource in none mode", () => {
     expect(snapshot.localHostId).toBeNull();
     expect(snapshot.hosts.some((entry) => entry.kind === "local")).toBe(false);
     expect(snapshot.hosts).toEqual([
-      { hostId: "local-host", kind: "remote" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "remote", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
     ]);
     fleet.dispose();
   });
@@ -330,6 +333,7 @@ describe("createDesktopLocalHostEnsurePort against a quiesced real controller", 
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     }),
   };
 

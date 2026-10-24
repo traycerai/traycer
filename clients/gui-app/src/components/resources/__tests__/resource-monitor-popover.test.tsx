@@ -2834,6 +2834,75 @@ describe("ResourceMonitorPopover", () => {
     ).not.toHaveBeenCalled();
   });
 
+  // A tombstone that lands while the panel is open lives only in the Query
+  // cache; a stale canvas index left the closed-tile row clickable, so the
+  // click did nothing.
+  it("disables a closed terminal's row when its tombstone arrives while the panel is open", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {
+      "tile-term-tombstoned": {
+        node: {
+          id: "term-tombstoned",
+          instanceId: "tile-term-tombstoned",
+          type: "terminal",
+          name: "Tombstoned Build",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work/background",
+        },
+        pendingCreate: false,
+      },
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-tombstoned",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const reopenable = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Tombstoned Build/,
+    });
+    expect(reopenable.disabled).toBe(false);
+
+    act(() => {
+      queryClient.setQueryData(
+        hostQueryKeys.plainTerminals("host-1", {
+          kind: "epic",
+          epicId: "epic-2",
+        }),
+        {
+          ...emptyPlainTerminalCollection(),
+          deletedRevisionByIdentity: {
+            [JSON.stringify(["host-1", "term-tombstoned"])]: 2,
+          },
+          projectionSequence: 1,
+        },
+      );
+    });
+
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^make/,
+    });
+    expect(row.disabled).toBe(true);
+  });
+
   it("reopens a closed terminal tile of the CURRENT tab through the same-route boundary", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
     canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
@@ -4933,6 +5002,43 @@ describe("ResourceMonitorPopover · host picker", () => {
     // forces `desktopApp: null` for this scope regardless of whether the
     // metrics promise above has settled yet, so this holds without an await.
     expect(screen.queryByText("Traycer Desktop")).toBeNull();
+  });
+
+  it("does not sample the shell for a closed bare-icon trigger on the local machine", () => {
+    // A glyph draws nothing from the readings while closed, and the shell
+    // sampler is an IPC round trip a second for the life of the header - the
+    // same reason the host stream stays shut for these forms. Open, the panel
+    // samples the shell itself.
+    const getMetrics = vi.fn(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    installDesktopMetricsBridge(getMetrics);
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    renderPopover();
+
+    expect(getMetrics).not.toHaveBeenCalled();
+  });
+
+  it("samples the shell for a closed trigger that prints a reading on the local machine", () => {
+    // The readout counts Traycer Desktop in its figure, as the panel's
+    // headline does, so a form that draws it has to keep the sample live.
+    const getMetrics = vi.fn(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    installDesktopMetricsBridge(getMetrics);
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    render(
+      <TooltipProvider>
+        <EpicLease epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          form="readout"
+          claimsOpenAction
+        />
+      </TooltipProvider>,
+    );
+
+    expect(getMetrics).toHaveBeenCalled();
   });
 
   // `isViewingActive` is `isFollowing`, which REQUIRES a resolved host, so

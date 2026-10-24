@@ -108,6 +108,11 @@ export function agentFailureHeadline(
  */
 const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
   ["CLAUDE_RUNTIME_DISPOSED", "Session ended"],
+  // A team host stopped the turn: its person left the team, or the host lost
+  // its team's member set for a moment. The host's message says which.
+  ["TEAM_MEMBER_REMOVED", "Member left the team"],
+  ["TEAM_HOST_RECONNECTING", "Waiting for the team's host"],
+  ["CLAUDE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
 ]);
 
 export interface UntypedCodePresentation {

@@ -2,6 +2,7 @@ import * as React from "react";
 import { Drawer as DrawerPrimitive } from "vaul";
 
 import { cn } from "@/lib/utils";
+import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
 
 function Drawer({
   ...props
@@ -39,7 +40,9 @@ function DrawerOverlay({
         className,
       )}
       {...props}
-    />
+    >
+      <BackdropDimSource strength="10" />
+    </DrawerPrimitive.Overlay>
   );
 }
 

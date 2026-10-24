@@ -253,6 +253,53 @@ describe("useProvidersAwaitLogin overlay merge", () => {
     expect(copilot?.auth.status).toBe("authenticated");
   });
 
+  // `macosRequirement` is list-only, like `advisory`: the frozen echo models
+  // none of them, so a login echo must keep the value the last list fetch set.
+  it("keeps the seeded macosRequirement after a login echo lands", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    const macosRequirement = {
+      runningMacos: "13.6",
+      managed: { requiredMacos: "14.0" },
+      launch: { requiredMacos: "14.0" },
+      refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+    };
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        macosRequirement,
+      })),
+    });
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const cached = queryClient.getQueryData<ProvidersListResponse>(listKey);
+    const copilot = cached?.providers.find(
+      (p: ProviderListEntry) => p.providerId === "copilot",
+    );
+    expect(copilot?.macosRequirement).toEqual(macosRequirement);
+    // The echo still overlaid what it models.
+    expect(copilot?.auth.status).toBe("authenticated");
+  });
+
   it("invalidates both harness catalogs for the awaiting host on a successful login - a sign-in can flip `available`", async () => {
     const { queryClient, wrapper } = makeWrapper();
     const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(

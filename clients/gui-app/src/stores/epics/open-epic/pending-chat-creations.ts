@@ -63,6 +63,16 @@ export interface PendingChatCreation {
   readonly ownerUserId: string | null;
 }
 
+/**
+ * A published cloud row for a chat, by the two facts that name the chat a
+ * stand-in was created as: the host mints its chat ids, so `(chatId,
+ * ownerHostId)` is one chat whoever the row is filed under.
+ */
+export interface PendingChatCreationCloudRow {
+  readonly chatId: string;
+  readonly ownerHostId: string;
+}
+
 /** A pending creation as retained: the caller's facts plus the store's stamp. */
 export interface RetainedChatCreation {
   readonly pending: PendingChatCreation;
@@ -101,6 +111,9 @@ export function chatProjectionFromPendingCreation(
     createdAt: retained.createdAt,
     updatedAt: retained.createdAt,
     userId: retained.ownerUserId,
+    // The viewer's by construction: this client made it, and the union below
+    // shows it only to the identity it was filed under.
+    ownedByViewer: true,
     hostId: retained.pending.hostId,
     isTitleEditedByUser: false,
     // A creation THIS client just made through `epic.createChat`, which writes
@@ -137,7 +150,9 @@ export function unionPendingChatCreations(
   for (const entry of retained) {
     const { chatId } = entry.pending;
     if (Object.hasOwn(records.byId, chatId)) continue;
-    if (!isChatVisibleToUser(entry.ownerUserId, currentUserId)) continue;
+    if (!isChatVisibleToUser(null, entry.ownerUserId, currentUserId, null)) {
+      continue;
+    }
     if (byId === null || allIds === null) {
       byId = { ...records.byId };
       allIds = [...records.allIds];

@@ -106,6 +106,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
     b: ChatMessage,
   ) => boolean;
 } = {
+  workingVerbSeed: (a, b) => a.workingVerbSeed === b.workingVerbSeed,
   role: (a, b) => a.role === b.role,
   content: (a, b) => a.content === b.content,
   segments: (a, b) => a.segments === b.segments,
@@ -137,6 +138,15 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   // identity check would re-render that turn's rows on every token.
   turnMessageIds: (a, b) => sameMessageIds(a.turnMessageIds, b.turnMessageIds),
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
+  // A member's picture can resolve after the row first painted.
+  senderAvatarUrl: (a, b) => a.senderAvatarUrl === b.senderAvatarUrl,
+  // The row-level request state is carried by reference from the open
+  // message, so a resolve arrives as a new object and identity is enough.
+  conversationRequest: (a, b) =>
+    a.conversationRequest === b.conversationRequest,
+  announcement: (a, b) => a.announcement === b.announcement,
+  options: (a, b) => a.options === b.options,
+  repliesTo: (a, b) => a.repliesTo === b.repliesTo,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,
   agentSenderInfo: (a, b) => a.agentSenderInfo === b.agentSenderInfo,

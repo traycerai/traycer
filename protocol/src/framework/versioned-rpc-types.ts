@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { WorktreeBusyHolder } from "./worktree-busy-holders";
+import type { EnvironmentStaleWrite } from "./environment-stale-write";
 
 declare const validatedMethodVersionRegistryBrand: unique symbol;
 declare const validatedVersionedRpcRegistryBrand: unique symbol;
@@ -75,6 +76,10 @@ export const RPC_ERROR_CODES = [
   // be read safely. Distinct from FORBIDDEN: the caller may hold editor access
   // while the document itself is intentionally read-only.
   "E_EPIC_READ_ONLY",
+  // `environment.host.bind` refused: a live bot of the host's current
+  // environment is bound to it, and a host belongs to exactly one
+  // environment. Same additive degrade story as E_INVALID_ARGUMENT.
+  "E_HOST_HAS_BOTS_OF_ANOTHER_ENVIRONMENT",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the
@@ -195,6 +200,102 @@ export const RPC_ERROR_CODES = [
   // degrade story as E_INVALID_ARGUMENT: a client that does not know this code
   // shows its generic failure, exactly as it did before the code existed.
   "E_HOST_STORAGE_FULL",
+  // ─── Sandbox host refusals (on-demand sandboxes) ────────────────────────
+  //
+  // Domain codes live here, as the share-refusal taxonomy's do: the code is
+  // the only typed channel on the error envelope, and each of these needs its
+  // own copy and its own next step. Same additive degrade story as
+  // E_INVALID_ARGUMENT - a client that predates them narrows each to
+  // RPC_ERROR while keeping the status and the message.
+  //
+  // The target sandbox is frozen for lack of credits. Not retryable until the
+  // balance is topped up; a dial path answers this instead of waiting out a
+  // HOST_UNREACHABLE timeout against a host that is deliberately down.
+  "SANDBOX_FROZEN",
+  // A sandbox host refuses to receive or store a user credential (profile
+  // sync, settings API keys, provider login, browser sign-ins): nothing
+  // secret lives on a sandbox outside the secrets track's broker.
+  "SANDBOX_HOST_REFUSES_CREDENTIALS",
+  // The sandbox host's guest configuration (`configureGuest`) has not
+  // completed: a harness spawn waited its 30 seconds for it and refused, with
+  // the attempt's last status in the message, rather than hang through a
+  // broker outage.
+  "SANDBOX_GUEST_NOT_CONFIGURED",
+  // The host runs a profile that carries no agents (the Automations pod's
+  // `automation` profile: shells, terminals and file copies only), so the two
+  // agent-creation verbs answer this instead of creating one. Not retryable
+  // on that host; the agent belongs on one of the user's own hosts or a
+  // sandbox.
+  "PROFILE_REFUSES_AGENTS",
+  // ─── Sandbox secrets refusals (the egress broker) ───────────────────────
+  //
+  // Spelled as the broker, the gateway and the forwarder spell them on their
+  // own wires (a refusal body's `code`, a typed egress event's `code`), so one
+  // string names one refusal on every channel that can carry it. Additive, as
+  // the block above: a client that predates them narrows each to RPC_ERROR.
+  //
+  // The sandbox's egress authorization is older than the grant set it was
+  // minted for: a decision, a re-bind or a wake is in flight. Retryable
+  // shortly, and NOT a missing grant - nothing is to be asked of the user.
+  "authorization_stale",
+  // The destination's protocol has no worker class, so a secret bound to it
+  // cannot be brokered; the alternative is an exposed binding.
+  "protocol_not_brokered",
+  // A request signed in a shape no signing worker reproduces (a presigned URL,
+  // a credential set handed to a third party); the alternative is an export.
+  "signing_shape_unsupported",
+  // The route's pre-issued leaf certificate is missing or expired, so its
+  // TLS-terminated endpoint cannot answer.
+  "leaf_unavailable",
+  // The destination sits behind a private connector that is enrolled and not
+  // connected.
+  "connector_offline",
+  // The destination sits behind a private connector that was never enrolled
+  // or has been revoked.
+  "connector_not_enrolled",
+  // The route's loopback endpoint could not be bound in the guest (an
+  // in-guest listener holds the port); the route is never sent direct.
+  "endpoint_unavailable",
+  // The destination answers HTTP/3 only, which the bound class cannot carry.
+  "h3_only_destination",
+  // A team's secrets are brokered only: a tool that needs a plain value needs
+  // a personal sandbox.
+  "team_secrets_are_brokered",
+  // Undo named a version whose value was destroyed.
+  "version_destroyed",
+  // Destroy named the current version: replace or revoke the secret first.
+  "version_current",
+  // ─── Environment ────────────────────────────────────────────────────────
+  //
+  // A settings write the host forwards to the person's environment lost a
+  // compare-and-set: another surface changed the item first. The envelope's
+  // `staleWrite` says who and the current revision; the page re-reads and
+  // says "changed on <host> just now". Additive, as above.
+  "ENVIRONMENT_WRITE_STALE",
+  // `providers.link`: the harness has no sign-in the
+  // environment can hold, so the profile stays on this host; the Link dialog
+  // says "On <host> only." and nothing more. Additive, as above.
+  "PROVIDER_LINK_NOT_OFFERED",
+  // `providers.link`: Traycer is not reachable (or the host is not set up
+  // yet), so nothing can be linked now; the dialog says "Connect to Traycer
+  // to link this profile." Additive, as above.
+  "PROVIDER_LINK_UNAVAILABLE",
+  // ─── Same principal ─────────────────────────────────────────────────────
+  //
+  // The two hosts belong to different owners (a person and a team, or two
+  // people): an agent message, or a host-agent attach, between them is
+  // refused. One reason name on every wire that carries the refusal, so the
+  // GUI picks its sentence from it alone; distinct from a transport failure,
+  // which says nothing about who owns the target. Additive, as above: a
+  // released peer narrows it to RPC_ERROR and keeps the status.
+  "principal_mismatch",
+  // ─── Bots ───────────────────────────────────────────────────────────────
+  //
+  // `bot.create` named a `requestKey` that already made a bot, and this
+  // request cannot be answered with it: its fields differ, or that bot was
+  // deleted since. Nothing was created; the bot the key made, if live, is in
+  // the person's list. Additive, as above.
+  "E_BOT_REQUEST_KEY_REUSED",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
@@ -218,6 +319,11 @@ export type RpcErrorDetails = {
    * `WORKTREE_HOLDERS_CHANGED` from a current host; omitted otherwise.
    */
   holdersRevision?: string;
+  /**
+   * Who changed the item and its current revision, on
+   * `ENVIRONMENT_WRITE_STALE` only. See `environment-stale-write.ts`.
+   */
+  staleWrite?: EnvironmentStaleWrite;
 };
 
 export type RpcContract<

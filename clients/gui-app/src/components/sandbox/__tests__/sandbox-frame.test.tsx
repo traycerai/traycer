@@ -38,7 +38,7 @@ describe("<SandboxFrame /> link confirm", () => {
     const statuses: SandboxStatus[] = [];
     render(
       <SandboxFrame
-        html="<p>page</p>"
+        source={{ kind: "html", html: "<p>page</p>" }}
         kind="page"
         title="Page"
         appName={null}
@@ -52,6 +52,7 @@ describe("<SandboxFrame /> link confirm", () => {
         onStatus={(status) => statuses.push(status)}
         onRequestTeardown={() => undefined}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />,
@@ -70,7 +71,67 @@ describe("<SandboxFrame /> link confirm", () => {
     // The loader coming back disposes the bridge; the frame stays mounted.
     fromFrame(PROXY_READY);
     expect(statuses).toContain("disposed");
+    expect(statuses).toContain("crashed");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(openLink).not.toHaveBeenCalled();
+  });
+});
+
+describe("<SandboxFrame /> unexpected disposal", () => {
+  function frame(html: string, onStatus: (status: SandboxStatus) => void) {
+    return (
+      <SandboxFrame
+        source={{ kind: "html", html }}
+        kind="page"
+        title="Page"
+        appName={null}
+        networkPolicy="open"
+        appCsp={null}
+        permissions={[]}
+        appRequests={null}
+        className=""
+        height={null}
+        onSize={() => undefined}
+        onStatus={onStatus}
+        onRequestTeardown={() => undefined}
+        displayMode="inline"
+        pageNavigation={null}
+        onBridge={null}
+        ref={null}
+      />
+    );
+  }
+
+  it("reports crashed when the loader comes back while mounted", () => {
+    const statuses: SandboxStatus[] = [];
+    render(frame("<p>page</p>", (status) => statuses.push(status)));
+    fromFrame(PROXY_READY);
+    expect(statuses).not.toContain("crashed");
+
+    fromFrame(PROXY_READY);
+    expect(statuses).toContain("crashed");
+  });
+
+  it("does not report crashed when new content replaces the frame", () => {
+    const statuses: SandboxStatus[] = [];
+    const onStatus = (status: SandboxStatus): void => {
+      statuses.push(status);
+    };
+    const { rerender } = render(frame("<p>one</p>", onStatus));
+    fromFrame(PROXY_READY);
+
+    rerender(frame("<p>two</p>", onStatus));
+    expect(statuses).not.toContain("crashed");
+  });
+
+  it("does not report crashed when the frame unmounts", () => {
+    const statuses: SandboxStatus[] = [];
+    const { unmount } = render(
+      frame("<p>page</p>", (status) => statuses.push(status)),
+    );
+    fromFrame(PROXY_READY);
+
+    unmount();
+    expect(statuses).not.toContain("crashed");
   });
 });

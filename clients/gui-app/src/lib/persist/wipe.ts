@@ -1,4 +1,8 @@
 import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
+import {
+  CANVAS_BROWSER_DB_NAME,
+  retireCanvasBrowserStorage,
+} from "@/stores/epics/canvas/canvas-browser-storage";
 // Destructive "wipe all gui-app persisted state" utility.
 //
 // Bridge-agnostic by design: it takes the host `clear` RPC as a parameter so it
@@ -42,6 +46,10 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
 import { clearAllSkeletonsForResume } from "@/stores/chats/skeleton-resume-cache";
+import {
+  VIEW_REPLICA_DB_NAME,
+  viewReplicaStore,
+} from "@/lib/view-replica/view-replica-store";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -152,6 +160,7 @@ async function deleteRendererDatabases(): Promise<void> {
   const names = new Set(enumerated);
   names.add(STASH_DB_NAME);
   names.add(persistKey("tab-recovery"));
+  names.add(CANVAS_BROWSER_DB_NAME);
   names.add(APPEARANCE_DB_NAME);
   const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
   names.add(transcriptImageDbName(null));
@@ -159,7 +168,8 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(transcriptImageDbName(accountId));
   names.add(transcriptImageMetaDbName(accountId));
   names.add(SKELETON_RESUME_DB_NAME);
-  // Recovery history must actually be deleted before reload. Other partitions
+  names.add(VIEW_REPLICA_DB_NAME);
+  // Canvas state and recovery history must be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
   // real recovery for this renderer. The bytes are
@@ -171,7 +181,11 @@ async function deleteRendererDatabases(): Promise<void> {
   await Promise.all(
     Array.from(names).map((name) =>
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
-        if (name === persistKey("tab-recovery")) throw error;
+        if (
+          name === persistKey("tab-recovery") ||
+          name === CANVAS_BROWSER_DB_NAME
+        )
+          throw error;
         failedCount += 1;
         appLogger.warn("[persist] renderer database delete failed", {
           error: describeLogError(error),
@@ -220,6 +234,7 @@ export async function clearAllPersistedStores(args: {
   }
 
   await resetTabRecoveryHistory();
+  await retireCanvasBrowserStorage();
 
   // Stop edit timers before deleting their journal (step 3 below). Deferred
   // until after the failure-prone host clear above: if `hostClear` rejects,
@@ -248,6 +263,8 @@ export async function clearAllPersistedStores(args: {
     });
   });
   await clearAllSkeletonsForResume();
+  // Fences queued replica writes before its database is deleted below.
+  await viewReplicaStore.evict({ kind: "identity-retired" });
   await deleteRendererDatabases();
 
   // 4. Reload last.

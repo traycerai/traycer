@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  poolHostDirectoryEntry,
+  type HostDirectoryEntry,
+  type HostKind,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionKindLabel,
+  hostEntryTakesCredentials,
+  hostOptionPickerGroup,
+  hostTakesCredentials,
+  type HostPickerGroup,
   hostOptionStatusWord,
   hostOptionUpdateBadge,
   isHostOptionSelectable,
+  sandboxWordYieldsToHealth,
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -277,4 +287,189 @@ describe("hostOptionUpdateBadge", () => {
       ),
     ).toBe("last seen updating");
   });
+});
+
+describe("hostOptionStatusWord - a sandbox's lifecycle word against its health", () => {
+  function sandboxOption(input: {
+    readonly state: "awake" | "suspended";
+    readonly frozen: boolean;
+    readonly health: HostHealthState;
+  }) {
+    return hostScopeOptionFixture({
+      hostId: "sbx-a",
+      kind: "sandbox",
+      health: {
+        state: input.health,
+        label: "irrelevant to the word",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+      sandbox: {
+        state: input.state,
+        frozen: input.frozen,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+  }
+  const available = AVAILABLE_HOST_ROW_SURFACE_STATE;
+
+  it("gives way to the health word for an awake sandbox that cannot be reached", () => {
+    expect(
+      hostOptionStatusWord(
+        sandboxOption({ state: "awake", frozen: false, health: "offline" }),
+        available,
+      ),
+    ).toBe("offline");
+    expect(
+      hostOptionStatusWord(
+        sandboxOption({ state: "awake", frozen: false, health: "restarting" }),
+        available,
+      ),
+    ).toBe("restarting");
+  });
+
+  it("says awake for an awake sandbox whose health has nothing to add", () => {
+    for (const health of ["online", "reported-reachable", "unknown"] as const) {
+      expect(
+        hostOptionStatusWord(
+          sandboxOption({ state: "awake", frozen: false, health }),
+          available,
+        ),
+      ).toBe("awake");
+    }
+  });
+
+  it("lets a surface refusal word outrank awake, but not a health word", () => {
+    const refused = { kind: "refused" as const, word: "needs update" };
+    expect(
+      hostOptionStatusWord(
+        sandboxOption({ state: "awake", frozen: false, health: "online" }),
+        refused,
+      ),
+    ).toBe("needs update");
+    expect(
+      hostOptionStatusWord(
+        sandboxOption({ state: "awake", frozen: false, health: "offline" }),
+        refused,
+      ),
+    ).toBe("offline");
+  });
+
+  it("keeps every other lifecycle word over the health word", () => {
+    expect(
+      hostOptionStatusWord(
+        sandboxOption({ state: "suspended", frozen: false, health: "offline" }),
+        available,
+      ),
+    ).toBe("suspended");
+    expect(
+      hostOptionStatusWord(
+        sandboxOption({ state: "awake", frozen: true, health: "offline" }),
+        available,
+      ),
+    ).toBe("frozen");
+  });
+});
+
+describe("sandboxWordYieldsToHealth", () => {
+  function row(input: {
+    readonly state: "awake" | "suspended";
+    readonly health: HostHealthState;
+  }) {
+    return hostScopeOptionFixture({
+      hostId: "sbx-a",
+      kind: "sandbox",
+      health: {
+        state: input.health,
+        label: "irrelevant",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+      sandbox: {
+        state: input.state,
+        frozen: false,
+        summary: null,
+        teamOwned: false,
+      },
+    });
+  }
+
+  it("is true only for an awake sandbox whose health has a word", () => {
+    expect(
+      sandboxWordYieldsToHealth(row({ state: "awake", health: "offline" })),
+    ).toBe(true);
+    expect(
+      sandboxWordYieldsToHealth(row({ state: "awake", health: "online" })),
+    ).toBe(false);
+    expect(
+      sandboxWordYieldsToHealth(row({ state: "suspended", health: "offline" })),
+    ).toBe(false);
+  });
+
+  it("is false for a personal host, whatever its health", () => {
+    expect(sandboxWordYieldsToHealth(option({ state: "offline" }))).toBe(false);
+  });
+});
+
+describe("hostOptionPickerGroup by directory kind", () => {
+  // Exhaustive over `HostKind`: a kind added later fails to compile here until
+  // someone decides which picker group it belongs to.
+  const GROUP_BY_KIND: Readonly<Record<HostKind, HostPickerGroup>> = {
+    local: "personal",
+    remote: "personal",
+    mock: "personal",
+    pool: "hidden",
+  };
+  const KINDS: readonly HostKind[] = ["local", "remote", "mock", "pool"];
+
+  function entryOf(kind: HostKind): HostDirectoryEntry {
+    if (kind === "pool") {
+      const pool = poolHostDirectoryEntry("wss://pool.test/v1/session");
+      if (pool === null) {
+        throw new Error("a non-empty pool URL synthesizes an entry");
+      }
+      return pool;
+    }
+    return {
+      hostId: `host-${kind}`,
+      label: kind,
+      kind,
+      websocketUrl: "ws://127.0.0.1:4455/ws",
+      version: null,
+      transportDialability: "dialable",
+    };
+  }
+
+  it.each(KINDS)("a %s entry lands in its group on every surface", (kind) => {
+    const option = hostScopeOptionFixture({
+      hostId: `host-${kind}`,
+      entry: entryOf(kind),
+    });
+    for (const listsAgentSandboxes of [false, true]) {
+      for (const composerViewer of [null, { userId: "u" }]) {
+        expect(
+          hostOptionPickerGroup(option, listsAgentSandboxes, composerViewer),
+        ).toBe(GROUP_BY_KIND[kind]);
+      }
+    }
+  });
+
+  it.each(KINDS)(
+    "a %s entry takes credentials unless it is the pool",
+    (kind) => {
+      const takes = kind !== "pool";
+      expect(hostEntryTakesCredentials(entryOf(kind))).toBe(takes);
+      expect(
+        hostTakesCredentials(
+          hostScopeOptionFixture({
+            hostId: `host-${kind}`,
+            entry: entryOf(kind),
+          }),
+        ),
+      ).toBe(takes);
+    },
+  );
 });

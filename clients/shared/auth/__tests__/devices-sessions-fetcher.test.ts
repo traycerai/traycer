@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listUserSessionsViaHttp,
   mintHostCredentialViaHttp,
@@ -7,6 +7,11 @@ import {
   toRetainedStepUpVerifyResult,
   verifyStepUpChallengeViaHttp,
 } from "../devices-sessions-fetcher";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "./no-native-abort-helpers";
 
 const AUTHN = "https://authn.example.test";
 
@@ -97,6 +102,50 @@ describe("devices/sessions authn fetcher", () => {
     // An abort is indistinguishable from any other transport failure here; the
     // only caller re-checks its own signal before reading this result.
     await expect(pending).resolves.toEqual({ kind: "network-error" });
+  });
+
+  it("still sends the request and aborts it with the reader's signal on a WebView without AbortSignal.any", async () => {
+    // `AbortSignal.any` is Chromium 116 / iOS 17.4; older WebViews threw a
+    // TypeError out of the call and the session list never loaded (#2308).
+    const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+    Object.defineProperty(AbortSignal, "any", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+    try {
+      const fetchMock = vi.fn(
+        async (_url: string, init: RequestInit | undefined) => {
+          await new Promise<void>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(init.signal?.reason);
+            });
+          });
+          return jsonResponse(200, sessionListBody());
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const controller = new AbortController();
+      const pending = listUserSessionsViaHttp(
+        AUTHN,
+        "jwt-abc",
+        controller.signal,
+      );
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      expect(init?.signal?.aborted).toBe(false);
+
+      controller.abort();
+
+      expect(init?.signal?.aborted).toBe(true);
+      await expect(pending).resolves.toEqual({ kind: "network-error" });
+    } finally {
+      if (nativeAny === undefined) {
+        Reflect.deleteProperty(AbortSignal, "any");
+      } else {
+        Object.defineProperty(AbortSignal, "any", nativeAny);
+      }
+    }
   });
 
   it("maps per-session 401 step_up_required to step-up-required", async () => {
@@ -269,5 +318,110 @@ describe("devices/sessions authn fetcher", () => {
 
       expect(result).toEqual({ kind: "rejected" });
     });
+  });
+});
+
+describe("devices/sessions authn fetcher on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("still makes the session-list request and parses a 200 JSON body", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(200, sessionListBody()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await listUserSessionsViaHttp(AUTHN, "jwt-abc", null);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.response.sessions[0]?.familyId).toBe("family-1");
+    }
+  });
+
+  it("still reads a 401 step_up_required reason out of the buffered response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(401, { reason: "step_up_required" }),
+      ),
+    );
+
+    const result = await revokeUserSessionViaHttp(AUTHN, "jwt", "family-1");
+
+    expect(result.kind).toBe("step-up-required");
+  });
+
+  it("handles a 204 without throwing: it has no body to parse, so it reads as a failed request, as before", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await revokeUserSessionViaHttp(AUTHN, "jwt", "family-1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ kind: "network-error" });
+  });
+
+  it("maps an empty-bodied 404 to not-found", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response("", { status: 404 })),
+    );
+
+    const result = await revokeUserSessionViaHttp(AUTHN, "jwt", "family-1");
+
+    expect(result.kind).toBe("not-found");
+  });
+
+  it("aborts a request that never answers once its 10 s timeout passes, and resolves to network-error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = revokeAllSessionsViaHttp(AUTHN, "jwt");
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+
+  it("aborts the session-list request when the reader's signal aborts, well before the timeout", async () => {
+    const fetchMock = stubHangingFetch();
+    const controller = new AbortController();
+
+    const pending = listUserSessionsViaHttp(
+      AUTHN,
+      "jwt-abc",
+      controller.signal,
+    );
+    const signal = signalOfLastFetch(fetchMock);
+    expect(signal.aborted).toBe(false);
+
+    controller.abort();
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+
+  it("leaves no timer behind once a response has been buffered", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse(200, sessionListBody())),
+    );
+
+    await listUserSessionsViaHttp(AUTHN, "jwt-abc", null);
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

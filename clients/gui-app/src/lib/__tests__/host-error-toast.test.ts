@@ -522,6 +522,31 @@ describe("transport-class causes never reach a reportable toast", () => {
     expect(messages[1]).toMatch(/may or may not have gone through/i);
   });
 
+  it("does not say a keyed request that was already sent never reached the host", () => {
+    // Retryable because a keyed request can be replayed, not because it never
+    // left: the host may have run it before the answer was lost. This is also
+    // what a retry episode ends with after a sent-and-dropped first attempt.
+    const keyedPostSend = new RetryableTransportError({
+      replaySafetyFromKey: true,
+      code: "RPC_ERROR",
+      message: "connection dropped after dispatch",
+      requestId: "req-keyed",
+      method: "epic.deleteChat",
+      fatalDetails: null,
+    });
+
+    toastFromHostError(keyedPostSend, "Couldn't delete agent.");
+
+    const call = vi.mocked(toast).mock.calls[0];
+    expect(call[0]).not.toContain("never received");
+    expect(call[0]).not.toContain("didn't go through");
+    expect(call[0]).toMatch(/may or may not have gone through/i);
+    // On the ambiguous notice's own id, so a later pre-send line cannot
+    // replace it with the reassuring one.
+    toastFromHostError(transportFailure("epic.deleteChat"), "b");
+    expect(call[1]?.id).toBe(vi.mocked(toast).mock.calls[1][1]?.id);
+  });
+
   it("keeps the ambiguous notice on its own id so a pre-send notice cannot overwrite it", () => {
     // One shared id is right for one shared statement. These are two different
     // statements, and the ambiguous one is the load-bearing one - collapsing it
@@ -698,6 +723,7 @@ describe("transport-class causes never reach a reportable toast", () => {
         message: "authority replaced",
         requestId: "req-abort",
         method: "epic.subscribe",
+        mayHaveDispatched: false,
       }),
       "Couldn't subscribe.",
     );

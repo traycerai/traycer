@@ -40,6 +40,12 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { ACTIVATE_HOST_HINT } from "@/components/settings/host-scope/host-option-model";
 
 const hostOptionsRef = vi.hoisted((): { value: HostOptions } => ({
@@ -76,6 +82,50 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   }),
 }));
 
+/**
+ * A sandbox row as the host list builds it: the directory entry carries the
+ * sandbox facts, and a team's row also carries the registry owner. A team
+ * row is the one `activate` refuses.
+ */
+function sandboxOption(hostId: string, teamId: string | null): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId,
+    name: hostId,
+    kind: "sandbox",
+    isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    entry: remoteEntry(hostId, sandboxFacts(teamId)),
+    item:
+      teamId === null
+        ? null
+        : {
+            hostId,
+            displayName: hostId,
+            platform: "linux-x64",
+            kind: "sandbox",
+            publicKey: "pk",
+            createdAt: new Date(0).toISOString(),
+            updatePolicy: "manual",
+            status: {
+              connectivity: "connectable",
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt: new Date(0).toISOString(),
+            },
+            owner: { kind: "team", id: teamId, name: "Alpha" },
+          },
+    sandbox: {
+      state: "awake",
+      frozen: false,
+      summary: sandboxSummaryFixture({ id: `sbx-${hostId}` }),
+      teamOwned: teamId !== null,
+    },
+  });
+}
+
 function buildHost(): MockRunnerHost {
   return new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -109,6 +159,8 @@ function makeMessengerFactory(): (args: {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
+            crossHostMessaging: null,
           }),
       },
     });
@@ -305,6 +357,64 @@ describe("<UserMenu /> host section", () => {
     expect(offlineRow.textContent).toContain("offline");
   });
 
+  it("leaves a team's sandbox out of the list, which activate would refuse, and keeps personal hosts and personal sandboxes", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [
+        active,
+        sandboxOption("sandbox-personal", null),
+        sandboxOption("sandbox-team", "team-a"),
+      ],
+      activeHostId: active.hostId,
+    });
+
+    await openMenu();
+
+    expect(
+      screen.getByTestId("user-menu-host-option-host-active"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("user-menu-host-option-sandbox-personal"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("user-menu-host-option-sandbox-team"),
+    ).toBeNull();
+  });
+
+  it("leaves a team's sandbox out of the list while its registry row has not arrived", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [
+        active,
+        sandboxOption("sandbox-personal", null),
+        { ...sandboxOption("sandbox-team", "team-a"), item: null },
+      ],
+      activeHostId: active.hostId,
+    });
+
+    await openMenu();
+
+    expect(
+      screen.getByTestId("user-menu-host-option-sandbox-personal"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("user-menu-host-option-sandbox-team"),
+    ).toBeNull();
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .some((row) => row.textContent.includes("sandbox-team")),
+    ).toBe(false);
+  });
+
   it("switches to a different online host on click", async () => {
     const active = hostScopeOptionFixture({
       hostId: "host-active",
@@ -361,6 +471,88 @@ describe("<UserMenu /> host section", () => {
 
     expect(screen.queryByTestId("user-menu-host-section")).toBeNull();
     expect(screen.queryByText("Host")).toBeNull();
+  });
+
+  describe("failed host lists", () => {
+    const only = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+
+    it("offers Try loading hosts again with the reason under it, and retries the lists on click, when a list failed", async () => {
+      const retryLists = vi.fn();
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [only],
+        activeHostId: only.hostId,
+        listsFailed: true,
+        isLoading: false,
+        retryLists,
+      });
+
+      await openMenu();
+
+      const retry = screen.getByTestId("user-menu-host-retry-lists");
+      expect(retry.textContent).toContain("Try loading hosts again");
+      expect(
+        screen.getByTestId("user-menu-host-retry-lists-reason").textContent,
+      ).toBe("Some hosts may be missing");
+      fireEvent.click(retry);
+
+      expect(retryLists).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers the retry on its own, with no reason line, when the failure left no host to pick", async () => {
+      const retryLists = vi.fn();
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [],
+        activeHostId: null,
+        listsFailed: true,
+        isLoading: false,
+        retryLists,
+      });
+
+      await openMenu();
+
+      const retry = screen.getByTestId("user-menu-host-retry-lists");
+      expect(retry.textContent).toBe("Try loading hosts again");
+      expect(
+        screen.queryByTestId("user-menu-host-retry-lists-reason"),
+      ).toBeNull();
+      fireEvent.click(retry);
+
+      expect(retryLists).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows no retry when the lists did not fail", async () => {
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [only],
+        activeHostId: only.hostId,
+        listsFailed: false,
+        isLoading: false,
+      });
+
+      await openMenu();
+
+      expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
+      expect(screen.queryByTestId("user-menu-host-loading-more")).toBeNull();
+    });
+
+    it("says more hosts are loading, in a disabled item and with no retry, while a list is on its first read", async () => {
+      hostOptionsRef.value = hostOptionsFixture({
+        hosts: [only],
+        activeHostId: only.hostId,
+        listsFailed: true,
+        isLoading: true,
+      });
+
+      await openMenu();
+
+      const loading = screen.getByTestId("user-menu-host-loading-more");
+      expect(loading.textContent).toContain("Loading more hosts…");
+      expect(loading.getAttribute("aria-disabled")).toBe("true");
+      expect(screen.queryByTestId("user-menu-host-retry-lists")).toBeNull();
+    });
   });
 
   it("holds every row and shows the spinner on the pending one while a switch is in flight (R1-A2)", async () => {

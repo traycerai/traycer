@@ -86,7 +86,13 @@ function renderInFlightReaders(queryClient: QueryClient) {
 }
 
 function deleteOf(ids: ReadonlyArray<string>): BatchDeleteEpicVariables {
-  return { ids, worktreeCleanup: null };
+  // Local-homed, so admission does not depend on the auth store here.
+  return {
+    ids,
+    isLocalHomedNow: () => true,
+    boundUserId: "user-1",
+    worktreeCleanup: null,
+  };
 }
 
 function heldAt(

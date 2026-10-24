@@ -5,6 +5,7 @@
  */
 
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
+import type { HostEnsureFailure } from "@traycer-clients/shared/platform/runner-host";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -143,6 +144,18 @@ export interface DesktopAuthSessionSnapshot {
   readonly status: DesktopAuthSessionStatus;
   readonly token: string | null;
   readonly profile: DesktopAuthSessionProfile | null;
+}
+
+/**
+ * The payload of the verdict-loss fan-out (`authVerificationRevoked`): the
+ * bearer the cloud refused, and whether the refusal was the user's own "sign
+ * out everywhere" (`user-epoch`). A host refuses a revoked bearer at once,
+ * not at its expiry, so every window holding it needs the scope, not only the
+ * one that saw the refusal.
+ */
+export interface DesktopAuthVerificationRevoked {
+  readonly token: string;
+  readonly revocation: "user-epoch" | null;
 }
 
 /**
@@ -330,6 +343,8 @@ export interface SupportHostSnapshot {
    * field. Absence must never render as "guaranteed".
    */
   readonly layer0: SupportHostLayer0Snapshot | null;
+  /** The controller's last ensure failure; null once a host answers or none occurred. */
+  readonly ensureFailure: HostEnsureFailure | null;
 }
 
 export interface SupportRuntimeVersions {
@@ -397,14 +412,16 @@ export type SupportCapturedField<T> =
 
 /**
  * Last-known session state (ticket 05's support-context registry). Every
- * field is opaque (ids, not full URLs/paths); `hostId` here is the tab-bound
- * host, which is not necessarily the same host `submitReport` attaches logs
- * from (see the "local host" labeling in `support.ts` - D10).
+ * field is opaque (ids, not full URLs/paths); `hostId` here is the app-wide
+ * effective host and `tabHostId` the host the active chat tab is bound to -
+ * neither is necessarily the host `submitReport` attaches logs from (see the
+ * "local host" labeling in `support.ts` - D10).
  * Field-for-field match with ticket 05's `SupportContextSnapshot`.
  */
 export interface SupportContextRegistrySnapshot {
   readonly routeTemplate: SupportCapturedField<string>;
   readonly hostId: SupportCapturedField<string>;
+  readonly tabHostId: SupportCapturedField<string>;
   readonly epicId: SupportCapturedField<string>;
   readonly tabId: SupportCapturedField<string>;
   readonly artifactId: SupportCapturedField<string>;
@@ -422,12 +439,117 @@ export interface SupportContextRegistrySnapshot {
 }
 
 /**
+ * The selected host's environment section: the renderer's
+ * `SupportEnvironmentSection`
+ * (`clients/gui-app/src/lib/support-environment-section.ts`), record for
+ * record. Closed: `support-ipc.ts` holds a `contractKeySet` per record and
+ * refuses any other key, and `SUPPORT_ENVIRONMENT_TEXT_MAX` bounds every text
+ * field. Never a key: pending uploads, local overrides, setup script or output,
+ * any value, `snapshot.json`, the policy body, profile, cost, routes, private
+ * agents, the team name or any owner's label, connector detail.
+ */
+export interface SupportEnvironmentSection {
+  readonly hostId: string;
+  readonly principal: "personal" | "team" | null;
+  readonly reachability: string;
+  readonly bindingGeneration: number | null;
+  readonly desiredRevision: number | null;
+  readonly receivedRevision: number | null;
+  readonly appliedRevision: number | null;
+  readonly receiptAgeMs: number | null;
+  readonly items: readonly SupportEnvironmentItem[];
+  readonly setupAttempts: readonly SupportEnvironmentSetupAttempt[] | null;
+  readonly policy: SupportEnvironmentPolicy | null;
+  readonly rotations: readonly SupportEnvironmentRotation[] | null;
+  readonly reachDenials: readonly SupportEnvironmentReachDenial[] | null;
+  readonly servedTask: SupportEnvironmentServedTask | null;
+}
+
+/**
+ * One same-principal refusal: opaque host and task references and principal
+ * categories, never a label or an owner's id.
+ */
+export interface SupportEnvironmentReachDenial {
+  readonly denialId: string;
+  readonly at: number;
+  readonly sourceHostRef: string;
+  readonly targetHostRef: string;
+  readonly taskRef: string | null;
+  readonly reason: string;
+  readonly sourcePrincipal: string;
+  readonly targetPrincipal: string;
+  readonly count: number;
+}
+
+export interface SupportEnvironmentServedTask {
+  readonly taskRef: string;
+  readonly otherHostPrincipals: readonly string[];
+}
+
+export interface SupportEnvironmentItem {
+  readonly kind: string;
+  readonly key: string;
+  readonly os: string;
+  readonly status: string;
+  readonly code: string;
+  readonly args: SupportEnvironmentItemArgs;
+}
+
+export interface SupportEnvironmentItemArgs {
+  readonly exitStatus: number | null;
+  readonly stage: string | null;
+  readonly durationMs: number | null;
+  readonly kind: string | null;
+}
+
+export interface SupportEnvironmentSetupAttempt {
+  readonly attemptId: string;
+  readonly scriptHash: string;
+  readonly trigger: string;
+  readonly startedAt: number;
+  readonly endedAt: number | null;
+  readonly exitStatus: number | null;
+  readonly stageReached: string | null;
+  readonly result: string | null;
+}
+
+export interface SupportEnvironmentPolicy {
+  readonly source: string;
+  readonly readState: string;
+  /** A team host's policy state; null on a personal or an older host. */
+  readonly teamState: string | null;
+  readonly teamPolicyVersion: string | null;
+}
+
+export interface SupportEnvironmentRotation {
+  readonly secretName: string;
+  readonly state: string;
+  readonly producers: readonly SupportEnvironmentRotationProducer[];
+}
+
+export interface SupportEnvironmentRotationProducer {
+  readonly producer: string;
+  readonly workerClass: string | null;
+  readonly hostId: string | null;
+  readonly hostName: null;
+  readonly status: string;
+  readonly evidence: readonly SupportEnvironmentRotationEvidence[] | null;
+}
+
+export interface SupportEnvironmentRotationEvidence {
+  readonly kind: string;
+  readonly count: number | null;
+}
+
+/**
  * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
  * (`serializeReportIssuePrivateDiagnostics` in
- * `report-issue-draft-context.ts`) - same five keys, always all present when
+ * `report-issue-draft-context.ts`) - same six keys, always all present when
  * this object is sent at all: `registry` is never itself absent (an "empty"
- * session is all-`unavailable` fields, not a missing registry), and
- * `correlationId` is always a fresh id minted at draft-open.
+ * session is all-`unavailable` fields, not a missing registry),
+ * `correlationId` is always a fresh id minted at draft-open, and
+ * `environment` is `unavailable` when the selected host serves no
+ * `environment.status`.
  */
 export interface SupportPrivateDiagnostics {
   readonly cause: SupportPrivateDiagnosticsCause | null;
@@ -440,6 +562,7 @@ export interface SupportPrivateDiagnostics {
    */
   readonly stackFamily: string | null;
   readonly correlationId: string;
+  readonly environment: SupportCapturedField<SupportEnvironmentSection>;
 }
 
 // Ticket 07 (T4): "bug" routes to bug_report.yml, "idea" to

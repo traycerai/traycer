@@ -25,6 +25,7 @@ describe("publishedChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: true,
+      environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
@@ -42,6 +43,7 @@ describe("publishedChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: true,
       ownedByViewer: true,
+      environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
@@ -68,6 +70,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -92,6 +95,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
+        environmentOwned: false,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -106,6 +110,30 @@ describe("publishedChatLockReason", () => {
     }
   });
 
+  it("says the team sandbox is out - not a collaborator, not a machine - for an environment-owned chat", () => {
+    // A team sandbox's chat is owned by the environment, so the viewer's
+    // user id never matches it and `ownedByViewer` reads false. The
+    // environment arm outranks that foreign arm and both reachability arms,
+    // for either reachability answer and a refusing owner alike.
+    for (const ownerIsReachable of [false, true]) {
+      const reason = publishedChatLockReason({
+        ownerIsReachable,
+        ownerRefusesStore: ownerIsReachable,
+        ownerIsThisHost: false,
+        ownedByViewer: false,
+        environmentOwned: true,
+        ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+        refresh: { kind: "idle" },
+      });
+      expect(reason).toBe(
+        "This chat's sandbox isn't available — showing the last published copy.",
+      );
+    }
+  });
+
   it("keeps the published-at and unreadable tails on the collaborator sentence", () => {
     const publishedAt = Date.parse("2026-08-14T12:00:00Z");
     const reason = publishedChatLockReason({
@@ -113,6 +141,7 @@ describe("publishedChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: false,
+      environmentOwned: false,
       ownerLabel: "some-host-id",
       unreadableCount: 2,
       fidelityNotice: null,
@@ -137,6 +166,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
@@ -150,6 +180,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
@@ -169,6 +200,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -189,6 +221,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -210,6 +243,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
@@ -234,6 +268,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
@@ -257,6 +292,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -272,6 +308,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -287,6 +324,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -304,6 +342,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -322,6 +361,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
@@ -347,6 +387,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
@@ -369,6 +410,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -389,6 +431,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: false,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -411,6 +454,7 @@ describe("publishedChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost,
           ownedByViewer: true,
+          environmentOwned: false,
           ownerLabel: "Ada's Mac",
           unreadableCount: 0,
           fidelityNotice: null,
@@ -429,6 +473,7 @@ describe("publishedChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost: false,
           ownedByViewer: false,
+          environmentOwned: false,
           ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
           unreadableCount: 0,
           fidelityNotice: null,
@@ -450,6 +495,7 @@ describe("replicaChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: true,
+      environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
     });
@@ -464,6 +510,7 @@ describe("replicaChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: true,
       ownedByViewer: true,
+      environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
     });
@@ -482,6 +529,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
+        environmentOwned: false,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
         unreadableCount: 0,
       });
@@ -492,6 +540,23 @@ describe("replicaChatLockReason", () => {
     }
   });
 
+  it("says the team sandbox is out for an environment-owned chat, ahead of the collaborator arm", () => {
+    for (const ownerIsReachable of [false, true]) {
+      const reason = replicaChatLockReason({
+        ownerIsReachable,
+        ownerRefusesStore: false,
+        ownerIsThisHost: false,
+        ownedByViewer: false,
+        environmentOwned: true,
+        ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+        unreadableCount: 0,
+      });
+      expect(reason).toBe(
+        "This chat's sandbox isn't available — showing this device's synced copy.",
+      );
+    }
+  });
+
   describe("owner-refuses-store arm", () => {
     it("names this host's own update need when the refusing owner IS this host", () => {
       const reason = replicaChatLockReason({
@@ -499,6 +564,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
       });
@@ -516,6 +582,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: false,
         ownedByViewer: true,
+        environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
       });
@@ -533,6 +600,7 @@ describe("replicaChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost,
           ownedByViewer: true,
+          environmentOwned: false,
           ownerLabel: "Ada's Mac",
           unreadableCount: 0,
         });
@@ -548,6 +616,7 @@ describe("replicaChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost: false,
           ownedByViewer: false,
+          environmentOwned: false,
           ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
           unreadableCount: 0,
         });

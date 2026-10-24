@@ -32,6 +32,9 @@ export const OPEN_TARGET_ICONS: Readonly<
   windsurf: WindsurfIcon,
   zed: ZedIcon,
   vscodium: VSCodiumIcon,
+  // Code - OSS is the open-source build VS Code is made from, with no logo of
+  // its own, so it wears VS Code's.
+  "code-oss": VisualStudioCodeIcon,
   finder: FinderIcon,
 };
 
@@ -71,8 +74,9 @@ export function withFinderTarget(
  * behaves on a non-Mac and how an editor default behaves on a host too old for
  * its id.
  *
- * Deliberately NOT intersected with the installed-editor probe; these surfaces
- * open whatever is stored, installed or not.
+ * Not intersected with the installed-editor probe here: `resolveOpenMenuState`
+ * does that, and resolves the stored default against the surviving rows with
+ * this function.
  */
 export function resolveEffectiveDefaultEditor(
   catalog: ReadonlyArray<OpenTargetEntry>,
@@ -85,6 +89,23 @@ export function resolveEffectiveDefaultEditor(
     return defaultTarget;
   }
   return catalog[0]?.id ?? "vscode";
+}
+
+function joinWithOr(labels: ReadonlyArray<string>): string {
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
+}
+
+/**
+ * What a surface with no menu says instead of sending an editor nobody has.
+ * `editors` is the catalog THIS host can be told about, so a host on an older
+ * minor is not asked to install an editor it would reject at parse.
+ */
+export function noEditorInstalledMessage(
+  editors: ReadonlyArray<EditorEntry>,
+): string {
+  const labels = joinWithOr(editors.map((editor) => editor.label));
+  return `None of ${labels} is installed on this machine; install one to open files from Traycer.`;
 }
 
 export interface OpenMenuState {

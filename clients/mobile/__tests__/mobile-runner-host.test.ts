@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
 import type { DeviceFlowResult } from "@traycer-clients/shared/platform/runner-host";
 import { MobileRunnerHost } from "../src/mobile-runner-host";
+import { MobileSandboxArtifacts } from "../src/sandbox-artifacts-plugin";
 import {
   MobileAuthSheet,
   type AppUrlOpenSlice,
@@ -36,6 +37,8 @@ const nativeMocks = vi.hoisted(() => ({
 const capacitorEventMocks = vi.hoisted(() => ({
   /** What `Capacitor.getPlatform()` reports; per-test overridable. */
   platform: "ios",
+  /** What `Capacitor.isNativePlatform()` reports; per-test overridable. */
+  native: true,
   pauseListeners: new Array<() => void>(),
   resumeListeners: new Array<() => void>(),
   appStateListeners: new Array<(state: { isActive: boolean }) => void>(),
@@ -105,6 +108,7 @@ vi.mock("@capacitor/core", async (importOriginal) => {
     Capacitor: {
       ...actual.Capacitor,
       getPlatform: () => capacitorEventMocks.platform,
+      isNativePlatform: () => capacitorEventMocks.native,
     },
   };
 });
@@ -250,6 +254,8 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     authnBaseUrl: "http://localhost:32350",
     hostLabel: "test-slot",
     relayBaseUrl: "ws://localhost:8787/attach",
+    serverBaseUrl: "http://localhost:5010",
+    sandboxControlUnavailableReason: null,
     fleetHostIds: null,
     // Push lifecycle is exercised in push-registration.test.ts; the host's
     // click sink with `null` is the dev-web no-op these tests always had.
@@ -269,6 +275,40 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     // The Android back adapter has its own suite (`system-back.test.ts`);
     // `null` is every other platform's answer.
     systemBack: null,
+    statusBarTap: null,
+  });
+}
+
+function runnerWithSandboxReason(
+  sandboxControlUnavailableReason: string | null,
+): MobileRunnerHost {
+  return new MobileRunnerHost({
+    signInUrl: "http://localhost:32352/sign-in",
+    authnBaseUrl: "http://localhost:32350",
+    hostLabel: "test-slot",
+    relayBaseUrl: "ws://localhost:8787/attach",
+    serverBaseUrl: "http://localhost:5010",
+    sandboxControlUnavailableReason,
+    fleetHostIds: null,
+    // Push lifecycle is exercised in push-registration.test.ts; the host's
+    // click sink with `null` is the dev-web no-op these tests always had.
+    pushRegistration: null,
+    openPushSettings: null,
+    returnScheme: null,
+    authSheet: null,
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
+    // The native save leg has its own suite (`file-save.test.ts`); `null` is
+    // the dev-web answer, and keeps the plugin pair out of these tests.
+    fileSave: null,
+    // Dev-web flavoured, matching `fileSave` above: a browser tab honours an
+    // image clipboard write.
+    canCopyImages: true,
+    // The Android back adapter has its own suite (`system-back.test.ts`);
+    // `null` is every other platform's answer.
+    systemBack: null,
+    statusBarTap: null,
   });
 }
 
@@ -322,6 +362,8 @@ function phoneRunner(input: {
     authnBaseUrl: "http://localhost:32350",
     hostLabel: "test-slot",
     relayBaseUrl: "ws://localhost:8787/attach",
+    serverBaseUrl: "http://localhost:5010",
+    sandboxControlUnavailableReason: null,
     fleetHostIds: null,
     pushRegistration: new MobilePushRegistration({
       plugin: input.plugin,
@@ -340,6 +382,7 @@ function phoneRunner(input: {
     fileSave: null,
     canCopyImages: true,
     systemBack: null,
+    statusBarTap: null,
   });
 }
 
@@ -399,6 +442,8 @@ function runnerWithAuthSheet(
     authnBaseUrl: "http://localhost:32350",
     hostLabel: "test-slot",
     relayBaseUrl: "ws://localhost:8787/attach",
+    serverBaseUrl: "http://localhost:5010",
+    sandboxControlUnavailableReason: null,
     fleetHostIds: null,
     pushRegistration: null,
     openPushSettings: null,
@@ -410,6 +455,7 @@ function runnerWithAuthSheet(
     fileSave: null,
     canCopyImages: true,
     systemBack: null,
+    statusBarTap: null,
   });
 }
 
@@ -427,6 +473,7 @@ describe("MobileRunnerHost", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capacitorEventMocks.platform = "ios";
+    capacitorEventMocks.native = true;
     capacitorEventMocks.rejectAppListeners = false;
     capacitorEventMocks.pauseListeners.length = 0;
     capacitorEventMocks.resumeListeners.length = 0;
@@ -528,6 +575,16 @@ describe("MobileRunnerHost", () => {
       { present: true, userId: "user-1", revision: 1 },
       { present: true, userId: "user-1", revision: 2 },
     ]);
+  });
+
+  it("exposes the sandbox-control unavailable reason it was given, and null when it was given none", () => {
+    const reason = "Sandboxes aren't available in the staging build.";
+    expect(
+      runnerWithSandboxReason(reason).sandboxControlUnavailableReason,
+    ).toBe(reason);
+    expect(
+      runnerWithSandboxReason(null).sandboxControlUnavailableReason,
+    ).toBeNull();
   });
 
   it("publishes a null local-host snapshot synchronously", () => {
@@ -2265,6 +2322,33 @@ describe("MobileRunnerHost", () => {
       expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
         url: session.authorization.verificationUriComplete,
       });
+    });
+  });
+
+  describe("sandboxArtifacts", () => {
+    it("wires the native artifact bridge on iOS, under iOS's own policy source", () => {
+      capacitorEventMocks.native = true;
+      capacitorEventMocks.platform = "ios";
+      const host = runner(null);
+
+      expect(host.sandboxArtifacts).toBeInstanceOf(MobileSandboxArtifacts);
+      expect(host.sandboxArtifacts?.policySource).toBe("traycer-artifact:");
+    });
+
+    it("wires the native artifact bridge on Android, which needs no extra CSP policy source", () => {
+      capacitorEventMocks.native = true;
+      capacitorEventMocks.platform = "android";
+      const host = runner(null);
+
+      expect(host.sandboxArtifacts).toBeInstanceOf(MobileSandboxArtifacts);
+      expect(host.sandboxArtifacts?.policySource).toBeNull();
+    });
+
+    it("serves no artifact bridge at all in the browser-tab build", () => {
+      capacitorEventMocks.native = false;
+      const host = runner(null);
+
+      expect(host.sandboxArtifacts).toBeNull();
     });
   });
 });

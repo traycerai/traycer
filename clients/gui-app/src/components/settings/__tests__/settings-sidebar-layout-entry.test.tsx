@@ -19,10 +19,45 @@ const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
+  const useHostScope = () => hostScopeFixture(scopeOverrides.current);
   return {
-    useHostScope: () => hostScopeFixture(scopeOverrides.current),
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
+
+// The Environment dropdown reads each registered computer's
+// `environment.status` and negotiated version, and the footer's Sandboxes link
+// reads the environment list: all `useQuery`s, and this suite mounts no query
+// client. "No host has answered" is the honest empty answer; the picker's own
+// rows are covered by environment-picker.test.tsx.
+vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
+  useRegisteredHostEnvironmentStatuses: () => new Map(),
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersions: () => new Map(),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: undefined }),
+}));
+vi.mock("@/components/settings/move-sheet", () => ({
+  MoveSheet: () => null,
+}));
+// The Team rows and the trigger's team label read the environment list
+// through the window's host client, and this suite mounts no host runtime.
+// The rows have their own suite; a Personal pick names no team.
+vi.mock("@/components/settings/environment/team-pick-label", () => ({
+  usePickedTeamLabel: () => null,
+}));
+vi.mock("@/components/settings/environment/team-rows", () => ({
+  TeamRows: () => null,
+}));
+// The Guide group leaves the rail once every Getting started step is done;
+// the real answer reads several `useQuery`s and this suite mounts no query
+// client. Not done, as for a new account.
+vi.mock("@/components/onboarding/getting-started-checklist", () => ({
+  useGettingStartedGuideIsComplete: () => false,
+}));
 
 vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
@@ -55,11 +90,27 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 // this navigation suite went on passing. The whole point of exporting
 // `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
 // of these by hand.
+// Mocked for the same reason the fleet views are: no QueryClient here, and
+// the environment label is not what this suite tests.
+vi.mock("@/hooks/bots/use-host-environment-labels", () => ({
+  useHostEnvironmentLabelResolver: () => () => null,
+}));
 vi.mock("@/hooks/host/use-fleet-update-views", async () => {
   const { UNKNOWN_FLEET_UPDATE_VIEW } =
     await import("@/lib/host/fleet-update/fleet-update-view");
   return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
 });
+
+// The host picker's balance banner reads the sandbox list through a
+// `useQuery`, which needs a query client this navigation suite deliberately
+// does not mount. It is irrelevant to navigation, and has its own suite.
+vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
+  SandboxBalanceBanner: () => null,
+}));
+// Same reasoning: the Automations entry reads its own `useQuery`.
+vi.mock("@/components/hosts/automations-host-entry", () => ({
+  AutomationsHostEntry: () => <div data-testid="automations-entry-probe" />,
+}));
 
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({

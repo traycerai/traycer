@@ -17,12 +17,18 @@
 
 export const DEV_AUTHN_BASE_URL_ENV = "TRAYCER_DEV_AUTHN_BASE_URL";
 export const DEV_CLOUD_UI_BASE_URL_ENV = "TRAYCER_DEV_CLOUD_UI_BASE_URL";
+// traycer-server's local origin. The same name the internal host reads for its
+// own traycer-server base URL, so one `make dev-desktop` export points both.
+export const DEV_SERVER_BASE_URL_ENV = "TRAYCER_DEV_SERVER_BASE_URL";
 // Remote Host Support (ticket T14): the relay worker's local WebSocket
 // attach endpoint, only read by the desktop build (the CLI never dials the
 // relay itself). Separate from `devBackendUrlFromEnv` below because the
 // relay URL is `ws:`, not `http:`, and carries a real path (`/attach`), not
 // just an origin.
 export const DEV_RELAY_BASE_URL_ENV = "TRAYCER_DEV_RELAY_BASE_URL";
+// The server pool's local session socket, read only by the desktop build.
+// Same shape and validation as the relay's (`ws:`, loopback, a real path).
+export const DEV_POOL_BASE_URL_ENV = "TRAYCER_DEV_POOL_BASE_URL";
 
 const ALLOWED_DEV_BACKEND_HOSTS: ReadonlySet<string> = new Set([
   "localhost",

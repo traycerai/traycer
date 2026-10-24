@@ -183,6 +183,9 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   ticket: "content",
   story: "content",
   review: "content",
+  html: "content",
+  canvas: "content",
+  file: "content",
   "workspace-file": "content",
   "git-diff": "content",
   "snapshot-diff": "content",
@@ -192,7 +195,9 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   "pr-detail": "content",
   "pr-diff": "content",
   "deleted-artifacts": "content",
-  "epic-file": "content",
+  // A device viewer, placed where browsers are: the two are the same kind of
+  // surface to a person laying out a canvas.
+  simulator: "browser",
   blank: "content",
 };
 

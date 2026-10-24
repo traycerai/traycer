@@ -232,8 +232,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
+  const useHostScope = () => hostScopeFixture({ client: null });
   return {
-    useHostScope: () => hostScopeFixture({ client: null }),
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 

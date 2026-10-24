@@ -11,6 +11,17 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  RemoteStreamClient,
+  type IRemoteSession,
+} from "@traycer-clients/shared/host-transport/remote/index";
+import type {
+  FatalErrorDetails,
+  SchemaVersion,
+} from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
@@ -21,6 +32,26 @@ const globalClientRef = vi.hoisted(() => ({
   requester: null as HostClient<HostRpcRegistry> | null,
   requesterFor: -1,
 }));
+
+// Only the network boundary is replaced; every other export of this barrel
+// stays REAL, matching `runtime-messenger-availability.test.ts`.
+const mocks = vi.hoisted(() => ({
+  createRemoteHostTransport: vi.fn(),
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      createRemoteHostTransport: mocks.createRemoteHostTransport,
+    };
+  },
+);
 
 vi.mock("@/lib/host/runtime", () => {
   const spine = () => {
@@ -51,6 +82,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { resetHostStreamClientCacheForTest } from "@/lib/host/host-stream-client-cache";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The SPINE `useHostClient` hands back in this suite - never bound to any one
@@ -87,11 +119,201 @@ const TARGET_B: HostDirectoryEntry = {
   websocketUrl: "ws://127.0.0.1:59999/rpc",
 };
 
+interface ControllableSession extends IRemoteSession<
+  HostRpcRegistry,
+  HostStreamRpcRegistry
+> {
+  /** How many availability listeners are attached RIGHT NOW - the whole point. */
+  readonly availabilityListenerCount: number;
+  readonly closeCalls: number;
+  /**
+   * Settable, because "already ready when the binding subscribes" is a state
+   * the cache produces routinely (a warm keep-warm hit) and one in which NO
+   * boundary will ever be emitted - `subscribeAvailabilityRecovered` reports a
+   * recovery, not the current state.
+   */
+  ready: boolean;
+  /**
+   * Settable BEFORE `emitClosed()` to play a terminal session fatal (the real
+   * session records the verdict, then closes and notifies). Left null,
+   * `emitClosed` plays a routine cache retirement - the distinction the
+   * messenger's `onClosed` handler keys on.
+   */
+  fatal: FatalErrorDetails | null;
+  emitReady(): void;
+  emitClosed(): void;
+  setMethodSupport(
+    support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
+  ): void;
+}
+
+function controllableSession(): ControllableSession {
+  const availability = new Set<() => void>();
+  const closed = new Set<() => void>();
+  const methodSupportListeners = new Set<() => void>();
+  let closeCalls = 0;
+  let terminallyClosed = false;
+  let methodSupport: StreamMethodSupport = "unknown";
+  let methodSchemaVersion: SchemaVersion | null = null;
+  const session: ControllableSession = {
+    ready: false,
+    fatal: null,
+    get availabilityListenerCount() {
+      return availability.size;
+    },
+    get closeCalls() {
+      return closeCalls;
+    },
+    emitReady: () => {
+      // Mirror production ordering: the phase flips to ready BEFORE the
+      // boundary listeners run, so a listener that re-reads `isReady()` sees
+      // the state its notification describes.
+      session.ready = true;
+      for (const listener of [...availability]) {
+        listener();
+      }
+    },
+    emitClosed: () => {
+      terminallyClosed = true;
+      session.ready = false;
+      for (const listener of [...closed]) {
+        listener();
+      }
+      // Deliberately does NOT clear the listener sets, though a real session
+      // does: `availabilityListenerCount` assertions must keep measuring
+      // whether the code under test detached, not whether the fake swept.
+    },
+    start: vi.fn(),
+    // False while merely RELEASED - a released session lingers, which is
+    // exactly the state this file is about - but true once `emitClosed` has
+    // fired, matching a real session that is already closed when it notifies
+    // its closed-listeners. NOT flipped by `close()`, which plays the cache
+    // view's release, not a terminal close.
+    isClosed: () => terminallyClosed,
+    isReady: () => session.ready,
+    // Structural member: this fake models readiness, never silence.
+    isSilentFor: () => false,
+    sendUnary: vi.fn(() => Promise.resolve({}) as never),
+    subscribe: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    subscribeAtVersion: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    subscribeWithParamsProvider: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    notifyBearerRotated: vi.fn(),
+    notifyCloudVerdictChanged: vi.fn(),
+    wake: vi.fn(),
+    forceReconnect: vi.fn(),
+    onClosed: (listener) => {
+      // Production refuses new listeners once closed and hands back a noop
+      // unsubscribe; a fake that kept accepting them could mint a
+      // wrong-reason pass for lifecycle tests.
+      if (terminallyClosed) {
+        return () => undefined;
+      }
+      closed.add(listener);
+      return () => closed.delete(listener);
+    },
+    subscribeAvailabilityRecovered: (listener) => {
+      if (terminallyClosed) {
+        return () => undefined;
+      }
+      availability.add(listener);
+      return () => availability.delete(listener);
+    },
+    subscribeReadinessLost: () => () => undefined,
+    getMethodSupport: () => methodSupport,
+    getMethodSchemaVersion: () => methodSchemaVersion,
+    subscribeMethodSupport: (listener) => {
+      methodSupportListeners.add(listener);
+      return () => {
+        methodSupportListeners.delete(listener);
+      };
+    },
+    terminalFatal: () => session.fatal,
+    setMethodSupport: (support, schemaVersion) => {
+      methodSupport = support;
+      methodSchemaVersion = schemaVersion;
+      for (const listener of methodSupportListeners) listener();
+    },
+    close: () => {
+      closeCalls += 1;
+    },
+  };
+  return session;
+}
+
+const FROZEN_SANDBOX_TARGET: RemoteHostDirectoryEntry = {
+  hostId: "sandbox-frozen-1",
+  label: "Frozen sandbox",
+  kind: "remote",
+  websocketUrl: "wss://relay.invalid/attach",
+  version: "1.2.3",
+  transportDialability: "dialable",
+  remoteStatus: {
+    connectivity: "connectable",
+    viewerReachability: "ok",
+    clientCloud: "ok",
+    updateState: "current",
+    appVersion: null,
+    lastSeenAt: null,
+  },
+  publicKey: "pubkey-frozen-sandbox",
+  relayFuseGrace: false,
+  sandbox: {
+    state: "suspended",
+    frozen: true,
+    profile: "agent",
+    ownerTeamName: null,
+    ownerTeamId: null,
+  },
+};
+
+function frozenFatal(): FatalErrorDetails {
+  return {
+    code: "SANDBOX_FROZEN",
+    reason: "This sandbox is paused because your credits ran out.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
 describe("useHostStreamClientFor", () => {
   afterEach(() => {
     cleanup();
     globalClientRef.value = null;
+    resetHostStreamClientCacheForTest();
+    mocks.createRemoteHostTransport.mockReset();
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("does not rebuild its stream client in a loop when a frozen sandbox's session ends with SANDBOX_FROZEN", async () => {
+    vi.useFakeTimers();
+    globalClientRef.value = buildGlobalClient(true);
+    const sessions: ControllableSession[] = [];
+    mocks.createRemoteHostTransport.mockImplementation(() => {
+      const session = controllableSession();
+      sessions.push(session);
+      return { session, streamClient: new RemoteStreamClient(session) };
+    });
+
+    renderHook(() => useHostStreamClientFor(FROZEN_SANDBOX_TARGET, null));
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      sessions[0].fatal = frozenFatal();
+      sessions[0].emitClosed();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
   });
 
   it("returns null when there is no target", () => {
@@ -104,6 +326,27 @@ describe("useHostStreamClientFor", () => {
     globalClientRef.value = buildGlobalClient(false);
     const { result } = renderHook(() => useHostStreamClientFor(TARGET_B, null));
     expect(result.current).toBeNull();
+  });
+
+  // `setRequestContext` swaps the context inside the one spine client. The
+  // compiled hook memoized its read on that stable object, so a sign-in after
+  // mount left the host's stream client unbuilt until the host changed. The
+  // sign-in's own announcement is the only thing that re-renders the hook here.
+  it("builds the stream client once the spine signs in", () => {
+    const globalClient = buildGlobalClient(false);
+    globalClientRef.value = globalClient;
+    const { result } = renderHook(() => useHostStreamClientFor(TARGET_B, null));
+    expect(result.current).toBeNull();
+
+    act(() => {
+      globalClient.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-1",
+        }),
+      );
+    });
+    expect(result.current).toBeInstanceOf(WsStreamClient);
   });
 
   it("builds a stream client for the chosen host without moving the global active host", () => {

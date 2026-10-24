@@ -71,6 +71,16 @@ const state = vi.hoisted(() => ({
   },
 }));
 
+// The no-menu open surfaces read the install probe; none of this suite's claims
+// depend on it, so it stays "still in flight".
+vi.mock("@/hooks/editor/use-editor-availability-query", () => ({
+  useEditorAvailability: () => ({ data: undefined }),
+}));
+
+vi.mock("@/hooks/editor/use-no-editor-installed-notice", () => ({
+  useNoEditorInstalledNotice: () => vi.fn(),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => state.hostEntry,
 }));

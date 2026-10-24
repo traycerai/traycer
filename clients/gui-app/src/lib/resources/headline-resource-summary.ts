@@ -63,8 +63,12 @@ export interface ResourceMonitorHostReading {
  * resolves (`isFollowing` requires one). Reaching for `isViewingActive` as a
  * cold-start fallback here looks like it preserves something and cannot: it is
  * false in exactly the case it would be consulted.
+ *
+ * Exported because the status bar's segment answers the same question for the
+ * same reason: its total is the popover's headline, and the two can only agree
+ * if they decide "is this machine" identically.
  */
-function readingShowsLocalDesktop(scope: HostScope): boolean {
+export function readingShowsLocalDesktop(scope: HostScope): boolean {
   return scope.host?.isLocalMachine === true;
 }
 

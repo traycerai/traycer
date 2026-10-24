@@ -12,12 +12,14 @@ import type {
   RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ListTasksFacets,
   ListTasksResponse,
   ListTaskLight,
   ListTasksSort,
+  EpicCreateOwner,
   TaskLight,
   TaskRepoIdentifier,
   TaskWorkspaceIdentifier,
@@ -27,16 +29,30 @@ import {
   listTasksRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { EPIC_CREATE_LOCAL_FIRST_MINOR } from "@/lib/epic-create-admission";
-import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
+import {
+  EPIC_CREATE_TEAM_OWNER_MINOR,
+  epicCreateFloor,
+  teamCreateRejectionMessage,
+} from "@/lib/epic-create-admission";
+import {
+  composerHostLabel,
+  createWithoutCloudVerdictMessage,
+} from "@/lib/composer/landing-placement";
 import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import { toast } from "sonner";
+import {
+  toastFromHostError,
+  toastHostRefusalWithGuidance,
+  toastUnknownOutcomeAfterRefusedRetry,
+  toastUnknownOutcomeWithRetryGuidance,
+} from "@/lib/host-error-toast";
 import {
   createOutcomeIsDecidable,
   pollEpicExistence,
@@ -62,6 +78,12 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 interface CreateEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
+  /**
+   * The slug of the team a team create was sent for, captured at dispatch: a
+   * refusal can arrive after the team left the person's list, and its line
+   * still names the team.
+   */
+  readonly teamSlug: string | null;
 }
 
 function taskCreationMode(
@@ -94,6 +116,9 @@ export function useEpicCreateForClient(
   CreateEpicMutationContext
 > {
   const queryClient = useQueryClient();
+  // The label the composer's own inline refusal names the device by, so the
+  // toast says the sentence the composer shows for that device.
+  const hostEntries = useHostDirectoryList().data ?? null;
   return useHostMutation<
     HostRpcRegistry,
     "epic.create",
@@ -118,7 +143,8 @@ export function useEpicCreateForClient(
       }
       return variables;
     },
-    requiredHostMethodVersion: () => createRequiresLocalFirstHost(),
+    requiredHostMethodVersion: (variables) =>
+      createFloorFor(variables.owner ?? null),
     // The epic this request is MINTING, which makes a replay of the frame the
     // same create rather than a second one. Only stable because hash-only
     // content keeps the params byte-identical across that replay - an inlined
@@ -183,6 +209,7 @@ export function useEpicCreateForClient(
         return {
           hostId: client?.getActiveHostId() ?? null,
           userId: client?.getRequestContextUserId() ?? null,
+          teamSlug: teamSlugFor(variables.owner ?? null),
         };
       },
       onSuccess: (response, variables, ctx) => {
@@ -248,6 +275,26 @@ export function useEpicCreateForClient(
           mode: taskCreationMode(variables.chat),
           blocker: analyticsBlockerFromError(error),
         });
+        // A team create's own refusals say what they are: the host below
+        // `@1.3`, and the cloud's `FORBIDDEN`. Nothing was created for either.
+        const teamRejection = teamCreateRejectionMessage(
+          error,
+          ctx?.teamSlug ?? null,
+        );
+        if (teamRejection !== null) {
+          toast.error(teamRejection);
+          return;
+        }
+        if (error instanceof CreateWithoutCloudVerdictError) {
+          toastHostRefusalWithGuidance(
+            error,
+            "Couldn't create epic.",
+            createWithoutCloudVerdictMessage(
+              composerHostLabel(hostEntries, ctx?.hostId ?? null),
+            ),
+          );
+          return;
+        }
         // NO LONGER UNCONDITIONAL. "May or may not have gone through" is the
         // right sentence only where the outcome is genuinely unknowable, and
         // now that this create carries `idempotencyKey = epicId` a dropped
@@ -289,16 +336,44 @@ export function useEpicCreateForClient(
             // create did not land, the second says the poll could not tell -
             // and a poll that could not tell leaves the outcome exactly as
             // ambiguous as it was, which is what this notice describes.
+            //
+            // A retry episode a refusal ended keeps those words too: `absent`
+            // is the poll's last look, not proof the earlier send never ran.
             if (verdict === "exists") return;
-            toastFromHostError(error, "Couldn't create epic.");
+            toastCreateOutcomeUnknown(error);
           },
+          // A poll that rejected could not tell either.
           () => {
-            toastFromHostError(error, "Couldn't create epic.");
+            toastCreateOutcomeUnknown(error);
           },
         );
       },
     },
   });
+}
+
+/**
+ * The notice for a create whose existence poll did not find it - `absent`,
+ * `unknown`, or a poll that rejected. Each leaves the outcome unknown. A retry
+ * episode a refusal ended adds that refusal's guidance, labelled as the
+ * retry's: the refusal stays true about the retry whatever the poll saw.
+ */
+function toastCreateOutcomeUnknown(error: HostRpcError): void {
+  if (
+    error instanceof RetryEpisodeOutcomeUnknownError &&
+    isCreateWithoutCloudVerdictRefusal(error.finalRefusal)
+  ) {
+    toastUnknownOutcomeWithRetryGuidance(CREATE_FLOOR_RETRY_REFUSED_GUIDANCE);
+    return;
+  }
+  if (error instanceof RetryEpisodeOutcomeUnknownError) {
+    toastUnknownOutcomeAfterRefusedRetry(
+      error.finalRefusal,
+      "Couldn't create epic.",
+    );
+    return;
+  }
+  toastFromHostError(error, "Couldn't create epic.");
 }
 
 function patchCreatedTaskIntoCloudTaskCaches(
@@ -858,13 +933,57 @@ function liveOpenEpicTitle(epicId: string): string | null {
  *
  * `null` for a `signed-in` session: it may spend the capability whatever the
  * peer's minor is, and pays no floor.
+ *
+ * A team owner requires `@1.3` whatever the session:
+ * an older host's frozen request strips `owner` and would create the person's
+ * own epic. `@1.3` is above the local-first floor, so it covers that one too.
  */
-function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
-  if (authorizesCloudCapability(useAuthStore.getState().status)) return null;
-  return {
-    method: "epic.create",
-    version: { major: 1, minor: EPIC_CREATE_LOCAL_FIRST_MINOR },
-  };
+function createFloorFor(
+  owner: EpicCreateOwner | null,
+): RequiredHostMethodVersion | null {
+  return epicCreateFloor({
+    owner,
+    cloudAuthorized: authorizesCloudCapability(useAuthStore.getState().status),
+  });
+}
+
+/**
+ * The guidance for a retry that reached an older host below the create floor,
+ * said in the outcome-unknown notice's "The retry was refused" line.
+ */
+const CREATE_FLOOR_RETRY_REFUSED_GUIDANCE =
+  "Traycer couldn't confirm your sign-in on the device that answered. Sign in again, or update that device, then check your epics before trying again.";
+
+/**
+ * The transport's pre-send refusal of a create below the cloud-verdict floor.
+ * The team-owner floor is not this one: its line is the one which
+ * `teamCreateRejectionMessage` reads off the same error type.
+ */
+function isCreateWithoutCloudVerdictRefusal(
+  cause: unknown,
+): cause is HostMethodVersionUnsatisfiedError {
+  return (
+    cause instanceof HostMethodVersionUnsatisfiedError &&
+    cause.requirement.version.minor < EPIC_CREATE_TEAM_OWNER_MINOR
+  );
+}
+
+/**
+ * A create refused at the `epic.create@1.1` floor, typed so the toast
+ * recognises it from the refusal itself and says the composer's remedy
+ * ({@link createWithoutCloudVerdictMessage}) rather than the host's message.
+ */
+class CreateWithoutCloudVerdictError extends HostRpcError {
+  constructor(cause: HostMethodVersionUnsatisfiedError) {
+    super({
+      code: "RPC_ERROR",
+      message: cause.message,
+      requestId: cause.requestId,
+      method: "epic.create",
+      fatalDetails: null,
+    });
+    this.name = "CreateWithoutCloudVerdictError";
+  }
 }
 
 /**
@@ -873,12 +992,16 @@ function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
  * moved but what the user reads did not.
  */
 function asCreateWithoutCloudVerdictError(cause: unknown): unknown {
-  if (!(cause instanceof HostMethodVersionUnsatisfiedError)) return cause;
-  return new HostRpcError({
-    code: "RPC_ERROR",
-    message: createWithoutCloudVerdictMessage("this device"),
-    requestId: cause.requestId,
-    method: "epic.create",
-    fatalDetails: null,
-  });
+  if (!isCreateWithoutCloudVerdictRefusal(cause)) return cause;
+  return new CreateWithoutCloudVerdictError(cause);
+}
+
+/** The slug of a team owner among the person's teams, or `null`. */
+function teamSlugFor(owner: EpicCreateOwner | null): string | null {
+  if (owner?.kind !== "team") return null;
+  return (
+    useAuthStore
+      .getState()
+      .shareableTeams.find((team) => team.teamId === owner.teamId)?.slug ?? null
+  );
 }

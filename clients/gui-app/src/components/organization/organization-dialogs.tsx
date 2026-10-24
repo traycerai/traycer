@@ -240,12 +240,7 @@ function NewGroupEditor(props: {
         </Button>
         <SaveButton
           pending={pending}
-          disabled={
-            !name.trim() ||
-            !organization?.view?.appearances.some(
-              (a) => a.taskId === props.taskId,
-            )
-          }
+          disabled={!name.trim() || organization?.supported !== true}
         >
           Create group
         </SaveButton>

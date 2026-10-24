@@ -80,6 +80,7 @@ if (process.argv.includes("--restore")) {
 const production = {
   cloud: {
     authnApiUrl: "https://authn.traycer.ai",
+    traycerServerBaseUrl: "https://server.traycer.ai",
     cloudUiBaseUrl: "https://traycer.ai",
     relayAttachUrl: "wss://relay.traycer.ai/attach",
   },
@@ -115,6 +116,12 @@ runConfigTargetCli({
       staging: targetInput === null ? "" : targetInput.cloud.authnApiUrl,
       production: production.cloud.authnApiUrl,
     },
+    serverBaseUrl: {
+      dev: production.cloud.traycerServerBaseUrl,
+      staging:
+        targetInput === null ? "" : targetInput.cloud.traycerServerBaseUrl,
+      production: production.cloud.traycerServerBaseUrl,
+    },
     cloudUiBaseUrl: {
       dev: production.cloud.cloudUiBaseUrl,
       staging: targetInput === null ? "" : targetInput.cloud.cloudUiBaseUrl,
@@ -124,6 +131,13 @@ runConfigTargetCli({
       dev: production.cloud.relayAttachUrl,
       staging: targetInput === null ? "" : targetInput.cloud.relayAttachUrl,
       production: production.cloud.relayAttachUrl,
+    },
+    // Empty for a target with no pool (production, until its address is
+    // published), which synthesizes no pool entry.
+    poolBaseUrl: {
+      dev: "",
+      staging: targetInput === null ? "" : (targetInput.cloud.poolUrl ?? ""),
+      production: "",
     },
     releaseRepo: {
       dev: "traycerai/traycer",

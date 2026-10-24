@@ -6,7 +6,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  type HostNotificationEntryV22,
+  type HostNotificationEntryV24,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeClientFrame,
@@ -36,6 +36,7 @@ import {
   openHostNotificationsStream,
   selectHostNotificationIds,
   useHostNotificationsStore,
+  type HostNotificationsCloudLane,
 } from "@/stores/notifications/host-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -51,7 +52,7 @@ function entry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntryV22 {
+): HostNotificationEntryV24 {
   return {
     id,
     updatedAt,
@@ -70,14 +71,14 @@ function entry(
   };
 }
 
-function promptEntry(id: string): HostNotificationEntryV22 {
+function promptEntry(id: string): HostNotificationEntryV24 {
   return promptOccurrence(id, 10);
 }
 
 function promptOccurrence(
   id: string,
   updatedAt: number,
-): HostNotificationEntryV22 {
+): HostNotificationEntryV24 {
   return {
     id,
     updatedAt,
@@ -108,7 +109,7 @@ function attentionCursor(
 }
 
 function defaultSummaryFor(
-  entries: ReadonlyArray<HostNotificationEntryV22>,
+  entries: ReadonlyArray<HostNotificationEntryV24>,
 ): HostNotificationsSummary {
   return {
     unreadCount: entries.filter((item) => item.readAt === null).length,
@@ -121,7 +122,7 @@ function defaultSummaryFor(
 }
 
 function applySimpleSnapshot(input: {
-  readonly entries: ReadonlyArray<HostNotificationEntryV22>;
+  readonly entries: ReadonlyArray<HostNotificationEntryV24>;
   readonly summary: HostNotificationsSummary;
   readonly recentCursor: HostNotificationsChronologicalCursor | null;
   readonly attentionNext: HostNotificationsAttentionCursor | null;
@@ -866,6 +867,7 @@ describe("host notifications store", () => {
       onFeedFrame: () => undefined,
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     expect(client.subscribeCount).toBe(1);
@@ -1316,6 +1318,7 @@ describe("host notifications store", () => {
       onFeedFrame: () => undefined,
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     // Notification frames are text-only; a non-null binary companion is the
@@ -1438,6 +1441,7 @@ describe("host notifications store", () => {
       onFeedFrame: (frame) => frames.push(frame),
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     client.session.emitServerFrame({
@@ -1479,6 +1483,7 @@ describe("host notifications store", () => {
       onFeedFrame: (frame) => frames.push(frame),
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     client.session.emitServerFrame({
@@ -1521,6 +1526,7 @@ describe("host notifications store", () => {
       onFeedFrame: (frame) => frames.push(frame),
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     client.session.emitServerFrame({
@@ -1538,7 +1544,7 @@ describe("host notifications store", () => {
 
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV22>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV24>> = [];
     const liveEntry = entry("live", 200, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1550,6 +1556,7 @@ describe("host notifications store", () => {
       onFeedFrame: () => undefined,
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     client.session.emitServerFrame({
@@ -1581,12 +1588,12 @@ describe("host notifications store", () => {
 
   it("uses the latest feed copy for renderer channel emissions", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV22>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV24>> = [];
     const staleEmissionEntry = entry("live", 200, null);
     if (staleEmissionEntry.kind !== "agent.stopped") {
       throw new Error("Expected an agent-stopped notification fixture");
     }
-    const richFeedEntry: HostNotificationEntryV22 = {
+    const richFeedEntry: HostNotificationEntryV24 = {
       ...staleEmissionEntry,
       updatedAt: 201,
       payload: {
@@ -1605,6 +1612,7 @@ describe("host notifications store", () => {
       onFeedFrame: () => undefined,
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     client.session.emitServerFrame({
@@ -1630,7 +1638,7 @@ describe("host notifications store", () => {
 
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV22>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV24>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
     const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1642,6 +1650,7 @@ describe("host notifications store", () => {
       onFeedFrame: () => undefined,
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     client.session.emitServerFrame({
@@ -1671,6 +1680,7 @@ describe("host notifications store", () => {
       onFeedFrame: () => undefined,
       onPresenceChanged: () => undefined,
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
 
     expect(client.session.clientFrames).toHaveLength(0);
@@ -1706,6 +1716,7 @@ describe("host notifications store", () => {
         onFeedFrame: () => undefined,
         onPresenceChanged: () => undefined,
         onStreamOpened: () => undefined,
+        cloudLane: null,
       });
 
       client.session.emitOpen();
@@ -1743,6 +1754,7 @@ describe("host notifications store", () => {
         notified.push(frame);
       },
       onStreamOpened: () => undefined,
+      cloudLane: null,
     });
     try {
       // No open ack ever arrives: the transport send is impossible, but the
@@ -1771,6 +1783,7 @@ describe("host notifications store", () => {
         onFeedFrame: () => undefined,
         onPresenceChanged: () => undefined,
         onStreamOpened: () => undefined,
+        cloudLane: null,
       });
       expect(client.subscribeCount).toBe(1);
       client.session.emitOpen();
@@ -1817,6 +1830,7 @@ describe("host notifications store", () => {
           notified.push(frame);
         },
         onStreamOpened: () => undefined,
+        cloudLane: null,
       });
       const firstSession = client.session;
       firstSession.emitOpen();
@@ -1867,6 +1881,7 @@ describe("host notifications store", () => {
         onFeedFrame: () => undefined,
         onPresenceChanged: () => undefined,
         onStreamOpened: () => undefined,
+        cloudLane: null,
       });
       const terminalClose = (): void => {
         client.session.emitClosed({
@@ -1958,6 +1973,7 @@ describe("host notifications store", () => {
             onFeedFrame: () => undefined,
             onPresenceChanged: () => undefined,
             onStreamOpened: () => undefined,
+            cloudLane: null,
           },
         );
         client.session.emitClosed(reason);
@@ -1981,6 +1997,7 @@ describe("host notifications store", () => {
         onFeedFrame: () => undefined,
         onPresenceChanged: () => undefined,
         onStreamOpened: () => undefined,
+        cloudLane: null,
       });
       client.session.emitClosed({
         kind: "fatalError",
@@ -1997,5 +2014,137 @@ describe("host notifications store", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("openHostNotificationsStream cloud lane presence", () => {
+  /** Records every envelope as sent: the base fake's schema parse predates the report. */
+  class RawFrameSession extends MockStreamSession {
+    readonly envelopes: StreamFrameEnvelope[] = [];
+
+    override sendClientFrame(envelope: StreamFrameEnvelope): void {
+      this.envelopes.push(envelope);
+    }
+
+    reports(): boolean[] {
+      return this.envelopes
+        .filter((envelope) => envelope.kind === "cloudLanePresence")
+        .map((envelope) => envelope.serving === true);
+    }
+  }
+
+  class LaneStreamClient extends MockWsStreamClient {
+    negotiated: SchemaVersion | null = { major: 1, minor: 5 };
+    readonly rawSessions: RawFrameSession[] = [];
+
+    override getMethodSchemaVersion(): SchemaVersion | null {
+      return this.negotiated;
+    }
+
+    override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
+      _method: Method,
+      _params: ParamsOf<HostStreamRpcRegistry, Method>,
+    ): IStreamSession {
+      this.subscribeCount += 1;
+      const session = new RawFrameSession();
+      this.session = session;
+      this.sessions.push(session);
+      this.rawSessions.push(session);
+      return session;
+    }
+  }
+
+  function laneOf(initial: boolean) {
+    let serving = initial;
+    const listeners = new Set<() => void>();
+    return {
+      lane: {
+        serving: () => serving,
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      },
+      set(next: boolean) {
+        serving = next;
+        for (const listener of [...listeners]) listener();
+      },
+      listenerCount: () => listeners.size,
+    };
+  }
+
+  function open(
+    client: LaneStreamClient,
+    cloudLane: HostNotificationsCloudLane | null,
+  ): () => void {
+    return openHostNotificationsStream(reconnectEngine, client, null, {
+      windowId: "window-1",
+      now: () => 123,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+      cloudLane,
+    });
+  }
+
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+  });
+
+  it("reports the lane on open and again only when serving changes", () => {
+    const client = new LaneStreamClient();
+    const lane = laneOf(true);
+    const close = open(client, lane.lane);
+    const session = client.rawSessions[0];
+
+    session.emitOpen();
+    expect(session.reports()).toEqual([true]);
+
+    lane.set(true);
+    expect(session.reports()).toEqual([true]);
+    lane.set(false);
+    lane.set(false);
+    lane.set(true);
+    expect(session.reports()).toEqual([true, false, true]);
+    close();
+  });
+
+  it("sends nothing below @1.5, while the version is unnegotiated, or with no lane", () => {
+    const oldHost = new LaneStreamClient();
+    oldHost.negotiated = { major: 1, minor: 4 };
+    const closeOld = open(oldHost, laneOf(true).lane);
+    oldHost.rawSessions[0]?.emitOpen();
+
+    const unknown = new LaneStreamClient();
+    unknown.negotiated = null;
+    const closeUnknown = open(unknown, laneOf(true).lane);
+    unknown.rawSessions[0]?.emitOpen();
+
+    const noLane = new LaneStreamClient();
+    const closeNone = open(noLane, null);
+    noLane.rawSessions[0]?.emitOpen();
+
+    expect(oldHost.rawSessions[0]?.reports()).toEqual([]);
+    expect(unknown.rawSessions[0]?.reports()).toEqual([]);
+    expect(noLane.rawSessions[0]?.reports()).toEqual([]);
+    closeOld();
+    closeUnknown();
+    closeNone();
+  });
+
+  it("stops listening to the lane on dispose", () => {
+    const client = new LaneStreamClient();
+    const lane = laneOf(true);
+    const close = open(client, lane.lane);
+    client.rawSessions[0]?.emitOpen();
+    expect(lane.listenerCount()).toBe(1);
+
+    close();
+    expect(lane.listenerCount()).toBe(0);
+    lane.set(false);
+    expect(client.rawSessions[0]?.reports()).toEqual([true]);
   });
 });

@@ -43,6 +43,22 @@ const FULL_ANNOTATION = {
   droppedElementCount: 0,
 };
 
+/**
+ * A legacy record states no `source`; the schema infers it from the top-level
+ * page fields, so every parsed record carries one.
+ */
+const PARSED_ANNOTATION = {
+  ...FULL_ANNOTATION,
+  source: {
+    kind: "browser" as const,
+    tabId: FULL_ANNOTATION.tabId,
+    sessionId: FULL_ANNOTATION.sessionId,
+    origin: FULL_ANNOTATION.origin,
+    pageUrl: FULL_ANNOTATION.pageUrl,
+    pageTitle: FULL_ANNOTATION.pageTitle,
+  },
+};
+
 function sendFrameWithoutAnnotations(): Record<string, unknown> {
   return {
     kind: "send",
@@ -67,9 +83,12 @@ function sendFrameWithoutAnnotations(): Record<string, unknown> {
 describe("browserAnnotationRecordSchema", () => {
   it("round-trips a browser-annotation record with every field", () => {
     const parsed = browserAnnotationRecordSchema.parse(FULL_ANNOTATION);
-    expect(parsed).toEqual(FULL_ANNOTATION);
+    expect(parsed).toEqual(PARSED_ANNOTATION);
     expect(parsed.kind).toBe("browser-annotation");
     expect(parsed.annotationId).toBe("ann-7f3a");
+    if (!("tabId" in parsed)) {
+      throw new Error("expected the browser arm");
+    }
     expect(parsed.tabId).toBe("t-1");
     expect(parsed.sessionId).toBe("s-1");
     expect(parsed.origin).toBe("https://example.com");
@@ -88,7 +107,7 @@ describe("browserAnnotationRecordSchema", () => {
 
     const serialized: unknown = JSON.parse(JSON.stringify(parsed));
     expect(browserAnnotationRecordSchema.parse(serialized)).toEqual(
-      FULL_ANNOTATION,
+      PARSED_ANNOTATION,
     );
   });
 
@@ -115,7 +134,7 @@ describe("live user message browserAnnotations default", () => {
       content: { type: "doc", content: [] },
       browserAnnotations: [FULL_ANNOTATION],
     });
-    expect(parsed.browserAnnotations).toEqual([FULL_ANNOTATION]);
+    expect(parsed.browserAnnotations).toEqual([PARSED_ANNOTATION]);
   });
 });
 
@@ -140,7 +159,7 @@ describe("live send frame browserAnnotations default", () => {
     if (parsed.kind !== "send") {
       throw new Error("expected send frame");
     }
-    expect(parsed.browserAnnotations).toEqual([FULL_ANNOTATION]);
+    expect(parsed.browserAnnotations).toEqual([PARSED_ANNOTATION]);
   });
 });
 

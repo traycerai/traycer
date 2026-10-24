@@ -312,9 +312,8 @@ export const SIDE_SPLIT_HALF_CLASS =
 export const SIDE_SPLIT_HALF_REST_CLASS =
   "bg-foreground/5 hover:bg-foreground/8";
 /**
- * The current pair's focused half: the selected tab's own box, as the top bar
- * draws a split's focused member, the background fill inside the sheets'
- * border.
+ * The current pair's focused half: the selected tab's own box, the
+ * background fill inside the sheets' border.
  */
 export const SIDE_SPLIT_HALF_FOCUSED_CLASS =
   "bg-background ring-1 ring-inset ring-canvas-border";

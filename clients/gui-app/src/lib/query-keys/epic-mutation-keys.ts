@@ -6,8 +6,11 @@ export const epicMutationKeys = {
   recordViewed: () => ["epic.recordViewed"] as const,
   sendQueuedInvites: () => ["epic.sendQueuedInvites"] as const,
   createChat: () => ["epic.createChat"] as const,
+  attachEnvironment: () => ["epic.attachEnvironment"] as const,
   continueSubagent: () => ["epic.continueSubagent"] as const,
   exportArtifacts: () => ["epic.exportArtifacts"] as const,
+  downloadHtmlArtifact: (hostId: string, artifactId: string) =>
+    ["epic.downloadHtmlArtifact", hostId, artifactId] as const,
   updateChatRunSettings: () => ["epic.updateChatRunSettings"] as const,
   updateChatProfile: () => ["epic.updateChatProfile"] as const,
   setChatArchived: () => ["epic.setChatArchived"] as const,

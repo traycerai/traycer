@@ -4,13 +4,22 @@ import { QueryClientContext } from "@tanstack/react-query";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicAccessToast } from "@/lib/toast/channels";
-import { subscribeDeletedEpicNotifications } from "@/lib/epics/deleted-epic-events";
+import {
+  subscribeDeletedEpicNotifications,
+  type DeletedEpicNotification,
+} from "@/lib/epics/deleted-epic-events";
+import {
+  clearDeletedEpicRunSettings,
+  epicIdsLostInWindow,
+} from "@/lib/epics/deleted-epic-scope";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
 import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
 import {
   CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
   wasEpicCreatedRecentlyThisSession,
 } from "@/lib/epics/session-created-epics";
 import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
 import {
@@ -36,6 +45,10 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
  *    session reconnects or is opened offline). Because that signal cannot tell
  *    a delete apart from a revoke, it gets a neutral "no longer available"
  *    toast rather than asserting either cause.
+ *
+ * It also undoes one: a session whose stream the host closed `FORBIDDEN`
+ * re-opens once that epic's chat-records read succeeds again after failing,
+ * so a re-granted epic recovers without Retry.
  *
  * It generalizes the former `useCloseUnavailableEpicTab`: it observes EVERY
  * live session through the module-scoped session registry, not just the active
@@ -93,12 +106,79 @@ export function EpicAccessCoordinator() {
       window.clearTimeout(timer);
       createGraceTimers.delete(epicId);
     };
+    // An epic whose stream the host closed `FORBIDDEN` (access lost while it
+    // was open). The client never reopens that stream on its own, so a
+    // re-granted epic would hold the removal-time error until Retry. Its
+    // chat-records read keeps polling the same host, and the host answering
+    // it again after a failure is the proof access is back: on that first
+    // failure-to-success switch the session re-opens once. A real revoke never
+    // answers, and nothing new polls.
+    const forbiddenWatches = new Map<string, () => void>();
+    const disarmForbiddenRecovery = (epicId: string): void => {
+      const unsubscribe = forbiddenWatches.get(epicId);
+      if (unsubscribe === undefined) return;
+      unsubscribe();
+      forbiddenWatches.delete(epicId);
+    };
+    const armForbiddenRecovery = (epicId: string): void => {
+      if (queryClient === undefined || forbiddenWatches.has(epicId)) return;
+      const cache = queryClient.getQueryCache();
+      // Per query, whether it has failed since the error landed: a success
+      // already in flight when access went away proves nothing.
+      const failed = new Set<string>();
+      for (const query of cache.findAll({
+        predicate: (candidate) => {
+          const queryKey: unknown = candidate.queryKey;
+          return isEpicChatRecordsKey(queryKey, epicId);
+        },
+      })) {
+        if (query.state.status === "error") failed.add(query.queryHash);
+      }
+      const unsubscribe = cache.subscribe((event) => {
+        if (event.type !== "updated") return;
+        const queryKey: unknown = event.query.queryKey;
+        if (!isEpicChatRecordsKey(queryKey, epicId)) return;
+        const actionType = event.action.type;
+        if (actionType === "failed" || actionType === "error") {
+          failed.add(event.query.queryHash);
+          return;
+        }
+        if (actionType !== "success" || !failed.has(event.query.queryHash)) {
+          return;
+        }
+        disarmForbiddenRecovery(epicId);
+        // Out of the cache's notify: re-opening publishes into the store.
+        queueMicrotask(() => {
+          if (disposed) return;
+          const live = registry.peek(epicId);
+          if (live === null) return;
+          const liveState = live.store.getState();
+          if (liveState.snapshotFetchError?.code !== "FORBIDDEN") return;
+          // `requestFreshSnapshot` replaces the replica; local work the person
+          // has not synced stays theirs to keep, behind the banner's Retry.
+          if (holdsUnsyncedWork(liveState)) return;
+          live.requestFreshSnapshot();
+        });
+      });
+      forbiddenWatches.set(epicId, unsubscribe);
+    };
+    const syncForbiddenRecovery = (
+      epicId: string,
+      state: OpenEpicState,
+    ): void => {
+      if (state.snapshotFetchError?.code === "FORBIDDEN") {
+        armForbiddenRecovery(epicId);
+      } else {
+        disarmForbiddenRecovery(epicId);
+      }
+    };
     // Last resident-set signature reconcile acted on, so the per-keystroke
     // eligibility emits the registry fires (which don't change membership)
     // short-circuit instead of re-walking every open session.
     let lastResidentSignature: string | null = null;
 
-    // Toast + composer-settings bookkeeping only - no layout/source mutation.
+    // Toast only - no layout/source mutation, and no settings: each caller
+    // clears a deleted epic's composer settings in its deletion's scope.
     // Kept separate from the mutation so a genuine multi-epic batch (see
     // `applyDeletedEpicNotification`) can announce each epic individually
     // while still routing the mutation through ONE coordinated
@@ -119,7 +199,6 @@ export function EpicAccessCoordinator() {
             ? `${subject} was deleted by ${by}`
             : `${subject} was deleted`,
         );
-        useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
       } else if (reason.kind === "revoked") {
         channel.info(
           `You no longer have access to ${objectEpicSubject(epicId)}`,
@@ -132,6 +211,11 @@ export function EpicAccessCoordinator() {
     const runClose = (epicId: string, reason: DeadEpicReason): void => {
       const wasActive = activeEpicIdRef.current === epicId;
       announceEpicLoss(epicId, reason);
+      // A session's own deleted signal is the epic's deletion as its host
+      // reports it, which has always cleared the epic on every host.
+      if (reason.kind === "deleted") {
+        useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
+      }
       tabCommandCoordinator.handleEpicAccessLoss([epicId]);
       if (wasActive) {
         // `handleEpicAccessLoss` recomputes `activeTabId` to a neighbor as a
@@ -143,23 +227,44 @@ export function EpicAccessCoordinator() {
     };
 
     const applyDeletedEpicNotification = (
-      epicIds: ReadonlyArray<string>,
-      userId: string,
-      epicTitlesById: Readonly<Record<string, string | undefined>>,
+      notification: DeletedEpicNotification,
     ): void => {
+      const { epicIds, userId, epicTitlesById } = notification;
+      // The scopes the deleting window tombstoned in: a local-homed Task
+      // under the host that deleted it, the rest account-wide.
+      const hostScoped = new Set(notification.hostScopedEpicIds);
+      const scopes = {
+        accountWideIds: epicIds.filter((id) => !hostScoped.has(id)),
+        hostScopedIds: [...hostScoped],
+        deletingHostId: notification.hostId,
+      };
       if (queryClient !== undefined) {
-        removeDeletedEpicsFromCloudTaskCaches(
-          queryClient,
-          { hostId: null, userId },
-          epicIds,
-        );
+        if (scopes.hostScopedIds.length > 0) {
+          removeDeletedEpicsFromCloudTaskCaches(
+            queryClient,
+            { hostId: notification.hostId, userId },
+            scopes.hostScopedIds,
+          );
+        }
+        if (scopes.accountWideIds.length > 0) {
+          removeDeletedEpicsFromCloudTaskCaches(
+            queryClient,
+            { hostId: null, userId },
+            scopes.accountWideIds,
+          );
+        }
       }
+      // Settings in each deletion's scope, resident tab or not: a deleted
+      // epic's settings must not silently survive it, and a same-id Task on
+      // another host keeps its own - matching `useEpicBatchDelete`.
+      clearDeletedEpicRunSettings(scopes);
+      // Only what this window lost: a same-id Task it holds on a host that
+      // did not delete it stays open (`epicIdsLostInWindow`).
+      const lostIds = epicIdsLostInWindow(scopes, activeHostIdOrNull());
       const openEpicIds = new Set(collectOpenEpicIds());
       let anyWasActive = false;
-      const withoutResidentTab: Array<string> = [];
-      for (const epicId of epicIds) {
+      for (const epicId of lostIds) {
         if (!openEpicIds.has(epicId) && activeEpicIdRef.current !== epicId) {
-          withoutResidentTab.push(epicId);
           continue;
         }
         if (activeEpicIdRef.current === epicId) anyWasActive = true;
@@ -169,24 +274,13 @@ export function EpicAccessCoordinator() {
           title: readEpicTitle(epicTitlesById, epicId),
         });
       }
-      // `announceEpicLoss` above already cleared run settings for the
-      // resident epics (it's the deleted-reason branch's job). A deleted
-      // epic without a resident tab never reaches that call, but its run
-      // settings still need to go - it must not silently survive the epic
-      // it belonged to, matching `useEpicBatchDelete`'s unconditional clear
-      // over its whole batch.
-      if (withoutResidentTab.length > 0) {
-        useComposerRunSettingsStore
-          .getState()
-          .clearEpicRunSettings(withoutResidentTab);
-      }
       // One coordinated call over the WHOLE notification batch - not a loop
       // of single-epic calls - so a pair of Epics that are both sides of the
       // same split (or that duplicate a ref across groups) collapse in one
       // coordinator transaction instead of firing a separate transaction
       // (and a separate persistence flush) per epic for what is semantically
       // one event.
-      tabCommandCoordinator.handleEpicAccessLoss(epicIds);
+      tabCommandCoordinator.handleEpicAccessLoss(lostIds);
       if (anyWasActive) {
         useEpicCanvasStore.setState({ activeTabId: null });
         void navigate({ ...LANDING_ROUTE, replace: true });
@@ -311,11 +405,13 @@ export function EpicAccessCoordinator() {
           ) {
             return;
           }
+          syncForbiddenRecovery(epicId, state);
           evaluate(epicId);
         });
         perHandleUnsub.set(epicId, unsubscribe);
         // Catch a session already dead at subscribe time (signal landed before
         // this coordinator observed the session).
+        syncForbiddenRecovery(epicId, handle.store.getState());
         evaluate(epicId);
       }
       for (const [epicId, unsubscribe] of [...perHandleUnsub.entries()]) {
@@ -329,6 +425,7 @@ export function EpicAccessCoordinator() {
         // reopen starts the schedule over.
         clearCreateGraceTimer(epicId);
         createGraceAttempts.delete(epicId);
+        disarmForbiddenRecovery(epicId);
       }
     };
 
@@ -345,11 +442,7 @@ export function EpicAccessCoordinator() {
         if (currentUserId === null || notification.userId !== currentUserId) {
           return;
         }
-        applyDeletedEpicNotification(
-          notification.epicIds,
-          notification.userId,
-          notification.epicTitlesById,
-        );
+        applyDeletedEpicNotification(notification);
       });
 
     return () => {
@@ -363,6 +456,8 @@ export function EpicAccessCoordinator() {
         window.clearTimeout(timer);
       }
       createGraceTimers.clear();
+      for (const unsubscribe of forbiddenWatches.values()) unsubscribe();
+      forbiddenWatches.clear();
     };
   }, [navigate, queryClient]);
 
@@ -406,6 +501,25 @@ function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
 function holdsUnsyncedWork(state: OpenEpicState | null): boolean {
   if (state === null) return false;
   return state.isDirty || state.unsyncedQueueSize > 0;
+}
+
+const CHAT_RECORDS_METHOD = "epic.listChatRecords";
+
+/** Whether `queryKey` is an `epic.listChatRecords` read of `epicId`, on any host. */
+function isEpicChatRecordsKey(queryKey: unknown, epicId: string): boolean {
+  if (
+    !Array.isArray(queryKey) ||
+    !hostQueryKeys.matchesMethodOnAnyHost(queryKey, CHAT_RECORDS_METHOD)
+  ) {
+    return false;
+  }
+  const params: unknown = queryKey[queryKey[1] === CHAT_RECORDS_METHOD ? 2 : 3];
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    "epicId" in params &&
+    params.epicId === epicId
+  );
 }
 
 /**

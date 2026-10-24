@@ -4,7 +4,10 @@ import type {
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  isPoolHostDirectoryEntry,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostRequestAbortedError,
@@ -17,7 +20,9 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
+  createPoolHostTransport,
   createRemoteHostTransport,
+  remoteOpenAuthFor,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -27,6 +32,7 @@ import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-trans
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
+import { mintAppMemberCredential } from "@/lib/auth/host-credential-provisioning";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -57,7 +63,7 @@ const TRANSPORT_KEY_SEPARATOR = "\u0000";
  * drive a mint+dial loop at the query layer's pace - while short enough that
  * a host the user just updated connects on the next natural refetch.
  */
-const TERMINAL_VERDICT_TTL_MS = 30_000;
+export const TERMINAL_VERDICT_TTL_MS = 30_000;
 
 const browserWebSocketFactory = createWhatwgWebSocketFactory();
 const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
@@ -89,8 +95,8 @@ export interface BuildRawHostMessengerForTargetParams<
    * than read off the auth store in here, because this function is also the
    * seam tests build through: an implicit ambient read would make the
    * permission untestable from the outside and invisible at the call site.
-   * Only consulted on the `target.kind === "remote"` branch, so local hosts are
-   * unaffected.
+   * Only consulted on the `remote` and `pool` branches, so local hosts are
+   * unaffected; a pool session has no mint and only reports it on `open`.
    */
   readonly cloudAuthorized: () => boolean;
   /**
@@ -111,6 +117,35 @@ export function buildRawHostMessengerForTarget<
 >(
   params: BuildRawHostMessengerForTargetParams<Registry>,
 ): BuiltHostMessenger<Registry> | null {
+  if (isPoolHostDirectoryEntry(params.target)) {
+    // The server pool: the same session as a host's, on a direct leg. What
+    // `open` presents (the user bearer, `authz: null`, no member credential)
+    // is fixed by the entry's kind here, before any byte is exchanged.
+    const poolTransport = createPoolHostTransport<
+      Registry,
+      HostStreamRpcRegistry
+    >({
+      entry: params.target,
+      userId: params.userId,
+      bearer: params.bearer,
+      cloudAuthorized: params.cloudAuthorized,
+      auth: params.auth,
+      // Same value as every other consumer of this session, for the reason
+      // the remote branch below gives.
+      clock: appServerClock,
+      rpcRegistry: params.registry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: browserStreamWebSocketFactory,
+      requestId: params.requestId,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: true,
+    });
+    if (poolTransport === null) return null;
+    return {
+      messenger: poolTransport.messenger,
+      remoteTransport: poolTransport,
+    };
+  }
   if (params.target.kind === "remote") {
     if (
       !isRemoteHostDirectoryEntry(params.target) ||
@@ -132,6 +167,7 @@ export function buildRawHostMessengerForTarget<
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      openAuth: remoteOpenAuthFor(params.target),
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
       // MUST match what `buildHostStreamClient` passes, and this is not a
@@ -152,12 +188,20 @@ export function buildRawHostMessengerForTarget<
       // reconnect replay could double-execute. Messenger-only bindings are in
       // fact a case the process-wide sweep exists to reach.
       proactiveWakeEligible: true,
+      mintMemberCredential: mintAppMemberCredential,
     });
     if (remoteTransport === null) return null;
     return {
       messenger: remoteTransport.messenger,
       remoteTransport,
     };
+  }
+  // An allowlist, not a fall-through: the per-request local socket presents
+  // the user bearer to whatever endpoint the entry names, so only the kinds
+  // that ARE a local socket reach it. A kind this code does not know builds
+  // nothing.
+  if (!servesOverLocalSocket(params.target)) {
+    return null;
   }
 
   return {
@@ -186,6 +230,12 @@ export interface RuntimeHostMessengerBinding<
   readonly messenger: IHostMessenger<Registry>;
   readonly reset: () => void;
   readonly dispose: () => void;
+  /**
+   * Called on every host list change. Drops a `SANDBOX_FROZEN` verdict once
+   * the list shows that sandbox thawed or gone, so a top-up inside the
+   * verdict's TTL is not still refused locally.
+   */
+  readonly hostListChanged: () => void;
 }
 
 export interface BuildRuntimeHostMessengerParams<
@@ -222,6 +272,16 @@ export interface BuildRuntimeHostMessengerParams<
    * `HostClient.notifyHostAvailabilityRecovered`.
    */
   readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
+  /**
+   * Called once when a host's remote session ends terminally, with the fatal
+   * it ended on. The one consumer acts on `SANDBOX_FROZEN` (an attach-grant
+   * mint refused for a frozen sandbox): the frozen tile frame and picker row
+   * read the host list, so it is refreshed to say so.
+   */
+  readonly onRemoteSessionTerminal: (
+    hostId: string,
+    fatal: FatalErrorDetails,
+  ) => void;
 }
 
 export function buildRuntimeHostMessenger<
@@ -234,7 +294,26 @@ export function buildRuntimeHostMessenger<
     messenger,
     reset: () => messenger.reset(),
     dispose: () => messenger.dispose(),
+    hostListChanged: () => messenger.dropThawedSandboxVerdicts(),
   };
+}
+
+/**
+ * What the host list says about a frozen-sandbox verdict's host: `frozen`
+ * while the sandbox is listed frozen; `thawed` when it is listed and not
+ * frozen; `gone` when the host or its sandbox is no longer listed.
+ */
+export function sandboxFreezeOf(
+  entry: HostDirectoryEntry | null,
+): "frozen" | "thawed" | "gone" {
+  if (
+    entry === null ||
+    !isRemoteHostDirectoryEntry(entry) ||
+    entry.sandbox === null
+  ) {
+    return "gone";
+  }
+  return entry.sandbox.frozen ? "frozen" : "thawed";
 }
 
 class RuntimeHostMessenger<
@@ -246,8 +325,21 @@ class RuntimeHostMessenger<
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
   private readonly onRemoteAvailabilityRecovered: (hostId: string) => void;
+  private readonly onRemoteSessionTerminal: (
+    hostId: string,
+    fatal: FatalErrorDetails,
+  ) => void;
   private readonly localMessenger: IHostMessenger<Registry>;
-  private remoteBinding: RemoteBinding<Registry> | null = null;
+  /**
+   * The remote bindings, keyed by the host they serve. Two slots: the server
+   * pool's, and ONE host's. A request for a different remote host replaces
+   * the host slot, and a request for a local host releases it, exactly as the
+   * single binding this map replaced did; neither touches the pool's, and a
+   * transport-key change rebuilds only its own entry. So a chat tab on a
+   * sandbox and History on the pool hold two sessions side by side instead of
+   * evicting each other on every alternating request.
+   */
+  private readonly remoteBindings = new Map<string, RemoteBinding<Registry>>();
   // The bearer of the request currently being dispatched. The cached remote
   // session outlives a single request, so it reads this through a thunk
   // instead of capturing one authority's bearer - a bearer rotated in place
@@ -285,6 +377,14 @@ class RuntimeHostMessenger<
    * folds in version/publicKey/relay URL, so e.g. the host update that
    * resolves an INCOMPATIBLE fatal changes the key and proves the verdict
    * describes a session that can no longer even be built.
+   *
+   * One exception to the TTL: a `SANDBOX_FROZEN` verdict the host list has
+   * confirmed (`frozenConfirmed`) describes the HOST's billing state, which
+   * no amount of waiting changes, so it holds until the list shows the
+   * sandbox thawed or gone (`dropVerdictIfThawed`), the key moves, or a
+   * session reaches ready. Expiring it would let every stream owner's
+   * rebuild mint a grant authn refuses with 402, once per backoff, for as
+   * long as a frozen tile stays mounted.
    */
   private readonly terminalVerdictByHost = new Map<
     string,
@@ -292,6 +392,15 @@ class RuntimeHostMessenger<
       readonly fatal: FatalErrorDetails;
       readonly expiresAt: number;
       readonly key: string;
+      /**
+       * `SANDBOX_FROZEN` only: whether the host list has shown the sandbox
+       * frozen since the fatal. The list is usually stale when the fatal
+       * lands (the meter froze the row after the last poll), so "not frozen"
+       * means "thawed" only once the list has been seen to agree with the
+       * fatal first; otherwise every refetch before the refresh lands would
+       * drop the verdict and mint a doomed grant again.
+       */
+      frozenConfirmed: boolean;
     }
   >();
 
@@ -302,6 +411,7 @@ class RuntimeHostMessenger<
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
     this.onRemoteAvailabilityRecovered = params.onRemoteAvailabilityRecovered;
+    this.onRemoteSessionTerminal = params.onRemoteSessionTerminal;
     this.localMessenger = new WsRpcClient<Registry>({
       registry: params.registry,
       requestId: params.requestId,
@@ -327,16 +437,16 @@ class RuntimeHostMessenger<
     }
     // Before target resolution, not just on the remote branch: an aborted
     // authority must be INERT everywhere. Gating only the remote path would
-    // still let a stale aborted request dispatch locally - and, worse, run
-    // `closeRemoteTransport()` as a side effect, releasing a live remote
-    // binding on behalf of a request whose owner already moved on.
+    // still let a stale aborted request dispatch locally - and, worse, release
+    // a live remote host binding as a side effect, on behalf of a request
+    // whose owner already moved on.
     const abortedRejection = this.rejectIfAborted(authority, method);
     if (abortedRejection !== null) {
       return abortedRejection;
     }
     const target = this.resolveTarget(authority.endpoint.hostId);
-    if (target === null || target.kind !== "remote") {
-      this.closeRemoteTransport();
+    if (target === null || servesOverLocalSocket(target)) {
+      this.releaseHostBindings(null);
       return this.localMessenger.request(method, params, options);
     }
 
@@ -382,8 +492,8 @@ class RuntimeHostMessenger<
       return abortedRejection;
     }
     const target = this.resolveTarget(authority.endpoint.hostId);
-    if (target === null || target.kind !== "remote") {
-      this.closeRemoteTransport();
+    if (target === null || servesOverLocalSocket(target)) {
+      this.releaseHostBindings(null);
       return this.localMessenger.requestWithResponseTimeout(
         method,
         params,
@@ -466,16 +576,23 @@ class RuntimeHostMessenger<
     // Publish this request's bearer before any dial so both a cache hit and a
     // freshly-built session read the lease this call was authorized under.
     this.currentBearer = authority.bearer;
-    if (this.remoteBinding !== null && this.remoteBinding.key === nextKey) {
-      if (!this.remoteBinding.transport.session.isClosed()) {
-        return this.remoteBinding.transport.messenger;
-      }
-      // The cached session terminally closed underneath (a session-level
-      // fatal). A closed session can never carry traffic again (`start()`
-      // no-ops once closed), so release the dead binding and rebuild below -
-      // the session cache evicts closed entries on acquire, so the rebuild
-      // mints a live successor rather than re-pinning the corpse.
-      this.closeRemoteTransport();
+    const existing = this.remoteBindings.get(target.hostId);
+    if (
+      existing !== undefined &&
+      existing.key === nextKey &&
+      !existing.transport.session.isClosed()
+    ) {
+      return existing.transport.messenger;
+    }
+    // Absent, re-keyed, or terminally closed underneath (a session-level
+    // fatal): a closed session can never carry traffic again (`start()`
+    // no-ops once closed), so release this host's binding and rebuild below -
+    // the session cache evicts closed entries on acquire, so the rebuild
+    // mints a live successor rather than re-pinning the corpse.
+    this.releaseBinding(target.hostId);
+    if (!isPoolHostDirectoryEntry(target)) {
+      // The single host slot: a different host's binding gives way.
+      this.releaseHostBindings(target.hostId);
     }
     // The remote session cache is keyed `(hostId, userId)` (Architecture §4 /
     // S1); the authority's bearer is the authoritative identity for the
@@ -483,7 +600,6 @@ class RuntimeHostMessenger<
     // separately-read signed-in user that could disagree mid-transition.
     const userId = authority.bearer.identity.userId;
 
-    this.closeRemoteTransport();
     const built = buildRawHostMessengerForTarget({
       target,
       userId,
@@ -510,11 +626,12 @@ class RuntimeHostMessenger<
       target.hostId,
       nextKey,
     );
-    this.remoteBinding = {
+    this.remoteBindings.set(target.hostId, {
+      target,
       key: nextKey,
       transport: built.remoteTransport,
       availability,
-    };
+    });
     return built.messenger;
   }
 
@@ -522,8 +639,8 @@ class RuntimeHostMessenger<
    * Forwards `session`'s availability-recovered events for `hostId`, and
    * returns a RELEASE function - deliberately not an unsubscribe.
    *
-   * This messenger holds ONE remote binding, and any request for a local or
-   * different host replaces it (see `request`). Since the session cache keeps
+   * This messenger holds ONE remote binding per slot, and any request for a
+   * local or different host replaces the host slot's (see `remoteBindings`). Since the session cache keeps
    * a released session warm rather than closing it, a session that was still
    * dialing when the slot flipped goes on to reach its first ready boundary -
    * and that boundary is the only evidence that un-strands the queries which
@@ -620,8 +737,11 @@ class RuntimeHostMessenger<
           fatal,
           expiresAt: Date.now() + TERMINAL_VERDICT_TTL_MS,
           key: transportKey,
+          frozenConfirmed:
+            sandboxFreezeOf(this.resolveTarget(hostId)) === "frozen",
         });
         this.onRemoteAvailabilityRecovered(hostId);
+        this.onRemoteSessionTerminal(hostId, fatal);
       }
       detach();
     });
@@ -653,29 +773,38 @@ class RuntimeHostMessenger<
   }
 
   /**
-   * Release the binding for reuse: the physical session goes back to the
-   * keep-warm cache and a still-owed availability listener stays attached as
-   * the host's orphan. This is the ordinary target-replacement path; auth
+   * Release `hostId`'s binding for reuse: the physical session goes back to
+   * the keep-warm cache and a still-owed availability listener stays attached
+   * as the host's orphan. This is the ordinary target-replacement path; auth
    * reset and terminal teardown use `teardownRemoteTransport` instead.
    */
-  private closeRemoteTransport(): void {
-    if (this.remoteBinding === null) {
+  private releaseBinding(hostId: string): void {
+    const binding = this.remoteBindings.get(hostId);
+    if (binding === undefined) {
       return;
     }
-    const binding = this.remoteBinding;
-    this.remoteBinding = null;
+    this.remoteBindings.delete(hostId);
     binding.availability.release();
     binding.transport.session.close();
   }
 
-  private teardownRemoteTransport(): void {
-    if (this.remoteBinding === null) {
-      return;
+  /** Releases the host slot, keeping `keep`'s binding and the pool's. */
+  private releaseHostBindings(keep: string | null): void {
+    for (const [hostId, binding] of [...this.remoteBindings]) {
+      if (hostId === keep || isPoolHostDirectoryEntry(binding.target)) {
+        continue;
+      }
+      this.releaseBinding(hostId);
     }
-    const binding = this.remoteBinding;
-    this.remoteBinding = null;
-    binding.availability.detach();
-    binding.transport.session.close();
+  }
+
+  private teardownRemoteTransport(): void {
+    const bindings = [...this.remoteBindings.values()];
+    this.remoteBindings.clear();
+    for (const binding of bindings) {
+      binding.availability.detach();
+      binding.transport.session.close();
+    }
   }
 
   /**
@@ -702,6 +831,7 @@ class RuntimeHostMessenger<
         message: "Request authority was aborted before dispatch",
         requestId: this.requestId(),
         method,
+        mayHaveDispatched: false,
       }),
     );
   }
@@ -712,18 +842,26 @@ class RuntimeHostMessenger<
    * (non-retryable, so the retrying wrapper and the Providers panel's error
    * classification both read it as "waiting will not help") instead of
    * minting a grant and dialing a session that will end the same way. An
-   * expired verdict is dropped here, letting the next request dial fresh.
+   * expired verdict is dropped here, letting the next request dial fresh; a
+   * confirmed `SANDBOX_FROZEN` verdict does not expire (see
+   * {@link terminalVerdictByHost}).
    */
   private rejectIfTerminalVerdict(
     hostId: string,
     currentKey: string | null,
     method: string,
   ): Promise<never> | null {
+    this.dropVerdictIfThawed(hostId);
     const verdict = this.terminalVerdictByHost.get(hostId);
     if (verdict === undefined) {
       return null;
     }
-    if (verdict.key !== currentKey || Date.now() >= verdict.expiresAt) {
+    const outlivesTtl =
+      verdict.fatal.code === "SANDBOX_FROZEN" && verdict.frozenConfirmed;
+    if (
+      verdict.key !== currentKey ||
+      (!outlivesTtl && Date.now() >= verdict.expiresAt)
+    ) {
       // Key mismatch: the host's transport identity moved (version bump, key
       // rotation, relay move) since the fatal - the very session the verdict
       // condemned can no longer be built, so waiting out the TTL would
@@ -741,6 +879,35 @@ class RuntimeHostMessenger<
         fatalDetails: verdict.fatal,
       }),
     );
+  }
+
+  /** See {@link RuntimeHostMessengerBinding.hostListChanged}. */
+  dropThawedSandboxVerdicts(): void {
+    for (const hostId of [...this.terminalVerdictByHost.keys()]) {
+      this.dropVerdictIfThawed(hostId);
+    }
+  }
+
+  /**
+   * A `SANDBOX_FROZEN` verdict holds only while the sandbox is frozen: a
+   * top-up thaws it, and the user's next request must dial rather than wait
+   * out the TTL. The verdict is dropped when the list shows the sandbox gone,
+   * or shows it not frozen after first showing it frozen (`frozenConfirmed`).
+   * Every other fatal keeps its TTL.
+   */
+  private dropVerdictIfThawed(hostId: string): void {
+    const verdict = this.terminalVerdictByHost.get(hostId);
+    if (verdict === undefined || verdict.fatal.code !== "SANDBOX_FROZEN") {
+      return;
+    }
+    const freeze = sandboxFreezeOf(this.resolveTarget(hostId));
+    if (freeze === "frozen") {
+      verdict.frozenConfirmed = true;
+      return;
+    }
+    if (freeze === "gone" || verdict.frozenConfirmed) {
+      this.terminalVerdictByHost.delete(hostId);
+    }
   }
 
   private rejectIfDisposed(method: string): Promise<never> | null {
@@ -772,12 +939,29 @@ interface AvailabilitySubscription {
 }
 
 interface RemoteBinding<Registry extends VersionedRpcRegistry> {
+  readonly target: HostDirectoryEntry;
   readonly key: string;
   readonly transport: RemoteHostTransport<Registry, HostStreamRpcRegistry>;
   readonly availability: AvailabilitySubscription;
 }
 
+/**
+ * Whether `entry` is reached through the per-request local socket. Every
+ * other kind - a relay host, the server pool, a kind this code does not know
+ * - goes through the session binding, which refuses what it cannot build.
+ */
+function servesOverLocalSocket(entry: HostDirectoryEntry): boolean {
+  return entry.kind === "local" || entry.kind === "mock";
+}
+
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {
+  if (isPoolHostDirectoryEntry(entry)) {
+    return entry.websocketUrl === null
+      ? null
+      : [entry.hostId, entry.websocketUrl, "pool-bearer"].join(
+          TRANSPORT_KEY_SEPARATOR,
+        );
+  }
   if (
     entry.kind !== "remote" ||
     !isRemoteHostDirectoryEntry(entry) ||
@@ -788,11 +972,15 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
+  // What `OPEN` presents IS included: a sandbox first projected as a personal
+  // host (a list read before the sandbox facts arrived) must rebuild once the
+  // entry is corrected, or its RPCs keep riding a user-bearer session.
   return [
     entry.hostId,
     entry.websocketUrl,
     entry.version ?? "",
     entry.publicKey,
+    remoteOpenAuthFor(entry),
   ].join(TRANSPORT_KEY_SEPARATOR);
 }
 

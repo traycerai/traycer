@@ -812,7 +812,7 @@ describe("useLandingDraftStore", () => {
     const runtime = draftRuntimeRegistry.attach(id);
     if (runtime === null) throw new Error("expected keyed draft runtime");
     runtime.setSnapshot(textContent("send me"), null);
-    const attempt = runtime.startSubmission(placement);
+    const attempt = runtime.startSubmission(placement, null);
     if (attempt === null) throw new Error("expected submission attempt");
     expect(runtime.markCreateStarted(attempt)).toBe(true);
 
@@ -828,7 +828,7 @@ describe("useLandingDraftStore", () => {
       kind: "current",
     });
     draftRuntimeRegistry.complete(attempt);
-    expect(runtime.startSubmission(placement)).not.toBeNull();
+    expect(runtime.startSubmission(placement, null)).not.toBeNull();
   });
 
   it("tabSourceRefs omit closed drafts so they stay out of the strip", () => {

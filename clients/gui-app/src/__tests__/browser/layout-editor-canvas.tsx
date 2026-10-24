@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
 import { createRoot } from "react-dom/client";
 import { Info } from "lucide-react";
@@ -53,6 +60,9 @@ import {
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { SampleWorkspaceBody } from "@/components/sample-workspace/sample-workspace-body";
+import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
+import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import type { AgentActivityByEpic } from "@traycer/protocol/host/agent/activity";
@@ -101,6 +111,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { LeftPanelId } from "@/lib/left-panel-ids";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
@@ -394,6 +405,20 @@ interface LayoutCanvasProbe {
   /** The same for any strip item, the split pair included (`fixture-split`). */
   readonly activateStripItem: (itemId: string) => void;
   /**
+   * Opens the app's real modals over the window, or closes them (`null`):
+   * `dialog` is the shared `Dialog`, whose backdrop is `bg-black/10`; `frame`
+   * is `PromotableModalFrame`, the Settings and History modal, whose backdrop
+   * is `bg-black/30`; `frame+dialog` is that frame with a shared `Dialog`
+   * opened over it, as Settings' add-host and danger-zone dialogs are;
+   * `dialog+dialog` is two shared `Dialog`s, the second over the first, as a
+   * confirm dialog opens over a sheet;
+   * `blocking` is `MigrationBlockingModalHost`, whose backdrop is `bg-black/40`
+   * (the window host modal shares it, but needs a live host narration). All
+   * are the production components, so the backdrop a check measures is the
+   * one the product draws. `restoreLoadState` closes them.
+   */
+  readonly openBackdrop: (kind: BackdropKind) => void;
+  /**
    * What the host answered for `host.notifications.indicatorState`, per epic
    * and per agent: the rail badges and the waiting pulse read the epics, the
    * Activity list's waiting chips read the agents.
@@ -474,19 +499,8 @@ declare global {
   }
 }
 
-/**
- * Between Files and Terminals, which is where the rail plans aim: Terminals
- * stays the icon right after the divider, as before the Files panel joined
- * the rail between Artifacts and Terminals.
- *
- * Index 4 rather than 3 or 2: the shipped rail carries a stack LINK between
- * Agents and Artifacts (L-166), so the entries are `railAgents`,
- * `stack:railAgents+railArtifacts`, `railArtifacts`, `railFiles`,
- * `railTerminals`. A divider at 2 would land inside the stack rather than
- * after it (where `normalizeRail` would then drop the join), and at 3 it would
- * leave Files, not Terminals, next to it.
- */
-const RAIL_DIVIDER_INDEX = 4;
+// After the shipped Agents/Artifacts stack, before Terminals.
+const RAIL_DIVIDER_INDEX = 3;
 
 function readVariant(): CanvasVariant {
   const params = new URLSearchParams(window.location.search);
@@ -675,6 +689,95 @@ function applyFixtureIndicators(): void {
 }
 queryClient.getQueryCache().subscribe(applyFixtureIndicators);
 
+/** Which real modal `openBackdrop` has open, if any. */
+type BackdropKind =
+  | "dialog"
+  | "frame"
+  | "frame+dialog"
+  | "dialog+dialog"
+  | "blocking"
+  | null;
+let openBackdropKind: BackdropKind = null;
+const backdropListeners = new Set<() => void>();
+function setOpenBackdrop(kind: BackdropKind): void {
+  openBackdropKind = kind;
+  // The blocking modal opens itself from the migration store: another
+  // window's running migration is the one flag that raises it with no host.
+  useMigrationRunStore.getState().setRemoteRunning(kind === "blocking");
+  for (const listener of backdropListeners) listener();
+}
+function subscribeBackdrop(listener: () => void): () => void {
+  backdropListeners.add(listener);
+  return () => {
+    backdropListeners.delete(listener);
+  };
+}
+function readOpenBackdrop(): BackdropKind {
+  return openBackdropKind;
+}
+
+/**
+ * The modals `openBackdrop` opens. Both roots stay mounted and only `open`
+ * changes, so closing plays the modal's own exit, as it does in the app. The
+ * frame comes first in the tree, as Settings does under its own dialogs.
+ */
+function ProbeBackdrops(): ReactNode {
+  const kind = useSyncExternalStore(subscribeBackdrop, readOpenBackdrop);
+  return (
+    <>
+      <DialogPrimitive.Root
+        open={kind === "frame" || kind === "frame+dialog"}
+        onOpenChange={(open) => {
+          if (!open) setOpenBackdrop(null);
+        }}
+      >
+        <PromotableModalFrame
+          icon={null}
+          title="Backdrop probe"
+          contentClassName="h-1/4 w-1/4"
+          dataAttributes={{}}
+          promoteAriaLabel="Open as tab"
+          promoteTestId="probe-backdrop-promote"
+          closeTestId="probe-backdrop-close"
+          onPromote={() => undefined}
+          onClose={() => {
+            setOpenBackdrop(null);
+          }}
+          onEscapeKeyDown={() => undefined}
+          onOpenAutoFocus={undefined}
+        >
+          {null}
+        </PromotableModalFrame>
+      </DialogPrimitive.Root>
+      <Dialog
+        open={
+          kind === "dialog" ||
+          kind === "frame+dialog" ||
+          kind === "dialog+dialog"
+        }
+        onOpenChange={(open) => {
+          if (!open) setOpenBackdrop(null);
+        }}
+      >
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Backdrop probe</DialogTitle>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={kind === "dialog+dialog"}
+        onOpenChange={(open) => {
+          if (!open) setOpenBackdrop(null);
+        }}
+      >
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Second backdrop probe</DialogTitle>
+        </DialogContent>
+      </Dialog>
+      <MigrationBlockingModalHost />
+    </>
+  );
+}
+
 const runnerHost = new MockRunnerHost({
   signInUrl: "http://127.0.0.1:9/sign-in",
   authnBaseUrl: "http://127.0.0.1:9",
@@ -860,6 +963,8 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         updateTransaction: null,
         storeFormats: null,
         install: null,
+        processMemory: null,
+        crossHostMessaging: null,
       }),
       "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
@@ -1020,6 +1125,7 @@ function buildProbe(): LayoutCanvasProbe {
     activateStripItem: (itemId) => {
       useTabsStore.setState({ activeItemId: itemId });
     },
+    openBackdrop: setOpenBackdrop,
     // Stands in for the host's reply; `applyFixtureIndicators` keeps every
     // indicator entry answered with it, including ones that appear later.
     setIndicators: (epics, chats) => {
@@ -1066,6 +1172,7 @@ function buildProbe(): LayoutCanvasProbe {
     },
     restoreLoadState: () => {
       const editor = useLayoutEditorStore.getState();
+      setOpenBackdrop(null);
       editor.endSession();
       editor.setDockMode(VARIANT.dock);
       resetLayout();
@@ -1257,6 +1364,7 @@ function openEpicSurfaceSession() {
         // Six minutes ago, so a running agent's row reads "6m", not an epoch.
         updatedAt: EPIC_SURFACE_AGENT_UPDATED_AT,
         userId: null,
+        ownedByViewer: true,
         hostId: "test-local-host",
         isTitleEditedByUser: false,
         docResident: false,
@@ -1548,6 +1656,7 @@ export function CanvasFixture(): ReactNode {
       ) : (
         <LayoutEditor column={column} />
       )}
+      <ProbeBackdrops />
     </div>
   );
 }

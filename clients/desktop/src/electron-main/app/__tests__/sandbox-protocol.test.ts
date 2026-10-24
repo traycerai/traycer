@@ -1,3 +1,4 @@
+import { SandboxArtifactServer } from "../sandbox-artifact-server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installSandboxProtocolHandler,
@@ -45,17 +46,16 @@ beforeEach(() => {
   state.handler = null;
   state.fetchCalls = 0;
   state.upstreamOk = true;
-  installSandboxProtocolHandler();
+  installSandboxProtocolHandler(new SandboxArtifactServer(() => false));
 });
 
 describe("sandbox protocol handler", () => {
-  it.each([
-    ["/index.html", "text/html; charset=utf-8"],
-    ["/loader.js", "text/javascript; charset=utf-8"],
-  ])("serves %s with the base policy header", async (path, contentType) => {
-    const response = await serve(`traycer-sandbox://page${path}`);
+  it("serves the loader page with the base policy header", async () => {
+    const response = await serve("traycer-sandbox://page/index.html");
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Type")).toBe(contentType);
+    expect(response.headers.get("Content-Type")).toBe(
+      "text/html; charset=utf-8",
+    );
     expect(response.headers.get("Content-Security-Policy")).toBe(
       SANDBOX_CONTENT_SECURITY_POLICY,
     );
@@ -64,7 +64,9 @@ describe("sandbox protocol handler", () => {
 
   it.each([
     "traycer-sandbox://page/",
-    // The font travels inside loader.js; the origin serves nothing a page loads.
+    // The loader and the font are inlined into the page; the origin serves
+    // nothing a page loads.
+    "traycer-sandbox://page/loader.js",
     "traycer-sandbox://page/figtree.woff2",
     "traycer-sandbox://page/index.html.map",
     "traycer-sandbox://page/../secrets.txt",
@@ -137,8 +139,7 @@ describe("sandboxDeclaredGrants", () => {
       sandboxDeclaredGrants("traycer-sandbox://page/index.html").size,
     ).toBe(0);
     expect(
-      sandboxDeclaredGrants("traycer-sandbox://page/loader.js?perm=camera")
-        .size,
+      sandboxDeclaredGrants("traycer-sandbox://page/other.js?perm=camera").size,
     ).toBe(0);
   });
 });

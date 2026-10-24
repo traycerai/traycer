@@ -53,6 +53,7 @@ import type {
 } from "@traycer/protocol/host/maintenance/index";
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -336,6 +337,18 @@ describe("host method poll policy table", () => {
     ).toBe(16 * 60 * 1_000);
   });
 
+  it("re-reads a secret's rotation every three seconds while the page asks to, and reads the rest once", () => {
+    expect(HOST_METHOD_POLL_TABLE["environment.secrets.rotation"]).toEqual({
+      mode: "latest",
+      joinResponseTimeoutMs: null,
+      poll: { kind: "fixed", intervalMs: 3_000 },
+    });
+    expect(HOST_METHOD_POLL_TABLE["environment.secrets.list"].poll).toBeNull();
+    expect(
+      HOST_METHOD_POLL_TABLE["environment.secrets.versions"].poll,
+    ).toBeNull();
+  });
+
   it("narrows null and fixed policies", () => {
     const neverPolled: null = HOST_METHOD_POLL_TABLE["host.identity.get"].poll;
     expect(neverPolled).toBeNull();
@@ -424,6 +437,22 @@ describe("host method poll policy table", () => {
     const policy = HOST_METHOD_POLL_TABLE["host.getInstallationInfo"].poll;
     const intervalMs: number = policy.intervalMs;
     expect(intervalMs).toBe(10_000);
+  });
+
+  // The bot's subscription reads `bot.thread.list` again when its
+  // conversations move, so nothing reads it on a timer.
+  it("never polls bot.thread.list", () => {
+    const entry = HOST_METHOD_POLL_TABLE["bot.thread.list"];
+    expect(entry.mode).toBe("latest");
+    expect(entry.poll).toBeNull();
+  });
+
+  // A send mints a request: two identical sends must stay two messages, never
+  // coalesce into one, and nothing re-reads it on a timer.
+  it("runs bot.conversation.send as an unpolled fifo mutation", () => {
+    const entry = HOST_METHOD_POLL_TABLE["bot.conversation.send"];
+    expect(entry.mode).toBe("fifo");
+    expect(entry.poll).toBeNull();
   });
 
   it("consumes condition cache data as unknown", () => {
@@ -1112,5 +1141,23 @@ describe("agent.resolveMessagePeer poll policy", () => {
 
   it("stops polling once a named peer resolves, so the other task can be reclaimed", () => {
     expect(policy.classify({ peer })).toBe(false);
+  });
+});
+
+describe("simulator.open declared budget", () => {
+  it("lets a cold open outlast the host's three-minute boot deadline", () => {
+    // The host answers a boot that misses its deadline with an error of its
+    // own; the client budget has to be the one that is NOT the first to give
+    // up, or every long boot reads as a client-side failure while the host
+    // goes on to boot the simulator.
+    expect(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS).toBe(210_000);
+    expect(HOST_METHOD_POLL_TABLE["simulator.open"]).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+      poll: null,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("simulator.open"),
+    ).toBe(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS);
   });
 });

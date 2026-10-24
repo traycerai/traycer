@@ -30,15 +30,28 @@ nx_parallel="${NX_PARALLEL:-8}"
 nx_compile_parallel="${NX_COMPILE_PARALLEL:-3}"
 workspace_check_lane="${WORKSPACE_CHECK_LANE:-all}"
 
+# CI is GitHub Actions, which sets both variables itself. CI alone is not
+# enough: an agent's tool shell can export it on a laptop, and the CI lanes
+# below lint every affected project, skip the machine slot and build.
+is_ci() {
+  [ -n "${CI:-}" ] && [ -n "${GITHUB_ACTIONS:-}" ]
+}
+
 # LOCAL runs differ from CI in three ways, all for memory. Agents commit from
 # several worktrees at once, and each check below holds a whole type program
 # resident, so a commit used to cost ~8 GB (gui-app `tsgo -b`, never warm) +
 # ~5 GB (whole-project type-aware lint) + ~5 GB (desktop's vite build), times
 # every concurrent commit.
 #
-#   1. One machine-wide slot (scripts/machine-slot.sh, one per 16 GB of RAM)
-#      for the whole run, shared with the internal monorepo's hook, so
-#      concurrent commits queue instead of stacking their peaks.
+#   1. One machine-wide slot (scripts/machine-slot.sh) for the whole run,
+#      shared with the internal monorepo's hook, so concurrent commits queue
+#      instead of stacking their peaks. `auto` is a pool of one slot file per
+#      16 GB of RAM plus an admission check, first come first served: a
+#      commit takes a free file only when nothing else is held, or while
+#      16 GiB plus 12 GiB per held slot file is available (every holder is
+#      assumed not to have peaked yet, however long it has held its slot).
+#      TRAYCER_MACHINE_SLOTS sets a pool of that exact size and turns
+#      admission off.
 #   2. Lint covers only the files this branch changed
 #      (scripts/lint-changed-files.mjs); CI lints every affected project.
 #   3. No `build`: bundling verifies packaging, not types, and CI runs it.
@@ -52,7 +65,7 @@ workspace_check_lane="${WORKSPACE_CHECK_LANE:-all}"
 run_static_checks() {
   local args=("$@")
   bun x nx affected --target=lint "${args[@]}" --parallel="${nx_parallel}"
-  if [ -n "${CI:-}" ]; then
+  if is_ci; then
     bun run format:check
   else
     bun run format
@@ -88,15 +101,15 @@ run_full_checks() {
   case "${workspace_check_lane}" in
     static)
       bun run lint
-      if [ -n "${CI:-}" ]; then bun run format:check; else bun run format; fi
+      if is_ci; then bun run format:check; else bun run format; fi
       ;;
     compile) bun run compile ;;
     build) bun run build ;;
     all)
       bun run lint
-      if [ -n "${CI:-}" ]; then bun run format:check; else bun run format; fi
+      if is_ci; then bun run format:check; else bun run format; fi
       bun run compile
-      if [ -n "${CI:-}" ]; then bun run build; fi
+      if is_ci; then bun run build; fi
       ;;
     *) echo "Unknown WORKSPACE_CHECK_LANE: ${workspace_check_lane}" >&2; exit 2 ;;
   esac
@@ -133,14 +146,14 @@ run_local_affected() {
   esac
 }
 
-if [ -n "${CI:-}" ] && [ -n "${NX_BASE:-}" ] && [ -n "${NX_HEAD:-}" ]; then
+if is_ci && [ -n "${NX_BASE:-}" ] && [ -n "${NX_HEAD:-}" ]; then
   echo "Affected workspace checks (${NX_BASE}..${NX_HEAD})..."
   run_affected --base="${NX_BASE}" --head="${NX_HEAD}" --tui=false
 else
   # The hook runs shellcheck without -x, so it cannot follow this file.
   # shellcheck disable=SC1091
   . "${script_dir}/machine-slot.sh"
-  if [ -z "${CI:-}" ]; then
+  if ! is_ci; then
     machine_slot_acquire commit-checks auto
   fi
 
@@ -156,7 +169,7 @@ else
     run_full_checks
   else
     echo "Affected workspace checks (base: ${base_ref})..."
-    if [ -n "${CI:-}" ]; then
+    if is_ci; then
       run_affected --base="${base_ref}" --tui=false
     else
       run_local_affected "${base_ref}" --tui=false

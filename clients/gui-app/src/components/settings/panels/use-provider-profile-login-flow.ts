@@ -39,7 +39,13 @@ import {
   analyticsBlockerFromError,
   type AnalyticsBlocker,
 } from "@/lib/analytics";
+import {
+  providerHostBlockLabel,
+  type ProviderHostBlock,
+} from "@/components/providers/provider-signin-availability";
+import { providerDisplayName } from "@/lib/provider-ordering";
 import { appLogger } from "@/lib/logger";
+import { hostControlFlowReasonOf } from "@/lib/query/host-query-error-boundary";
 
 type LoginMutationContext = { readonly hostId: string | null };
 
@@ -311,6 +317,7 @@ export interface ProviderProfileLoginFlowCodePaste {
 }
 
 interface UseProviderProfileLoginFlowInput {
+  readonly hostBlock: ProviderHostBlock | null;
   readonly supportsLoginOwnership: boolean;
   readonly mode: ProviderProfileLoginFlowMode;
   readonly providerId: ProviderCliState["providerId"];
@@ -420,6 +427,7 @@ export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
 ): ProviderProfileLoginFlow {
   const {
+    hostBlock,
     supportsLoginOwnership,
     mode,
     providerId,
@@ -1104,8 +1112,17 @@ export function useProviderProfileLoginFlow(
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
           };
-          const handleAwaitError = (): void => {
+          const handleAwaitError = (error: unknown): void => {
             if (attemptAbandoned()) return;
+            // The await rejected without a host verdict, so the attempt ends
+            // on the "did not finish" copy; the reason is the only record of
+            // why. A closed word set: the coordinator's control-flow reason,
+            // or `rpc-error` for any other rejection.
+            appLogger.warn("[provider-login] await ended without a verdict", {
+              provider: providerId,
+              mode,
+              reason: hostControlFlowReasonOf(error) ?? "rpc-error",
+            });
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
           };
@@ -1174,6 +1191,16 @@ export function useProviderProfileLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
+      // Guard every caller, including reauth's automatic mount-effect start.
+      if (hostBlock?.kind === "macos") {
+        const message = providerHostBlockLabel(
+          hostBlock,
+          providerDisplayName(providerId),
+        );
+        setState({ kind: "failed", message, refusal: null });
+        onFailed(message);
+        return;
+      }
       // `starting`, not `startLogin.isPending`: see `busy` below.
       if (
         state.kind === "starting" ||
@@ -1208,7 +1235,9 @@ export function useProviderProfileLoginFlow(
     [
       awaitLogin.isPending,
       beginLogin,
+      hostBlock,
       mode,
+      onFailed,
       providerId,
       settleOwedReleases,
       state.kind,

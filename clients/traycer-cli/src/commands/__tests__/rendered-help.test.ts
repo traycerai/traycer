@@ -255,6 +255,7 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
   ["profile"],
   ["workspace"],
   ["worktree"],
+  ["task"],
   ["agent"],
   ["agent", "role"],
 ];
@@ -541,6 +542,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     path: "host uninstall",
     options: [
       { flags: "--all", mandatory: false },
+      { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
@@ -894,6 +896,26 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  { path: "task", options: [], args: [] },
+  {
+    path: "task create",
+    options: [
+      { flags: "--harness <id>", mandatory: true },
+      { flags: "--idempotency-key <key>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--message <text>", mandatory: true },
+      { flags: "--model <id>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--permission-mode <mode>", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--repo <owner/repo>", mandatory: false },
+      { flags: "--title <title>", mandatory: false },
+      { flags: "--workspace <path>", mandatory: false },
+    ],
+    args: [],
+  },
   { path: "agent", options: [], args: [] },
   {
     path: "agent list",
@@ -1028,6 +1050,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "agent rename",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "id", required: true, variadic: false },
+      { name: "name", required: true, variadic: false },
+    ],
+  },
+  {
     path: "agent send",
     options: [
       { flags: "--expect-reply", mandatory: false },
@@ -1037,6 +1071,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--quiet", mandatory: false },
       { flags: "--response-id <id>", mandatory: false },
       { flags: "--to <agentId>", mandatory: true },
+      { flags: "--workspace <path>", mandatory: false },
     ],
     args: [],
   },
@@ -1093,6 +1128,62 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--quiet", mandatory: false },
     ],
     args: [],
+  },
+  { path: "bot", options: [], args: [] },
+  {
+    path: "bot list",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "bot post",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--wait <duration>", mandatory: false },
+    ],
+    args: [
+      { name: "bot", required: true, variadic: false },
+      { name: "text", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "bot threads",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "bot", required: true, variadic: false }],
+  },
+  {
+    path: "bot reply",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--wait <duration>", mandatory: false },
+    ],
+    args: [
+      { name: "bot", required: true, variadic: false },
+      { name: "thread", required: true, variadic: false },
+      { name: "text", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "bot checkins",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--task <id>", mandatory: false },
+    ],
+    args: [{ name: "bot", required: true, variadic: false }],
   },
   {
     path: "monitor",
@@ -1539,6 +1630,14 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // a host a person started in a terminal, so it carries the flag too.
         "traycer host uninstall --lifecycle-origin",
         "traycer host free-port-and-restart --lifecycle-origin",
+        // The host process a Desktop force restart was confirmed for: the
+        // restart, and the takeover its re-register fallback reaches, refuse
+        // when pid.json names another one. Desktop passes them from its own
+        // check; a person never does.
+        "traycer host restart --expect-host-pid",
+        "traycer host restart --expect-host-start-identity",
+        "traycer host service install --expect-host-pid",
+        "traycer host service install --expect-host-start-identity",
       ].sort(),
     );
   });
@@ -1683,6 +1782,17 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "--response-id <id> Answer a request received from this recipient; omit on your own follow-ups",
       );
       expect(help).not.toContain("Close an open thread");
+    });
+
+    it("agent send --help documents --workspace", () => {
+      const program = freshProgram();
+      const help = renderHelp(findByPath(program, ["agent", "send"])).replace(
+        /\s+/g,
+        " ",
+      );
+      expect(help).toContain(
+        "--workspace <path> Absolute folder on the receiving agent's host for it to run in, when it has none yet.",
+      );
     });
 
     it("host --help lists 'free-port-and-restart' and not the bare 'free-port' (false-match guard)", () => {

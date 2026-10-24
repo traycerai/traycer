@@ -988,7 +988,6 @@ const TERMINALS_ABOVE_THE_DIVIDER = [
   "railAgents",
   "stack:railAgents+railArtifacts",
   "railArtifacts",
-  "railFiles",
   "railTerminals",
   "divider:1",
   "railBrowsers",

@@ -21,6 +21,8 @@ import {
   isServiceMutationAuthorityError,
   withServiceMutationAuthority,
 } from "../../mutation-authority";
+import { withStopTarget } from "../../stop-target";
+import { CLI_ERROR_CODES } from "../../../runner/errors";
 
 // HOME is redirected to a private temp dir BEFORE anything reads it:
 // `store/paths` binds `homedir()` at module load, so without this the suite
@@ -55,6 +57,7 @@ afterAll(() => {
 
 const MOCKS = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
+  readHostPidMetadataEvidence: vi.fn(),
   removeHostPidMetadata: vi.fn(),
   isProcessAlive: vi.fn(),
   callHostRpcAtEndpoint: vi.fn(),
@@ -70,6 +73,9 @@ vi.mock("../../../host/pid-metadata", async (importOriginal) => {
   return {
     ...actual,
     readHostPidMetadata: MOCKS.readHostPidMetadata,
+    // Read only by a stop-target scope (`service/stop-target.ts`), which asks
+    // it against the live record; staged by the one suite that opens a scope.
+    readHostPidMetadataEvidence: MOCKS.readHostPidMetadataEvidence,
     // `forceStopHostProcess` removes pid.json on the host's behalf after a
     // confirmed SIGKILL - override it too so that path never touches a real
     // one, the same discipline `readHostPidMetadata` already gets here.
@@ -137,6 +143,7 @@ const LIVE_METADATA = {
 
 beforeEach(() => {
   MOCKS.readHostPidMetadata.mockReset();
+  MOCKS.readHostPidMetadataEvidence.mockReset();
   MOCKS.removeHostPidMetadata.mockReset();
   MOCKS.isProcessAlive.mockReset();
   MOCKS.callHostRpcAtEndpoint.mockReset();
@@ -936,6 +943,201 @@ describe("forceStopHostProcess", () => {
 // a `void` resolution can say so. It fires once a live, current host is about
 // to be claimed or signalled - never for a missing record, a dead pid, or an
 // identity the engine refuses to signal.
+// A forced stop confirmed for one host process (`withStopTarget`) asks again
+// immediately before each direct signal: these signals take no service
+// authority, so the scope is the only thing that can hold them to the host
+// the person confirmed. `pid.json` is staged through the evidence reader the
+// scope uses; `readHostPidMetadata` is what the signals are aimed by.
+describe("forceStopHostProcess inside a scope for one confirmed host", () => {
+  const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+  const PUBLISHED_CONFIRMED = {
+    kind: "read",
+    metadata: {
+      ...LIVE_METADATA,
+      processStartIdentity: CONFIRMED_HOST.startIdentity,
+    },
+  };
+
+  // A live process other than the confirmed one: this test process, under its
+  // own identity.
+  function publishedReplacement() {
+    return {
+      kind: "read",
+      metadata: {
+        ...LIVE_METADATA,
+        pid: process.pid,
+        processStartIdentity: ownProcessStartIdentity(),
+      },
+    };
+  }
+
+  // The signals that reached a process. The scope's own identity probe also
+  // goes through `process.kill`, with signal 0, which delivers nothing.
+  function deliveredSignals(spy: {
+    readonly mock: { readonly calls: ReadonlyArray<ReadonlyArray<unknown>> };
+  }): string[] {
+    return spy.mock.calls
+      .filter(([, signal]) => signal !== 0)
+      .map(([pid, signal]) => `${String(pid)} ${String(signal)}`);
+  }
+
+  function forceStopInScope() {
+    return withStopTarget("host stop", "production", CONFIRMED_HOST, () =>
+      forceStopHostProcess("production", "stop"),
+    );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends no signal, and refuses E_HOST_RESTART_TARGET_CHANGED, when pid.json already names a different live host", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue(publishedReplacement());
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(forceStopInScope()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+    });
+
+    expect(deliveredSignals(killSpy)).toEqual([]);
+  });
+
+  it("sends the SIGTERM but never the SIGKILL when a different live host is published during the SIGTERM grace", async () => {
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue(PUBLISHED_CONFIRMED);
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((_pid, signal) => {
+        // The replacement appears as the SIGTERM lands; the confirmed host
+        // survives it.
+        if (signal === "SIGTERM") {
+          MOCKS.readHostPidMetadataEvidence.mockResolvedValue(
+            publishedReplacement(),
+          );
+        }
+        return true;
+      });
+
+    const settled = forceStopInScope().then(
+      () => null,
+      (err: unknown) => err,
+    );
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(settled).resolves.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      message: expect.stringContaining(
+        "SIGTERM had already been sent to the confirmed host",
+      ),
+    });
+    expect(deliveredSignals(killSpy)).toEqual(["4242 SIGTERM"]);
+  });
+
+  // A refusal addresses nothing: the host is reported addressed, and the
+  // force-stop logged, only for a signal that is then sent.
+  it("does not report the host addressed, and says nothing was stopped, when the refusal is at the SIGTERM", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue(publishedReplacement());
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const onHostAddressed = vi.fn();
+
+    await expect(
+      withStopTarget("host restart", "production", CONFIRMED_HOST, () =>
+        forceStopHostProcessReporting("production", "stop", onHostAddressed),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      message: expect.stringContaining("so nothing was stopped"),
+    });
+
+    expect(onHostAddressed).not.toHaveBeenCalled();
+    expect(MOCKS.loggerWarn).not.toHaveBeenCalled();
+    expect(deliveredSignals(killSpy)).toEqual([]);
+  });
+
+  it("signals as before while pid.json still names the confirmed host", async () => {
+    vi.useFakeTimers();
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue(PUBLISHED_CONFIRMED);
+    let sigkillSent = false;
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((_pid, signal) => {
+        if (signal === "SIGKILL") sigkillSent = true;
+        return true;
+      });
+    MOCKS.isProcessAlive.mockImplementation(() => !sigkillSent);
+    MOCKS.verifyProcessIdentityAsync.mockImplementation(async () =>
+      sigkillSent ? "dead" : "alive-same",
+    );
+
+    const pending = forceStopInScope();
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(pending).resolves.toEqual({ kind: "stopped" });
+    expect(deliveredSignals(killSpy)).toEqual(["4242 SIGTERM", "4242 SIGKILL"]);
+  });
+});
+
+// The cooperative request is also a stop confirmed for one host: it claims,
+// then commits, and the host a replacement can be published between the two.
+// The refusal has to leave as the mutation-authority failure it is - a
+// stand-down that answered `unreachable` instead would let a macOS restart
+// carry on to a forced recycle of the job.
+describe("requestCooperativeShutdown inside a scope for one confirmed host", () => {
+  const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+
+  it("rejects, releasing the claim and never committing, when a different live host is published during the claim", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: {
+        ...LIVE_METADATA,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      },
+    });
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
+    MOCKS.callHostRpcAtEndpoint.mockImplementation(async (method: string) => {
+      if (method === "lifecycle.claimShutdown") {
+        // The replacement appears while the claim is in flight.
+        MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+          kind: "read",
+          metadata: {
+            ...LIVE_METADATA,
+            pid: process.pid,
+            processStartIdentity: ownProcessStartIdentity(),
+          },
+        });
+        return { granted: { token: "tok-claim" } };
+      }
+      return { committed: true };
+    });
+
+    const error: unknown = await withStopTarget(
+      "host restart",
+      "production",
+      CONFIRMED_HOST,
+      () => requestCooperativeShutdown("production", "restart", "restart"),
+    ).then(
+      (outcome: unknown) => outcome,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+    });
+    expect(isServiceMutationAuthorityError(error)).toBe(true);
+    expect(
+      MOCKS.callHostRpcAtEndpoint.mock.calls.map(([method]) => method),
+    ).toEqual(["lifecycle.claimShutdown", "lifecycle.releaseShutdown"]);
+  });
+});
+
 describe("onHostAddressed", () => {
   afterEach(() => {
     // `process.kill` spies accumulate across tests otherwise.

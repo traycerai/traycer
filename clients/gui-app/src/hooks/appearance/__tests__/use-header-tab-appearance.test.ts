@@ -66,14 +66,37 @@ describe("useHeaderTabAppearance", () => {
     expect(painted(badged).icon).toBe("🧪");
   });
 
-  it("lets a user customization win over the kind's own appearance", () => {
+  it("lets the account's customization win over the kind's own appearance", () => {
+    useTabsStore.setState({
+      customizations: {
+        [SAMPLE_KEY]: {
+          color: "#81c995",
+          icon: "🚀",
+          groupId: null,
+          organizationOwnerId: "user-1",
+        },
+      },
+    });
+
+    expect(painted(SAMPLE_TAB)).toEqual({ color: "#81c995", icon: "🚀" });
+  });
+
+  it("does not draw a customization the account did not write: the kind's own appearance shows", () => {
+    const badged: HeaderTab = {
+      ...SAMPLE_TAB,
+      appearance: { color: "var(--warning-foreground)", icon: "🧪" },
+    };
+    // No `organizationOwnerId`: the retired machine-local colour and icon.
     useTabsStore.setState({
       customizations: {
         [SAMPLE_KEY]: { color: "#81c995", icon: "🚀", groupId: null },
       },
     });
 
-    expect(painted(SAMPLE_TAB)).toEqual({ color: "#81c995", icon: "🚀" });
+    expect(painted(badged)).toEqual({
+      color: "var(--warning-foreground)",
+      icon: "🧪",
+    });
   });
 
   it("lets a group's colour win over both", () => {
@@ -82,7 +105,12 @@ describe("useHeaderTabAppearance", () => {
         [SAMPLE_KEY]: { color: "#81c995", icon: null, groupId: "group-1" },
       },
       groups: {
-        "group-1": { name: "Work", color: "#8ab4f8", collapsed: false },
+        "group-1": {
+          name: "Work",
+          color: "#8ab4f8",
+          collapsed: false,
+          organizationOwnerId: "user-1",
+        },
       },
     });
 

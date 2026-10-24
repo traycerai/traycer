@@ -24,11 +24,14 @@ import type {
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
+  transcriptShowsWorkingRow,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import type { PendingTurn } from "@/stores/chats/chat-send-state";
 import type {
+  ChatMessage,
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
@@ -425,6 +428,7 @@ function persistedPlanBlock(input: {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",
@@ -432,6 +436,8 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
+  resolveAgentServiceTierLabel: (_sender, serviceTier) =>
+    serviceTier === null ? null : `Resolved ${serviceTier}`,
   contentBlocksPreview: () => "",
 };
 
@@ -1417,6 +1423,7 @@ describe("useRenderedMessages", () => {
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
+      serviceTierLabel: "Resolved priority",
       // Null, not absent: this fixture's record carries no env credential, and
       // that IS the claim "the profile sign-in ran the turn".
       envCredentialVar: null,
@@ -2095,7 +2102,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2158,7 +2166,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend,
           managedCommand: null,
           agentMessageReceipt,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2185,6 +2194,211 @@ describe("useRenderedMessages", () => {
     expect(tool?.agentMessageSend).toEqual(agentMessageSend);
   });
 
+  describe("sent-message card stamps", () => {
+    const A2A_TOOL = "traycer_a2a/traycer_send_message";
+    const SHARED_IMAGE_RESOLUTIONS: Extract<
+      Message,
+      { role: "assistant" }
+    >["imageResolutions"] = [];
+    const SEND = {
+      receiverAgentId: "agent-receiver-1",
+      message: "ping",
+      responseId: null,
+      expectReply: false,
+    };
+    const QUEUED = {
+      targetHostId: "host-b",
+      eventId: "evt-1",
+      state: "queued" as const,
+      targetHostOffline: false,
+    };
+    const RECEIPT = {
+      receiverAgentId: "agent-receiver-1",
+      messageId: "agent-msg-receipt-1",
+    };
+
+    function sendBlock(overrides: {
+      readonly delivery: typeof QUEUED | { state: "delivered" } | null;
+      readonly receipt: typeof RECEIPT | null;
+    }): Extract<
+      Extract<Message, { role: "assistant" }>["blocks"][number],
+      { type: "tool_call" }
+    > {
+      const delivery =
+        overrides.delivery === null
+          ? null
+          : { ...QUEUED, ...overrides.delivery };
+      return {
+        type: "tool_call",
+        blockId: "tool-1",
+        toolName: A2A_TOOL,
+        ...toolCallInputFields(A2A_TOOL, {
+          toAgentId: "agent-receiver-1",
+          message: "ping",
+        }),
+        error: null,
+        agentMessageSend: SEND,
+        managedCommand: null,
+        agentMessageReceipt: overrides.receipt,
+        agentMessageDelivery: delivery,
+        artifact: null,
+        mcpApp: null,
+        progress: null,
+        backgroundOutput: null,
+        backgroundTask: false,
+        stopped: false,
+        status: "completed",
+        timestamp: 2002,
+        startedAt: 2002,
+        endedAt: 2002,
+        imageResults: [],
+      };
+    }
+
+    // The turn cache is shared across this file's tests (one display context)
+    // and keyed by turn id, so each case gets its own turn.
+    function recordWith(
+      block: Extract<Message, { role: "assistant" }>["blocks"][number],
+      turnId: string,
+    ): Message {
+      // One shared array: the turn cache keys on the identity of
+      // `imageResolutions`, so a fresh `[]` per record would defeat the very
+      // cache hit these cases are about.
+      return {
+        ...assistantMessage(turnId, 2000),
+        imageResolutions: SHARED_IMAGE_RESOLUTIONS,
+        blocks: [block],
+      };
+    }
+
+    function toolSegmentOf(messages: ReadonlyArray<ChatMessage>): ToolSegment {
+      const tool = (messages[0]?.segments ?? []).find(
+        (segment): segment is ToolSegment => segment.kind === "tool",
+      );
+      if (tool === undefined) throw new Error("expected a tool segment");
+      return tool;
+    }
+
+    it("reads stamps a stored block never had as null, not undefined", () => {
+      // The shallow snapshot parse path runs no zod defaults, so a block
+      // stored before a field existed arrives with the key genuinely absent.
+      const block = sendBlock({ delivery: null, receipt: null });
+      Reflect.deleteProperty(block, "agentMessageDelivery");
+      Reflect.deleteProperty(block, "agentMessageReceipt");
+
+      const { result } = renderRenderedMessages({
+        messages: [recordWith(block, "turn-stamps-1")],
+      });
+
+      const tool = toolSegmentOf(result.current);
+      expect(tool.agentMessageDelivery).toBeNull();
+      expect(tool.agentMessageReceipt).toBeNull();
+      expect(tool.agentMessageSend).toEqual(SEND);
+    });
+
+    it("reads an absent agentMessageSend as null", () => {
+      const block = {
+        ...sendBlock({ delivery: null, receipt: null }),
+        // Not an A2A tool, so no send is derived from the input either.
+        toolName: "read_file",
+        ...toolCallInputFields("read_file", { path: "/repo/a.ts" }),
+      };
+      Reflect.deleteProperty(block, "agentMessageSend");
+
+      const { result } = renderRenderedMessages({
+        messages: [recordWith(block, "turn-stamps-2")],
+      });
+
+      expect(toolSegmentOf(result.current).agentMessageSend).toBeNull();
+    });
+
+    it("re-renders a delivery that moves queued to delivered without a blocksVersion", () => {
+      const queued = recordWith(
+        sendBlock({ delivery: QUEUED, receipt: null }),
+        "turn-stamps-3",
+      );
+      if (queued.role === "assistant") {
+        expect(queued.blocksVersion).toBeUndefined();
+      }
+      const driver = renderRenderedMessages({ messages: [queued] });
+      expect(toolSegmentOf(driver.result.current).agentMessageDelivery).toEqual(
+        QUEUED,
+      );
+
+      // Same status, same timestamp, a NEW record object.
+      driver.patch({
+        messages: [
+          recordWith(
+            sendBlock({ delivery: { state: "delivered" }, receipt: null }),
+            "turn-stamps-3",
+          ),
+        ],
+      });
+
+      expect(
+        toolSegmentOf(driver.result.current).agentMessageDelivery?.state,
+      ).toBe("delivered");
+    });
+
+    it("re-renders a receipt that arrives on an otherwise identical block", () => {
+      const driver = renderRenderedMessages({
+        messages: [
+          recordWith(
+            sendBlock({ delivery: QUEUED, receipt: null }),
+            "turn-stamps-4",
+          ),
+        ],
+      });
+      expect(
+        toolSegmentOf(driver.result.current).agentMessageReceipt,
+      ).toBeNull();
+
+      driver.patch({
+        messages: [
+          recordWith(
+            sendBlock({ delivery: QUEUED, receipt: RECEIPT }),
+            "turn-stamps-4",
+          ),
+        ],
+      });
+
+      expect(toolSegmentOf(driver.result.current).agentMessageReceipt).toEqual(
+        RECEIPT,
+      );
+    });
+
+    it("renders a tool call with none of the stamps the same, and reuses its turn", () => {
+      const plain = (): Message =>
+        recordWith(
+          {
+            ...sendBlock({ delivery: null, receipt: null }),
+            toolName: "read_file",
+            ...toolCallInputFields("read_file", { path: "/repo/a.ts" }),
+            agentMessageSend: null,
+          },
+          "turn-stamps-5",
+        );
+      const driver = renderRenderedMessages({ messages: [plain()] });
+      const first = driver.result.current[0];
+      const firstJson = JSON.stringify(first);
+
+      // A new record object with identical content is a cache hit.
+      driver.patch({ messages: [plain()] });
+      expect(driver.result.current[0]).toBe(first);
+      expect(JSON.stringify(driver.result.current[0])).toBe(firstJson);
+      expect(toolSegmentOf(driver.result.current)).toMatchObject({
+        agentMessageSend: null,
+        agentMessageReceipt: null,
+        agentMessageDelivery: null,
+      });
+
+      // The same input again serves the cached model by identity.
+      const settled = driver.result.current[0];
+      driver.rerender();
+      expect(driver.result.current[0]).toBe(settled);
+    });
+  });
+
   it("drops a resume trigger whose blockId is the immediately preceding tool segment", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -2198,7 +2412,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2267,7 +2482,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2325,7 +2541,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2408,7 +2625,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2523,7 +2741,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2644,7 +2863,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
@@ -2668,7 +2888,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
@@ -2692,7 +2913,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2719,7 +2941,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2740,7 +2963,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -2864,7 +3088,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -3031,7 +3256,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -3569,7 +3795,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -3627,7 +3854,8 @@ describe("useRenderedMessages", () => {
           agentMessageSend: null,
           managedCommand: null,
           agentMessageReceipt: null,
-          page: null,
+          agentMessageDelivery: null,
+          artifact: null,
           mcpApp: null,
           progress: null,
           backgroundOutput: null,
@@ -4549,19 +4777,18 @@ describe("useRenderedMessages setup card integration", () => {
     expect(indicator?.elapsedStartedAt).not.toBe(indicator?.createdAt);
   });
 
-  it("omits elapsedStartedAt from the pre-turn indicator when no active turn exists yet", () => {
+  it("times the pre-turn indicator from the send's own sentAt when no active turn exists yet", () => {
     const { result } = renderRenderedMessages({
       activeTurn: null,
       runStatus: "running",
+      pendingTurn: { messageId: "m-sent", sentAt: 4200, settings: SETTINGS },
     });
 
     const indicator = result.current.find(
       (message) => message.role === "assistant",
     );
-    // Same list anchor as the active-turn case above - only the presence of
-    // `elapsedStartedAt` differs, since there is genuinely no known start.
     expect(indicator?.createdAt).toBe(1);
-    expect(indicator?.elapsedStartedAt).toBeUndefined();
+    expect(indicator?.elapsedStartedAt).toBe(4200);
   });
 
   it("still shows the Working indicator when setup has already completed", () => {
@@ -7034,7 +7261,8 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
       agentMessageSend: null,
       managedCommand: null,
       agentMessageReceipt: null,
-      page: null,
+      agentMessageDelivery: null,
+      artifact: null,
       mcpApp: null,
       progress: null,
       backgroundOutput: null,
@@ -7442,5 +7670,187 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
           segment.kind === "text" && segment.markdown === "final answer",
       ),
     ).toBe(true);
+  });
+});
+
+describe("useRenderedMessages: the working row is built from the pending turn", () => {
+  const SENT_AT = 5000;
+  const pendingTurn: PendingTurn = {
+    messageId: "m-sent",
+    sentAt: SENT_AT,
+    settings: SETTINGS,
+  };
+  const sentMessage = withdrawnPendingMessage("action-sent", "m-sent", SENT_AT);
+
+  function workingRow(
+    rows: ReadonlyArray<ChatMessage>,
+  ): ChatMessage | undefined {
+    return rows.find((row) => row.role === "assistant");
+  }
+
+  it("draws the message and a fully populated working row on the first frame of a send into an idle chat", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(result.current.map((row) => row.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    const working = workingRow(result.current);
+    expect(working?.runState).toBe("running");
+    expect(working?.elapsedStartedAt).toBe(SENT_AT);
+    expect(working?.assistantMeta?.provider).toBe(SETTINGS.harnessId);
+    expect(working?.createdAt).toBeGreaterThan(SENT_AT);
+  });
+
+  it("transcriptShowsWorkingRow reads true with the trailing working row and false without it", () => {
+    const withRow = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(withRow.result.current)).toBeDefined();
+    expect(transcriptShowsWorkingRow(withRow.result.current)).toBe(true);
+
+    const withoutRow = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: null,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(withoutRow.result.current)).toBeUndefined();
+    expect(transcriptShowsWorkingRow(withoutRow.result.current)).toBe(false);
+  });
+
+  it("shows no working row for the same pending message once there is no pendingTurn and the chat is idle", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: null,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(workingRow(result.current)).toBeUndefined();
+  });
+
+  it("keeps the timer origin and provider when the host's activeTurn arrives naming the send", () => {
+    const driver = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    const before = workingRow(driver.result.current);
+
+    driver.patch({
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        turnId: "turn-1",
+        userMessageId: "m-sent",
+        harnessId: SETTINGS.harnessId,
+        startedAt: SENT_AT + 40,
+      },
+    });
+    const after = workingRow(driver.result.current);
+
+    expect(after?.elapsedStartedAt).toBe(before?.elapsedStartedAt);
+    expect(after?.assistantMeta?.provider).toBe(
+      before?.assistantMeta?.provider,
+    );
+    expect(driver.result.current.map((row) => row.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("switches the icon only when the host really started a different provider", () => {
+    const driver = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    driver.patch({
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "m-sent",
+        harnessId: "codex",
+        startedAt: SENT_AT + 40,
+      },
+    });
+
+    expect(workingRow(driver.result.current)?.assistantMeta?.provider).toBe(
+      "codex",
+    );
+  });
+
+  it("orders the working row below its own local message even when the host's start predates the local clock", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "m-sent",
+        startedAt: SENT_AT - 3000,
+      },
+    });
+
+    expect(result.current.map((row) => row.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("times a send that waited in the dock from its drain instant, unchanged when activeTurn arrives", () => {
+    const drained: PendingTurn = {
+      ...pendingTurn,
+      timerOrigin: SENT_AT + 300_000,
+    };
+    const driver = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: drained,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(driver.result.current)?.elapsedStartedAt).toBe(
+      SENT_AT + 300_000,
+    );
+
+    driver.patch({
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "m-sent",
+        startedAt: SENT_AT + 300_040,
+      },
+    });
+
+    expect(workingRow(driver.result.current)?.elapsedStartedAt).toBe(
+      SENT_AT + 300_000,
+    );
+  });
+
+  it("times a turn that is not this send's from the host's start, not from the pending send", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "someone-elses-message",
+        startedAt: 1234,
+      },
+    });
+
+    expect(workingRow(result.current)?.elapsedStartedAt).toBe(1234);
   });
 });

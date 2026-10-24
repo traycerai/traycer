@@ -281,7 +281,7 @@ vi.mock(
             onOutput: (channel, chunk) =>
               options.callbacks.onTargetOutput(path, channel, chunk),
             onComplete: (deleted) => {
-              options.callbacks.onTargetComplete(path, deleted);
+              options.callbacks.onTargetComplete(path, deleted, undefined);
               settleTarget(path, deleted);
             },
             onFailed: (reason, holders, code) => {
@@ -1846,6 +1846,98 @@ describe("WorktreesList delete flow", () => {
     screen.getByText("0/4 deleted, 4 failed");
   });
 
+  it("names the decline in the progress strip when every failed target in a batch was declined for one reason", () => {
+    renderDefault();
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    act(() => {
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "teardown_failed",
+      );
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/dirty",
+        false,
+        "teardown_failed",
+      );
+    });
+
+    expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
+    // Two failures, so the sentence speaks of the worktrees, not "the worktree".
+    screen.getByText(
+      "0/2 deleted, 2 failed. The teardown script didn't finish successfully, so the worktrees were left in place - check the script and try again.",
+    );
+  });
+
+  it("keeps the counts alone in the strip when a batch's failures have different reasons", () => {
+    renderDefault();
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    act(() => {
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "teardown_failed",
+      );
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/dirty",
+        false,
+        "removal_failed",
+      );
+    });
+
+    screen.getByText("0/2 deleted, 2 failed");
+  });
+
+  it("keeps the counts alone when one failure was a named decline and the other was not", () => {
+    renderDefault();
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    act(() => {
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "teardown_failed",
+      );
+      // A host that did not name a reason for this one.
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/dirty",
+        false,
+        undefined,
+      );
+    });
+
+    // Exact match: no sentence may follow the counts.
+    screen.getByText("0/2 deleted, 2 failed");
+  });
+
+  it("names the decline for a single failure even when other targets were deleted", () => {
+    renderDefault();
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    act(() => {
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        true,
+        undefined,
+      );
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/dirty",
+        false,
+        "removal_failed",
+      );
+    });
+
+    screen.getByText(
+      "1/2 deleted, 1 failed. The worktree couldn't be fully removed and part of it may still be on disk - refresh the list and try again, or check the folder.",
+    );
+  });
+
   it("falls back to per-target streams when the host has no batch command method", () => {
     const multiRepoWorktrees = [
       ...WORKTREES,
@@ -1990,8 +2082,8 @@ describe("WorktreesList delete flow", () => {
     // batch method disappeared after it already received both target frames,
     // but before it receives the aggregate command frame.
     act(() => {
-      command?.onTargetComplete("/wt/clean", true);
-      command?.onTargetComplete("/wt/dirty", true);
+      command?.onTargetComplete("/wt/clean", true, undefined);
+      command?.onTargetComplete("/wt/dirty", true, undefined);
     });
     expect(invalidateSpy).not.toHaveBeenCalled();
 
@@ -2291,6 +2383,55 @@ describe("WorktreesList delete flow", () => {
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
       "Couldn't remove the worktree",
+    );
+  });
+
+  it("names why the host declined to delete a worktree it does not manage", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetStarted("/wt/clean", false);
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "not_managed",
+      );
+    });
+    const message = screen.getByTestId("worktree-delete-error").textContent;
+    expect(message).toContain("isn't a worktree");
+    expect(message).not.toMatch(/delete it yourself/i);
+    expect(message).not.toContain("may still be in use");
+  });
+
+  it("names a failed teardown script when the host declined for that reason", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetStarted("/wt/clean", true);
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "teardown_failed",
+      );
+    });
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "teardown script",
+    );
+  });
+
+  it("names a removal that left files behind when the host declined for that reason", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetStarted("/wt/clean", false);
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "removal_failed",
+      );
+    });
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "on disk",
     );
   });
 

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { NewTerminalPickerBody } from "@/components/epic-canvas/sidebar/new-terminal-picker-body";
+import { subscribeStagedTerminalLaunch } from "@/components/epic-canvas/sidebar/new-terminal-staged-launch";
 import {
   mintNewEpicTerminalTile,
   type TerminalLaunchTarget,
@@ -60,6 +61,15 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
     },
     [epicId, openTile, tabId, onOpenChange, onLaunched],
   );
+  // A staged sandbox's terminal launches from the tab once it is ready, and
+  // closes this dialog as its own Launch would.
+  useEffect(() => {
+    if (!open) return;
+    return subscribeStagedTerminalLaunch(tabId, () => {
+      onOpenChange(false);
+      if (onLaunched !== null) onLaunched();
+    });
+  }, [onLaunched, onOpenChange, open, tabId]);
   // A touch pointer is the one that pays for a focused text field: focusing
   // the picker's workspace search raises a software keyboard nobody asked for,
   // over a dialog whose whole job is a two-tap host-then-folder pick. The

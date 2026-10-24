@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
@@ -30,6 +31,8 @@ import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
@@ -37,6 +40,12 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  isAttachEnvironmentUnsupported,
+  toastAttachEnvironmentNeedsOwnHost,
+  useEpicAttachEnvironment,
+} from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { useChatPublicationState } from "@/hooks/chats/use-chat-publication-state-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -53,6 +62,7 @@ import {
 import { clearChatForkWorkspace } from "@/lib/worktree/chat-fork-workspace-staging";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   chatForkHostRefusals,
@@ -148,6 +158,11 @@ export interface ChatForkDialogTarget {
    * version, publication) applies to it exactly as to a hand-picked host.
    */
   readonly initialHostId: string | null;
+  /**
+   * The only hosts the picker lists ("Continue on a <team> host"), or `null`
+   * for every host.
+   */
+  readonly onlyHostIds: ReadonlySet<string> | null;
 }
 
 interface ChatForkDialogProps {
@@ -168,6 +183,42 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
     <SurfaceActivityProvider active={presentedOpen}>
       <ChatForkDialogBody {...props} />
     </SurfaceActivityProvider>
+  );
+}
+
+function ChatForkModelPicker(props: {
+  readonly store: ComposerToolbarStore;
+  readonly selectedHostId: string;
+  readonly disabled: boolean;
+}) {
+  // Catalog updates replace toolbar state. Keep these subscriptions below the
+  // dialog's useComposerToolbarStore hook so they cannot re-run its catalog
+  // effect when a query returns a new but equivalent array.
+  const reasoning = useStore(props.store, (state) => state.reasoning);
+  const serviceTier = useStore(props.store, (state) => state.serviceTier);
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, serviceTier),
+    [reasoning, serviceTier],
+  );
+  return (
+    <HarnessModelPicker
+      labelDisplay="responsive"
+      store={props.store}
+      maxModeContext={maxModeContext}
+      withServiceTier
+      withReasoning
+      tuiOnly={false}
+      lockedHarnessId={null}
+      disabled={props.disabled}
+      registerActivation={false}
+      createProfileHostId={props.selectedHostId}
+      runTargetHostId={props.selectedHostId}
+      // A dialog has no terminal surface to open a setup terminal into, and
+      // its selected host may not be the tab's.
+      terminalLoginSurface={null}
+      profileAdmission={null}
+      embedding={null}
+    />
   );
 }
 
@@ -476,6 +527,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
+  // A harness a team sandbox does not offer holds Fork shut on that host, and
+  // the dialog says so.
+  const forkHarnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const teamSandboxHarnessBlocked = useTeamSandboxHarnessBlocked({
+    hostId: selectedHostId,
+    client: selectedHostClient,
+    harnessId: forkHarnessId,
+  });
   const modelResolved =
     modelSlugPresent &&
     (!isCrossHost || catalogConfirmed || catalogSubstituted);
@@ -494,6 +553,26 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // `null` when this client genuinely does not know, never a guess, because the
   // host TRUSTS a value it is given.
   const appWideClient = useHostClient();
+  // A fork onto a team's host first attaches the task to that team, so the
+  // team's host may serve it: the person's own act, sent on the person's own
+  // (app-wide) host with their bearer. Not when the source already runs on a
+  // host of that team - the task is that team's to serve already.
+  const selectedHostTeamId = useHostOwnerTeamId(selectedHostId);
+  const tabHostTeamId = useHostOwnerTeamId(tabHostId);
+  const attachTeamId =
+    selectedHostTeamId !== null && selectedHostTeamId !== tabHostTeamId
+      ? selectedHostTeamId
+      : null;
+  // The attachment is the person's act, so it travels on a host no team owns:
+  // the source tab's, else the app-wide one. A team's host would send it with
+  // a member's credential, which the cloud refuses. With neither, there is no
+  // host to send it from.
+  const appWideHostTeamId = useHostOwnerTeamId(appWideClient.getActiveHostId());
+  const personalAppWideClient =
+    appWideHostTeamId === null ? appWideClient : null;
+  const attachClient =
+    tabHostTeamId === null ? tabHostClient : personalAppWideClient;
+  const attachEnvironment = useEpicAttachEnvironment(attachClient);
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -570,8 +649,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     sourceUntitled,
     modelResolved,
     hasStagedPreselection: stagedIntentForKey !== null,
-    createPending: createChat.isPending,
+    createPending: createChat.isPending || attachEnvironment.isPending,
     hostClientResolved: selectedHostClient !== null,
+    teamSandboxHarnessBlocked,
     // Not a host-build fact any more, and the name says so. This one boolean
     // now carries the SOURCE CHAT's publication too - a frozen publication and
     // a boundary the published head does not cover both hold Fork shut, the
@@ -690,70 +770,93 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
     });
-    createChat.mutate(
-      {
-        epicId,
-        // The host the user picked in THIS dialog, which is the machine the
-        // fork is created on and the one the forked chat is bound to for life.
-        hostId,
-        parentId: target.parentId,
-        title: trimmedTitle,
-        chatId,
-        settings,
-        workspaceMode,
-        worktreeIntent,
-        initialMessage: null,
-        // Both fork shapes carry the rendered source owner so a destination
-        // with no local chat record can verify the cloud publication's owner.
-        forkSource:
-          target.assistantMessageId === null
-            ? {
-                boundary: "latest",
-                sourceChatId: target.sourceChatId,
-                sourceOwnerUserId,
-              }
-            : {
-                boundary: "assistantMessage",
-                sourceChatId: target.sourceChatId,
-                assistantMessageId: target.assistantMessageId,
-                interviewBlockId: target.interviewBlockId,
-                carriedInterviews: target.carriedInterviews,
-                sourceOwnerUserId,
-              },
-      },
-      {
-        onSuccess: (result) => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
-            source: "direct_ui",
-            include_history: true,
-          });
-          clearForkWorkspaces();
-          const cancel = openCreatedChatWhenProjectedWithNavigation({
-            intent: {
-              epicId,
-              tabId,
-              chatId: result.chatId,
-              // The host the fork was actually created on. Binding the new tab
-              // to the ACTIVE host instead would leave it addressing a machine
-              // that has never heard of this chat, and waiting out the whole
-              // cross-host replication before anything appeared.
-              hostId,
-              placement: null,
+    const createForkChat = (): void => {
+      createChat.mutate(
+        {
+          epicId,
+          // The host the user picked in THIS dialog, which is the machine the
+          // fork is created on and the one the forked chat is bound to for life.
+          hostId,
+          parentId: target.parentId,
+          title: trimmedTitle,
+          chatId,
+          settings,
+          workspaceMode,
+          worktreeIntent,
+          initialMessage: null,
+          // Both fork shapes carry the rendered source owner so a destination
+          // with no local chat record can verify the cloud publication's owner.
+          forkSource:
+            target.assistantMessageId === null
+              ? {
+                  boundary: "latest",
+                  sourceChatId: target.sourceChatId,
+                  sourceOwnerUserId,
+                }
+              : {
+                  boundary: "assistantMessage",
+                  sourceChatId: target.sourceChatId,
+                  assistantMessageId: target.assistantMessageId,
+                  interviewBlockId: target.interviewBlockId,
+                  carriedInterviews: target.carriedInterviews,
+                  sourceOwnerUserId,
+                },
+        },
+        {
+          onSuccess: (result) => {
+            Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
-            },
-            navigateNestedFocus,
-          });
-          const openCancels = openCancelsRef.current;
-          if (openCancels === null) {
-            cancel();
-          } else {
-            openCancels.add(cancel);
-          }
-          onOpenChange(false);
+              include_history: true,
+            });
+            clearForkWorkspaces();
+            const cancel = openCreatedChatWhenProjectedWithNavigation({
+              intent: {
+                epicId,
+                tabId,
+                chatId: result.chatId,
+                // The host the fork was actually created on. Binding the new tab
+                // to the ACTIVE host instead would leave it addressing a machine
+                // that has never heard of this chat, and waiting out the whole
+                // cross-host replication before anything appeared.
+                hostId,
+                placement: null,
+                source: "direct_ui",
+              },
+              navigateNestedFocus,
+            });
+            const openCancels = openCancelsRef.current;
+            if (openCancels === null) {
+              cancel();
+            } else {
+              openCancels.add(cancel);
+            }
+            onOpenChange(false);
+          },
+        },
+      );
+    };
+    if (attachTeamId === null) {
+      createForkChat();
+      return;
+    }
+    if (attachClient === null) {
+      toastAttachEnvironmentNeedsOwnHost();
+      return;
+    }
+    attachEnvironment.mutate(
+      { epicId, teamId: attachTeamId },
+      {
+        onSuccess: createForkChat,
+        // A host that predates the attachment creates as it always has.
+        onError: (error) => {
+          if (isAttachEnvironmentUnsupported(error)) createForkChat();
         },
       },
     );
   }, [
+    attachClient,
+    attachEnvironment,
+    attachTeamId,
     canSubmit,
     clearForkWorkspaces,
     createChat,
@@ -786,6 +889,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       // the picker which row is exempt — a same-host fork needs no publication
       // at all.
       unselectableExceptHostId: remoteRowsUnselectable ? tabHostId : null,
+      onlyHostIds: target?.onlyHostIds ?? null,
     }),
     [
       hostRefusals,
@@ -794,6 +898,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       selectedHostClient,
       selectedHostId,
       tabHostId,
+      target,
     ],
   );
 
@@ -899,28 +1004,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               Harness
             </div>
             <div className="flex min-w-0 items-center gap-2">
-              <HarnessModelPicker
-                labelDisplay="responsive"
+              <ChatForkModelPicker
                 key={modelPickerKey}
                 store={toolbarStore}
-                withServiceTier
-                withReasoning
-                tuiOnly={false}
-                lockedHarnessId={null}
                 disabled={createChat.isPending}
-                registerActivation={false}
-                createProfileHostId={selectedHostId}
-                runTargetHostId={selectedHostId}
-                // A dialog has no terminal surface to open a setup terminal
-                // into, and its selected host may not be the tab's; the CTA
-                // shows its steps without the button.
-                terminalLoginSurface={null}
-                profileAdmission={null}
-                embedding={null}
+                selectedHostId={selectedHostId}
               />
             </div>
           </section>
           <ActiveHostWorkspaceControls
+            sandboxStaging={null}
             // Locked while the create is in flight, like every other control in
             // this dialog. The host picker is LIVE here (`kind: "selected"`), so
             // an unlocked retarget would move `selectedHostId` out from under a
@@ -937,6 +1030,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             seedIntentOverride={seedIntentOverride}
             hostScope={workspaceHostScope}
           />
+          {teamSandboxHarnessBlocked ? (
+            <p
+              className="text-ui-xs text-destructive"
+              data-testid="fork-team-sandbox-unavailable"
+            >
+              {TEAM_SANDBOX_HARNESS_UNAVAILABLE}
+            </p>
+          ) : null}
           <ChatForkTargetNotices
             isCrossHost={isCrossHost}
             carriesChanges={
@@ -1134,6 +1235,8 @@ function canSubmitFork(input: {
   readonly createPending: boolean;
   /** The selected host resolved to a client this app can actually dial. */
   readonly hostClientResolved: boolean;
+  /** The selected host is a team sandbox that does not offer the harness. */
+  readonly teamSandboxHarnessBlocked: boolean;
   /**
    * The combined Layer-1 verdict allows a submit - see `chat-fork-target`. It
    * spans BOTH subjects the dialog gates on: the selected host's build, and the
@@ -1148,6 +1251,7 @@ function canSubmitFork(input: {
   if (!input.modelResolved) return false;
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;
+  if (input.teamSandboxHarnessBlocked) return false;
   if (!input.verdictAllowsSubmit) return false;
   if (input.requiresStagedPreselection && !input.hasStagedPreselection) {
     return false;

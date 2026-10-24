@@ -11,6 +11,8 @@
 // `busy:false` is treated as idle. This is a plain HTTP GET - no WsRpcClient,
 // manifest, or bearer - so an unauthenticated caller can always make the call.
 
+import { timeoutSignal } from "./timeout-signal";
+
 const ACTIVITY_PROBE_TIMEOUT_MS = 1_500;
 
 /**
@@ -25,7 +27,7 @@ export async function probeHostActivityBusy(
 ): Promise<boolean> {
   try {
     const response = await fetch(toActivityUrl(websocketUrl), {
-      signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
+      signal: timeoutSignal(ACTIVITY_PROBE_TIMEOUT_MS),
     });
     if (!response.ok) {
       return true;
@@ -86,7 +88,7 @@ export async function probeHostActivity(
   let response: Response;
   try {
     response = await fetch(toActivityUrl(websocketUrl), {
-      signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
+      signal: timeoutSignal(ACTIVITY_PROBE_TIMEOUT_MS),
     });
   } catch {
     return { kind: "unreachable" };
@@ -131,7 +133,7 @@ export async function probeHostReachable(
 ): Promise<boolean> {
   try {
     await fetch(toActivityUrl(websocketUrl), {
-      signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
+      signal: timeoutSignal(ACTIVITY_PROBE_TIMEOUT_MS),
     });
     return true;
   } catch {

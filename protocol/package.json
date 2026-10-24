@@ -34,6 +34,7 @@
     "./host-transport/__tests__/chunk-reassembler-conformance": "./src/host-transport/__tests__/chunk-reassembler-conformance.ts",
     "./framework": "./src/framework/index.ts",
     "./framework/*": "./src/framework/*.ts",
+    "./environment/*": "./src/environment/*.ts",
     "./notifications/*": "./src/notifications/*.ts",
     "./persistence/*": "./src/persistence/*.ts",
     "./utils/yjs-utils": "./utils/yjs-utils/index.ts",
@@ -147,6 +148,10 @@
         "types": "./dist/src/framework/*.d.ts",
         "import": "./dist/src/framework/*.js"
       },
+      "./environment/*": {
+        "types": "./dist/src/environment/*.d.ts",
+        "import": "./dist/src/environment/*.js"
+      },
       "./notifications/*": {
         "types": "./dist/src/notifications/*.d.ts",
         "import": "./dist/src/notifications/*.js"
@@ -202,7 +207,7 @@
     "tldts": "7.4.10",
     "y-utility": "^0.1.4",
     "yjs": "^13.6.32",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "catalog:",

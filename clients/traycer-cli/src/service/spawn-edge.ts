@@ -7,6 +7,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "./mutation-authority";
+import { noteStopTargetSpawnEdge } from "./stop-target";
 
 /**
  * The spawn edge: the point inside a platform controller immediately before
@@ -46,6 +47,13 @@ const spawnEdgeWithdrawal = new AsyncLocalStorage<{ withdrawn: boolean }>();
 const unreportedRefusals = new WeakSet<object>();
 
 export async function atServiceSpawnEdge(): Promise<void> {
+  await runSpawnEdgeHook();
+  // The call after this edge launches: once it returns, a host published
+  // after it may be this command's own (`service/stop-target.ts`).
+  noteStopTargetSpawnEdge();
+}
+
+async function runSpawnEdgeHook(): Promise<void> {
   const hook = spawnEdgeHook.getStore();
   if (hook === undefined) return;
   await hook();
@@ -65,7 +73,9 @@ export async function atServiceSpawnEdge(): Promise<void> {
  * bound counts (`spawn-edge-bounds.ts`).
  */
 export async function atServiceInstallEdge(): Promise<void> {
-  await atServiceSpawnEdge();
+  // In front of a write, not a launch: the install's bootouts after it are
+  // still held to a stop's confirmed host.
+  await runSpawnEdgeHook();
 }
 
 /**

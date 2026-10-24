@@ -11,6 +11,7 @@ import {
   type JsonValue,
 } from "@traycer/protocol/persistence/chat-sync/json";
 import {
+  snapshotArtifactOperationBlockSchema,
   snapshotChatEventSchema,
   snapshotContentBlockSchema,
   snapshotProviderNoticeMetadataSchema,
@@ -20,6 +21,7 @@ import { encodeChatShard } from "@traycer/protocol/persistence/chat-sync/shard";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import {
+  artifactOperationBlockSchema,
   contentBlockSchema,
   providerNoticeMetadataSchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -34,6 +36,7 @@ import {
 } from "@traycer/protocol/persistence/registry";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Harness ids in this contract are open strings.
@@ -391,13 +394,100 @@ describe("chat-sync session anchors", () => {
   });
 });
 
+/**
+ * The artifact kind on an `artifact_operation` block is an open string from
+ * chat-sync 1.8, for the same reason the harness ids are: a closed enum would
+ * let a kind added later reject the whole shard that holds the block, because
+ * `type: "artifact_operation"` is known and the carrier hands the block to the
+ * known schema.
+ */
+describe("chat-sync artifact operation kind", () => {
+  function artifactOperationBlock(kind: string): JsonObject {
+    return {
+      blockId: `b-artifact-${kind}`,
+      status: "completed",
+      timestamp: 30,
+      type: "artifact_operation",
+      parentBlockId: null,
+      operation: "create",
+      kind,
+      artifactId: `artifact-${kind}`,
+      title: "A page",
+      beforeHash: null,
+      afterHash: null,
+    };
+  }
+
+  function shardWithBlock(block: JsonObject): JsonObject {
+    return {
+      ...futureHarnessShard,
+      messages: [
+        {
+          role: "assistant",
+          messageId: "m-artifact",
+          sender: futureSender,
+          blocks: [block],
+          startedAt: null,
+          timestamp: 2,
+          turnId: null,
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      ],
+    };
+  }
+
+  it.each(["html", "slides"])(
+    "interprets a %s operation block and re-emits the shard losslessly",
+    (kind) => {
+      const shardJson = shardWithBlock(artifactOperationBlock(kind));
+      const shard = parseShard(shardJson);
+
+      const assistant = shard.messages[0].value;
+      if (assistant === null || assistant.role !== "assistant") {
+        throw new Error("expected an interpreted assistant message");
+      }
+      const block = assistant.blocks[0].value;
+      // Interpreted, not degraded to unknown-variant passthrough.
+      if (block === null || block.type !== "artifact_operation") {
+        throw new Error("expected an interpreted artifact operation block");
+      }
+      expect(block.kind).toBe(kind);
+
+      expect(encodeChatShard(shard)).toEqual(canonicalizeJsonValue(shardJson));
+    },
+  );
+
+  it("keeps the epic block closed on a kind it does not know, so only the chat-sync leaf is reopened", () => {
+    expect(
+      contentBlockSchema.safeParse(artifactOperationBlock("html")).success,
+    ).toBe(true);
+    expect(
+      contentBlockSchema.safeParse(artifactOperationBlock("slides")).success,
+    ).toBe(false);
+    expect(
+      snapshotContentBlockSchema.safeParse(artifactOperationBlock("slides"))
+        .success,
+    ).toBe(true);
+  });
+
+  it("still rejects an empty kind", () => {
+    expect(
+      snapshotContentBlockSchema.safeParse(artifactOperationBlock("")).success,
+    ).toBe(false);
+  });
+});
+
 describe("chat-sync harness-id leaf sweep", () => {
   // Round-tripped through JSON so the walker below sees plain data: Zod's
   // emitted schema can carry `undefined`-valued keys, which are not JSON.
   const surfaces: readonly JsonValue[] = [chatHeadSchema, chatShardSchema].map(
     (schema) =>
       jsonValueSchema.parse(
-        JSON.parse(JSON.stringify(z.toJSONSchema(schema, { io: "output" }))),
+        JSON.parse(
+          JSON.stringify(toCanonicalJsonSchema(schema, { io: "output" })),
+        ),
       ),
   );
 
@@ -598,6 +688,15 @@ describe("chat-sync derived schema forks", () => {
       [],
     );
   });
+
+  it("keeps the artifact operation block bound to the epic schema's live fields", () => {
+    expectDerivedFrom(
+      snapshotArtifactOperationBlockSchema.shape,
+      artifactOperationBlockSchema.shape,
+      ["kind"],
+      [],
+    );
+  });
 });
 
 describe("chat-sync content-block union parity", () => {
@@ -619,7 +718,7 @@ describe("chat-sync content-block union parity", () => {
           )
           .optional(),
       }),
-      z.toJSONSchema(schema, { io: "input" }),
+      toCanonicalJsonSchema(schema, { io: "input" }),
     );
     const options = jsonSchema.anyOf ?? jsonSchema.oneOf ?? [];
     return options.map((option) => option.properties[key].const).sort();

@@ -98,7 +98,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => null,
+    useHostClient: () => APP_WIDE_HOST_CLIENT,
   };
 });
 
@@ -108,6 +108,19 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => TAB_HOST_ID,
+}));
+
+// The attachment before a fork onto a team's host: passed straight through,
+// so every fork here goes on to `epic.createChat` as it did before.
+vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
+  isAttachEnvironmentUnsupported: () => false,
+  toastAttachEnvironmentNeedsOwnHost: () => undefined,
+  useEpicAttachEnvironment: () => ({
+    isPending: false,
+    mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {
+      options.onSuccess();
+    },
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -204,6 +217,10 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
 // only client the dialog is allowed to thread into a "fixed" scope.
 const TAB_HOST_CLIENT = buildHostClient(TAB_HOST_ID);
 
+// The app-wide client (`useHostClient()`), on a host of its own so nothing
+// the dialog threads into its fixed scope can be mistaken for it.
+const APP_WIDE_HOST_CLIENT = buildHostClient("app-wide-host-id");
+
 function forkTarget(): ChatForkDialogTarget {
   return {
     sourceChatId: "source-chat",
@@ -228,6 +245,7 @@ function forkTarget(): ChatForkDialogTarget {
     carriedInterviews: "settled",
     forkMode: "plain",
     initialHostId: null,
+    onlyHostIds: null,
   };
 }
 

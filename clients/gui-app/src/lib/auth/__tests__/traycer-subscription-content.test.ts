@@ -14,6 +14,7 @@ import {
   resolveTraycerSubscriptionState,
   selectSubscription,
   subscriptionPlanLabel,
+  usesCreditView,
 } from "@/lib/auth/traycer-subscription-content";
 
 const EPOCH = new Date(0);
@@ -37,22 +38,36 @@ function baseSubscription() {
 function userSub(overrides: {
   status: SubscriptionStatus;
   hasActiveBundle?: boolean;
+  totalPlanCredits?: number;
 }): TraycerUserSubscription {
   return {
     ...baseSubscription(),
     subscriptionStatus: overrides.status,
     isInTrial: false,
     hasActiveBundle: overrides.hasActiveBundle,
+    // Omitted (not set to undefined) when the caller passes none, so the
+    // "server reported no plan credits" case is the property being absent.
+    ...(overrides.totalPlanCredits === undefined
+      ? {}
+      : { totalPlanCredits: overrides.totalPlanCredits }),
   };
 }
 
 function teamSub(teamId: string): TraycerTeamSubscription {
+  return teamSubWith(teamId, "ULTRA_1X_V3", 500);
+}
+
+function teamSubWith(
+  teamId: string,
+  status: SubscriptionStatus,
+  totalPlanCredits: number,
+): TraycerTeamSubscription {
   return {
     ...baseSubscription(),
     teamID: teamId,
-    subscriptionStatus: "ULTRA_1X_V3",
+    subscriptionStatus: status,
     isInTrial: false,
-    totalPlanCredits: 500,
+    totalPlanCredits,
     hasActiveBundle: false,
     bundleSummary: { bundleTotal: 0, bundleConsumed: 0, bundleRemaining: 0 },
     team: {
@@ -89,6 +104,8 @@ function userWith(
     userSubscription,
     payAsYouGoUsage: { allowPayAsYouGo: false },
     teamSubscriptions: teams,
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
 
@@ -105,6 +122,59 @@ describe("isPaid / isCreditBasedPricing", () => {
     expect(isCreditBasedPricing("FREE")).toBe(true);
     expect(isCreditBasedPricing("PRO_PLUS_V2")).toBe(false);
     expect(isCreditBasedPricing("PRO_LEGACY")).toBe(false);
+  });
+});
+
+describe("usesCreditView", () => {
+  const LEGACY_STATUSES: readonly SubscriptionStatus[] = [
+    "PRO_LEGACY",
+    "PRO_PLUS_V2",
+  ];
+  const CREDIT_STATUSES: readonly SubscriptionStatus[] = ["PRO_V3", "FREE"];
+
+  it.each(LEGACY_STATUSES)(
+    "shows the credit view for %s once plan credits are reported",
+    (status) => {
+      expect(usesCreditView(userSub({ status, totalPlanCredits: 30 }))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(LEGACY_STATUSES)(
+    "keeps the rate-limit view for %s with zero plan credits",
+    (status) => {
+      expect(usesCreditView(userSub({ status, totalPlanCredits: 0 }))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(LEGACY_STATUSES)(
+    "keeps the rate-limit view for %s with no plan credits reported",
+    (status) => {
+      expect(usesCreditView(userSub({ status }))).toBe(false);
+    },
+  );
+
+  it.each(CREDIT_STATUSES)(
+    "shows the credit view for %s with zero plan credits",
+    (status) => {
+      expect(usesCreditView(userSub({ status, totalPlanCredits: 0 }))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(CREDIT_STATUSES)(
+    "shows the credit view for %s with no plan credits reported",
+    (status) => {
+      expect(usesCreditView(userSub({ status }))).toBe(true);
+    },
+  );
+
+  it("shows the credit view for a legacy-status team subscription with plan credits", () => {
+    expect(usesCreditView(teamSubWith("team-1", "PRO_PLUS_V2", 30))).toBe(true);
   });
 });
 

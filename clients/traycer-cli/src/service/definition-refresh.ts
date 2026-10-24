@@ -2,6 +2,7 @@ import { platform as osPlatform } from "node:os";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { ServiceLabel } from "./label";
 import { verifyServiceMutationAuthority } from "./mutation-authority";
+import { runAtStopTargetEdge } from "./stop-target";
 import {
   inspectLinuxServiceDefinition,
   refreshLinuxServiceDefinition,
@@ -52,7 +53,7 @@ export function createServiceDefinitionRefresher(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   const platform = osPlatform();
   if (platform === "darwin") {

@@ -211,13 +211,16 @@ function createSupportBridgeHarness(overrides: {
 function createBaseRunnerHost(): IRunnerHost {
   return {
     browserView: null,
+    sandboxArtifacts: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
     refreshHostFleet: () => Promise.resolve(),
     onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
+    poolBaseUrl: "",
     hasLocalHost: true,
+    sandboxControlUnavailableReason: null,
     canCopyImages: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
@@ -227,6 +230,28 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCatalogue: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    createSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    destroySandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    patchSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    keepSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    runSandboxVerb: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxAutomation: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    openSandboxAutomation: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getTeamEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    getEnvironmentProviders: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    decideSecretRequest: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintExecutableWriteGrant: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
     revokeUserSession: () =>
       Promise.resolve({ kind: "network-error" as const }),
@@ -296,9 +321,12 @@ function createBaseRunnerHost(): IRunnerHost {
         Promise.resolve("identity-unknown" as const),
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
+    onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
+    forceRestartUnresponsiveHost: () =>
+      Promise.resolve({ kind: "restarted" as const }),
     getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,
     traycerCli: null,
@@ -309,6 +337,7 @@ function createBaseRunnerHost(): IRunnerHost {
     zoom: null,
     pushPermission: null,
     systemBack: null,
+    statusBarTap: null,
   };
 }
 

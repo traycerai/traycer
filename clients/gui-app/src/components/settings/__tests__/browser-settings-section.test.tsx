@@ -617,7 +617,7 @@ describe("<BrowserSettingsSection /> Agents group", () => {
     useSettingsStore.setState({ browserDevOrigins: [] });
   });
 
-  it("renders the Agents group with only the passed row when the host cannot advertise access and no origins exist", () => {
+  it("renders the Agents group with only the passed row when no origins exist", () => {
     hostBinding.current = {};
     useSettingsStore.setState({ browserDevOrigins: [] });
     renderSection(controller({ enabled: true }), null);
@@ -626,11 +626,30 @@ describe("<BrowserSettingsSection /> Agents group", () => {
     expect(group.contains(screen.getByTestId("agent-opened-tabs-stub"))).toBe(
       true,
     );
+    // The agent-access switch moved to Personal > Browser agent access; the
+    // Browser page never draws it, whatever the host advertises.
     expect(
       screen.queryByRole("switch", {
         name: "Let agents use the in-app browser",
       }),
     ).toBeNull();
     expect(screen.queryByText("Detected dev origins")).toBeNull();
+  });
+
+  it("renders the passed row and the detected origins, and still no access switch", () => {
+    hostBinding.current = {};
+    useSettingsStore.setState({ browserDevOrigins: ["http://localhost:3000"] });
+    renderSection(controller({ enabled: true }), null);
+
+    const group = screen.getByTestId("settings-browser-agents");
+    expect(group.contains(screen.getByTestId("agent-opened-tabs-stub"))).toBe(
+      true,
+    );
+    expect(group.contains(screen.getByText("Detected dev origins"))).toBe(true);
+    expect(
+      screen.queryByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeNull();
   });
 });

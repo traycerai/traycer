@@ -34,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -71,6 +72,7 @@ import {
   useRemoteFolderPickerStore,
   type FolderPickerIntent,
 } from "@/stores/workspace/remote-folder-picker-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * Folder picker for hosts the client cannot open a native OS dialog for
@@ -716,6 +718,7 @@ function PickerRow(props: {
   const longPress = useLongPress({
     onLongPress: props.onShowFullPath,
     disabled: false,
+    acceptsMouse: false,
   });
   return (
     // Hover is the pointer's half of the long-press: `useLongPress` is touch
@@ -1106,7 +1109,7 @@ function useKeyboardDirectoryAim(args: {
   const [keyboardAim, setKeyboardAim] = useState<KeyboardDirectoryAim | null>(
     null,
   );
-  const hostId = args.client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(args.client);
   const aimedAddTarget =
     keyboardAim !== null &&
     args.pathInput.source === "navigation" &&
@@ -1201,12 +1204,13 @@ function handlePickerFieldKeys(
     actions.openSelectedRow();
     return;
   }
-  if (event.key === "ArrowDown") {
+  const navigationKey = listNavigationKey(event);
+  if (navigationKey === "ArrowDown") {
     event.preventDefault();
     actions.moveSelection(1);
     return;
   }
-  if (event.key === "ArrowUp") {
+  if (navigationKey === "ArrowUp") {
     event.preventDefault();
     actions.moveSelection(-1);
   }

@@ -294,6 +294,50 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect(host.requestHostRespawnCalls).toBe(2);
   });
 
+  it("restarts through forceRestartUnresponsiveHost only for the offer the host reports unresponsive", async () => {
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: "The host is no longer unresponsive.",
+    });
+    expect(host.requestHostRespawnCalls).toBe(0);
+
+    host.setLocalHostUnresponsive({
+      pid: 4242,
+      offerId: 7,
+      unreachableForMs: 600_000,
+    });
+    // A pid or an offer id other than the reported one is declined.
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 9999, offerId: 7 }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: "The host is no longer unresponsive.",
+    });
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 8 }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: "The host is no longer unresponsive.",
+    });
+    expect(host.requestHostRespawnCalls).toBe(0);
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 }),
+    ).resolves.toEqual({ kind: "restarted" });
+    expect(host.requestHostRespawnCalls).toBe(1);
+  });
+
   it("reflects the authnBaseUrl option on the constructed host", () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",

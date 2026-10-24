@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import {
   HostSwitcher,
+  type HostSwitcherComposerMode,
   type HostSwitcherSurface,
 } from "@/components/settings/host-scope/host-switcher";
 import {
@@ -52,6 +53,11 @@ interface HostSectionProps {
   /** A host list request FAILED, so an empty `hosts` proves nothing. */
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
+  /**
+   * The composer and new-terminal pickers' mode, where a pick only stages;
+   * `null` for the scoped tools. See `HostSwitcherComposerMode`.
+   */
+  readonly composer: HostSwitcherComposerMode | null;
 }
 
 interface WorkspaceHostSwitcherProps extends HostSectionProps {
@@ -97,6 +103,8 @@ export function WorkspaceHostSwitcher(
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists}
       updateViewForHost={null}
+      composer={props.composer}
+      environmentLabelForHost={null}
       disabled={props.disabled}
       keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
     />

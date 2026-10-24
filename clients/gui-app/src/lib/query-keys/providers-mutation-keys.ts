@@ -3,6 +3,8 @@ export const providersMutationKeys = {
   addCustomPath: () => ["providers.addCustomPath"] as const,
   removeCustomPath: () => ["providers.removeCustomPath"] as const,
   setEnabled: () => ["providers.setEnabled"] as const,
+  promoteToPersonal: () =>
+    ["providers.nativeMutate", "promoteToPersonal"] as const,
   setProfileEnabled: (hostId: string | null, providerId: string | null) =>
     ["providers.setProfileEnabled", hostId, providerId] as const,
   setApiKey: () => ["providers.setApiKey"] as const,
@@ -17,6 +19,10 @@ export const providersMutationKeys = {
   clearProfileApiKey: () => ["providers.clearProfileApiKey"] as const,
   setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
   setAutoJudge: () => ["providers.setAutoJudge"] as const,
+  setNativeSubagents: () => ["providers.setNativeSubagents"] as const,
+  resetSettingsFile: () => ["providers.settingsFile.reset"] as const,
+  resetProviderSettings: () =>
+    ["providers.settingsFile.resetProvider"] as const,
   setEnvOverride: () => ["providers.setEnvOverride"] as const,
   deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
   startLogin: () => ["providers.startLogin"] as const,

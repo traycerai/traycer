@@ -8,8 +8,8 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Check a branch before merging it: the Actions tab, or
-  # `gh workflow run pre-commit.yml --ref <branch>`.
+  # A manual trigger for a sparing branch run, when a check is actually
+  # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:
@@ -25,14 +25,14 @@ concurrency:
 jobs:
   workspace-checks:
     name: ${{ matrix.lane }}
-    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
-    # PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main` skips this job: the merge to `main` runs it once.
+    # A fork PR, a bot PR and a PR into any other branch run it in full.
     if: >-
       github.event_name != 'pull_request'
       || github.base_ref != 'main'
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -60,7 +60,7 @@ jobs:
         with:
           fetch-depth: 0 # nx affected needs history to diff against the base
       # A push run is compared with the last push this workflow PASSED on, not
-      # with the push before it. A team PR runs no check before it merges, so a
+      # with the push before it. A team PR is not tested before it merges, so a
       # red merge would otherwise be forgotten by the next one: A breaks the
       # compile, B changes a doc, B's range is only the doc, and the green run
       # on B makes the tip look shippable. From the last green push, B's range
@@ -131,8 +131,8 @@ jobs:
   pre-commit:
     name: pre-commit
     needs: workspace-checks
-    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
-    # PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main` skips this job: the merge to `main` runs it once.
+    # A fork PR, a bot PR and a PR into any other branch run it in full.
     if: >-
       always() && (
         github.event_name != 'pull_request'
@@ -140,7 +140,7 @@ jobs:
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Require every workspace lane
         env:

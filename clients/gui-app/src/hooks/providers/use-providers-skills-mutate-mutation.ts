@@ -1,19 +1,25 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProvidersSkillsMutateAction,
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import { useHostClient } from "@/lib/host";
+import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
   mapNativeMutateToSkillsMutate,
   type SkillsListData,
   type SkillsMutateData,
 } from "@/hooks/providers/native-response-map";
-import { providersMutationKeys } from "@/lib/query-keys";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import {
   isNativeSkillsListQueryKey,
   providersNativeQueryKeys,
@@ -21,6 +27,8 @@ import {
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 export type SkillsMutateVariables = {
+  /** Captured by the team surface; never read again when a queued write resumes. */
+  readonly environmentId?: string | null;
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
@@ -52,6 +60,8 @@ export function useProvidersSkillsMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  // What this installs can run on the host, so it carries the grant.
+  const grant = useExecutableWriteGrant();
   return useMutation<
     SkillsMutateData,
     HostRpcError,
@@ -60,15 +70,37 @@ export function useProvidersSkillsMutate(): UseMutationResult<
   >({
     mutationKey: providersMutationKeys.skillsMutate(),
     mutationFn: async (variables) => {
-      const response = await client.request("providers.nativeMutate", {
-        providerId: variables.providerId,
-        mutation: {
-          kind: "skills",
-          scope: variables.scope,
-          workspaceRoot: variables.workspaceRoot,
-          mutation: variables.mutation,
+      const environmentId = variables.environmentId ?? null;
+      if (environmentId !== null)
+        cloudVerdictPreflight("providers.nativeMutate")();
+      const request = await grant<
+        RequestOfMethod<HostRpcRegistry, "providers.nativeMutate">
+      >(
+        {
+          providerId: variables.providerId,
+          executableWriteGrant: null,
+          expectedEnvironmentId: environmentId,
+          mutation: {
+            kind: "skills",
+            scope: variables.scope,
+            workspaceRoot: variables.workspaceRoot,
+            mutation: variables.mutation,
+          },
         },
-      });
+        client,
+      );
+      const response =
+        environmentId === null
+          ? await client.request("providers.nativeMutate", request)
+          : await client.requestWithSignalRequiringHostMethodVersion(
+              "providers.nativeMutate",
+              request,
+              undefined,
+              {
+                method: "providers.nativeMutate",
+                version: { major: 1, minor: 4 },
+              },
+            );
       return mapNativeMutateToSkillsMutate({ response });
     },
     onMutate: (variables) => ({
@@ -102,6 +134,23 @@ export function useProvidersSkillsMutate(): UseMutationResult<
       }
     },
     onError: (error, variables, ctx) => {
+      // A dispatch refusal wrote nothing; the tab names the update remedy.
+      if (error instanceof HostMethodVersionUnsatisfiedError) return;
+      if (
+        isProviderNativeRpcError(error) &&
+        error.nativeCode === "environment_mismatch"
+      ) {
+        // The refusal proves this host is no longer a team source. Do not
+        // refetch its native list, which could now describe Personal.
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            hostQueryKeys.matchesMethodOnAnyHost(
+              query.queryKey,
+              "environment.host.list",
+            ),
+        });
+        return;
+      }
       // Any write may land partially before the host reports an error. Inspect
       // is excluded because it never writes.
       if (

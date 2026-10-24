@@ -53,6 +53,10 @@ const testState = vi.hoisted((): TestState => ({
   cloudKnownChatIds: new Set(),
 }));
 
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: undefined }),
+}));
+
 vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicArtifact: (id: string) =>
@@ -97,6 +101,16 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
+// The canvas reads the chat host's directory row (the serving witness), which
+// needs a host runtime this suite does not mount; no row is the answer for a
+// host with no runtime.
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -206,9 +220,11 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
         hostLabel={props.hostLabel}
         reason={props.reason}
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={props.showsPublishedCopy}
         onClone={() => undefined}
+        continueTargetLabel={null}
         cloning={false}
         className={undefined}
         testId={props.testId}
@@ -259,7 +275,14 @@ describe("published-copy substitution renders exactly one dead-tile banner", () 
       screen.getByTestId(`published-chat-dead-tile-${CHAT.id}`),
     ).not.toBeNull();
     expect(screen.queryByTestId(`chat-dead-tile-${CHAT.id}`)).toBeNull();
-    expect(screen.getByText(/Bound host "host-A" is offline/)).not.toBeNull();
+    // The mocked host label equals the host id, so the banner names no host.
+    const bannerText = screen.getByTestId(
+      `published-chat-dead-tile-${CHAT.id}`,
+    ).textContent;
+    expect(bannerText).toContain(
+      "Clone this agent to continue while the host is offline; the original stays there.",
+    );
+    expect(bannerText).not.toContain("host-A");
   });
 
   it("for a same-host offline owner with a cloud copy: still one banner", async () => {

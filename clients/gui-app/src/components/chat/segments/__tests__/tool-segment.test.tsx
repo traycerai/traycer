@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
+import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { ToolSegment } from "@/components/chat/segments/tool-segment";
@@ -44,7 +45,7 @@ function inputProps(toolName: string, input: unknown) {
     inputSummary: deriveToolInputSummary(toolName, input),
     inputDetail: deriveToolInputDetail(toolName, input),
     imageResults: [],
-    page: null,
+    artifact: null,
     mcpApp: null,
   };
 }
@@ -185,6 +186,33 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "active-host-1",
 }));
 
+const hostDirectoryMocks = vi.hoisted(() => ({
+  labels: new Map<string, string>(),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) => {
+    if (hostId === null) return null;
+    const label = hostDirectoryMocks.labels.get(hostId);
+    return label === undefined ? null : { hostId, label };
+  },
+}));
+
+// The row-routing suite below stubs the stamp-driven row so it can
+// assert the SELECTION (which row, with which stamp/fallback) without
+// standing up each row's own scope/store dependencies - those are each
+// row's own test file's job. No other test in this file stamps `artifact`, so these stubs never engage outside that suite.
+vi.mock("@/components/chat/segments/artifact-row", () => ({
+  // Deliberately renders neither the stamp nor the fallback: the routing
+  // suite below asserts SELECTION, and a stub that painted its fallback
+  // (the real generic row) would make "which row rendered" indistinguishable
+  // from "the fallback's own content happens to be present".
+  ArtifactRow: (_props: {
+    readonly artifact: ToolCallArtifactStamp | null;
+    readonly fallback: ReactNode;
+  }) => <div data-testid="artifact-row-stub" />,
+}));
+
 interface OpenA2ASendButtonProps {
   readonly label: string;
   readonly segmentId: string;
@@ -244,6 +272,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -307,6 +336,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           }}
           managedCommand={null}
           agentMessageReceipt={null}
+          agentMessageDelivery={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -347,6 +377,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           }}
           managedCommand={null}
           agentMessageReceipt={null}
+          agentMessageDelivery={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -380,6 +411,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -394,6 +426,58 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     expect(screen.getByText("shell")).toBeTruthy();
     expect(screen.queryByText("Sent message")).toBeNull();
+  });
+
+  it("keeps an A2A send on its own card even when the call carries image results", () => {
+    const { container } = render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-images"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: false,
+        })}
+        imageResults={[
+          {
+            attachmentHash: "hash-a2a",
+            mediaType: "image/png",
+            byteLength: 256,
+            width: null,
+            height: null,
+            alt: "stray image",
+            revisedPrompt: null,
+            filePath: null,
+          },
+        ]}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("Sent message")).toBeTruthy();
+    expect(screen.getByText("Receiver Agent")).toBeTruthy();
+    expect(container.querySelector("figure")).toBeNull();
+    expect(screen.queryByText("stray image")).toBeNull();
   });
 
   it("opens optimistic chat receivers with the active host fallback", () => {
@@ -412,6 +496,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -447,6 +532,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -504,6 +590,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           receiverAgentId: "agent-receiver-1",
           messageId: "receiver-message-1",
         }}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -556,6 +643,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         }}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -609,6 +697,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           receiverAgentId: "agent-receiver-tui-1",
           messageId: "receiver-message-1",
         }}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -669,6 +758,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           }}
           managedCommand={null}
           agentMessageReceipt={receipt}
+          agentMessageDelivery={null}
           isStreaming={false}
           endState={null}
           stopped={false}
@@ -788,6 +878,123 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
   });
 });
 
+describe("<ToolSegment /> cross-host send delivery", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    hostDirectoryMocks.labels = new Map();
+    cleanup();
+  });
+
+  function renderDelivery(
+    state: "queued" | "delivered" | "expired" | "failed" | null,
+    targetHostOffline: boolean,
+  ) {
+    hostDirectoryMocks.labels = new Map([["host-2", "Work Laptop"]]);
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-delivery"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please pick this up.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={
+          state === null
+            ? null
+            : {
+                targetHostId: "host-2",
+                eventId: "evt-1",
+                state,
+                targetHostOffline,
+              }
+        }
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+  }
+
+  // The host reports failures only (traycer#2421): a send nothing has failed
+  // is the plain sent card, with no tag, whatever host build stamped it.
+  it.each(["queued", "delivered"] as const)(
+    "renders a %s send to a host not seen offline as the plain sent card",
+    (state) => {
+      renderDelivery(state, false);
+      expect(screen.getByText("Sent message").className).toContain("sr-only");
+      expect(screen.queryByText("queued")).toBeNull();
+      expect(screen.queryByText(/Queued for/)).toBeNull();
+      expect(screen.queryByText(/Delivered on/)).toBeNull();
+      expect(screen.queryByText(/looked offline/)).toBeNull();
+    },
+  );
+
+  it("renders a send to a host seen offline as sent, with the offline note and no tag", () => {
+    renderDelivery("queued", true);
+    expect(
+      screen.getByText(
+        "Sent. Work Laptop looked offline; if it is not back online within 24 hours, this expires.",
+      ).className,
+    ).toContain("text-muted-foreground");
+    expect(screen.getByText("Sent message").className).toContain("sr-only");
+    expect(screen.queryByText("queued")).toBeNull();
+  });
+
+  // The note is status copy, not the message: chat find indexes the message
+  // body, so a search for "offline" must not land on the card's note.
+  it("marks the delivery note as skipped by chat find, collapsed and open", () => {
+    renderDelivery("queued", true);
+    const collapsed = screen.getAllByText(/looked offline/);
+    expect(collapsed.length).toBeGreaterThan(0);
+    for (const note of collapsed) {
+      expect(note.hasAttribute("data-find-skip")).toBe(true);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
+
+    const open = screen.getAllByText(/looked offline/);
+    expect(open.length).toBeGreaterThan(0);
+    for (const note of open) {
+      expect(note.hasAttribute("data-find-skip")).toBe(true);
+    }
+  });
+
+  it.each(["expired", "failed"] as const)(
+    "renders a %s send as not delivered with destructive styling",
+    (state) => {
+      renderDelivery(state, true);
+      const note = screen.getByText(/Not delivered: Work Laptop/);
+      expect(note.className).toContain("text-destructive");
+      // The badge paints its own fill: `bg-muted` collapses into raised surfaces.
+      const badge = screen.getByText("not delivered");
+      expect(badge.className).toContain("text-destructive");
+      expect(badge.className).not.toContain("bg-muted");
+      expect(screen.queryByText(/looked offline/)).toBeNull();
+    },
+  );
+
+  it("renders a null delivery exactly as the plain sent card", () => {
+    renderDelivery(null, false);
+    expect(screen.getByText("Sent message")).toBeTruthy();
+    expect(screen.queryByText(/looked offline/)).toBeNull();
+    expect(screen.queryByText(/Not delivered/)).toBeNull();
+    expect(screen.queryByText("queued")).toBeNull();
+  });
+});
+
 describe("<ToolSegment /> input rendering", () => {
   afterEach(() => {
     useToolOpenStore.getState().reset("default");
@@ -808,6 +1015,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -843,6 +1051,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -878,6 +1087,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -911,6 +1121,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -945,6 +1156,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -977,6 +1189,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -1008,6 +1221,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -1047,6 +1261,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -1079,6 +1294,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -1113,6 +1329,7 @@ describe("<ToolSegment /> input rendering", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped
@@ -1155,6 +1372,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -1191,6 +1409,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -1242,6 +1461,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming
         endState={null}
         stopped={false}
@@ -1287,6 +1507,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}
@@ -1316,6 +1537,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState="interrupted"
         stopped={false}
@@ -1339,6 +1561,7 @@ describe("<ToolSegment /> streaming heartbeat", () => {
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState="superseded"
         stopped={false}
@@ -1351,5 +1574,59 @@ describe("<ToolSegment /> streaming heartbeat", () => {
       />,
     );
     expect(screen.getByText("superseded")).toBeTruthy();
+  });
+});
+
+describe("<ToolSegment /> row routing", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    cleanup();
+  });
+
+  const ARTIFACT_STAMP: ToolCallArtifactStamp = {
+    artifactId: "art-1",
+    title: "My Artifact",
+    manifest: { files: {}, capturedAt: 0 },
+    originChatId: "chat-1",
+  };
+
+  function renderRouted(artifact: ToolCallArtifactStamp | null) {
+    return render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="routing-1"
+        toolName="Bash"
+        {...inputProps("Bash", { command: "echo hi" })}
+        artifact={artifact}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+  }
+
+  it("routes a stamped artifact call to the artifact row", () => {
+    renderRouted(ARTIFACT_STAMP);
+
+    expect(screen.getByTestId("artifact-row-stub")).toBeTruthy();
+    expect(screen.queryByText("Bash")).toBeNull();
+  });
+
+  it("falls through to the generic tool row when no artifact stamp is set", () => {
+    renderRouted(null);
+
+    expect(screen.queryByTestId("artifact-row-stub")).toBeNull();
+    expect(screen.getByText("Bash")).toBeTruthy();
   });
 });

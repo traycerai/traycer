@@ -505,9 +505,11 @@ export function installPackVersionRefusalMessage(
  * `detail` is operator-facing only.
  */
 export function packVersionUseRefusalMessage(
-  code: Extract<ProvidersUsePackVersionResult, { ok: false }>["code"],
+  result: Extract<ProvidersUsePackVersionResult, { ok: false }>,
 ): string {
-  switch (code) {
+  switch (result.code) {
+    case "macos-ineligible":
+      return `Needs macOS ${result.requiredMacos} or later. This Mac runs macOS ${result.runningMacos}.`;
     case "verification-failed":
       return "Could not verify this install before switching — the pin was not kept";
     case "below-security-floor":

@@ -100,6 +100,9 @@ export const ARTIFACT_KIND_OPTIONS: ReadonlyArray<EpicArtifactKind> = [
   "ticket",
   "story",
   "review",
+  "html",
+  "canvas",
+  "file",
 ];
 
 export const ARTIFACT_READ_OPTIONS: ReadonlyArray<{

@@ -9,6 +9,7 @@ import { useNewConversationModalStore } from "@/stores/epics/new-conversation-mo
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
@@ -31,6 +32,8 @@ import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
+import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
+import { useTerminalAccountMentionStore } from "@/stores/onboarding/terminal-account-mention-store";
 
 // Call-site regression guard for the full persist-name chain:
 //   catalog leaf (keys.ts) → STORE_KEYS[camelName] → the store's persist call.
@@ -84,6 +87,7 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:artifact-read-state",
   ],
   ["useGitPanelStore", useGitPanelStore, "traycer-gui-app:git-panel"],
+  ["usePrPanelStore", usePrPanelStore, "traycer-gui-app:pr-panel"],
   ["usePrPresenceStore", usePrPresenceStore, "traycer-gui-app:pr-presence"],
   [
     "useInitialChatHandoffStore",
@@ -148,6 +152,16 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
   ],
   ["useLayoutStore", useLayoutStore, "traycer-gui-app:layout"],
   ["useWatchHostStore", useWatchHostStore, "traycer-gui-app:watch-host"],
+  [
+    "useHostAccessPromptsStore",
+    useHostAccessPromptsStore,
+    "traycer-gui-app:host-access-prompts",
+  ],
+  [
+    "useTerminalAccountMentionStore",
+    useTerminalAccountMentionStore,
+    "traycer-gui-app:terminal-account-mention",
+  ],
 
   // ── Scoped singletons (initial `anon` bucket at construction) ─────────────
   [

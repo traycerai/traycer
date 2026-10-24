@@ -2874,6 +2874,12 @@ export default tseslint.config(
             "pdfViewer", // pdf.js, styled by pdf-preview.css
             "toaster", // sonner's own root class
             "cn-toast", // the hook sonner's toastOptions.classNames targets
+            "nokey", // XYFlow's capture-phase Shift selection opt-out
+            // The canvas's XYFlow noPanClassName / noWheelClassName: a
+            // dedicated name, because a utility class there would veto pans
+            // on any ancestor that happens to carry it.
+            "canvas-nopan",
+            "canvas-nowheel",
 
             // Markers with no CSS at all: a name a test's querySelector or a
             // sibling selector reaches for. Removing them would break the
@@ -3072,6 +3078,10 @@ export default tseslint.config(
     // Inlining these helpers at 34 call sites to satisfy it would be a worse
     // codebase, so the rule is off where the helper is used and stays on
     // everywhere else in those files' directories.
+    // `simulator-surface.tsx` reads `deviceMediaStyle(frame, rotation)` and
+    // `deviceFrameStyle(frame)` (`lib/simulator-view/simulator-input-encoding`),
+    // a measured box plus the rotation that turns a sideways device's
+    // portrait framebuffer - width, height, left, top and transform only.
     files: [
       "src/components/browser-tile/browser-viewport-frame.tsx",
       "src/components/chat/chat-progress-icon.tsx",
@@ -3099,6 +3109,7 @@ export default tseslint.config(
       "src/components/notifications/notifications-popover.tsx",
       "src/components/resources/resource-monitor-popover.tsx",
       "src/components/settings/panels/appearance-settings-panel.tsx",
+      "src/components/simulator-tile/simulator-surface.tsx",
       "src/components/ui/hover-card.tsx",
       "src/components/ui/shimmer.tsx",
       "src/components/ui/start-truncated-text.tsx",

@@ -27,6 +27,7 @@ import {
   ProviderLoginRefusalAction,
   ProviderLoginRefusalMessage,
 } from "@/components/providers/provider-login-refusal";
+import { providerHostBlock } from "@/components/providers/provider-signin-availability";
 import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 import {
   AddProfileIdentityStep,
@@ -36,6 +37,8 @@ import {
   useProviderProfileLoginFlow,
   type ProviderProfileLoginFlow,
 } from "./use-provider-profile-login-flow";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 function noop(): void {}
 
@@ -72,6 +75,10 @@ export function ProviderProfileReauthPanel({
   onDone,
 }: ProviderProfileReauthPanelProps): ReactNode {
   const openLink = useOpenLink();
+  // The floor under every way in (Sign in, Switch account, a deep link's
+  // auto-reauth): on a sandbox no sign-in starts, not even the automatic one
+  // this panel runs on mount.
+  const credentialRefusal = useHostCredentialRefusal(null);
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
@@ -91,7 +98,9 @@ export function ProviderProfileReauthPanel({
   // profile was when the user started, and everything below wants exactly it.
   const [entryProfile] = useState(profile);
   const supportsLoginOwnership = useProvidersLoginOwnership();
+  const hostBlock = providerHostBlock(state, "sign-in");
   const flow = useProviderProfileLoginFlow({
+    hostBlock,
     supportsLoginOwnership,
     mode: "reauth",
     providerId: state.providerId,
@@ -130,8 +139,9 @@ export function ProviderProfileReauthPanel({
   const showIdentityCard = showIdentity && !handingOff;
 
   const start = useCallback((): void => {
+    if (credentialRefusal !== null) return;
     flow.start({ label: null, shareSkillsAndPlugins: false });
-  }, [flow]);
+  }, [credentialRefusal, flow]);
 
   const cancel = (): void => {
     flow.cancel();
@@ -145,10 +155,12 @@ export function ProviderProfileReauthPanel({
   };
 
   useEffect(() => {
-    if (startedRef.current) return;
+    // Not latched while refused, so the automatic start is never spent on a
+    // sign-in that was not allowed to begin.
+    if (startedRef.current || credentialRefusal !== null) return;
     startedRef.current = true;
     start();
-  }, [start]);
+  }, [credentialRefusal, start]);
 
   // One-shot on its own ref, not on the dep list: the caller's handler is an
   // inline closure, so deps alone would re-fire this on every render the
@@ -165,6 +177,19 @@ export function ProviderProfileReauthPanel({
     handedOffRef.current = true;
     onSameAccountReconnected(flow.state.profile);
   }, [flow.state, handingOff, onSameAccountReconnected]);
+
+  if (credentialRefusal !== null) {
+    return (
+      <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+        <CredentialRefusalNote refusal={credentialRefusal} />
+        <div>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
@@ -196,6 +221,7 @@ export function ProviderProfileReauthPanel({
           void openLink(url, "auth", null);
         }}
         onCancel={cancel}
+        retryBlocked={hostBlock?.kind === "macos"}
         onRetry={start}
         onSignInAgain={signInAgain}
         onDone={onDone}
@@ -218,6 +244,7 @@ function ProviderProfileReauthState({
   onOpenExternalLink,
   onCancel,
   onRetry,
+  retryBlocked,
   onSignInAgain,
   onDone,
 }: {
@@ -237,6 +264,7 @@ function ProviderProfileReauthState({
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
+  readonly retryBlocked: boolean;
   readonly onSignInAgain: () => void;
   readonly onDone: () => void;
 }): ReactNode {
@@ -314,6 +342,7 @@ function ProviderProfileReauthState({
         showIdentity={showIdentity}
         identityChanged={identityChanged}
         onCancel={onCancel}
+        retryBlocked={retryBlocked}
         onRetry={onRetry}
         onSignInAgain={onSignInAgain}
         onDone={onDone}
@@ -329,6 +358,7 @@ function ProviderProfileReauthActions({
   identityChanged,
   onCancel,
   onRetry,
+  retryBlocked,
   onSignInAgain,
   onDone,
 }: {
@@ -338,6 +368,7 @@ function ProviderProfileReauthActions({
   readonly identityChanged: boolean;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
+  readonly retryBlocked: boolean;
   readonly onSignInAgain: () => void;
   readonly onDone: () => void;
 }): ReactNode {
@@ -359,7 +390,7 @@ function ProviderProfileReauthActions({
             type="button"
             size="sm"
             variant="secondary"
-            disabled={flow.busy}
+            disabled={flow.busy || retryBlocked}
             onClick={onRetry}
           >
             {flow.busy ? <MutedAgentSpinner /> : null}

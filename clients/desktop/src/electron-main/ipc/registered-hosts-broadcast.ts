@@ -90,26 +90,23 @@ export function createRegisteredHostsPublisher(
  * module makes is not reachable from that test realm. Pinning it would mean
  * injecting the timer factory - a production seam added purely for a test - and
  * that was judged not worth it. The cadence and disposal ARE pinned; `unref` is
- * not, and this note is here so nobody reads three green arms as covering it.
+ * not, and this note is here so nobody reads the green arms as covering it.
  */
 export function registerRegisteredHostsBroadcast(
   bridge: RegisteredHostsBroadcastBridge,
   fleet: DesktopHostFleetSource,
 ): void {
   const timer = setInterval(() => {
-    // Skipped while the local host is pushing the registry to this process
-    // (`local-host-inventory-subscription.ts`): that push arrives through
-    // `acceptPushedRows`, which is the same adoption this tick's `refresh()`
-    // performs, from a read the host made anyway. Two readers of one lease is
-    // exactly the duplication this module exists to collapse.
-    //
-    // Read per TICK rather than used to stop and restart the timer, so the
-    // cadence has one owner and one lifetime. A flag that got stuck `true`
-    // would be the only way this could silence the fallback, and the
-    // subscription sets it `false` for every way its stream can be less than
-    // healthy - a drop, a host restart, a method the host does not serve, or
-    // rows the host itself marked stale.
-    if (fleet.isPushActive()) return;
+    // NOT skipped while the local host is pushing the registry to this process
+    // (`local-host-inventory-subscription.ts`). The push cannot stand in for
+    // this read: the host reads with its device credential, which authn scopes
+    // to the owner's personal hosts, so its rows never include a team's hosts.
+    // Only this user-bearer read returns those, and a tick skipped for the
+    // push froze them - a teammate's suspended sandbox still read as awake in
+    // a member's directory minutes later, and a new one did not appear. The
+    // fleet merges the two by scope (`RegistryScope` in
+    // `desktop-selection-ports.ts`): the push refreshes the personal rows
+    // between ticks, and this read owns the team rows.
     void fleet.refresh();
   }, REGISTERED_HOSTS_POLL_MS);
   // The cadence must never be what keeps the main process alive.

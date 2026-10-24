@@ -7,6 +7,7 @@ import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registr
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { chatSyncSchemaSurfaceBaseline } from "./__fixtures__/chat-sync-schema-surface";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Frozen surface of the registered `chat-head` / `chat-shard` contract.
@@ -62,25 +63,25 @@ describe("registered chat-sync persistence surface is frozen", () => {
   );
 
   it("head storage (wire projection) JSON Schema matches the baseline", () => {
-    expect(z.toJSONSchema(chatHeadStorageSchema, { io: "input" })).toEqual(
-      chatSyncSchemaSurfaceBaseline.head.storage,
-    );
+    expect(
+      toCanonicalJsonSchema(chatHeadStorageSchema, { io: "input" }),
+    ).toEqual(chatSyncSchemaSurfaceBaseline.head.storage);
   });
 
   it("head domain (default/output) JSON Schema matches the baseline", () => {
-    expect(z.toJSONSchema(chatHeadSchema)).toEqual(
+    expect(toCanonicalJsonSchema(chatHeadSchema, {})).toEqual(
       chatSyncSchemaSurfaceBaseline.head.domain,
     );
   });
 
   it("shard storage (wire projection) JSON Schema matches the baseline", () => {
-    expect(z.toJSONSchema(chatShardStorageSchema, { io: "input" })).toEqual(
-      chatSyncSchemaSurfaceBaseline.shard.storage,
-    );
+    expect(
+      toCanonicalJsonSchema(chatShardStorageSchema, { io: "input" }),
+    ).toEqual(chatSyncSchemaSurfaceBaseline.shard.storage);
   });
 
   it("shard domain (default/output) JSON Schema matches the baseline", () => {
-    expect(z.toJSONSchema(chatShardSchema)).toEqual(
+    expect(toCanonicalJsonSchema(chatShardSchema, {})).toEqual(
       chatSyncSchemaSurfaceBaseline.shard.domain,
     );
   });
@@ -203,8 +204,12 @@ describe("chat-sync storage projections describe the wire", () => {
     // `residual` is an internal domain-side field; it must not appear as a
     // property or a requirement of anything a writer puts on the wire.
     for (const surface of [
-      JSON.stringify(z.toJSONSchema(chatHeadStorageSchema, { io: "input" })),
-      JSON.stringify(z.toJSONSchema(chatShardStorageSchema, { io: "input" })),
+      JSON.stringify(
+        toCanonicalJsonSchema(chatHeadStorageSchema, { io: "input" }),
+      ),
+      JSON.stringify(
+        toCanonicalJsonSchema(chatShardStorageSchema, { io: "input" }),
+      ),
       JSON.stringify(chatSyncSchemaSurfaceBaseline.head.storage),
       JSON.stringify(chatSyncSchemaSurfaceBaseline.shard.storage),
     ]) {
@@ -224,7 +229,7 @@ describe("chat-sync storage projections describe the wire", () => {
           }),
         }),
       }),
-      z.toJSONSchema(chatHeadStorageSchema, { io: "input" }),
+      toCanonicalJsonSchema(chatHeadStorageSchema, { io: "input" }),
     );
 
     expect(parsed.required).toEqual(

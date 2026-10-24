@@ -36,9 +36,11 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 import type {
+  ImageGenerationResult,
   WorkflowActivityEntry,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { ToolImageGallery } from "./tool-image-gallery";
 import {
   cleanSubagentNotificationText,
   subagentHasChildText,
@@ -64,6 +66,7 @@ interface SubagentSegmentProps {
   id: string;
   /** Original transcript block identity for navigation and focus return. */
   cardId: string;
+  toolImageResults: ReadonlyArray<ImageGenerationResult>;
   name: string | null;
   agentType: string | null;
   task: string | null;
@@ -125,6 +128,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
   const {
     id,
     cardId,
+    toolImageResults,
     name,
     agentType,
     task,
@@ -164,6 +168,10 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
     cardId,
     variant === "row" ? "bare" : "cell",
   );
+  const imageGallery =
+    toolImageResults.length === 0 ? null : (
+      <ToolImageGallery id={cardId} imageResults={toolImageResults} />
+    );
 
   const displayTask = cleanSubagentNotificationText(task);
   const displayName = cleanSubagentNotificationText(name) ?? "Subagent";
@@ -287,7 +295,7 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
         headerFindUnitId={headerFindUnitId}
         bodyFindUnitId={null}
         className={undefined}
-        footer={null}
+        footer={imageGallery}
       />
     );
   }
@@ -297,8 +305,17 @@ function CompactSubagentSegment(props: CompactSubagentSegmentProps) {
       onOpenChange={handleOpenChange}
       header={header}
       headerAction={headerAction}
-      collapsedPreview={null}
-      body={body}
+      collapsedPreview={imageGallery}
+      body={
+        imageGallery === null ? (
+          body
+        ) : (
+          <div className="flex flex-col gap-2">
+            {body}
+            {imageGallery}
+          </div>
+        )
+      }
       tone="default"
       headerPosition="normal"
       bodyOverflow="hidden"
@@ -316,6 +333,7 @@ function PromotedSubagentSegment(
   const {
     id,
     cardId,
+    toolImageResults,
     name,
     agentType,
     task,
@@ -351,6 +369,10 @@ function PromotedSubagentSegment(
   const displayTask = cleanSubagentNotificationText(task);
   const dedupedProgress = useSubagentProgressItems(progressUpdates, nested);
   const headerAction = useOpenAsChatHeaderAction(cardId, "cell");
+  const imageGallery =
+    toolImageResults.length === 0 ? null : (
+      <ToolImageGallery id={cardId} imageResults={toolImageResults} />
+    );
   const lastProgress = dedupedProgress.at(-1)?.text ?? null;
   // Collapsed line shows live progress only. Finished cards omit it because
   // the final result is visible in the expanded body and duplicates the title.
@@ -413,6 +435,9 @@ function PromotedSubagentSegment(
           />
         </div>
       </CollapsibleContent>
+      {imageGallery === null ? null : (
+        <div className="px-3 py-2.5">{imageGallery}</div>
+      )}
     </Collapsible>
   );
 }

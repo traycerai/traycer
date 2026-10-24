@@ -20,6 +20,7 @@ import {
   type WorktreeBranchPickerController,
   type WorktreeBranchPickerProps,
 } from "@/components/home/worktree/worktree-branch-picker-model";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 
 export function useWorktreeBranchPickerController(
   props: WorktreeBranchPickerProps,
@@ -178,13 +179,15 @@ export function useWorktreeBranchPickerController(
 
   const handleContentKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>): void => {
-      if (event.key === "ArrowDown") {
+      const navigationKey = listNavigationKey(event);
+
+      if (navigationKey === "ArrowDown") {
         event.preventDefault();
         moveActiveEntry(1);
         return;
       }
 
-      if (event.key === "ArrowUp") {
+      if (navigationKey === "ArrowUp") {
         event.preventDefault();
         moveActiveEntry(-1);
         return;

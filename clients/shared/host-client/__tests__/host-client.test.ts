@@ -1,5 +1,5 @@
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -26,6 +26,7 @@ import type { HostDirectoryEntry } from "../host-directory";
 import type { RemoteHostDirectoryEntry } from "../remote-fetcher";
 import { WsRpcClient } from "../../host-transport/ws-rpc-client";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   type RequiredHostMethodVersion,
 } from "../../host-transport/host-messenger";
@@ -42,6 +43,7 @@ import type {
   ClientRequestFrame,
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { removeNativeAbortHelpers } from "../../auth/__tests__/no-native-abort-helpers";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -811,6 +813,76 @@ describe("HostClient", () => {
     expect(dialed).toHaveLength(0);
   });
 
+  describe("request authority without AbortSignal.any", () => {
+    // `AbortSignal.any` landed in Chromium 116. An Android WebView 114 lacks
+    // it, and the unconditional call in `captureAuthority` threw a TypeError
+    // before the request coordinator ran, failing every host RPC (#2308).
+    const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+
+    beforeEach(() => {
+      Object.defineProperty(AbortSignal, "any", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    afterEach(() => {
+      if (nativeAny === undefined) {
+        Reflect.deleteProperty(AbortSignal, "any");
+      } else {
+        Object.defineProperty(AbortSignal, "any", nativeAny);
+      }
+    });
+
+    it("dispatches a request to the messenger", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      client.setRequestContext(makeContext("user-1", "tok-1"));
+
+      await expect(requester.request("host.ping", {})).resolves.toEqual({
+        pong: true,
+      });
+      expect(messenger.calls).toHaveLength(1);
+    });
+
+    it("aborts an in-flight request when its request context aborts", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      messenger.setHandlers({
+        "host.ping": () => new Promise<never>(() => {}),
+      });
+      const context = makeContext("user-1", "tok-1");
+      client.setRequestContext(context);
+
+      const outcome = requester.request("host.ping", {}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(messenger.calls).toHaveLength(1);
+
+      context.abort("identity-transition");
+
+      expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
+    });
+
+    it("aborts an in-flight request when the binding generation ends", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      messenger.setHandlers({
+        "host.ping": () => new Promise<never>(() => {}),
+      });
+      client.setRequestContext(makeContext("user-1", "tok-1"));
+
+      const outcome = requester.request("host.ping", {}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(messenger.calls).toHaveLength(1);
+
+      client.getAuthorityRegistry().dispose();
+
+      expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
+    });
+  });
+
   describe("requestWithOptions", () => {
     const timedSchedulingPolicy: RpcSchedulingPolicy<typeof registry> = {
       modeFor: () => "latest",
@@ -1047,5 +1119,62 @@ describe("HostClient", () => {
         client.requestWithOptions("host.ping", {}, options),
       ).rejects.toThrow();
     });
+  });
+});
+
+describe("HostClient request authority on a WebView without AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The abort signal the messenger was handed for the one request sent. */
+  async function sendOneRequest(
+    client: HostClient<typeof registry>,
+    requester: HostClient<typeof registry>,
+    messenger: MockHostMessenger<typeof registry>,
+  ): Promise<AbortSignal> {
+    const result = await requester.request("host.ping", {});
+    expect(result).toEqual({ pong: true });
+    expect(client.getRequestContext()).not.toBeNull();
+    const call = messenger.calls.at(-1);
+    if (call === undefined) {
+      throw new Error("the messenger received no request");
+    }
+    return call.authority.abortSignal;
+  }
+
+  it("still runs the request, with an authority signal that has not fired", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+
+    const signal = await sendOneRequest(client, requester, messenger);
+
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("aborts the authority signal when the request context aborts", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    const context = makeContext("user-1", "tok-1");
+    client.setRequestContext(context);
+    const signal = await sendOneRequest(client, requester, messenger);
+    expect(signal.aborted).toBe(false);
+
+    context.abort("signed out");
+
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("aborts the authority signal when the host binding is retired", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+    const signal = await sendOneRequest(client, requester, messenger);
+    expect(signal.aborted).toBe(false);
+
+    client.getAuthorityRegistry().dispose();
+
+    expect(signal.aborted).toBe(true);
   });
 });

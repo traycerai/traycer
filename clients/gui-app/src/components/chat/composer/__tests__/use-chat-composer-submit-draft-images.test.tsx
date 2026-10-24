@@ -29,6 +29,10 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  browserAnnotationRecordSchema,
+  canvasAnnotationRecordSchema,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 
@@ -133,6 +137,7 @@ function fakeEditor(
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }
@@ -204,6 +209,7 @@ function mountSubmit(args: {
       getActiveTurnForSteer: () => null,
       hasPendingApprovals: false,
       sendDisabled: false,
+      sendDisabledHint: null,
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
@@ -619,7 +625,8 @@ describe("useChatComposerSubmit draft images - T5 send gate", () => {
 // ─── F5: live capability at the decision, not at preparation-start ────────
 
 function annotationRecordFor(hash: string): BrowserAnnotationRecord {
-  return {
+  // Parsed, not typed: the schema infers `source` from the flat browser fields.
+  return browserAnnotationRecordSchema.parse({
     kind: "browser-annotation",
     annotationId: `ann-${hash.slice(0, 6)}`,
     tabId: "t-1",
@@ -634,7 +641,7 @@ function annotationRecordFor(hash: string): BrowserAnnotationRecord {
     imageFileName: `browser-annotation-ann-${hash.slice(0, 6)}.png`,
     imageHash: `crop-${hash.slice(0, 6)}`,
     droppedElementCount: 0,
-  };
+  });
 }
 
 function mountSubmitRerenderable(initial: {
@@ -678,6 +685,7 @@ function mountSubmitRerenderable(initial: {
         getActiveTurnForSteer: initial.getActiveTurnForSteer ?? (() => null),
         hasPendingApprovals: false,
         sendDisabled: false,
+        sendDisabledHint: null,
         workspaceBlocked: false,
         imagesUnsupported: false,
         attachmentPreparationPending: false,
@@ -774,6 +782,51 @@ describe("useChatComposerSubmit draft images - F5 live capability", () => {
       atom.fileName.startsWith("browser-annotation-"),
     );
     expect(crop?.mimeType).toBe("image/webp");
+  });
+
+  it("sends a canvas annotation that has no crop: the sidecar travels, no image atom is added, and no crop is looked up", async () => {
+    const taskId = "chat-canvas-no-crop";
+    const canvasAnnotation = canvasAnnotationRecordSchema.parse({
+      kind: "browser-annotation",
+      annotationId: "canvas-ann-1",
+      source: {
+        kind: "canvas",
+        artifactId: "artifact-1",
+        boardPath: "boards/hero.html",
+        canvasPage: null,
+        artifactTitle: "Hero",
+      },
+      capturedAt: 1,
+      comment: "tighten",
+      counts: { elements: 1, regions: 0, strokes: 0 },
+      elements: [],
+      imageFileName: null,
+      imageHash: null,
+    });
+    useComposerDraftStore
+      .getState()
+      .addBrowserAnnotation(taskId, canvasAnnotation);
+
+    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
+    const { result } = mountSubmitRerenderable({
+      taskId,
+      editor: fakeEditor(docWithText("see this"), null),
+      onSubmitMessage: submit,
+      targetHostId: GATE_HOST,
+      draftBlobBridgeSupported: false,
+    });
+
+    act(() => {
+      result.current.submitDraft("enter");
+    });
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledTimes(1);
+    });
+
+    const sent = submit.mock.calls[0][0];
+    expect(sent.restore.browserAnnotations).toEqual([canvasAnnotation]);
+    expect(collectImageAtoms(sent.content)).toEqual([]);
+    expect(annotationImageMocks.getImageBytes).not.toHaveBeenCalled();
   });
 
   it("(8) a bridge flag flip DURING the annotation/image read is read live at the final decision, not captured at preparation-start", async () => {
@@ -995,6 +1048,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
         getActiveTurnForSteer: () => null,
         hasPendingApprovals: false,
         sendDisabled: false,
+        sendDisabledHint: null,
         workspaceBlocked: false,
         imagesUnsupported: false,
         attachmentPreparationPending: false,

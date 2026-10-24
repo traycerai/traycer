@@ -16,16 +16,22 @@ import { Route as OnboardingRouteImport } from "./routes/onboarding";
 import { Route as SampleWorkspaceRouteImport } from "./routes/sample-workspace";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as WhenYouQuitRouteImport } from "./routes/when-you-quit";
+import { Route as BotBotIdRouteImport } from "./routes/bot.$botId";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
+import { Route as SettingsAgentDefinitionsRouteImport } from "./routes/settings.agent-definitions";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
+import { Route as SettingsBrowserAgentAccessRouteImport } from "./routes/settings.browser-agent-access";
+import { Route as SettingsCreditsRouteImport } from "./routes/settings.credits";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
+import { Route as SettingsDevArtifactProofRouteImport } from "./routes/settings.dev-artifact-proof";
+import { Route as SettingsDevCanvasProofRouteImport } from "./routes/settings.dev-canvas-proof";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
@@ -35,12 +41,18 @@ import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
 import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
+import { Route as SettingsMachineSetupRouteImport } from "./routes/settings.machine-setup";
+import { Route as SettingsMcpServersRouteImport } from "./routes/settings.mcp-servers";
+import { Route as SettingsMembersRouteImport } from "./routes/settings.members";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
 import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
+import { Route as SettingsSandboxesRouteImport } from "./routes/settings.sandboxes";
+import { Route as SettingsSecretsRouteImport } from "./routes/settings.secrets";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
+import { Route as SettingsSkillsRouteImport } from "./routes/settings.skills";
 import { Route as SettingsUsageRouteImport } from "./routes/settings.usage";
 import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
@@ -80,6 +92,11 @@ const WhenYouQuitRoute = WhenYouQuitRouteImport.update({
   path: "/when-you-quit",
   getParentRoute: () => rootRouteImport,
 } as any);
+const BotBotIdRoute = BotBotIdRouteImport.update({
+  id: "/bot/$botId",
+  path: "/bot/$botId",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
   id: "/draft/$draftId",
   path: "/draft/$draftId",
@@ -100,6 +117,12 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: "/",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsAgentDefinitionsRoute =
+  SettingsAgentDefinitionsRouteImport.update({
+    id: "/agent-definitions",
+    path: "/agent-definitions",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
   id: "/agents",
   path: "/agents",
@@ -126,9 +149,31 @@ const SettingsBrowserRoute = SettingsBrowserRouteImport.update({
   path: "/browser",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsBrowserAgentAccessRoute =
+  SettingsBrowserAgentAccessRouteImport.update({
+    id: "/browser-agent-access",
+    path: "/browser-agent-access",
+    getParentRoute: () => SettingsRoute,
+  } as any);
+const SettingsCreditsRoute = SettingsCreditsRouteImport.update({
+  id: "/credits",
+  path: "/credits",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
   id: "/delete-account",
   path: "/delete-account",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsDevArtifactProofRoute =
+  SettingsDevArtifactProofRouteImport.update({
+    id: "/dev-artifact-proof",
+    path: "/dev-artifact-proof",
+    getParentRoute: () => SettingsRoute,
+  } as any);
+const SettingsDevCanvasProofRoute = SettingsDevCanvasProofRouteImport.update({
+  id: "/dev-canvas-proof",
+  path: "/dev-canvas-proof",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
@@ -176,6 +221,21 @@ const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
   path: "/link-phone",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsMachineSetupRoute = SettingsMachineSetupRouteImport.update({
+  id: "/machine-setup",
+  path: "/machine-setup",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsMcpServersRoute = SettingsMcpServersRouteImport.update({
+  id: "/mcp-servers",
+  path: "/mcp-servers",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsMembersRoute = SettingsMembersRouteImport.update({
+  id: "/members",
+  path: "/members",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   id: "/notifications",
   path: "/notifications",
@@ -196,6 +256,16 @@ const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   path: "/providers",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsSandboxesRoute = SettingsSandboxesRouteImport.update({
+  id: "/sandboxes",
+  path: "/sandboxes",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsSecretsRoute = SettingsSecretsRouteImport.update({
+  id: "/secrets",
+  path: "/secrets",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsServiceRoute = SettingsServiceRouteImport.update({
   id: "/service",
   path: "/service",
@@ -204,6 +274,11 @@ const SettingsServiceRoute = SettingsServiceRouteImport.update({
 const SettingsShellRoute = SettingsShellRouteImport.update({
   id: "/shell",
   path: "/shell",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsSkillsRoute = SettingsSkillsRouteImport.update({
+  id: "/skills",
+  path: "/skills",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
@@ -230,14 +305,20 @@ export interface FileRoutesByFullPath {
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
+  "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
+  "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
+  "/settings/credits": typeof SettingsCreditsRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
+  "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
+  "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -247,12 +328,18 @@ export interface FileRoutesByFullPath {
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
+  "/settings/machine-setup": typeof SettingsMachineSetupRoute;
+  "/settings/mcp-servers": typeof SettingsMcpServersRoute;
+  "/settings/members": typeof SettingsMembersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
+  "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
@@ -265,14 +352,20 @@ export interface FileRoutesByTo {
   "/onboarding": typeof OnboardingRoute;
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/when-you-quit": typeof WhenYouQuitRoute;
+  "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
+  "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
+  "/settings/credits": typeof SettingsCreditsRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
+  "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
+  "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -282,12 +375,18 @@ export interface FileRoutesByTo {
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
+  "/settings/machine-setup": typeof SettingsMachineSetupRoute;
+  "/settings/mcp-servers": typeof SettingsMcpServersRoute;
+  "/settings/members": typeof SettingsMembersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
+  "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics": typeof EpicsIndexRoute;
@@ -303,14 +402,20 @@ export interface FileRoutesById {
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
+  "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
+  "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
+  "/settings/credits": typeof SettingsCreditsRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
+  "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
+  "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -320,12 +425,18 @@ export interface FileRoutesById {
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
+  "/settings/machine-setup": typeof SettingsMachineSetupRoute;
+  "/settings/mcp-servers": typeof SettingsMcpServersRoute;
+  "/settings/members": typeof SettingsMembersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
+  "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
@@ -342,14 +453,20 @@ export interface FileRouteTypes {
     | "/sample-workspace"
     | "/settings"
     | "/when-you-quit"
+    | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/settings/agent-definitions"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/browser"
+    | "/settings/browser-agent-access"
+    | "/settings/credits"
     | "/settings/delete-account"
+    | "/settings/dev-artifact-proof"
+    | "/settings/dev-canvas-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -359,12 +476,18 @@ export interface FileRouteTypes {
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
+    | "/settings/machine-setup"
+    | "/settings/mcp-servers"
+    | "/settings/members"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
+    | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
@@ -377,14 +500,20 @@ export interface FileRouteTypes {
     | "/onboarding"
     | "/sample-workspace"
     | "/when-you-quit"
+    | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/settings/agent-definitions"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/browser"
+    | "/settings/browser-agent-access"
+    | "/settings/credits"
     | "/settings/delete-account"
+    | "/settings/dev-artifact-proof"
+    | "/settings/dev-canvas-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -394,12 +523,18 @@ export interface FileRouteTypes {
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
+    | "/settings/machine-setup"
+    | "/settings/mcp-servers"
+    | "/settings/members"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
+    | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/epics"
@@ -414,14 +549,20 @@ export interface FileRouteTypes {
     | "/sample-workspace"
     | "/settings"
     | "/when-you-quit"
+    | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/settings/agent-definitions"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/browser"
+    | "/settings/browser-agent-access"
+    | "/settings/credits"
     | "/settings/delete-account"
+    | "/settings/dev-artifact-proof"
+    | "/settings/dev-canvas-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -431,12 +572,18 @@ export interface FileRouteTypes {
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
+    | "/settings/machine-setup"
+    | "/settings/mcp-servers"
+    | "/settings/members"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
+    | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
@@ -452,6 +599,7 @@ export interface RootRouteChildren {
   SampleWorkspaceRoute: typeof SampleWorkspaceRoute;
   SettingsRoute: typeof SettingsRouteWithChildren;
   WhenYouQuitRoute: typeof WhenYouQuitRoute;
+  BotBotIdRoute: typeof BotBotIdRoute;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
 }
@@ -507,6 +655,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof WhenYouQuitRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/bot/$botId": {
+      id: "/bot/$botId";
+      path: "/bot/$botId";
+      fullPath: "/bot/$botId";
+      preLoaderRoute: typeof BotBotIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/draft/$draftId": {
       id: "/draft/$draftId";
       path: "/draft/$draftId";
@@ -533,6 +688,13 @@ declare module "@tanstack/react-router" {
       path: "/";
       fullPath: "/settings/";
       preLoaderRoute: typeof SettingsIndexRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/agent-definitions": {
+      id: "/settings/agent-definitions";
+      path: "/agent-definitions";
+      fullPath: "/settings/agent-definitions";
+      preLoaderRoute: typeof SettingsAgentDefinitionsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/agents": {
@@ -570,11 +732,39 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsBrowserRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/browser-agent-access": {
+      id: "/settings/browser-agent-access";
+      path: "/browser-agent-access";
+      fullPath: "/settings/browser-agent-access";
+      preLoaderRoute: typeof SettingsBrowserAgentAccessRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/credits": {
+      id: "/settings/credits";
+      path: "/credits";
+      fullPath: "/settings/credits";
+      preLoaderRoute: typeof SettingsCreditsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/delete-account": {
       id: "/settings/delete-account";
       path: "/delete-account";
       fullPath: "/settings/delete-account";
       preLoaderRoute: typeof SettingsDeleteAccountRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/dev-artifact-proof": {
+      id: "/settings/dev-artifact-proof";
+      path: "/dev-artifact-proof";
+      fullPath: "/settings/dev-artifact-proof";
+      preLoaderRoute: typeof SettingsDevArtifactProofRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/dev-canvas-proof": {
+      id: "/settings/dev-canvas-proof";
+      path: "/dev-canvas-proof";
+      fullPath: "/settings/dev-canvas-proof";
+      preLoaderRoute: typeof SettingsDevCanvasProofRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/devices": {
@@ -640,6 +830,27 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsLinkPhoneRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/machine-setup": {
+      id: "/settings/machine-setup";
+      path: "/machine-setup";
+      fullPath: "/settings/machine-setup";
+      preLoaderRoute: typeof SettingsMachineSetupRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/mcp-servers": {
+      id: "/settings/mcp-servers";
+      path: "/mcp-servers";
+      fullPath: "/settings/mcp-servers";
+      preLoaderRoute: typeof SettingsMcpServersRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/members": {
+      id: "/settings/members";
+      path: "/members";
+      fullPath: "/settings/members";
+      preLoaderRoute: typeof SettingsMembersRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/notifications": {
       id: "/settings/notifications";
       path: "/notifications";
@@ -668,6 +879,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsProvidersRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/sandboxes": {
+      id: "/settings/sandboxes";
+      path: "/sandboxes";
+      fullPath: "/settings/sandboxes";
+      preLoaderRoute: typeof SettingsSandboxesRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/secrets": {
+      id: "/settings/secrets";
+      path: "/secrets";
+      fullPath: "/settings/secrets";
+      preLoaderRoute: typeof SettingsSecretsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/service": {
       id: "/settings/service";
       path: "/service";
@@ -680,6 +905,13 @@ declare module "@tanstack/react-router" {
       path: "/shell";
       fullPath: "/settings/shell";
       preLoaderRoute: typeof SettingsShellRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/skills": {
+      id: "/settings/skills";
+      path: "/skills";
+      fullPath: "/settings/skills";
+      preLoaderRoute: typeof SettingsSkillsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/usage": {
@@ -719,12 +951,17 @@ const EpicsRouteChildren: EpicsRouteChildren = {
 const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 
 interface SettingsRouteChildren {
+  SettingsAgentDefinitionsRoute: typeof SettingsAgentDefinitionsRoute;
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsBrowserRoute: typeof SettingsBrowserRoute;
+  SettingsBrowserAgentAccessRoute: typeof SettingsBrowserAgentAccessRoute;
+  SettingsCreditsRoute: typeof SettingsCreditsRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
+  SettingsDevArtifactProofRoute: typeof SettingsDevArtifactProofRoute;
+  SettingsDevCanvasProofRoute: typeof SettingsDevCanvasProofRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsFallbackRoute: typeof SettingsFallbackRoute;
@@ -734,24 +971,35 @@ interface SettingsRouteChildren {
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
   SettingsLayoutRoute: typeof SettingsLayoutRoute;
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
+  SettingsMachineSetupRoute: typeof SettingsMachineSetupRoute;
+  SettingsMcpServersRoute: typeof SettingsMcpServersRoute;
+  SettingsMembersRoute: typeof SettingsMembersRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
   SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
+  SettingsSandboxesRoute: typeof SettingsSandboxesRoute;
+  SettingsSecretsRoute: typeof SettingsSecretsRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
+  SettingsSkillsRoute: typeof SettingsSkillsRoute;
   SettingsUsageRoute: typeof SettingsUsageRoute;
   SettingsWorktreesRoute: typeof SettingsWorktreesRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAgentDefinitionsRoute: SettingsAgentDefinitionsRoute,
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsBrowserRoute: SettingsBrowserRoute,
+  SettingsBrowserAgentAccessRoute: SettingsBrowserAgentAccessRoute,
+  SettingsCreditsRoute: SettingsCreditsRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
+  SettingsDevArtifactProofRoute: SettingsDevArtifactProofRoute,
+  SettingsDevCanvasProofRoute: SettingsDevCanvasProofRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsFallbackRoute: SettingsFallbackRoute,
@@ -761,12 +1009,18 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsLayoutRoute: SettingsLayoutRoute,
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
+  SettingsMachineSetupRoute: SettingsMachineSetupRoute,
+  SettingsMcpServersRoute: SettingsMcpServersRoute,
+  SettingsMembersRoute: SettingsMembersRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
   SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsSandboxesRoute: SettingsSandboxesRoute,
+  SettingsSecretsRoute: SettingsSecretsRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
+  SettingsSkillsRoute: SettingsSkillsRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsWorktreesRoute: SettingsWorktreesRoute,
   SettingsIndexRoute: SettingsIndexRoute,
@@ -784,6 +1038,7 @@ const rootRouteChildren: RootRouteChildren = {
   SampleWorkspaceRoute: SampleWorkspaceRoute,
   SettingsRoute: SettingsRouteWithChildren,
   WhenYouQuitRoute: WhenYouQuitRoute,
+  BotBotIdRoute: BotBotIdRoute,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
 };

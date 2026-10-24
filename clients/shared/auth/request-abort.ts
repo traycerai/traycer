@@ -27,8 +27,12 @@ export function composeRequestAbort(
   timeoutMs: number,
 ): ComposedRequestAbort {
   const controller = new AbortController();
+  // A `TimeoutError`, as `AbortSignal.timeout` aborts with, so a caller that
+  // tells a timeout from a cancellation still can.
   const timer = setTimeout(() => {
-    controller.abort();
+    controller.abort(
+      new DOMException("The request timed out.", "TimeoutError"),
+    );
   }, timeoutMs);
   if (callerSignal === null) {
     return {
@@ -61,4 +65,56 @@ export function composeRequestAbort(
       callerSignal.removeEventListener("abort", forwardAbort);
     },
   };
+}
+
+/**
+ * Keeps each composed controller alive exactly as long as its signal, so the
+ * sources hold only a weak reference to it and a long-lived source never pins
+ * the requests it once fed.
+ */
+const controllerOfSignal = new WeakMap<AbortSignal, AbortController>();
+
+/** Detaches a composed signal's source listeners once it is collected. */
+const detachOnCollect = new FinalizationRegistry<() => void>((detach) => {
+  detach();
+});
+
+/**
+ * `AbortSignal.any` for the WebView floor, which predates it (iOS 17.4) and
+ * throws rather than degrading; see the module comment above.
+ *
+ * Unlike {@link composeRequestAbort} it needs no `clear()`, because callers
+ * hand the signal on to code whose lifetime they do not own. As the native
+ * one does, it aborts with the first source's reason. The sources reach the
+ * controller only through a weak reference, and their listeners are removed
+ * once any source fires or the composed signal is collected. So a source
+ * that outlives many composed signals, such as a host binding's, does not
+ * accumulate them.
+ */
+export function anyAbortSignal(sources: readonly AbortSignal[]): AbortSignal {
+  const controller = new AbortController();
+  const aborted = sources.find((source) => source.aborted);
+  if (aborted !== undefined) {
+    controller.abort(aborted.reason);
+    return controller.signal;
+  }
+  controllerOfSignal.set(controller.signal, controller);
+  const reference = new WeakRef(controller);
+  const listeners = sources.map((source) => {
+    const listener = (): void => {
+      reference.deref()?.abort(source.reason);
+      detach();
+    };
+    return { source, listener };
+  });
+  function detach(): void {
+    for (const { source, listener } of listeners) {
+      source.removeEventListener("abort", listener);
+    }
+  }
+  for (const { source, listener } of listeners) {
+    source.addEventListener("abort", listener);
+  }
+  detachOnCollect.register(controller.signal, detach);
+  return controller.signal;
 }

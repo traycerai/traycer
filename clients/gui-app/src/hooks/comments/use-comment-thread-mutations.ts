@@ -1,6 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
+import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import type {
   CreateCommentThreadRequest,
+  ReplyToCommentThreadRequest,
+  EditCommentRequest,
+  DeleteCommentRequest,
+  SetCommentThreadResolvedRequest,
+  DeleteCommentThreadRequest,
   ListCommentThreadsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { extractUserMentionIds } from "@traycer/protocol/notifications/comment-notification-utils";
@@ -94,7 +100,7 @@ interface MutationContext {
 function useThreadInvalidator(): (
   hostId: string | null,
   epicId: string,
-  artifactType: "spec" | "ticket" | "story" | "review",
+  artifactType: CommentArtifactKind,
   artifactId: string,
 ) => void {
   const queryClient = useQueryClient();
@@ -118,13 +124,24 @@ export function useCreateCommentThreadForClient(
   return useHostMutation({
     client,
     method: "epic.createCommentThread",
-    mapVariables: (variables) => variables,
+    requiredHostMethodVersion: (variables) =>
+      variables.anchor === undefined
+        ? null
+        : {
+            method: "epic.createCommentThread",
+            version: { major: 1, minor: 2 },
+          },
+    mapVariables: (
+      variables: CreateCommentThreadRequest & {
+        artifactType: CommentArtifactKind;
+      },
+    ) => variables,
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
         return { hostId: client?.getActiveHostId() ?? null };
       },
-      onSuccess: (_data, variables: CreateCommentThreadRequest, ctx) => {
+      onSuccess: (_data, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
@@ -150,7 +167,11 @@ export function useReplyToCommentThreadForClient(
   return useHostMutation({
     client,
     method: "epic.replyToCommentThread",
-    mapVariables: (variables) => variables,
+    mapVariables: (
+      variables: ReplyToCommentThreadRequest & {
+        artifactType: CommentArtifactKind;
+      },
+    ) => variables,
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
@@ -182,7 +203,9 @@ export function useEditCommentForClient(
   return useHostMutation({
     client,
     method: "epic.editComment",
-    mapVariables: (variables) => variables,
+    mapVariables: (
+      variables: EditCommentRequest & { artifactType: CommentArtifactKind },
+    ) => variables,
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
@@ -212,7 +235,9 @@ export function useDeleteCommentForClient(
   return useHostMutation({
     client,
     method: "epic.deleteComment",
-    mapVariables: (variables) => variables,
+    mapVariables: (
+      variables: DeleteCommentRequest & { artifactType: CommentArtifactKind },
+    ) => variables,
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
@@ -242,7 +267,11 @@ export function useSetCommentThreadResolvedForClient(
   return useHostMutation({
     client,
     method: "epic.setCommentThreadResolved",
-    mapVariables: (variables) => variables,
+    mapVariables: (
+      variables: SetCommentThreadResolvedRequest & {
+        artifactType: CommentArtifactKind;
+      },
+    ) => variables,
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);
@@ -278,7 +307,11 @@ export function useDeleteCommentThreadForClient(
   return useHostMutation({
     client,
     method: "epic.deleteCommentThread",
-    mapVariables: (variables) => variables,
+    mapVariables: (
+      variables: DeleteCommentThreadRequest & {
+        artifactType: CommentArtifactKind;
+      },
+    ) => variables,
     options: {
       onMutate: (variables) => {
         assertCommentWriteAuthorized(variables.epicId, sessionHandle);

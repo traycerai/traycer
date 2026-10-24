@@ -79,7 +79,10 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
       contentClassName="w-[min(90vw,28rem)] gap-0 p-0"
       contentTestId="file-tree-workspace-picker-popover"
     >
-      <WorktreePickerHostSection surfaceKey={props.surfaceKey} />
+      <WorktreePickerHostSection
+        surfaceKey={props.surfaceKey}
+        composer={null}
+      />
       <WorktreeFolderListBody
         isPending={listQuery.isPending}
         isError={listQuery.isError}

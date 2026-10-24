@@ -41,6 +41,7 @@ import { useSystemTabModalController } from "@/stores/tabs/use-system-tab-modal"
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { ThemeProvider } from "@/providers/theme-provider";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
@@ -58,6 +59,7 @@ vi.mock("@/lib/appearance/curated-wallpapers", () => ({
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => hostScopeFixture({}),
+  usePersonalHostScope: () => hostScopeFixture({}),
   useHostScopeFor: () => hostScopeFixture({}),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -158,7 +160,9 @@ function renderApp(router: AnyRouter): void {
     <QueryClientProvider client={new QueryClient()}>
       <TooltipProvider>
         <ThemeProvider>
-          <RouterProvider router={router} />
+          <HostRuntimeTestProvider>
+            <RouterProvider router={router} />
+          </HostRuntimeTestProvider>
         </ThemeProvider>
       </TooltipProvider>
     </QueryClientProvider>,

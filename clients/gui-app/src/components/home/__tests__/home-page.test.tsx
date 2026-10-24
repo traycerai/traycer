@@ -318,6 +318,9 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
         draftId,
         editor: editorHandleForPrompt("Plan the GUI migration"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: {
           selection: {
             harnessId: "codex",
@@ -1453,6 +1456,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }

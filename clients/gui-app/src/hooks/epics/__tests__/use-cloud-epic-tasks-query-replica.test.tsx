@@ -1,0 +1,232 @@
+import "fake-indexeddb/auto";
+import { createElement, type ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  renderHook,
+  waitFor,
+  type RenderHookResult,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import { createIndexedDbViewReplicaBackend } from "@traycer-clients/shared/view-replica/indexeddb-backend";
+import { ViewReplicaStore } from "@traycer-clients/shared/view-replica/store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  useCloudEpicTasksQuery,
+  type CloudEpicTasksQueryResult,
+} from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
+import {
+  historyReplicaAddress,
+  historyReplicaService,
+} from "@/lib/view-replica/history-replica";
+import {
+  VIEW_REPLICA_DB_NAME,
+  viewReplicaStore,
+} from "@/lib/view-replica/view-replica-store";
+import {
+  historyPage,
+  taskIds,
+  taskLight,
+} from "@/lib/view-replica/__tests__/replica-fixtures";
+
+const HOST_ID = "host-test";
+const CACHED_IDS = ["cached-one", "cached-two"];
+const CACHED_TASKS = CACHED_IDS.map((id) => taskLight(id, null));
+const USER_ID = "user-test";
+
+type PendingRequest = (
+  method: string,
+  params: unknown,
+) => Promise<ListTasksResponse>;
+
+const mockHostClient = {
+  getActiveHostId: vi.fn(() => HOST_ID),
+  getRequestContextUserId: vi.fn(() => USER_ID),
+  onChange: vi.fn(() => () => undefined),
+  request: vi.fn<PendingRequest>(),
+  requestWithSignal: vi.fn(
+    (method: string, params: unknown): Promise<ListTasksResponse> =>
+      mockHostClient.request(method, params),
+  ),
+  requestWithSignalRequiringHostMethodVersion: vi.fn(
+    (method: string, params: unknown): Promise<ListTasksResponse> =>
+      mockHostClient.request(method, params),
+  ),
+};
+
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => mockHostClient,
+  useHostRuntimeClient: () => mockHostClient,
+  useHostBinding: () => ({
+    hostId: HOST_ID,
+    hostClient: {
+      ...mockHostClient,
+      createRequesterForHostId: () => mockHostClient,
+    },
+  }),
+}));
+
+interface Deferred {
+  readonly promise: Promise<ListTasksResponse>;
+  readonly resolve: (page: ListTasksResponse) => void;
+  readonly reject: (error: Error) => void;
+}
+
+function deferred(): Deferred {
+  let resolve: Deferred["resolve"] = () => undefined;
+  let reject: Deferred["reject"] = () => undefined;
+  const promise = new Promise<ListTasksResponse>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function idsOf(result: CloudEpicTasksQueryResult): readonly string[] {
+  return taskIds({ tasks: [...result.tasks], hasMore: false });
+}
+
+function makeWrapper(
+  queryClient: QueryClient,
+): ({ children }: { readonly children: ReactNode }) => ReactNode {
+  return ({ children }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
+}
+
+/** A previous session's replica: written to the database, not to this memory. */
+async function seedPreviousSession(
+  tasks: readonly ListTaskLight[],
+): Promise<void> {
+  const previous = new ViewReplicaStore(
+    createIndexedDbViewReplicaBackend(
+      () => globalThis.indexedDB,
+      VIEW_REPLICA_DB_NAME,
+    ),
+  );
+  await previous.warm(USER_ID);
+  const address = historyReplicaAddress(
+    USER_ID,
+    HOST_ID,
+    LIST_CLOUD_TASKS_REQUEST,
+  );
+  if (address === null) throw new Error("Expected a History address");
+  previous.write(historyReplicaService, address, historyPage(tasks), {
+    observedAt: 100,
+    sourceGeneration: null,
+  });
+  await previous.drain();
+}
+
+describe("useCloudEpicTasksQuery with the replica tier", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The serving tier never answers: the pool is unreachable.
+    mockHostClient.request.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: { userId: USER_ID, userName: "Test", email: "t@example.com" },
+      contextMetadata: { userId: USER_ID, username: "test-user" },
+      shareableTeams: [],
+      subscriptionStatus: null,
+    });
+    recordNegotiatedHostManifest(HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+    });
+  });
+
+  afterEach(async () => {
+    cleanup();
+    resetNegotiatedManifests();
+    await viewReplicaStore.evict({ kind: "identity-retired" });
+  });
+
+  async function renderWarmCached(
+    tasks: readonly ListTaskLight[],
+  ): Promise<RenderHookResult<CloudEpicTasksQueryResult, unknown>> {
+    await seedPreviousSession(tasks);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const rendered = renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await act(async () => {
+      await viewReplicaStore.warm(USER_ID);
+    });
+    return rendered;
+  }
+
+  it("presents the cached page, stating that it is cached, while the request is pending", async () => {
+    const { result } = await renderWarmCached(CACHED_TASKS);
+
+    await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
+    expect(result.current.presentsCachedPage).toBe(true);
+    expect(result.current.firstPagePending).toBe(false);
+    // The request is still waiting: the cached page's cloud half is pending,
+    // not unavailable, so the coverage line does not flash before the answer.
+    expect(result.current.query.status).toBe("pending");
+    expect(result.current.completeness?.cloudPage).toBe("pending");
+  });
+
+  it("keeps the cached page, with no error, after the request fails", async () => {
+    const failure = deferred();
+    mockHostClient.request.mockImplementation(() => failure.promise);
+    const { result } = await renderWarmCached(CACHED_TASKS);
+    await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
+
+    await act(async () => {
+      failure.reject(new Error("pool unreachable"));
+      await failure.promise.catch(() => undefined);
+    });
+
+    await waitFor(() => expect(result.current.query.status).toBe("error"));
+    expect(idsOf(result.current)).toEqual(CACHED_IDS);
+    expect(result.current.presentsCachedPage).toBe(true);
+    expect(result.current.firstPageError).toBeNull();
+    expect(result.current.firstPagePending).toBe(false);
+    expect(result.current.completeness?.cloudPage).toBe("unavailable");
+  });
+
+  it("replaces the cached page with a settled answer", async () => {
+    const answer = deferred();
+    mockHostClient.request.mockImplementation(() => answer.promise);
+    const { result } = await renderWarmCached(CACHED_TASKS);
+    await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
+
+    await act(async () => {
+      answer.resolve(historyPage([taskLight("fresh", null)]));
+      await answer.promise;
+    });
+
+    await waitFor(() => expect(result.current.presentsCachedPage).toBe(false));
+    expect(idsOf(result.current)).toEqual(["fresh"]);
+    expect(result.current.completeness?.cloudPage).toBe("settled");
+  });
+
+  it("does not present an empty cached page while the request is pending", async () => {
+    const { result } = await renderWarmCached([]);
+
+    // An empty cached page has nothing to stand in with: the list stays
+    // loading until the request answers, never "No tasks yet." from the cache.
+    await waitFor(() => expect(result.current.query.status).toBe("pending"));
+    await act(async () => {
+      await viewReplicaStore.warm(USER_ID);
+    });
+    expect(result.current.presentsCachedPage).toBe(false);
+    expect(result.current.firstPagePending).toBe(true);
+    expect(result.current.firstPage).toBeUndefined();
+  });
+});

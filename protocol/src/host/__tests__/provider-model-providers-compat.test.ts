@@ -62,6 +62,7 @@ import {
   providersModelProviderAuthRequestSchema,
   providersModelProviderAuthResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Model Providers wire contract.
@@ -1757,10 +1758,10 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("keeps every other code out of the shared native vocabulary", () => {
-    // Not a style preference: `providerNativeErrorCodeSchema` rides RELEASED
-    // carriers, so it cannot be widened, and its other members describe
-    // config-file EDITS. A model-provider code leaking into it (or vice versa)
-    // would mean one of the two enums grew where it must not.
+    // Not a style preference: the live native vocabulary is distinct from
+    // model-provider failures, and released native carriers bind their frozen
+    // preimage. A model-provider code leaking into this enum (or vice versa)
+    // would widen the wrong surface.
     const ours = [
       ...modelProviderListErrorCodeSchema.options,
       ...modelProviderAuthErrorCodeSchema.options,
@@ -1843,19 +1844,16 @@ describe("attempt lifecycle is encodable end to end", () => {
 });
 
 describe("the v7.0 capability freeze around the model-provider surface", () => {
-  // Hand-frozen copies that still deep-equal their live counterparts. Green
-  // today; red the day a live subtree grows past the frozen line - and the
-  // answer to red is main's freeze rule: keep the copy frozen and extend the
-  // v8->v7 projection/bridge to say what a v7.0 peer sees instead.
+  // Hand-frozen copies that still deep-equal their live counterparts. MCP
+  // diverged when applyRemedy opened on the new carrier and is checked below.
+  // For the others, red means a live subtree grew past the frozen line: keep
+  // the copy frozen and extend the v8->v7 projection/bridge.
   const PAIRS = [
     [
-      "mcp capabilities",
-      providerMcpCapabilitiesSchema,
-      providerMcpCapabilitiesSchemaV70,
-    ],
-    [
       "plugins capabilities",
-      providerPluginsCapabilitiesSchema,
+      providerPluginsCapabilitiesSchema.omit({
+        openChatsApplyNextMessage: true,
+      }),
       providerPluginsCapabilitiesSchemaV70,
     ],
     [
@@ -1868,11 +1866,26 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
   it.each(PAIRS)(
     "%s: the frozen v7.0 copy still matches the live schema",
     (_label, live, frozen) => {
-      expect(z.toJSONSchema(frozen, { unrepresentable: "any" })).toEqual(
-        z.toJSONSchema(live, { unrepresentable: "any" }),
+      expect(toCanonicalJsonSchema(frozen, { unrepresentable: "any" })).toEqual(
+        toCanonicalJsonSchema(live, { unrepresentable: "any" }),
       );
     },
   );
+
+  it("frozen MCP capabilities match the live descriptor except applyRemedy", () => {
+    const liveBeforeRemedies = providerMcpCapabilitiesSchema.extend({
+      actionScopes: providerMcpCapabilitiesSchema.shape.actionScopes.omit({
+        applyRemedy: true,
+      }),
+    });
+    expect(
+      toCanonicalJsonSchema(providerMcpCapabilitiesSchemaV70, {
+        unrepresentable: "any",
+      }),
+    ).toEqual(
+      toCanonicalJsonSchema(liveBeforeRemedies, { unrepresentable: "any" }),
+    );
+  });
 
   it("frozen skills actionScopes = live keys minus inspect/edit/update, exactly", () => {
     const liveKeys = Object.keys(

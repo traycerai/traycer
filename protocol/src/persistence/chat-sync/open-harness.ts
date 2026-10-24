@@ -216,11 +216,15 @@ const snapshotSteerBlockSchema = lazySchema(() =>
   }),
 );
 
+/** An unknown artifact kind must not reject a whole shard. */
+export const snapshotArtifactOperationBlockSchema = lazySchema(() =>
+  artifactOperationBlockSchema.extend({ kind: z.string().min(1) }),
+);
+
 /**
- * The epic content-block union with its three harness-bearing members
- * reopened. Every other member is the live schema, so a change there lands
- * here with no edit; a NEW member has to be added to this list, which
- * `chat-sync-open-harness.test.ts` enforces by comparing member sets.
+ * The epic content-block union with its harness-bearing members and artifact
+ * kind reopened. A new member must be added here; chat-sync-open-harness.test.ts
+ * enforces that by comparing member sets.
  */
 export const snapshotContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
@@ -238,7 +242,7 @@ export const snapshotContentBlockSchema = lazySchema(() =>
     autonomousResumeBlockSchema,
     snapshotSteerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    snapshotArtifactOperationBlockSchema,
   ]),
 );
 export type SnapshotContentBlock = z.infer<typeof snapshotContentBlockSchema>;

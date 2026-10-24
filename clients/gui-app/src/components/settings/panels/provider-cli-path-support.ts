@@ -26,8 +26,7 @@ export function providerSupportsCustomCliPath(providerId: ProviderId): boolean {
 /**
  * Why "Add custom path" is held for this provider, or null when it is not.
  *
- * Worded to hold on every platform: it names no managed download, because
- * Antigravity has none on an Intel Mac. The host's refusal
+ * Worded to hold on every platform. The host's refusal
  * (`ProviderCustomCliPathUnsupportedError`) says the same.
  */
 export function providerCustomCliPathHeldReason(

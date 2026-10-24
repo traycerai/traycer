@@ -103,6 +103,8 @@ const BACKGROUND_METHODS: ReadonlySet<string> = new Set([
   "browser.sessions",
   "epic.listCollaborators",
   "epic.listCommentThreads",
+  // Decorates the agent rows' reach marks and the composer's mirror line; answers second.
+  "epic.listTaskHosts",
   "worktree.listBindingsForEpic",
 ]);
 

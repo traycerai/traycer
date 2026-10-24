@@ -1,3 +1,4 @@
+import { captureWindowRegion } from "../app/window-capture";
 import { rememberRecentDocument } from "../app/recent-documents";
 import {
   handleFlashFrame,
@@ -98,7 +99,7 @@ import {
   readFeatureSettings,
   readLogLevels,
   setAgentRolesEnabled,
-  setLogLevels,
+  setLogLevel,
 } from "@traycer/protocol/config/store";
 import { isLogLevel, type LogLevel } from "@traycer/protocol/config/log-level";
 import type {
@@ -261,6 +262,11 @@ export function registerPlatformIpc(
         rememberRecentDocument(path);
       }
     },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.windowCaptureRegion,
+    captureWindowRegion,
   );
 
   bridge.handleInvoke(
@@ -525,11 +531,9 @@ export function registerPlatformIpc(
       if (scope === "desktop") {
         await setDesktopLogLevel(level);
       } else {
-        const levels = await readLogLevels();
-        await setLogLevels(
-          scope === "cli" ? level : levels.cliLogLevel,
-          scope === "host" ? level : levels.hostLogLevel,
-        );
+        // Scoped under the settings lock: the other threshold is kept as the
+        // file holds it then, never as read before this call.
+        await setLogLevel(scope, level);
       }
       return readLogLevelsSnapshot();
     },

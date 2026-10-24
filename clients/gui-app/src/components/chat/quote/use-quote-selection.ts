@@ -99,7 +99,7 @@ export function useQuoteSelection(params: {
       cancelPending();
       pendingFrame = requestAnimationFrame(() => {
         pendingFrame = null;
-        const next = resolveFromLiveSelection();
+        const next = resolveLiveQuoteSelection();
         // Summon (or replace) the snapshot; reuse the previous reference when
         // unchanged so an equivalent re-read - e.g. a preceding selectionchange
         // for the same shift-extend gesture - doesn't churn the popover.
@@ -108,7 +108,7 @@ export function useQuoteSelection(params: {
     };
 
     const handleSelectionChange = (): void => {
-      const next = resolveFromLiveSelection();
+      const next = resolveLiveQuoteSelection();
       setSnapshot((prev) => {
         // Release-only trigger: a selection change never summons the popover on
         // its own - it only tracks or dismisses one that mouseup already opened.
@@ -153,8 +153,10 @@ export function isSingleUsableSelection(info: UsableSelectionInfo): boolean {
 }
 
 /** Reads the live selection and resolves it, or `null` when it is collapsed,
- *  empty, multi-range, or fails validation. */
-function resolveFromLiveSelection(): QuoteSelectionSnapshot | null {
+ *  empty, multi-range, or fails validation. Also the entry a native shell's
+ *  quote request takes (`use-native-quote-request.ts`), so a phone's edit
+ *  menu quotes exactly what the popover would. */
+export function resolveLiveQuoteSelection(): QuoteSelectionSnapshot | null {
   const selection = window.getSelection();
   if (selection === null || !isSingleUsableSelection(selection)) return null;
   return resolveQuoteSelection(selection.getRangeAt(0), selection.toString());

@@ -70,6 +70,13 @@ export function publishedChatLockReason(input: {
    * unknown - only a positive mismatch may flip the sentence.
    */
   readonly ownedByViewer: boolean;
+  /**
+   * Whether the owner is one of the viewer's team environments: a team
+   * sandbox's chat. It outranks `ownedByViewer`, whose foreign arm would call
+   * a team chat another collaborator's, and both reachability arms, which
+   * name a machine and promise a resume this copy is not waiting on.
+   */
+  readonly environmentOwned: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -143,6 +150,8 @@ export function replicaChatLockReason(input: {
   readonly ownerIsThisHost: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly ownedByViewer: boolean;
+  /** Same fact, same reason, as `publishedChatLockReason`'s. */
+  readonly environmentOwned: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
@@ -183,8 +192,15 @@ function publishedCopySentence(input: {
   readonly ownerRefusesStore: boolean;
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
+  readonly environmentOwned: boolean;
   readonly ownerLabel: string;
 }): string {
+  // A team environment's chat, ahead of the collaborator arm: it is no
+  // collaborator's, and its sandbox is what is out. Aligned with the
+  // dead-tile banner's environment sentence.
+  if (input.environmentOwned) {
+    return `This chat's sandbox isn't available — showing the last published copy.`;
+  }
   // A collaborator's chat, checked before either reachability arm: every
   // clause below it is written for the viewer's own fleet (see the
   // `ownedByViewer` doc above) and turns false for a machine this account
@@ -217,9 +233,14 @@ function replicaCopySentence(input: {
   readonly ownerRefusesStore: boolean;
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
+  readonly environmentOwned: boolean;
   readonly ownerLabel: string;
 }): string {
-  // Same precedence, same reason, as `publishedCopySentence`'s foreign arm.
+  // Same precedence, same reason, as `publishedCopySentence`'s environment
+  // and foreign arms.
+  if (input.environmentOwned) {
+    return `This chat's sandbox isn't available — showing this device's synced copy.`;
+  }
   if (!input.ownedByViewer) {
     return `This agent belongs to another collaborator — showing this device's synced copy. It isn't available live from here.`;
   }

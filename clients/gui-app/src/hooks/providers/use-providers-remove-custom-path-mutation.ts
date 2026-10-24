@@ -6,7 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { PROVIDER_SELECTION_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
 
 export function useProvidersRemoveCustomPath(): UseMutationResult<
@@ -19,6 +19,6 @@ export function useProvidersRemoveCustomPath(): UseMutationResult<
     method: "providers.removeCustomPath",
     mutationKey: providersMutationKeys.removeCustomPath(),
     errorMessage: "Couldn't remove custom CLI path.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
+    invalidateMethods: PROVIDER_SELECTION_INVALIDATIONS,
   });
 }

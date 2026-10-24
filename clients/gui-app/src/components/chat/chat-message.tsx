@@ -1,9 +1,11 @@
-import { memo, type ReactElement } from "react";
+import { memo, useContext, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
+import { ChatBotMessage } from "./chat-bot-message";
+import { ChatBotPresentationContext } from "./chat-bot-presentation-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
@@ -50,6 +52,7 @@ export interface ChatMessageEditing {
   readonly pending: boolean;
   readonly canSubmit: boolean;
   readonly slashProviderId: GuiHarnessId;
+  readonly slashProfileId: string | null;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
@@ -83,8 +86,8 @@ export interface ChatMessageUserActions {
    * The phase a row the host is still delivering shows under it, `null`
    * otherwise. Such a row offers copy only (`enabled` is false and nothing is
    * being edited); it becomes an ordinary message when it starts. A preparing
-   * row beside the chat's setup card is also `null`: the card, or once it is no
-   * longer in flight the pre-turn "Working…" row, already shows that wait (see
+   * row is also `null` while the chat's setup card or the pre-turn "Working…"
+   * row is on screen, because either already shows that wait (see
    * `deliveringUserMessageActionsFor`).
    */
   readonly deliveryPhase: ChatMessageDeliveryPhase | null;
@@ -195,6 +198,7 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         backgroundToolBlockIds={backgroundToolBlockIds}
         runState={message.runState}
         messageId={message.id}
+        workingVerbSeed={message.workingVerbSeed}
         elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
         turnHasOnlyAutonomousResumeSegments={
           message.turnHasOnlyAutonomousResumeSegments ?? false
@@ -231,6 +235,7 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 
 function ChatMessageImpl(props: ChatMessageProps) {
   const { actions, message } = props;
+  const botPresentation = useContext(ChatBotPresentationContext);
   // The list withholds these rows (`withholdUnpaintedRows`); this is the same
   // predicate for a model that reaches a `ChatMessage` some other way. It
   // returns before the role branches below, so the row's `system` role and
@@ -239,6 +244,12 @@ function ChatMessageImpl(props: ChatMessageProps) {
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
     return renderSpecialSegment(specialSegment);
+  }
+  // A bot's channel or thread draws its rows in Slack's layout; the bot's
+  // own sessions (trunk, thread forks) provide no presentation and keep the
+  // transcript's.
+  if (botPresentation !== null && message.role !== "system") {
+    return <ChatBotMessage message={message} presentation={botPresentation} />;
   }
   if (message.role === "assistant") {
     return renderAssistantMessage(props);
@@ -259,7 +270,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // Timestamps setting can hide it, and a lone separator after the label is
   // worse than no stamp at all.
   const sentAt = message.sentAt ?? message.createdAt;
-  const sender = (
+  const overline = (
     <ChatSenderOverline
       label={label}
       sentAt={sentAt}
@@ -267,7 +278,6 @@ function ChatMessageImpl(props: ChatMessageProps) {
       instanceId={message.id}
     />
   );
-
   return (
     <div
       className={cn(
@@ -275,7 +285,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
         messageAlignmentClass(message),
       )}
     >
-      {message.agentSenderInfo === null ? sender : null}
+      {message.agentSenderInfo === null ? overline : null}
       <UserMessageBody
         message={message}
         actions={actions?.type === "user" ? actions : null}

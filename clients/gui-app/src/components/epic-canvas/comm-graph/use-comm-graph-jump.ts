@@ -28,7 +28,6 @@ import { useHostDirectory } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
-import { isCommGraphOriginAvailable } from "@/lib/comm-graph/comm-graph-origin-availability";
 import {
   makeOpenableNodeRef,
   type EpicArtifactRef,
@@ -140,32 +139,33 @@ export function useCommGraphJump(
   // so jump affordances follow the route's real state instead of freezing at
   // whatever was true on the last directory emit.
   const hasReadySessionFor = useRemoteSessionsPollReadiness(relevantHostIds);
-  const getDirectorySnapshot = useCallback(() => {
+  // The ids whose origin host is dialable right now, as a string stamp:
+  // `useSyncExternalStore` compares by value, and the callbacks below read the
+  // set derived FROM this returned stamp, so their identity changes exactly
+  // when some host's dialability does.
+  const getAvailableHostStamp = useCallback(() => {
     return relevantHostIds
-      .map((hostId) => {
-        const endpoint = dialableHostEndpointFor(
-          directory.findById(hostId),
-          hasReadySessionFor(hostId),
-        );
-        return `${hostId}:${endpoint?.websocketUrl ?? "offline"}`;
-      })
-      .join("|");
+      .filter(
+        (hostId) =>
+          dialableHostEndpointFor(
+            directory.findById(hostId),
+            hasReadySessionFor(hostId),
+          ) !== null,
+      )
+      .join("\n");
   }, [directory, hasReadySessionFor, relevantHostIds]);
-  const directorySnapshot = useSyncExternalStore(
+  const availableHostStamp = useSyncExternalStore(
     subscribeToDirectory,
-    getDirectorySnapshot,
+    getAvailableHostStamp,
     () => "",
   );
+  const availableHostIds = useMemo(
+    () => new Set(availableHostStamp.split("\n")),
+    [availableHostStamp],
+  );
   const isOriginAvailable = useCallback(
-    (event: CommGraphEvent): boolean => {
-      void directorySnapshot;
-      return isCommGraphOriginAvailable(
-        directory,
-        event,
-        hasReadySessionFor(event.hostId),
-      );
-    },
-    [directory, directorySnapshot, hasReadySessionFor],
+    (event: CommGraphEvent): boolean => availableHostIds.has(event.hostId),
+    [availableHostIds],
   );
 
   const canJump = useCallback(

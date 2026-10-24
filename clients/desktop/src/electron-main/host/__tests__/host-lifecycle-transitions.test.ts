@@ -292,6 +292,27 @@ async function presenceVerdict(
   return presence === null ? null : presence.onExit;
 }
 
+/**
+ * Waits for the presence on disk to carry `onExit` stamped with `policyRev`.
+ *
+ * A view that names a new policy rev is not the presence landing: an
+ * observation emits its view from a second read of the policy, so a CLI write
+ * that lands between the observation's two reads shows in the view while the
+ * presence rewrite is still one observation away. Asserting the presence on
+ * the view alone reads the file a few milliseconds too early.
+ */
+async function waitForPresence(
+  store: HostLifecyclePolicyStore,
+  onExit: DesktopPresenceOnExit,
+  policyRev: number,
+): Promise<void> {
+  await vi.waitFor(async () => {
+    const presence = await store.readPresence();
+    expect(presence?.onExit).toBe(onExit);
+    expect(presence?.policyRev).toBe(policyRev);
+  });
+}
+
 /** A real-time pause that lets already-queued fire-and-forget work run. */
 function settle(): Promise<void> {
   return new Promise((resolve) => {
@@ -709,9 +730,7 @@ describe("CLI observation", () => {
     await vi.waitFor(() => {
       expect(harness.views.at(-1)?.desired.rev).toBe(1);
     });
-    const presence = await harness.store.readPresence();
-    expect(presence?.onExit).toBe("stop");
-    expect(presence?.policyRev).toBe(1);
+    await waitForPresence(harness.store, "stop", 1);
     expect(harness.views.length).toBeGreaterThan(viewsBefore);
     expect(harness.views.at(-1)?.desired.mode).toBe("linked");
     expect(harness.views.at(-1)?.desired.updatedBy).toBe("cli");
@@ -727,9 +746,7 @@ describe("CLI observation", () => {
     await vi.waitFor(() => {
       expect(harness.views.at(-1)?.desired.rev).toBe(1);
     });
-    const presence = await harness.store.readPresence();
-    expect(presence?.onExit).toBe("keep");
-    expect(presence?.policyRev).toBe(1);
+    await waitForPresence(harness.store, "keep", 1);
     expect(harness.views.at(-1)?.pending).toBe("restart-app");
     expect(harness.controller.totalCalls()).toBe(0);
   });
@@ -742,7 +759,7 @@ describe("CLI observation", () => {
     await vi.waitFor(() => {
       expect(harness.views.at(-1)?.desired.rev).toBe(1);
     });
-    expect(await presenceVerdict(harness.store)).toBe("stop");
+    await waitForPresence(harness.store, "stop", 1);
     await vi.waitFor(() => {
       expect(harness.records.watchCount).toBeGreaterThan(1);
     });
@@ -1367,6 +1384,9 @@ describe("a quit verdict whose write failed is retried", () => {
       expect(writeSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
     expect(writeSpy.mock.calls[1]?.[0]).toBe("stop");
+    // The spy records the call as it starts; the presence file is rewritten a
+    // few awaits later. No policy file exists, so the retry is stamped rev 0.
+    await waitForPresence(harness.store, "stop", 0);
     const presence = await harness.store.readPresence();
     expect(presence?.onExit).toBe("stop");
   });

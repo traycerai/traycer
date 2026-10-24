@@ -36,7 +36,7 @@ import {
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
-  useHostScope,
+  usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import {
@@ -132,6 +132,9 @@ import {
   MASTER_TOGGLE_DESCRIPTION,
 } from "@/components/settings/panels/fallback-settings.definitions";
 
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamModelRouting } from "@/components/settings/environment/team-model-routing";
+
 /**
  * Settings ▸ Host ▸ Fallback.
  *
@@ -140,7 +143,16 @@ import {
  * chat gets are the actions on its own cards when a fallback arms.
  */
 export function FallbackSettingsPanel(): ReactNode {
-  const scope = useHostScope();
+  const source = useConfigurationSource();
+  return source.kind === "pool" ? (
+    <TeamModelRouting />
+  ) : (
+    <HostFallbackSettingsPanel />
+  );
+}
+
+function HostFallbackSettingsPanel(): ReactNode {
+  const scope = usePersonalHostScope();
   const realBinding = useHostBinding();
 
   // The same governed narrow the agent-guide section makes, for the same

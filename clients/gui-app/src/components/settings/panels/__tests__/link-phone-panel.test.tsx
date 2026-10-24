@@ -279,7 +279,7 @@ describe("LinkPhonePanel", () => {
     });
     render(<LinkPhonePanel />);
     expect(screen.queryByTestId("link-phone-awaiting-elsewhere")).toBeNull();
-    expect(screen.getByTestId("link-phone-single-use-hint")).toBeTruthy();
+    expect(screen.getByTestId("link-phone-instructions")).toBeTruthy();
   });
 
   it("gone → claim-pending renders the awaiting state, not a dead QR or an error", () => {
@@ -830,13 +830,9 @@ describe("LinkPhonePanel", () => {
     );
   });
 
-  it("states that a code is single-use and short-lived", () => {
+  it("shows the typeable code for the manual-entry path", () => {
     mocks.useAuthLinkLoginCode.mockReturnValue(queryResultWithCode(Date.now()));
     render(<LinkPhonePanel />);
-    expect(screen.getByTestId("link-phone-single-use-hint").textContent).toBe(
-      "Each code signs in one phone, expires in about a minute, and only takes effect once you approve it here.",
-    );
-    // The raw code stays available for the manual-entry path.
     expect(screen.getByText("ABCDE-FGHJK")).toBeTruthy();
   });
 });

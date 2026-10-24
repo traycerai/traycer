@@ -12,6 +12,7 @@ import type {
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -22,6 +23,10 @@ import {
 } from "@/lib/provider-ordering";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  catalogOpencodeLineParam,
+  useChatOpencodeLine,
+} from "@/hooks/harnesses/chat-opencode-line-context";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -304,11 +309,13 @@ interface ModelCatalogueRead {
 }
 
 /**
- * The two questions a surface can ask of a set of model catalogues.
+ * The questions a surface can ask of a set of model catalogues.
  *
- * Almost every caller wants only the first and takes {@link
+ * Almost every caller wants only the label and takes {@link
  * useFallbackModelLabels}: a card renders whatever is resolved now and
  * repaints when more arrives, so "not yet" costs it nothing.
+ * The routing chooser also reads the failed model's advertised tier labels
+ * from this same availability-gated, null-directory catalogue.
  *
  * `settledFor` exists for the one surface that cannot repaint - the transcript
  * announcer CONSUMES a confirmed manual switch, advancing a sequence counter so
@@ -317,6 +324,11 @@ interface ModelCatalogueRead {
  */
 export interface FallbackModelCatalogues {
   readonly labelFor: FallbackModelLabelResolver;
+  /** An available harness's catalog model, for settings labels beyond its name. */
+  readonly modelFor: (
+    harnessId: string,
+    model: string,
+  ) => GuiAgentModelOption | null;
   /** Whether this harness's catalogue has settled. Unasked-for ids are settled. */
   readonly settledFor: (harnessId: string) => boolean;
 }
@@ -464,15 +476,22 @@ export function useFallbackModelCatalogues(
     });
   }, [available, wantedKey]);
 
+  // The chat's OpenCode line, so a fallback tuple on `opencode` is named from
+  // the catalogue of the line the chat runs.
+  const opencodeLine = useChatOpencodeLine();
   const requests = useMemo(
     () =>
       harnessIds.map((harnessId) => ({
         method: "agent.gui.listModels" as const,
         // `null`: these cards name a tuple, not a workspace, and a
         // project-scoped catalogue would resolve the same slugs anyway.
-        params: { harnessId, workingDirectory: null },
+        params: {
+          harnessId,
+          workingDirectory: null,
+          ...catalogOpencodeLineParam(harnessId, opencodeLine),
+        },
       })),
-    [harnessIds],
+    [harnessIds, opencodeLine],
   );
 
   // `combine` projects to catalogue DATA rather than handing back the result
@@ -542,13 +561,13 @@ export function useFallbackModelCatalogues(
   // we do not own. Nesting has no separator to choose and no pair of distinct
   // inputs can collide.
   const byHarness = useMemo(() => {
-    const outer = new Map<string, ReadonlyMap<string, string>>();
+    const outer = new Map<string, ReadonlyMap<string, GuiAgentModelOption>>();
     harnessIds.forEach((harnessId, index) => {
       const models = modelCatalogues[index].models;
       if (models === undefined) return;
-      const inner = new Map<string, string>();
+      const inner = new Map<string, GuiAgentModelOption>();
       for (const model of models) {
-        inner.set(model.slug.toLowerCase(), model.label);
+        inner.set(model.slug.toLowerCase(), model);
       }
       outer.set(harnessId, inner);
     });
@@ -662,7 +681,12 @@ export function useFallbackModelCatalogues(
         // Lower-cased on both sides, matching the engine's own family match
         // (`candidateFamilyMatchesSlug`), so "GPT-5" and "gpt-5" are one model
         // here exactly as they are to the walk.
-        byHarness.get(harnessId)?.get(model.toLowerCase()) ?? model,
+        byHarness.get(harnessId)?.get(model.toLowerCase())?.label ?? model,
+      modelFor: (
+        harnessId: string,
+        model: string,
+      ): GuiAgentModelOption | null =>
+        byHarness.get(harnessId)?.get(model.toLowerCase()) ?? null,
       // An id NOBODY asked about reads settled, and that is the safe default
       // rather than an oversight: this set holds the subjects a caller listed
       // and is still waiting on, so an id outside it has no read in flight for

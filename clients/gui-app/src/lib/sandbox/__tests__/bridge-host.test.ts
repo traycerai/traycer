@@ -14,12 +14,14 @@ import {
   MAX_IN_FLIGHT_APP_REQUESTS,
   MAX_LINK_URL_CHARS,
   MAX_INBOUND_MESSAGE_BYTES,
+  PAGE_HANDSHAKE_TIMEOUT_MS,
   PING_TIMEOUT_MS,
   SandboxBridgeHost,
   TEARDOWN_GRACE_MS,
   type SandboxAppRequestHandler,
   type SandboxHostContext,
   type SandboxScrollDirection,
+  type SandboxServedPages,
   type SandboxShortcutPress,
   type SandboxSize,
   type SandboxStatus,
@@ -82,23 +84,26 @@ function createHarness(options: {
   const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
   const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
   const host = new SandboxBridgeHost({
-    resource: {
-      html: "<p>hi</p>",
-      kind: options.appRequests === null ? "page" : "app",
-      networkPolicy: "https-only",
-      csp: null,
-      permissions: [],
-      theme: {
-        appliesToRoot: true,
-        colorScheme: "light",
-        background: null,
-        variables: {},
+    document: {
+      kind: "loader",
+      resource: {
+        html: "<p>hi</p>",
+        kind: options.appRequests === null ? "page" : "app",
+        networkPolicy: "https-only",
+        csp: null,
+        permissions: [],
+        theme: {
+          appliesToRoot: true,
+          colorScheme: "light",
+          background: null,
+          variables: {},
+        },
+        forwardedShortcuts: [
+          { code: "KeyK", ctrl: false, meta: true, alt: false, shift: false },
+        ],
       },
-      forwardedShortcuts: [
-        { code: "KeyK", ctrl: false, meta: true, alt: false, shift: false },
-      ],
+      nonce: NONCE,
     },
-    nonce: NONCE,
     hostContext: HOST_CONTEXT,
     hostVersion: "9.9.9",
     post: (message) => {
@@ -226,7 +231,7 @@ describe("loading handshake", () => {
     harness.host.receive(proxyReady());
     harness.host.receive(message());
     expect(harness.host.status).toBe("disposed");
-    expect(harness.statuses).toEqual(["disposed"]);
+    expect(harness.statuses).toEqual(["disposed", "crashed"]);
   });
 
   it("ignores a document-ready that arrives before the resource was delivered", () => {
@@ -242,6 +247,7 @@ describe("loading handshake", () => {
     const harness = ready(null, OPENS);
     harness.host.receive(documentReady(NONCE, 120));
     expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed", "crashed"]);
   });
 
   it("allows two frame loads and disposes on the third", () => {
@@ -249,14 +255,17 @@ describe("loading handshake", () => {
     harness.host.frameLoaded();
     harness.host.frameLoaded();
     expect(harness.host.status).toBe("ready");
+    expect(harness.statuses).toEqual(["ready"]);
     harness.host.frameLoaded();
     expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed", "crashed"]);
   });
 
   it("disposes when the loader comes back with a second proxy-ready", () => {
     const harness = ready(null, OPENS);
     harness.host.receive(proxyReady());
     expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed", "crashed"]);
     expect(harness.all("ui/notifications/sandbox-resource-ready")).toHaveLength(
       1,
     );
@@ -618,6 +627,17 @@ describe("app-to-page notifications", () => {
   });
 });
 
+describe("html view state", () => {
+  it("is never sent to an MCP App or loader-delivered page", () => {
+    const harness = ready(null, OPENS);
+    harness.host.receive(notification("ui/notifications/initialized", {}));
+
+    harness.host.setHtmlView(true, 1.5);
+
+    expect(harness.all("traycer/html/view")).toEqual([]);
+  });
+});
+
 describe("host context changes", () => {
   it("sends only the keys that changed", () => {
     const harness = ready(null, OPENS);
@@ -974,6 +994,7 @@ describe("teardown", () => {
     harness.host.receive({ jsonrpc: "2.0", id: asked.id, result: {} });
     await done;
     expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed"]);
   });
 
   it("disposes after the 2 s grace when the page never answers", async () => {
@@ -988,12 +1009,377 @@ describe("teardown", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(finished).toBe(true);
     expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed"]);
   });
 
   it("disposes without asking a frame that never loaded the resource", async () => {
     const harness = createHarness({ appRequests: null, openLink: OPENS });
     await harness.host.teardown();
     expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["disposed"]);
     expect(harness.all("ui/resource-teardown")).toEqual([]);
+  });
+});
+
+/**
+ * A served document (an artifact's own page) skips the loader's two-phase
+ * handshake entirely: the bridge starts at `phase: "delivered"`, so it never
+ * waits for `sandbox-proxy-ready` and admits only one frame load.
+ */
+function createServedHarness(options: {
+  readonly nonce: string;
+  readonly appRequests: SandboxAppRequestHandler | null;
+  readonly pages: SandboxServedPages | null;
+}): Harness {
+  const sent: Sent[] = [];
+  const statuses: SandboxStatus[] = [];
+  const statusHooks: ((status: SandboxStatus) => void)[] = [];
+  const onSize = vi.fn<(size: SandboxSize) => void>();
+  const onOpenLink = vi.fn<OpenLink>(OPENS);
+  const onRequestTeardown = vi.fn<() => void>();
+  const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
+  const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
+  const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
+  const host = new SandboxBridgeHost({
+    document: {
+      kind: "served",
+      nonce: options.nonce,
+      forwardedShortcuts: [
+        { code: "KeyK", ctrl: false, meta: true, alt: false, shift: false },
+      ],
+      pages: options.pages,
+    },
+    hostContext: HOST_CONTEXT,
+    hostVersion: "9.9.9",
+    post: (message) => {
+      if (isSent(message)) sent.push(message);
+    },
+    events: {
+      onStatus: (status) => {
+        statuses.push(status);
+        for (const hook of statusHooks) hook(status);
+      },
+      onSize,
+      onOpenLink,
+      onShortcut,
+      onRequestTeardown,
+      onScrollGesture,
+      onWheel,
+    },
+    appRequests: options.appRequests,
+  });
+  hosts.push(host);
+  return {
+    host,
+    sent,
+    statuses,
+    statusHooks,
+    onSize,
+    onOpenLink,
+    onRequestTeardown,
+    onShortcut,
+    onScrollGesture,
+    onWheel,
+    all: (method) => sent.filter((message) => message.method === method),
+    responseTo: (id) => sent.find((message) => message.id === id),
+  };
+}
+
+describe("served document", () => {
+  it("needs no proxy handshake: the right nonce alone reaches ready", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    expect(harness.host.status).toBe("loading");
+    harness.host.receive(documentReady(NONCE, 120));
+    expect(harness.host.status).toBe("ready");
+    expect(harness.statuses).toEqual(["ready"]);
+    // Nothing is ever written over the frame: there is no loader to answer.
+    expect(harness.all("ui/notifications/sandbox-resource-ready")).toEqual([]);
+  });
+
+  it("ignores a proxy-ready instead of answering it: served documents never expect one", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(proxyReady());
+    expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["disposed", "crashed"]);
+    expect(harness.all("ui/notifications/sandbox-resource-ready")).toEqual([]);
+  });
+
+  it("disposes on a wrong nonce, with no proxy-ready required first", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(documentReady("other-nonce", 120));
+    expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["disposed", "crashed"]);
+  });
+
+  it("disposes on a document-ready with no nonce at all", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(
+      notification("traycer/notifications/document-ready", {}),
+    );
+    expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["disposed", "crashed"]);
+  });
+
+  it("disposes on a repeated nonce once already ready", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(documentReady(NONCE, 120));
+    expect(harness.host.status).toBe("ready");
+    harness.host.receive(documentReady(NONCE, 120));
+    expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed", "crashed"]);
+  });
+
+  it("allows exactly one frame load and disposes on the second", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(documentReady(NONCE, 120));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+    expect(harness.statuses).toEqual(["ready"]);
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("disposed");
+    expect(harness.statuses).toEqual(["ready", "disposed", "crashed"]);
+  });
+
+  it("still answers page requests once ready, exactly like a loaded document", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(documentReady(NONCE, 120));
+    harness.host.receive(request(7, "ping", {}));
+    expect(harness.responseTo(7)?.result).toEqual({});
+  });
+});
+
+describe("served document: gated until the nonce is proven", () => {
+  /**
+   * A served frame runs the artifact's own (untrusted) script from its very
+   * first paint, with no separate trusted-bootstrap phase the way the loader
+   * has one. So every page/app side effect is held back until document-ready
+   * proves the nonce - only document-ready, early-error and ping (and their
+   * correlated responses) are allowed through before that.
+   */
+  it("drops every page/app side effect before proof, then dispatches them normally once proven", async () => {
+    const handler = vi.fn<SandboxAppRequestHandler>(() =>
+      Promise.resolve({ content: ["ok"] }),
+    );
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: handler,
+      pages: null,
+    });
+    const shortcutPress = (): Sent =>
+      notification("traycer/notifications/shortcut", {
+        key: "k",
+        code: "KeyK",
+        ctrl: false,
+        meta: true,
+        alt: false,
+        shift: false,
+      });
+
+    harness.host.receive(
+      request(1, "ui/open-link", { url: "https://example.com/a" }),
+    );
+    harness.host.receive(notification("ui/notifications/request-teardown", {}));
+    harness.host.receive(shortcutPress());
+    harness.host.receive(
+      notification("ui/notifications/size-changed", { width: 10, height: 20 }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/scroll-gesture", {
+        direction: "toward-end",
+      }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/wheel", {
+        deltaX: 0,
+        deltaY: 1,
+        deltaMode: 0,
+      }),
+    );
+    harness.host.receive(request(2, "tools/call", { name: "x" }));
+    harness.host.receive(notification("ui/notifications/initialized", {}));
+    harness.host.notify("ui/notifications/tool-input", { n: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.onOpenLink).not.toHaveBeenCalled();
+    expect(harness.onRequestTeardown).not.toHaveBeenCalled();
+    expect(harness.onShortcut).not.toHaveBeenCalled();
+    expect(harness.onSize).not.toHaveBeenCalled();
+    expect(harness.onScrollGesture).not.toHaveBeenCalled();
+    expect(harness.onWheel).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    // Blocked, not merely unanswered-yet: no response for either request.
+    expect(harness.responseTo(1)).toBeUndefined();
+    expect(harness.responseTo(2)).toBeUndefined();
+    // Still queued, not flushed: `initialized` pre-proof must not have landed.
+    expect(harness.all("ui/notifications/tool-input")).toEqual([]);
+
+    harness.host.receive(documentReady(NONCE, 120));
+    expect(harness.host.status).toBe("ready");
+
+    harness.host.receive(
+      request(3, "ui/open-link", { url: "https://example.com/b" }),
+    );
+    harness.host.receive(notification("ui/notifications/request-teardown", {}));
+    harness.host.receive(shortcutPress());
+    harness.host.receive(
+      notification("ui/notifications/size-changed", { width: 10, height: 20 }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/scroll-gesture", {
+        direction: "toward-end",
+      }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/wheel", {
+        deltaX: 0,
+        deltaY: 1,
+        deltaMode: 0,
+      }),
+    );
+    harness.host.receive(request(4, "tools/call", { name: "x" }));
+    harness.host.receive(notification("ui/notifications/initialized", {}));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.onOpenLink).toHaveBeenCalledTimes(1);
+    expect(harness.onRequestTeardown).toHaveBeenCalledTimes(1);
+    expect(harness.onShortcut).toHaveBeenCalledTimes(1);
+    expect(harness.onSize).toHaveBeenCalledTimes(1);
+    expect(harness.onScrollGesture).toHaveBeenCalledTimes(1);
+    expect(harness.onWheel).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(harness.all("ui/notifications/tool-input")).toHaveLength(1);
+  });
+
+  it("still answers ping before proof, with its correlated response", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(request(9, "ping", {}));
+    expect(harness.responseTo(9)?.result).toEqual({});
+  });
+
+  it("still applies an early error before proof, crashing a document that then draws nothing", () => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(notification("traycer/notifications/early-error", {}));
+    harness.host.receive(documentReady(NONCE, 0));
+    expect(harness.host.status).toBe("crashed");
+    expect(harness.all("ping")).toEqual([]);
+  });
+});
+
+describe("served document: a folder of pages", () => {
+  const PAGE_ORIGIN = "traycer-artifact://artifact-a1--m1";
+
+  function pagesHarness() {
+    const onNavigate = vi.fn<(path: string) => void>();
+    const onPageMissing = vi.fn<() => void>();
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: { treePath: "site", onNavigate, onPageMissing },
+    });
+    return { harness, onNavigate, onPageMissing };
+  }
+
+  /** A served page's ready names the page it is, as the bootstrap sends it. */
+  function pageReady(path: string): Sent {
+    return notification("traycer/notifications/document-ready", {
+      nonce: NONCE,
+      height: 120,
+      url: `${PAGE_ORIGIN}/${path}`,
+    });
+  }
+
+  it("takes each later load as a page that must prove itself again, in either arrival order", () => {
+    const { harness, onNavigate } = pagesHarness();
+    harness.host.receive(pageReady("site/index.html"));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+
+    // Load first: the page waits for its handshake, and its messages with it.
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("loading");
+    harness.host.receive(
+      notification("ui/notifications/size-changed", { width: 10, height: 20 }),
+    );
+    expect(harness.onSize).not.toHaveBeenCalled();
+    harness.host.receive(pageReady("site/about.html"));
+    expect(harness.host.status).toBe("ready");
+
+    // Ready first: the load that follows belongs to the same page.
+    harness.host.receive(pageReady("docs/guide.html"));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+
+    // The first page's unanswered ping must not mark a later page crashed.
+    expect(harness.statuses).toEqual([
+      "ready",
+      "loading",
+      "ready",
+      "loading",
+      "ready",
+    ]);
+    expect(onNavigate.mock.calls).toEqual([
+      ["index.html"],
+      ["about.html"],
+      ["../docs/guide.html"],
+    ]);
+  });
+
+  it("reports a later load that never proves itself as a missing page, not a crash", () => {
+    const { harness, onPageMissing } = pagesHarness();
+    harness.host.receive(pageReady("site/index.html"));
+    harness.host.frameLoaded();
+    harness.host.frameLoaded();
+    vi.advanceTimersByTime(PAGE_HANDSHAKE_TIMEOUT_MS - 1);
+    expect(onPageMissing).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onPageMissing).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(LOAD_TIMEOUT_MS);
+    expect(harness.statuses).not.toContain("crashed");
+  });
+
+  it("relays the stand-in page's own report that the page is missing", () => {
+    const { harness, onNavigate, onPageMissing } = pagesHarness();
+    harness.host.receive(pageReady("site/gone.html"));
+    harness.host.receive(
+      notification("traycer/notifications/page-missing", { nonce: NONCE }),
+    );
+    expect(onNavigate).toHaveBeenCalledWith("gone.html");
+    expect(onPageMissing).toHaveBeenCalledTimes(1);
   });
 });

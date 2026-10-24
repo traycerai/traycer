@@ -299,6 +299,7 @@ function restampHostRpcError(
     method,
     fatalDetails: cause.fatalDetails,
     holders: cause.holders,
+    staleWrite: cause.staleWrite,
   };
   if (cause instanceof RetryableTransportError) {
     // Carried from the cause, not re-decided: the whole point of this restamp
@@ -323,11 +324,15 @@ function awaitAbortableHandler<Response>(
   method: string,
   setDetachAbortListener: (detach: () => void) => void,
 ): Promise<Response> {
+  // The caller has already invoked the handler - the mock's host - so an
+  // abort from here on may follow a write it applied, as a socket abort after
+  // the send may.
   const abortError = (): HostRequestAbortedError =>
     new HostRequestAbortedError({
       message: "Mock host request authority was aborted",
       requestId,
       method,
+      mayHaveDispatched: true,
     });
   if (authority.abortSignal.aborted) {
     return Promise.reject(abortError());

@@ -20,6 +20,7 @@ import {
   evictChatTabStateForEpic,
   peekSavedChatTabState,
   restoreChatTabState,
+  restoreChatTabStateForMount,
   saveChatTabState,
 } from "@/stores/chats/chat-tab-state-cache";
 import {
@@ -199,6 +200,76 @@ describe("chat-tab-persistence-key", () => {
 });
 
 describe("ticket 15 dual-key scroll cache", () => {
+  describe("mounting a free scroll that resolves to no anchor", () => {
+    const followingLatest = {
+      mode: "following-end",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    };
+
+    // The list would mount at scroll 0 with no follow permission, so a mount
+    // follows the latest instead.
+    it.each([null, 2])(
+      "follows latest when the saved anchor is null (index %s)",
+      (anchorIndex) => {
+        const id = chatIdIdentity("missing-anchor");
+        const messages = makeMessages(3);
+        const rowKeys = messages.map((message) => message.id);
+        saveChatTabState({
+          identity: id,
+          mode: "free-scrolling",
+          anchorMessageId: null,
+          anchorIndex,
+          offset: 48,
+        });
+        expect(restoreChatTabStateForMount(id, rowKeys)).toEqual(
+          followingLatest,
+        );
+        expect(restoreChatTabStateForMount(id, [])).toEqual(followingLatest);
+      },
+    );
+
+    it("leaves a saved anchor that does not resolve yet to the hydration restore", () => {
+      const id = chatIdIdentity("hydrating");
+      const rowKeys = makeMessages(3).map((message) => message.id);
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: "not-hydrated-yet",
+        anchorIndex: null,
+        offset: 16,
+      });
+      const pending = {
+        mode: "free-scrolling",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      };
+      // A partial transcript and an empty one both keep the pending shape.
+      expect(restoreChatTabStateForMount(id, rowKeys)).toEqual(pending);
+      expect(restoreChatTabStateForMount(id, [])).toEqual(pending);
+    });
+
+    it("leaves the visibility replay on the raw anchorless shape", () => {
+      const id = chatIdIdentity("replay-anchorless");
+      const rowKeys = makeMessages(3).map((message) => message.id);
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      });
+      // A kept-alive tile shown again must not jump a reader who was free
+      // scrolling over an unplaced row.
+      expect(restoreChatTabState(id, rowKeys)).toMatchObject({
+        mode: "free-scrolling",
+        anchorMessageId: null,
+      });
+    });
+  });
+
   it("RESTORE-FIRST: saved following-end and free-scrolling both round-trip (tab-key)", () => {
     const messages = makeMessages(6);
     const id = chatIdIdentity("pane-a");

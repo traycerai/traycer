@@ -17,6 +17,8 @@ import {
 } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
+import { isProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
 import {
@@ -24,11 +26,20 @@ import {
   resolveAgentCliSurface,
 } from "./agent-surface";
 import { resolveCliVersion } from "./cli-version";
+import {
+  admitCliInvocation,
+  unexpectedDefaultDataRootWarning,
+} from "./data-migration-admission";
+import {
+  runDataControlEntry,
+  selectsDataControlCommand,
+} from "./data-migration/commands/data-control-entry";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
+import { buildAgentRenameCommand } from "./commands/agent-rename";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
 import { buildAgentForkCommand } from "./commands/agent-fork";
@@ -46,6 +57,10 @@ import {
 } from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
 import { buildAgentSendCommand } from "./commands/agent-send";
+import { buildBotCheckinsCommand } from "./commands/bot-checkins";
+import { buildBotListCommand } from "./commands/bot-list";
+import { buildBotThreadsCommand } from "./commands/bot-threads";
+import { buildBotPostCommand, buildBotReplyCommand } from "./commands/bot-post";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
 import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
@@ -65,6 +80,7 @@ import {
 } from "./commands/profile-mutations";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
 import { buildWorktreeCreateCommand } from "./commands/worktree-create";
+import { buildTaskCreateCommand } from "./commands/task-create";
 import { buildWorktreeListCommand } from "./commands/worktree-list";
 import { buildWorktreeDeleteCommand } from "./commands/worktree-delete";
 import {
@@ -168,7 +184,11 @@ import {
   assertAgentWorktreeCreateAllowed,
   readAgentWorktreeCreatePolicy,
 } from "./agent-worktree-create";
-import { writeStderr, writeStdout } from "./runner/std-write";
+import {
+  installStdioErrorGuards,
+  writeStderr,
+  writeStdout,
+} from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process termination, so anything composed via `withRunner` participates in
@@ -325,6 +345,48 @@ const ACCEPT_STORE_FORMAT_LOSS_HELP =
 function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   const value = opts.attemptAdoption;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// Hidden: Desktop's force restart of a host that stopped answering, which may
+// stop only the process the person confirmed - see host/restart-target-guard.ts.
+// On `host restart`, and on `host service install` for the takeover its
+// packaged-macOS re-register fallback can reach.
+function expectHostPidOption(): Option {
+  return new Option(
+    "--expect-host-pid <pid>",
+    "Internal: refuse with E_HOST_RESTART_TARGET_CHANGED unless the published host is still this pid (or no live host is published)",
+  ).hideHelp();
+}
+
+function expectHostStartIdentityOption(): Option {
+  return new Option(
+    "--expect-host-start-identity <identity>",
+    "Internal: the start identity the expected host published; required with --expect-host-pid",
+  ).hideHelp();
+}
+
+/**
+ * The binding to one host process: both flags or neither. Thrown from inside
+ * the command so the refusal reaches the runner as a typed error.
+ */
+function expectedRestartHostArg(
+  verb: string,
+  opts: Record<string, unknown>,
+): RestartTargetHost | null {
+  const rawPid = opts.expectHostPid;
+  const rawIdentity = opts.expectHostStartIdentity;
+  if (rawPid === undefined && rawIdentity === undefined) return null;
+  const pid =
+    typeof rawPid === "string" ? parsePositiveIntegerArg(rawPid) : null;
+  if (pid === null || !isProcessStartIdentity(rawIdentity)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `${verb}: --expect-host-pid takes a positive whole number and must be passed with a valid --expect-host-start-identity`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  return { pid, startIdentity: rawIdentity };
 }
 
 function parsePortArg(value: string): number | null {
@@ -660,7 +722,15 @@ export function buildProgramWithAgentRoles(
     .description(
       "Traycer CLI - sign in, run the Traycer host on this machine, and work with the agents in a Task",
     )
-    .version(cliVersion);
+    .version(cliVersion)
+    // `traycer data ...` runs in its own control entry
+    // (`data-migration/commands/data-control-entry.ts`) and is deliberately
+    // not registered here, so nothing under `data` can fall through to this
+    // program. Listed as static text so it is still discoverable.
+    .addHelpText(
+      "after",
+      "\nData folder:\n  traycer data --help   where Traycer keeps its data: status, init, migrate, recover, cleanup\n",
+    );
 
   // Global runner flags so `traycer --json <subcommand>` works even when
   // the subcommand declares its own copy. Commander merges globals via
@@ -851,7 +921,9 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerProfileCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
+  registerTaskCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
+  registerBotCommands(program);
   registerMonitorCommand(program);
 }
 
@@ -1369,14 +1441,17 @@ function registerHostCommands(program: Command): void {
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
       )
+      .addOption(expectHostPidOption())
+      .addOption(expectHostStartIdentityOption())
       .addOption(lifecycleOriginOption()),
-    (opts) =>
+    (opts) => (ctx) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
         deferIfParked: opts.deferIfParked === true,
+        expectedHost: expectedRestartHostArg("host restart", opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
-      }),
+      })(ctx),
   );
 
   withRunner(
@@ -1963,11 +2038,15 @@ function registerHostCommands(program: Command): void {
     host
       .command("uninstall")
       .description(
-        "Remove the installed and staged host bytes. By default nothing else is touched: the OS service stays registered and a running host keeps running. Use --all to deregister the service and stop the host as well.",
+        "Stop the running host, then remove the installed and staged host bytes. By default the OS service stays registered. Use --all to deregister the service as well.",
       )
       .option(
         "--all",
-        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. The stop is cooperative and best-effort: a host that denies or outlives the shutdown claim is left running, and its pid metadata and log are preserved rather than purged.",
+        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. On macOS and Linux the stop is cooperative: if the host does not stop, its install is kept and the command fails, naming --force. On Windows the stop ends the host's process tree, so running terminal sessions and in-flight agent work are lost.",
+      )
+      .option(
+        "--force",
+        "Stop the host even if it is not responding, then remove the install. Running terminal sessions and in-flight agent work are killed.",
       )
       .addHelpText(
         "after",
@@ -1979,10 +2058,10 @@ function registerHostCommands(program: Command): void {
           "           removal of the bytes can fail there while the record is still deleted -",
           "           check `removedInstallDir` in the result, and stop the host first if you",
           "           need the directory gone.",
-          "           The OS service stays REGISTERED and is not stopped, so a running host",
-          "           serves until it exits and the surviving registration then has no valid",
-          "           install to launch. Recover with 'traycer host install', or clean up with",
-          "           'traycer host service uninstall'.",
+          "           A running host is asked to stop first; a host that does not stop keeps",
+          "           its install and the command fails, naming --force. The OS service stays",
+          "           REGISTERED with no install to launch. Recover with 'traycer host install',",
+          "           or clean up with 'traycer host service uninstall'.",
           "  --all    Deregistration REQUESTED, the host asked to stand down, and the bytes",
           "           removed. No platform can verify a registration is actually GONE, so",
           "           this reports the request plus what the readback saw: a positive",
@@ -1990,16 +2069,17 @@ function registerHostCommands(program: Command): void {
           "           null means nothing could confirm either way.",
           "           WINDOWS: deregistration force-kills the host process tree",
           "           first - there is no busy check, so running terminal sessions and",
-          "           in-flight agent work are lost. macOS/Linux: the stop is cooperative and",
-          "           best-effort, so a host that denies the claim or outlives it keeps",
-          "           serving while the bytes are removed anyway, with its pid metadata and",
-          "           log preserved by this command. `hostStillRunning` in the result (and",
-          "           the summary line) reports what the probe could establish; it is null",
-          "           when nothing could be. Re-run with 'traycer host stop --force' if a",
-          "           host is still up. Runtime state is never purged here - removing it is",
+          "           in-flight agent work are lost. macOS/Linux: the stop is cooperative, so",
+          "           a host that denies the claim or outlives it keeps serving - and then",
+          "           its install is KEPT and the command fails, because removing it would",
+          "           leave that host running from deleted bytes with nothing able to",
+          "           replace it. Re-run with --force to stop it anyway and remove the",
+          "           install. `hostStillRunning` in the result (and the summary line)",
+          "           reports what the probe could establish; it is null when nothing",
+          "           could be. Runtime state is never purged here - removing it is",
           "           only safe once the supervisor is confirmed stopped, which needs a",
           "           backend completion contract that does not exist yet.",
-          "Neither mode touches your data or credentials under ~/.traycer.",
+          "Neither mode touches your data or credentials.",
           "",
         ].join("\n"),
       )
@@ -2007,6 +2087,7 @@ function registerHostCommands(program: Command): void {
     (opts) =>
       buildHostUninstallCommand({
         all: opts.all === true,
+        force: opts.force === true,
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       }),
   );
@@ -2290,15 +2371,18 @@ function registerServiceCommands(host: Command): void {
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
       .addOption(attemptAdoptionOption())
+      .addOption(expectHostPidOption())
+      .addOption(expectHostStartIdentityOption())
       .addOption(lifecycleOriginOption()),
-    (opts) =>
+    (opts) => (ctx) =>
       buildServiceInstallCommand({
         attemptAdoption: attemptAdoptionNonce(opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
-      }),
+        expectedHost: expectedRestartHostArg("host service install", opts),
+      })(ctx),
   );
 
   // The public background start, and the answer to "why does `host start`
@@ -3028,6 +3112,88 @@ function registerWorktreeCommands(program: Command): void {
   );
 }
 
+// For a person at a shell or a scheduled job: an agent starts a Task with
+// its `traycer_create_task` tool, and the command refuses inside an agent
+// session. Hidden on the readonly surface, where `READONLY_REFUSED_COMMANDS`
+// refuses it too.
+function registerTaskCommands(program: Command): void {
+  const task = program
+    .command("task")
+    .description("Start Tasks from a shell or a scheduled job");
+
+  withRunner(
+    task
+      .command("create", {
+        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+      })
+      .description(
+        "Start a Task and send its first message. The first agent starts working at once and uses your provider plan.",
+      )
+      .requiredOption("--message <text>", "The first agent's first message")
+      .requiredOption(
+        "--harness <id>",
+        `Harness for the first agent: ${AGENT_FACING_HARNESS_ID_LIST}`,
+      )
+      .requiredOption(
+        "--model <id>",
+        "Model for the first agent. Use 'traycer agent list-harness-models <harness>' to find one.",
+      )
+      .option("--title <title>", "Task title. Omit to have one generated.")
+      .option(
+        "--workspace <path>",
+        "Absolute path of a folder on this machine the Task works in. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--repo <owner/repo>",
+        "Repository the Task is about. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--reasoning-effort <effort>",
+        "Reasoning effort for supported models",
+      )
+      .option(
+        "--permission-mode <mode>",
+        "Permission mode for the first agent. Omit to use `full_access`.",
+      )
+      .option(
+        "--profile <ambient|id>",
+        "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer profile list'. Omit to use 'ambient'.",
+      )
+      .option(
+        "--idempotency-key <key>",
+        "Start at most one Task for this key within 24 hours: a rerun prints the same ids. Build it from the schedule slot.",
+      ),
+    (opts) =>
+      buildTaskCreateCommand({
+        title: typeof opts.title === "string" ? opts.title : null,
+        message: typeof opts.message === "string" ? opts.message : "",
+        workspaces: stringValues(opts.workspace),
+        repos: stringValues(opts.repo),
+        harness: typeof opts.harness === "string" ? opts.harness : null,
+        model: typeof opts.model === "string" ? opts.model : null,
+        reasoningEffort:
+          typeof opts.reasoningEffort === "string"
+            ? opts.reasoningEffort
+            : null,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
+        profile: typeof opts.profile === "string" ? opts.profile : null,
+        idempotencyKey:
+          typeof opts.idempotencyKey === "string" ? opts.idempotencyKey : null,
+      }),
+  );
+}
+
+function stringValues(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
 function registerAgentCommands(
   program: Command,
   agentRolesEnabled: boolean,
@@ -3368,6 +3534,29 @@ function registerAgentCommands(
 
   withRunner(
     agent
+      .command("rename", readonlyHidden)
+      .description(
+        "Set the display name of a GUI chat or terminal agent on this host. The name is marked as user-set, so automatic titles never replace it.",
+      )
+      .argument(
+        "<id>",
+        "Full id of the chat or terminal agent to rename. No prefix resolution - the id must be exact.",
+      )
+      .argument(
+        "<name>",
+        "The new display name. Surrounding whitespace is trimmed; a blank name is refused.",
+      ),
+    (_opts, args) =>
+      buildAgentRenameCommand({
+        epicId: null,
+        senderAgentId: null,
+        agentId: expectRequiredPositional(args[0], "agent id"),
+        name: expectRequiredPositional(args[1], "name"),
+      }),
+  );
+
+  withRunner(
+    agent
       .command("send", readonlyHidden)
       .description("Send a prompt to another agent")
       .requiredOption("--to <agentId>", "Receiver agent id")
@@ -3379,6 +3568,10 @@ function registerAgentCommands(
       .option(
         "--response-id <id>",
         "Answer a request received from this recipient; omit on your own follow-ups",
+      )
+      .option(
+        "--workspace <path>",
+        "Absolute folder on the receiving agent's host for it to run in, when it has none yet. Ignored when it already has one.",
       ),
     (opts) =>
       buildAgentSendCommand({
@@ -3389,6 +3582,7 @@ function registerAgentCommands(
         expectReply: opts.expectReply === true,
         responseId:
           typeof opts.responseId === "string" ? opts.responseId : null,
+        workspace: typeof opts.workspace === "string" ? opts.workspace : null,
       }),
   );
 
@@ -3531,14 +3725,21 @@ function registerAgentCommands(
       )
       // Codex's `notify` (the only turn-end edge it exposes) invokes this as the
       // `stop` program and appends its `agent-turn-complete` JSON as a trailing
-      // argv. The stop edge is keyed entirely on the bound agent env, so that
-      // payload is ignored - tolerate it instead of erroring on the extra arg.
+      // argv. The stop reads its `turn-id` from it; anything past it is
+      // tolerated rather than an error.
+      .argument(
+        "[notify-payload]",
+        "Codex notify payload (JSON) appended to the stop program",
+      )
       .allowExcessArguments(true)
       .requiredOption(
         "--provider <provider>",
         "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
       )
-      .requiredOption("--event <event>", "Lifecycle event: 'start' or 'stop'")
+      .requiredOption(
+        "--event <event>",
+        "Lifecycle event: 'start', 'stop', 'idle' or 'started'",
+      )
       .option(
         "--agent-id <id>",
         "TUI agent id whose activity changed (defaults to $TRAYCER_AGENT_ID)",
@@ -3547,7 +3748,7 @@ function registerAgentCommands(
         "--harness-session-id <id>",
         "Provider session id for hooks that run outside per-agent env",
       ),
-    (opts) =>
+    (opts, args) =>
       buildAgentActivityFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
         event: typeof opts.event === "string" ? opts.event : "",
@@ -3557,6 +3758,7 @@ function registerAgentCommands(
           typeof opts.harnessSessionId === "string"
             ? opts.harnessSessionId
             : null,
+        notifyPayload: args[0] ?? null,
       }),
   );
 
@@ -3601,6 +3803,93 @@ function registerAgentCommands(
         provider: typeof opts.provider === "string" ? opts.provider : "",
         epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+      }),
+  );
+}
+
+function registerBotCommands(program: Command): void {
+  const bot = program
+    .command("bot")
+    .description(
+      "List your bots, post to them, follow their threads, and see what they follow",
+    );
+  const botArgument = "Bot id, or its title";
+
+  withRunner(
+    bot
+      .command("list")
+      .description(
+        "List your bots in every environment you belong to, with the host each runs on and its open requests",
+      ),
+    () => buildBotListCommand(),
+  );
+
+  // Posting and replying are hidden and refused on the readonly surface (see
+  // `READONLY_REFUSED_COMMANDS`); the reads stay offered.
+  const hideSends = resolveAgentCliSurface(readonlyEnv()) === "readonly";
+  const waitOption =
+    "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.";
+  withRunner(
+    bot
+      .command("post", { hidden: hideSends })
+      .description(
+        "Post to a bot and print the request it opens. The bot answers in a new thread, in turns that count toward your usage like any other agent's.",
+      )
+      .argument("<bot>", botArgument)
+      .argument("<text>", "The post")
+      .option("--wait <duration>", waitOption),
+    (opts, args) =>
+      buildBotPostCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        text: expectRequiredPositional(args[1], "text"),
+        wait: typeof opts.wait === "string" ? opts.wait : null,
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("threads")
+      .description(
+        "List a bot's threads with the post each answers, its replies, open requests and cost. Works only on the host the bot runs on.",
+      )
+      .argument("<bot>", botArgument),
+    (_opts, args) =>
+      buildBotThreadsCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("reply", { hidden: hideSends })
+      .description(
+        "Write in one of a bot's threads and print the request it opens. The bot answers there, in turns that count toward your usage like any other agent's.",
+      )
+      .argument("<bot>", botArgument)
+      .argument("<thread>", "Thread id, from `traycer bot threads`")
+      .argument("<text>", "The message")
+      .option("--wait <duration>", waitOption),
+    (opts, args) =>
+      buildBotReplyCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        threadId: expectRequiredPositional(args[1], "thread"),
+        text: expectRequiredPositional(args[2], "text"),
+        wait: typeof opts.wait === "string" ? opts.wait : null,
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("checkins")
+      .description(
+        "List the tasks a bot follows, how often it checks in on each, and when it last did",
+      )
+      .argument("<bot>", botArgument)
+      .option("--task <id>", "Show only this task"),
+    (opts, args) =>
+      buildBotCheckinsCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        taskId: typeof opts.task === "string" ? opts.task : null,
       }),
   );
 }
@@ -3662,7 +3951,11 @@ function registerMonitorCommand(program: Command): void {
         }\n`,
       );
       await finishAndExit(1);
+      return;
     }
+    // `runMonitor` returns only once stdout's reader has closed the pipe (an
+    // orphaned monitor): that is a normal end, not a failure.
+    await finishAndExit(0);
   });
 }
 
@@ -3674,14 +3967,25 @@ function registerMonitorCommand(program: Command): void {
 // the CLI invocation itself - including the Windows `traycer.exe`
 // suffix.
 const entryArgv = typeof process !== "undefined" ? process.argv[1] : undefined;
-if (isTraycerCliEntrypoint(entryArgv)) {
+// `traycer data ...` takes its own control entry INSTEAD of everything below:
+// no CLI log, no migration admission, no slot refresh, no ordinary program.
+// It must answer while a migration holds the startup barrier or the location
+// record is unusable, and the migration coordinator must be neither an
+// admitted participant nor a writer of the folder it moves. Only argv whose
+// command is `data` goes there; see `data-control-entry.ts`.
+const dataControl =
+  isTraycerCliEntrypoint(entryArgv) && selectsDataControlCommand(process.argv);
+if (dataControl) {
+  void runDataControlEntry(process.argv);
+}
+if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const entryLogger = createCliLogger(config.environment);
   installProcessFailureHandlers(entryLogger);
+  // Before any command runs, so every writer is covered - including the ones
+  // that bypass std-write (bare `process.stdout.write`, `console.error`). A
+  // reader that closed the pipe is not a CLI fault; see std-write.ts.
+  installStdioErrorGuards();
   const program = buildProgram();
-  entryLogger.debug("CLI entrypoint parsing argv", {
-    environment: config.environment,
-    argvLength: process.argv.length,
-  });
   // Keep the well-known CLI slot pointing at the anchored binary, BEFORE
   // commander parses anything.
   //
@@ -3720,6 +4024,45 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
   const runEntry = async (): Promise<void> => {
     try {
+      // Before the slot refresh and before Commander: the slot, the CLI log and
+      // every command write under the data root, and none of that may happen
+      // while a data migration holds its startup barrier. A refusal writes
+      // nothing - not even the CLI log.
+      const admission = await admitCliInvocation();
+      if (admission.kind === "refused") {
+        if (argvRequestsJson(program)) {
+          const event = {
+            type: "result",
+            status: "error",
+            error: {
+              code: CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED,
+              message: admission.message,
+              details: null,
+            },
+            timestamp: new Date().toISOString(),
+          };
+          writeStdout(`${JSON.stringify(event)}\n`);
+        } else {
+          writeStderr(
+            `traycer: ${admission.message} [code=${CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED}]\n`,
+          );
+        }
+        await finishAndExit(1);
+        return;
+      }
+      // A person at a terminal hears about a populated default data folder
+      // that is not a known migration backup (Desktop shows its own notice);
+      // a service or Desktop-spawned invocation does not repeat it.
+      if (process.stderr.isTTY === true) {
+        const warning = unexpectedDefaultDataRootWarning();
+        if (warning !== null) writeStderr(`traycer: warning: ${warning}\n`);
+      }
+      // After admission: at debug level this appends to the CLI log under the
+      // data root.
+      entryLogger.debug("CLI entrypoint parsing argv", {
+        environment: config.environment,
+        argvLength: process.argv.length,
+      });
       const replacedRunningBinary =
         await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it

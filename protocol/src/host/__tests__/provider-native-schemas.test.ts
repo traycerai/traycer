@@ -44,7 +44,7 @@ import {
   providersSetEnabledRequestSchemaV20,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV20,
-  providersSetEnvOverrideRequestSchema,
+  providersSetEnvOverrideRequestSchemaV21,
   providersSetEnvOverrideResponseSchemaV20,
   providersSetSelectionRequestSchema,
   providersSetSelectionResponseSchemaV20,
@@ -174,7 +174,7 @@ const MUTATION_V20_REQUEST_PARSER_BY_METHOD: Record<
   "providers.setApiKey": providersSetApiKeyRequestSchema,
   "providers.clearApiKey": providersClearApiKeyRequestSchema,
   "providers.setTerminalAgentArgs": providersSetTerminalAgentArgsRequestSchema,
-  "providers.setEnvOverride": providersSetEnvOverrideRequestSchema,
+  "providers.setEnvOverride": providersSetEnvOverrideRequestSchemaV21,
   "providers.deleteEnvOverride": providersDeleteEnvOverrideRequestSchema,
   "providers.awaitLogin": providersAwaitLoginRequestSchemaV20,
 };
@@ -406,6 +406,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
                 setEnabled: [],
               },
               traycerSessionToolsNotice: true,
+              openChatsApplyNextMessage: false,
             },
             skills: null,
             modelProviders: null,
@@ -805,6 +806,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(
       providersNativeMutateRequestSchema.parse({
         providerId: "claude-code",
+        executableWriteGrant: null,
         mutation: {
           kind: "mcp",
           scope: "global",
@@ -817,7 +819,13 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       providersNativeMutateResponseSchema.parse({
         result: { ok: true, kind: "mcp", servers: [] },
       }).result,
-    ).toEqual({ ok: true, kind: "mcp", servers: [] });
+    ).toEqual({
+      ok: true,
+      kind: "mcp",
+      servers: [],
+      notices: [],
+      coverage: null,
+    });
   });
 
   // `result` is deliberately REQUIRED on these methods: they exist only to
@@ -1043,6 +1051,8 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       "store_version_unsupported",
       "rollback_failed",
       "config_unreadable",
+      "server_not_found",
+      "change_shadowed",
     ] as const) {
       expect(providerNativeErrorCodeSchema.parse(code)).toBe(code);
     }

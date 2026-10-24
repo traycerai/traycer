@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
+import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -40,7 +41,9 @@ function SheetOverlay({
         className,
       )}
       {...props}
-    />
+    >
+      <BackdropDimSource strength="10" />
+    </SheetPrimitive.Overlay>
   );
 }
 

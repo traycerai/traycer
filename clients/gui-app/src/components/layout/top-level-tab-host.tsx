@@ -34,10 +34,7 @@ import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { newestLandingDraftId } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import {
-  getTabStructuralLockRevision,
-  subscribeTabStructuralLocks,
-} from "@/stores/tabs/tab-structural-lock";
+import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 // Side-effect import: installs renderer parking's open-tab mirror (plan C, C1
 // fixup 1). Anchored HERE because this component is the retention pool - it is
@@ -584,18 +581,17 @@ function useFillableSlotDropActive(
     })),
   );
   // `resolveValidatedTopLevelTabDrop` consults the structural-lock registry,
-  // which lives outside both stores above. Without this the highlight would
-  // keep whatever it computed when the pointer arrived, so a lock taken or
-  // released mid-drag left the feedback disagreeing with what the drop does.
-  // Same subscription the split-slot chooser uses.
-  useSyncExternalStore(
+  // which lives outside both stores above. The answer is read as the
+  // registry's snapshot, so a lock taken or released mid-drag reaches the
+  // highlight: the compiler memoizes a render-time call on its arguments, and
+  // none of them change when the registry does.
+  return useSyncExternalStore(
     subscribeTabStructuralLocks,
-    getTabStructuralLockRevision,
-    getTabStructuralLockRevision,
-  );
-  if (!isOver || activeHeaderTab === null) return false;
-  return (
-    resolveValidatedTopLevelTabDrop(activeHeaderTab, target, layout) !== null
+    () =>
+      isOver &&
+      activeHeaderTab !== null &&
+      resolveValidatedTopLevelTabDrop(activeHeaderTab, target, layout) !== null,
+    () => false,
   );
 }
 
@@ -607,6 +603,8 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
       return tabSurfaceDescriptor("sample-workspace").render(props.tab);
     case "draft":
       return tabSurfaceDescriptor("draft").render(props.tab);
+    case "bot":
+      return tabSurfaceDescriptor("bot").render(props.tab);
     case "history":
       return tabSurfaceDescriptor("history").render(props.tab);
     case "settings":

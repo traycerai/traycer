@@ -1,5 +1,14 @@
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import {
+  isUnenrolledSandboxOption,
+  type HostScopeOption,
+  type HostScopeSandbox,
+} from "@/components/settings/host-scope/host-scope-model";
 import type {
   FleetUpdateView,
   FleetUpdateViewKind,
@@ -101,7 +110,27 @@ export function isHostOptionSelectable(
   surfaceState: HostRowSurfaceState,
 ): boolean {
   if (surfaceState.kind !== "available") return false;
-  return intent === "view" || host.connectable;
+  if (intent === "view") return true;
+  if (host.sandbox !== null && host.sandbox.frozen) return false;
+  return host.connectable || isSleepingSandboxPick(host);
+}
+
+/**
+ * A sandbox that is asleep (suspended, stopped or released, or on its way
+ * there) and not frozen. Picking it in a `pin` or `bind` picker is the user's next
+ * action, which wakes it (`wakeSandboxOnPick`), so the row is offered
+ * whatever its route says: a sleeping sandbox reads `offline`, and past the
+ * relay fuse's grace it has no route at all. The pin or preference is stored
+ * at once; the surface resolves to its fallback while the sandbox's lease
+ * reads dead, so nothing lands on it before it answers, and returns to it
+ * when it does. A frozen sandbox is never offered: a wake would only refuse.
+ */
+export function isSleepingSandboxPick(host: HostScopeOption): boolean {
+  return (
+    host.sandbox !== null &&
+    !host.sandbox.frozen &&
+    isSandboxAsleep(host.sandbox.state)
+  );
 }
 
 /**
@@ -173,9 +202,31 @@ export function hostOptionStatusWord(
   // THAT machine, and invites trying another one when no other one can help.
   if (surfaceState.kind === "inert") return null;
   if (host.settingUp) return "setting up";
+  // A sandbox speaks its lifecycle instead of connectivity: "suspended" is
+  // why it is not answering, which "offline" would hide. Except "awake",
+  // which explains nothing about a row that cannot be reached: there the
+  // health or the refusal word says why, and "awake" is left for the row
+  // that is fine.
+  const sandboxWord =
+    host.sandbox === null ? null : sandboxStateWord(host.sandbox);
+  if (sandboxWord !== null && sandboxWord !== "awake") return sandboxWord;
   const statusWord = STATUS_WORD[host.health.state];
   if (statusWord !== null) return statusWord;
-  return surfaceState.kind === "refused" ? surfaceState.word : null;
+  if (surfaceState.kind === "refused") return surfaceState.word;
+  return sandboxWord;
+}
+
+/**
+ * Whether a sandbox's lifecycle word gives way to its host health: the
+ * sandbox is `awake` (so its lifecycle explains no unreachability) and its
+ * health has a word of its own (offline, restarting, update required...).
+ * Every other lifecycle word (suspended, resuming, stopped, frozen, failed)
+ * is itself why the host is not answering, and keeps the slot.
+ */
+export function sandboxWordYieldsToHealth(host: HostScopeOption): boolean {
+  if (host.sandbox === null) return false;
+  if (sandboxStateWord(host.sandbox) !== "awake") return false;
+  return STATUS_WORD[host.health.state] !== null;
 }
 
 /**
@@ -345,7 +396,355 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
  */
 export function hostOptionKindLabel(host: HostScopeOption): string {
   if (host.isLocalMachine) return "This machine";
+  if (host.sandbox !== null) return "Sandbox";
   if (host.entry?.kind === "remote") return "Remote host";
   if (host.entry?.kind === "mock") return "Mock host";
   return "Host";
+}
+
+/**
+ * A sandbox's lifecycle, as the one word a row carries in place of the
+ * connectivity it would otherwise show. Every state has a word, `awake`
+ * included: a sandbox is billed by state, so "awake" is information a person
+ * scanning the list acts on, where a personal host's "online" is not.
+ * `frozen` leads, because it is why a suspended or stopped sandbox will not
+ * wake; a destroyed or failed row never reads frozen (the flag is folded with
+ * the state upstream, `isSandboxFrozenInEffect`).
+ */
+const SANDBOX_STATE_WORD: Record<HostSandboxState, string> = {
+  creating: "creating",
+  awake: "awake",
+  suspending: "suspending",
+  suspended: "suspended",
+  resuming: "resuming",
+  stopping: "stopping",
+  stopped: "stopped",
+  starting: "starting",
+  destroying: "destroying",
+  destroyed: "destroyed",
+  failed: "failed",
+  released: "released",
+};
+
+export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
+  if (sandbox.frozen) return "frozen";
+  return sandbox.state === null ? null : SANDBOX_STATE_WORD[sandbox.state];
+}
+
+/**
+ * Where a row sits in a host list:
+ *
+ * - `personal`: the user's own machines, the list's first group.
+ * - `sandbox`: a sandbox the user created, in a collapsible group below them.
+ * - `agent-sandbox`: a burst sandbox an agent created for one task. Shown ONLY
+ *   by the host list, in a collapsed sub-group; never offered by a picker,
+ *   where starting work on it would outlive the task it was made for.
+ * - `hidden`: left out of this list.
+ *
+ * The Automations pod (`kind: "automation"`) is a slim host for scheduled
+ * runs: the host list shows it with the user's sandboxes, and no picker
+ * offers it. It is reached by its `automation` alias and the configuration's
+ * Sandboxes page.
+ *
+ * `listsAgentSandboxes` is the host list (Settings), every other surface is a
+ * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
+ * answered (`summary === null`): until `GET /api/sandboxes` says it is not
+ * burst, it might be, and a burst sandbox offered once is the leak.
+ *
+ * The server pool (`kind: "pool"`) is hidden from every list: it serves the
+ * cloud's own read paths and is not a machine anyone picks, activates or
+ * manages.
+ */
+export type HostPickerGroup =
+  | "personal"
+  | "sandbox"
+  | "agent-sandbox"
+  | "hidden";
+
+export function hostOptionPickerGroup(
+  host: HostScopeOption,
+  listsAgentSandboxes: boolean,
+  /**
+   * The viewer a composer picker is scoped to, or `null` for every other
+   * list. A composer offers only the sandboxes the viewer started or kept;
+   * the mode adds that `hidden` arm and changes no other.
+   */
+  composerViewer: ComposerPickerViewer | null,
+): HostPickerGroup {
+  if (host.entry?.kind === "pool") return "hidden";
+  if (host.sandbox === null) return "personal";
+  // A sandbox no host row stands for yet: never offered as a
+  // host. The host list groups it by the rules below, like any sandbox.
+  if (!listsAgentSandboxes && isUnenrolledSandboxOption(host)) return "hidden";
+  const summary = host.sandbox.summary;
+  if (summary === null) return listsAgentSandboxes ? "sandbox" : "hidden";
+  if (summary.kind === "automation") {
+    return listsAgentSandboxes ? "sandbox" : "hidden";
+  }
+  if (summary.burst) return listsAgentSandboxes ? "agent-sandbox" : "hidden";
+  if (
+    composerViewer !== null &&
+    !viewerStartedOrKept(host.sandbox, summary, composerViewer)
+  ) {
+    return "hidden";
+  }
+  return "sandbox";
+}
+
+/** Who a composer picker lists sandboxes for. */
+export interface ComposerPickerViewer {
+  /** `null` while signed out: no team sandbox is then the viewer's. */
+  readonly userId: string | null;
+}
+
+/**
+ * Whether the viewer started this sandbox or kept it. A personal sandbox is
+ * its owner's (the control plane lists only the viewer's own), so it is
+ * theirs; a team sandbox is theirs when they created it or kept it, so a
+ * teammate's sandbox, kept or not, stays on the team's Sandboxes page.
+ */
+function viewerStartedOrKept(
+  sandbox: HostScopeSandbox,
+  summary: SandboxSummary,
+  viewer: ComposerPickerViewer,
+): boolean {
+  if (!sandbox.teamOwned) return true;
+  if (viewer.userId === null) return false;
+  return (
+    summary.createdBy?.userId === viewer.userId ||
+    summary.keptBy?.userId === viewer.userId
+  );
+}
+
+/**
+ * Whether Activate may be offered for this row: exactly the rows a full-host
+ * picker offers. The host list keeps the Automations pod, burst sandboxes and
+ * an unconfirmed sandbox (`summary === null`) visible for management.
+ * Activating one would route the window's new work to a scheduled-run pod or
+ * a task-owned sandbox, which every picker hides for that reason. Asked
+ * without the composer's viewer, so who started a sandbox never decides it.
+ */
+export function hostOptionCanActivate(host: HostScopeOption): boolean {
+  return hostOptionPickerGroup(host, false, null) !== "hidden";
+}
+
+/**
+ * Why a team's host is never this window's host. Shown on its disabled
+ * Activate and as the refusal when a switch to one is asked for anyway.
+ */
+export const TEAM_HOST_ACTIVATE_REASON = "Team hosts can't be made active.";
+
+/**
+ * One team's hosts in a list: its sandboxes and pods, and the
+ * burst ones an agent made, under the team's name.
+ */
+export interface HostTeamGroup {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly sandboxes: readonly HostScopeOption[];
+  readonly agentSandboxes: readonly HostScopeOption[];
+}
+
+export interface HostPickerGroups {
+  readonly personal: readonly HostScopeOption[];
+  readonly sandboxes: readonly HostScopeOption[];
+  readonly agentSandboxes: readonly HostScopeOption[];
+  /** Ordered by team name, then id. */
+  readonly teams: readonly HostTeamGroup[];
+}
+
+/**
+ * The team that owns a sandbox row, from its registry `owner`, or `null`: a
+ * personal host, a sandbox the person owns, and a row whose registry carries
+ * no `owner` (an authn from before it) all stay in the person's own groups.
+ */
+export function hostOptionTeamOwner(
+  host: HostScopeOption,
+): { readonly teamId: string; readonly teamName: string } | null {
+  if (host.sandbox === null) return null;
+  const owner = host.item?.owner ?? null;
+  if (owner === null || owner.kind !== "team") return null;
+  return { teamId: owner.id, teamName: owner.name };
+}
+
+interface MutableTeamGroup {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly sandboxes: HostScopeOption[];
+  readonly agentSandboxes: HostScopeOption[];
+}
+
+/**
+ * Splits a list into its groups, in the list's own order. `keepHostId` is the
+ * row the surface is pointed at: it is never dropped, because hiding the
+ * current answer is not the same thing as not offering it (a composer fixed to
+ * a burst sandbox's tab still shows that tab's host).
+ */
+export function groupHostOptions(
+  hosts: readonly HostScopeOption[],
+  listsAgentSandboxes: boolean,
+  composerViewer: ComposerPickerViewer | null,
+  keepHostId: string | null,
+): HostPickerGroups {
+  const personal: HostScopeOption[] = [];
+  const sandboxes: HostScopeOption[] = [];
+  const agentSandboxes: HostScopeOption[] = [];
+  const teams = new Map<string, MutableTeamGroup>();
+  for (const host of hosts) {
+    const group = hostOptionPickerGroup(
+      host,
+      listsAgentSandboxes,
+      composerViewer,
+    );
+    const owner = hostOptionTeamOwner(host);
+    let target = { sandboxes, agentSandboxes };
+    if (owner !== null) {
+      const team = teams.get(owner.teamId) ?? {
+        teamId: owner.teamId,
+        teamName: owner.teamName,
+        sandboxes: [],
+        agentSandboxes: [],
+      };
+      teams.set(owner.teamId, team);
+      target = team;
+    }
+    if (group === "personal") personal.push(host);
+    else if (group === "sandbox") target.sandboxes.push(host);
+    else if (group === "agent-sandbox") target.agentSandboxes.push(host);
+    else if (host.hostId === keepHostId) target.sandboxes.push(host);
+  }
+  return {
+    personal,
+    sandboxes,
+    agentSandboxes,
+    teams: [...teams.values()]
+      .filter(
+        (team) => team.sandboxes.length > 0 || team.agentSandboxes.length > 0,
+      )
+      .sort(
+        (a, b) =>
+          a.teamName.localeCompare(b.teamName) ||
+          a.teamId.localeCompare(b.teamId),
+      ),
+  };
+}
+
+/**
+ * A composer picker's host groups: `Yours` (the person's computers) and
+ * `Sandboxes you started` (every configuration together, the viewer's own
+ * and the team sandboxes they started or kept, never an agent's), in the
+ * list's order. `keepHostId` is the row the composer is pointed at, which is
+ * never dropped (see {@link groupHostOptions}).
+ */
+export interface ComposerHostGroups {
+  readonly yours: readonly HostScopeOption[];
+  readonly started: readonly HostScopeOption[];
+}
+
+export function groupComposerHostOptions(
+  hosts: readonly HostScopeOption[],
+  viewer: ComposerPickerViewer,
+  keepHostId: string | null,
+): ComposerHostGroups {
+  const groups = groupHostOptions(hosts, false, viewer, keepHostId);
+  return {
+    yours: groups.personal,
+    started: [
+      ...groups.sandboxes,
+      ...groups.teams.flatMap((team) => team.sandboxes),
+    ],
+  };
+}
+
+/** `N awake` beside the collapsed `Sandboxes you started` count. */
+export function awakeSandboxCount(hosts: readonly HostScopeOption[]): number {
+  return hosts.filter(
+    (host) =>
+      host.sandbox !== null &&
+      !host.sandbox.frozen &&
+      host.sandbox.state === "awake",
+  ).length;
+}
+
+/**
+ * The one line every credential control shows, disabled, on a sandbox.
+ */
+export const SANDBOX_CREDENTIALS_REFUSED = "Sandboxes don't take sign-ins";
+
+/**
+ * Whether a credential (a sign-in, a provider's API key or env override, a
+ * synced profile, an MCP server's auth) may be sent to this host. A sandbox
+ * runs code the user did not write on a machine they do not hold, so it takes
+ * none of them. The check is made BEFORE the RPC: the sandbox's own
+ * `SANDBOX_HOST_REFUSES_CREDENTIALS` arrives only after the secret already
+ * has. {@link hostEntryTakesCredentials} is the same rule over a directory
+ * entry, for a surface that holds one instead of a picker row. The server
+ * pool takes none either: it serves the cloud's reads and holds no one's
+ * secrets.
+ */
+export function hostTakesCredentials(host: HostScopeOption): boolean {
+  return host.sandbox === null && host.entry?.kind !== "pool";
+}
+
+/**
+ * {@link hostTakesCredentials} over a directory entry. An unknown host
+ * (`null`) is not refused here: with no directory row there is no route to
+ * send through either.
+ */
+export function hostEntryTakesCredentials(
+  entry: HostDirectoryEntry | null,
+): boolean {
+  return (
+    entry === null ||
+    (entry.kind !== "pool" && !isSandboxHostDirectoryEntry(entry))
+  );
+}
+
+/**
+ * The rows a picker may offer as the TARGET of a credential: personal hosts
+ * only ({@link hostTakesCredentials}), so a sandbox is never offered as a
+ * step that would hand it a secret.
+ */
+export function credentialTargetHostOptions(
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  return hosts.filter(hostTakesCredentials);
+}
+
+/**
+ * {@link groupHostOptions} flattened for a surface that draws one flat list
+ * (the browser sidebar, a sweep): personal hosts first, then the person's own
+ * pickable sandboxes, then each team's in team order, never a burst one.
+ */
+export function pickableHostOptions(
+  hosts: readonly HostScopeOption[],
+  keepHostId: string | null,
+): readonly HostScopeOption[] {
+  const groups = groupHostOptions(hosts, false, null, keepHostId);
+  return [
+    ...groups.personal,
+    ...groups.sandboxes,
+    ...groups.teams.flatMap((team) => team.sandboxes),
+  ];
+}
+
+/**
+ * The rows the app-wide host may be switched to (the account menu): personal
+ * hosts, then the person's own pickable sandboxes. A team's sandbox is never
+ * one - it serves its team's environment, and the selection authority refuses
+ * it - so offering it would be a pick that does nothing. A team sandbox whose
+ * registry row has not arrived lands in the own-sandbox group (grouping reads
+ * the row's owner), so the directory's `teamOwned` fact excludes it too.
+ */
+export function appWideHostOptions(
+  hosts: readonly HostScopeOption[],
+  keepHostId: string | null,
+): readonly HostScopeOption[] {
+  const groups = groupHostOptions(hosts, false, null, keepHostId);
+  return [
+    ...groups.personal,
+    ...groups.sandboxes.filter(
+      (host) => host.sandbox === null || !host.sandbox.teamOwned,
+    ),
+  ];
 }

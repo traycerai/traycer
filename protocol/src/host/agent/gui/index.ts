@@ -1,5 +1,6 @@
 export * from "./unary-schemas";
 export * from "./contracts";
+export * from "./prestart-runtime";
 export * from "./subscribe";
 export * from "./agent-runtime";
 export * from "./agent-runtime-accumulator";

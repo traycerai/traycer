@@ -1,12 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SchemaVersion,
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
-import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  WsStreamClient,
+  type StreamMethodSupport,
+} from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
+  WebSocketCloseEvent,
+  WebSocketErrorEvent,
+  WebSocketOpenEvent,
+} from "@traycer-clients/shared/host-transport/ws-factory";
+import type {
+  IStreamWebSocketFactory,
+  StreamWebSocketLike,
+  StreamWebSocketMessageEvent,
+} from "@traycer-clients/shared/host-transport/ws-stream-factory";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   acquireRemoteSession,
   remoteSessionRefCountForTest,
@@ -23,7 +43,12 @@ import {
   AuthService,
   AUTH_ERROR_SESSION_EXPIRED,
   type ExternalSession,
+  type RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
+import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
+import { authUserQueryOptions } from "@/hooks/auth/use-auth-user-query";
+import { createAppQueryClient } from "@/lib/query-client";
+import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 // Companion to `auth-service.test.ts`, isolated into its own file because it
@@ -73,12 +98,12 @@ function installFetch(handler: FetchHandler): () => void {
   };
 }
 
-function okWithProfile(): Promise<Response> {
+function okWithProfileFor(userId: string): Promise<Response> {
   return Promise.resolve(
     new Response(
       JSON.stringify({
         user: {
-          id: "user-1",
+          id: userId,
           name: "Test User",
           providerId: "gh-1",
           providerHandle: "test-user",
@@ -94,7 +119,7 @@ function okWithProfile(): Promise<Response> {
         },
         userSubscription: {
           id: "sub-1",
-          userID: "user-1",
+          userID: userId,
           orgID: null,
           teamID: null,
           customerId: "cus-1",
@@ -119,6 +144,10 @@ function okWithProfile(): Promise<Response> {
       },
     ),
   );
+}
+
+function okWithProfile(): Promise<Response> {
+  return okWithProfileFor("user-1");
 }
 
 function status(code: number): Promise<Response> {
@@ -189,6 +218,8 @@ function externalSessionForUser(
       },
       teamSubscriptions: [],
       payAsYouGoUsage: { allowPayAsYouGo: false },
+      environments: { personal: null, teams: [] },
+      actingAs: null,
     },
   };
 }
@@ -352,7 +383,31 @@ function freshIdentity(): RemoteSessionIdentity {
     relayAttachUrl: `wss://relay.test/authz-loss-attach-${nextIdentitySeq}`,
     authRecovery: "revalidate",
     authEpoch: "authz-loss-lease-1",
+    openAuth: "user-bearer",
   };
+}
+
+/**
+ * A scriptable `/stream` socket: the test fires the host's side (open, then a
+ * fatal frame) and the real `WsStreamClient` reacts to it.
+ */
+class ScriptedStreamSocket implements StreamWebSocketLike {
+  onopen: ((event: WebSocketOpenEvent) => void) | null = null;
+  onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
+  onerror: ((event: WebSocketErrorEvent) => void) | null = null;
+  onclose: ((event: WebSocketCloseEvent) => void) | null = null;
+
+  send(): void {}
+
+  close(): void {}
+
+  fireOpen(): void {
+    this.onopen?.({ type: "open" });
+  }
+
+  fireText(data: unknown): void {
+    this.onmessage?.({ type: "text", data: JSON.stringify(data) });
+  }
 }
 
 const trackedServices: AuthService[] = [];
@@ -426,10 +481,10 @@ describe("AuthService authorization-loss remote-session sweep", () => {
     // The copies held outside this renderer (desktop main's jar-plane
     // principal) learn of the terminal loss through this edge and nothing
     // else - an `unverified` snapshot is never projected cross-window.
-    const revokedTokens: string[] = [];
+    const revokedFanOuts: RevokedCloudAuthorization[] = [];
     const revokedSubscription = service.onCloudAuthorizationRevoked(
       (revoked) => {
-        revokedTokens.push(revoked.token);
+        revokedFanOuts.push(revoked);
       },
     );
 
@@ -440,7 +495,9 @@ describe("AuthService authorization-loss remote-session sweep", () => {
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
     // Once, and naming the bearer that was rejected - the fence a copy held
     // outside this renderer applies before withdrawing its own verification.
-    expect(revokedTokens).toEqual(["dead-token"]);
+    // A plain credential refusal (no `revocation_scope`), so it carries no
+    // revocation: only a "sign out everywhere" tells the other windows more.
+    expect(revokedFanOuts).toEqual([{ token: "dead-token", revocation: null }]);
     revokedSubscription.dispose();
 
     // THE FIX: the previously-established remote session was closed by the
@@ -524,6 +581,9 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    // `setSignedOut` keeps the last cloud verdict, so a demotion in an earlier
+    // test would otherwise colour the next test's unverified projection.
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
     restoreFetch = installFetch(() => okWithProfile());
   });
 
@@ -689,33 +749,48 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     // is NOT a `/api/v3/user` verdict, so the one rotation path that is NOT
     // one of the four fixed call sites (`rotateLiveBearer`, reached here via
     // the reactive 401 path) must NOT flip the verdict back to `true`.
+    //
+    // The session reaches `unverified` through a cold start with authn
+    // UNREACHABLE, not through a 401/401 demotion. A session authn REFUSED
+    // sets the terminal latch, and from then on a reactive revalidation is
+    // answered `rejected` without asking authn or rotating: a host refusing
+    // the held bearer would otherwise re-spend the refused refresh token on
+    // every request (see `auth-service-held-session-host-refusal.test.ts`).
+    // An `unverified` session that authn merely could not be reached for
+    // holds no verdict and no latch, so it still rotates reactively - and that
+    // is the rotation this test guards.
+    vi.useFakeTimers();
     const { service, host } = makeService();
     trackedServices.push(service);
-    await service.start();
-    await deviceSignIn(service, host, "dead-token");
-
-    // Demote to unverified (retain branch) exactly as in the first test.
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
-    restoreFetch = installFetch((input) => {
-      const url = typeof input === "string" ? input : String(input);
-      if (url === VALIDATION_URL || url === REFRESH_URL) {
-        return status(401);
-      }
-      return status(500);
-    });
-    const demoteOutcome = await service.revalidateCurrentContext();
-    expect(demoteOutcome?.kind).toBe("rejected");
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
     expect(useAuthStore.getState().status).toBe("unverified");
+    // Non-vacuity: no verdict was ever refused, so this is the unlatched path.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
 
     const provider = service.getRequestContextProvider();
     const contextBefore = provider.current();
+    // A never-verified startup mints a fresh context with `cloudAuthorized:
+    // false` at construction.
     expect(contextBefore?.cloudAuthorized).toBe(false);
 
-    // The stored refresh token is still good (the file was kept on demotion):
-    // a fresh reactive 401 rotate succeeds ("applied"), which drives
+    // Authn is reachable again and the stored refresh token is still good: a
+    // fresh reactive 401 rotate succeeds ("applied"), which drives
     // `rotateLiveBearer` while the session is still `unverified`. The
     // handler must distinguish the two validate calls by bearer - the stale
-    // "dead-token" (rejected, driving the rotate) and the freshly-rotated
+    // stored token (rejected, driving the rotate) and the freshly-rotated
     // "post-demotion-token" (accepted, driving `revalidateCurrentContextOnce`'s
     // post-rotate re-check) - or the second call would also read as rejected.
     restoreFetch();
@@ -736,6 +811,9 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       return status(500);
     });
 
+    // No timer is advanced before this call: the recovery loop's first tick
+    // would validate the stored token itself and promote the session to
+    // `signed-in`, which is a different transition from the one under test.
     const rotateOutcome = await service.revalidateCurrentContext();
     expect(rotateOutcome?.kind).toBe("valid");
     expect(service.getCurrentSessionSnapshot().token).toBe(
@@ -748,6 +826,690 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     const contextAfter = provider.current();
     expect(contextAfter).toBe(contextBefore);
     expect(contextAfter?.cloudAuthorized).toBe(false);
+  });
+
+  it("a valid revalidation after a reactive rotate on an unverified session restores the verdict with the store's signed-in", async () => {
+    // The step after the case above: the rotated bearer validates on the NEXT
+    // check for the same user. That is a verdict, and the store goes
+    // `signed-in` on it - here because the account was renamed since the stored
+    // snapshot, so the identity reads as changed. The context every host call
+    // socket reads (`cloudAuthorized: () => context.cloudAuthorized`) must go
+    // with it, or the host refuses each call of a session the UI shows as
+    // signed in.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Old Name" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore?.cloudAuthorized).toBe(false);
+
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer post-demotion-token"
+      ) {
+        return okWithProfile();
+      }
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return okWithRefreshToken("post-demotion-token");
+      }
+      return status(500);
+    });
+
+    // The reactive rotate: a bearer swap, still no verdict (see above).
+    const rotateOutcome = await service.revalidateCurrentContext();
+    expect(rotateOutcome?.kind).toBe("valid");
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(provider.current()?.cloudAuthorized).toBe(false);
+
+    // The next check validates the held bearer outright.
+    const verdictOutcome = await service.revalidateCurrentContext();
+    expect(verdictOutcome?.kind).toBe("valid");
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    const contextAfter = provider.current();
+    expect(contextAfter).toBe(contextBefore);
+    expect(contextAfter?.cloudAuthorized).toBe(true);
+  });
+
+  it("a valid verdict for the bearer a check was sent with is not projected onto a bearer a reconcile adopted meanwhile", async () => {
+    // The verdict names the token that was sent. A reconcile that adopts a
+    // same-user bearer authn refuses lands `unverified` on the new token
+    // without moving the identity generation, so only the credential
+    // generation tells the late verdict that its token is no longer the one
+    // held. Authorizing the adopted bearer would give a token authn has just
+    // refused a cloud verdict.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore?.cloudAuthorized).toBe(false);
+
+    // The check on the held bearer is left pending; authn refuses the bearer
+    // the reconcile is about to read off disk.
+    let answerHeldBearer: (response: Response) => void = () => undefined;
+    const heldBearerAnswer = new Promise<Response>((resolve) => {
+      answerHeldBearer = resolve;
+    });
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return status(500);
+      }
+      return init?.headers?.Authorization === "Bearer stale-stored-token"
+        ? heldBearerAnswer
+        : status(401);
+    });
+    const revalidation = service.revalidateCurrentContext();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await host.tokenStore.signIn(
+      { token: "adopted-token", refreshToken: "adopted-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the reconcile really did adopt the second bearer.
+    expect(service.getCurrentSessionSnapshot().token).toBe("adopted-token");
+
+    answerHeldBearer(await okWithProfile());
+    const outcome = await revalidation;
+    // The verdict is about a credential no longer held, so it is stale.
+    expect(outcome).toEqual({ kind: "superseded" });
+
+    expect(useAuthStore.getState().status).toBe("unverified");
+    const contextAfter = provider.current();
+    expect(contextAfter).toBe(contextBefore);
+    expect(contextAfter?.cloudAuthorized).toBe(false);
+  });
+
+  it("a user fetch started as one account is retried against the live account once a sibling window has signed in as another", async () => {
+    // The fetch is sent while this window is signed in as user-1. Before it
+    // answers, a sibling window switches accounts and the switch reaches this
+    // window as user-2. The switch moves the credential but not the identity
+    // generation, so user-1's late "valid" would pass the identity check; the
+    // query must retry against user-2 rather than cache user-1's answer or "no
+    // user" for the live account.
+    vi.useFakeTimers();
+    const queryClient = createAppQueryClient();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await deviceSignIn(service, host, "token-a");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().profile?.userId).toBe("user-1");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    let validationRequests = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return status(500);
+      }
+      validationRequests += 1;
+      return validationRequests === 1
+        ? heldCheckAnswer
+        : okWithProfileFor("user-2");
+    });
+
+    const pending = queryClient.fetchQuery(authUserQueryOptions(service, true));
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the check really is in flight and unanswered.
+    expect(validationRequests).toBe(1);
+
+    service.applyExternalSession(externalSessionForUser("user-2", "token-b"));
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+
+    answerHeldCheck(await okWithProfile());
+    await vi.advanceTimersByTimeAsync(1_100);
+    const user = await pending;
+
+    expect(user?.user.id).toBe("user-2");
+    expect(validationRequests).toBe(2);
+    const cached = queryClient.getQueryData<AuthenticatedUser | null>(
+      authQueryKeys.user(service),
+    );
+    expect(cached?.user.id).toBe("user-2");
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+    queryClient.clear();
+  });
+
+  it("a refusal of a credential no longer held neither rotates it nor signs out the account that replaced it", async () => {
+    // The check on user-1's bearer is refused after a sibling window has
+    // already signed in as user-2. The refusal is about a credential this
+    // window no longer holds, so it is dropped before any rotation: rotating
+    // user-1's pair against the pair the shared store now holds for user-2
+    // would be answered as a mismatch and sign the live session out.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await deviceSignIn(service, host, "token-a");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    let validationRequests = 0;
+    let refreshRequests = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshRequests += 1;
+        return status(401);
+      }
+      if (url !== VALIDATION_URL) {
+        return status(500);
+      }
+      validationRequests += 1;
+      return validationRequests === 1 ? heldCheckAnswer : status(500);
+    });
+
+    const pending = service.revalidateCurrentContext();
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the check really is in flight and unanswered.
+    expect(validationRequests).toBe(1);
+
+    service.applyExternalSession(externalSessionForUser("user-2", "token-b"));
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+
+    answerHeldCheck(await status(401));
+    const outcome = await pending;
+
+    expect(refreshRequests).toBe(0);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+    expect(outcome).toEqual({ kind: "superseded" });
+  });
+
+  it("a live revalidation stands down for an interactive sign-in attempt on an unverified session", async () => {
+    // Session recovery never races an interactive attempt, and the live
+    // revalidation must not either: a verdict would end `signing-in` while the
+    // device flow still runs, leaving the attempt's own result landing on a
+    // session the surface already reports as signed in.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+
+    // Authn is reachable again and accepts the bearer the session still holds.
+    restoreFetch();
+    restoreFetch = installFetch(() => okWithProfile());
+    const outcome = await service.revalidateCurrentContext();
+    expect(outcome).toEqual({ kind: "superseded" });
+
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+  });
+
+  it("an unauthorized stream close during an interactive sign-in re-dials instead of going terminal", async () => {
+    // The stream's UNAUTHORIZED recovery asks the live revalidation, which
+    // stands down under the attempt. Reading that as a rejection would close
+    // the stream for good while the sign-in is still deciding the session.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "stale-stored-token",
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    session.close();
+  });
+
+  it("an unauthorized stream close whose check an interactive sign-in overtakes re-dials instead of going terminal", async () => {
+    // The other ordering: the stream's recovery has already sent
+    // `/api/v3/user` when the sign-in starts, so the check is fenced by the
+    // identity generation after its answer lands. That internal `null` means
+    // "stale", not "no context"; reading it as a rejection would close the
+    // stream for good under a session the attempt is still deciding.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    const validationRequests = { value: 0 };
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      validationRequests.value += 1;
+      return heldCheckAnswer;
+    });
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "stale-stored-token",
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const revalidation = vi.spyOn(service, "revalidateCurrentContext");
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the recovery's check really is in flight, undecided.
+    expect(validationRequests.value).toBe(1);
+    expect(sockets).toHaveLength(1);
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    answerHeldCheck(await okWithProfile());
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    await expect(revalidation.mock.results[0]?.value).resolves.toEqual({
+      kind: "superseded",
+    });
+    session.close();
+  });
+
+  it("an unauthorized stream close whose check a completed same-user sign-in overtakes re-dials on the new bearer", async () => {
+    // The sign-in finishes while the recovery's check is still waiting on the
+    // held bearer's answer, so no attempt is running when that answer lands
+    // and the check is fenced as stale. The context is live on the new
+    // bearer, so `null` ("no context") would close the stream for good under
+    // a signed-in session; the check must answer "superseded" instead.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    const validationRequests = { value: 0 };
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      validationRequests.value += 1;
+      return validationRequests.value === 1 ? heldCheckAnswer : okWithProfile();
+    });
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "stale-stored-token",
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const revalidation = vi.spyOn(service, "revalidateCurrentContext");
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the recovery's check really is in flight, undecided.
+    expect(validationRequests.value).toBe(1);
+    expect(sockets).toHaveLength(1);
+
+    await deviceSignIn(service, host, "fresh-token-b");
+    await vi.waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+    expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token-b");
+
+    answerHeldCheck(await okWithProfile());
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token-b");
+    await expect(revalidation.mock.results[0]?.value).resolves.toEqual({
+      kind: "superseded",
+    });
+    session.close();
+  });
+
+  it("a refused live revalidation does not demote an interactive sign-in attempt or spend the refresh token", async () => {
+    // The mirror of the case above: authn refuses the held bearer, which would
+    // rotate it and land `unverified` over the running attempt.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    const refreshRequests = { value: 0 };
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshRequests.value += 1;
+      }
+      return status(401);
+    });
+    await service.revalidateCurrentContext();
+
+    expect(refreshRequests.value).toBe(0);
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+  });
+
+  it("a refused live revalidation stands down for a sibling window's sign-in that lands while the check is in flight", async () => {
+    // The sibling's `signing-in` arrives as a projection only: it starts no
+    // attempt of ours and moves no identity generation, so the answer to the
+    // check already in flight still looks current. It must be read again after
+    // the await, or the refusal spends the refresh token and demotes the
+    // store over the projected attempt.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    const requests = { validation: 0, refresh: 0 };
+    let releaseValidation: (response: Response) => void = () => undefined;
+    const heldValidation = new Promise<Response>((resolve) => {
+      releaseValidation = resolve;
+    });
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) {
+        requests.validation += 1;
+        return requests.validation === 1
+          ? heldValidation
+          : Promise.reject(new Error("unexpected second validation"));
+      }
+      if (url === REFRESH_URL) {
+        requests.refresh += 1;
+        return status(401);
+      }
+      return Promise.reject(new Error(`unexpected request to ${url}`));
+    });
+
+    const pending = service.revalidateCurrentContext();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests.validation).toBe(1);
+
+    await service.ingestProjectedSessionSnapshot({
+      status: "signing-in",
+      token: null,
+      profile: null,
+      contextMetadata: null,
+    });
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    releaseValidation(new Response(null, { status: 401 }));
+    const outcome = await pending;
+
+    // The effects first: on the unfenced path these are the spend and the
+    // demotion, which the outcome alone would not show.
+    expect(requests.refresh).toBe(0);
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getLastError()).toBeNull();
+    expect(outcome).toEqual({ kind: "superseded" });
   });
 
   /**
@@ -851,7 +1613,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       await deviceSignIn(service, host, "sibling-token");
       expect(useAuthStore.getState().status).toBe("signed-in");
 
-      service.ingestCloudAuthorizationRevoked("sibling-token");
+      service.ingestCloudAuthorizationRevoked("sibling-token", null);
 
       expect(useAuthStore.getState().status).toBe("unverified");
     });
@@ -869,7 +1631,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
       expect(service.getLastError()).toBeNull();
 
-      service.ingestCloudAuthorizationRevoked("sibling-token");
+      service.ingestCloudAuthorizationRevoked("sibling-token", null);
 
       expect(useAuthStore.getState().cloudVerdictLoss).toBe("ended-elsewhere");
     });
@@ -880,7 +1642,10 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       await service.start();
       await deviceSignIn(service, host, "current-token");
 
-      service.ingestCloudAuthorizationRevoked("a-bearer-this-window-replaced");
+      service.ingestCloudAuthorizationRevoked(
+        "a-bearer-this-window-replaced",
+        null,
+      );
 
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
@@ -897,7 +1662,10 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       await deviceSignIn(service, host, "current-token");
       expect(useAuthStore.getState().status).toBe("signed-in");
 
-      service.ingestCloudAuthorizationRevoked("a-bearer-this-window-replaced");
+      service.ingestCloudAuthorizationRevoked(
+        "a-bearer-this-window-replaced",
+        null,
+      );
 
       expect(useAuthStore.getState().status).toBe("signed-in");
     });
@@ -916,7 +1684,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
         announcements += 1;
       });
 
-      service.ingestCloudAuthorizationRevoked("echo-token");
+      service.ingestCloudAuthorizationRevoked("echo-token", null);
 
       expect(useAuthStore.getState().status).toBe("unverified");
       expect(announcements).toBe(0);

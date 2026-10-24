@@ -4,6 +4,7 @@ import {
   createHostReconnectEngine,
   HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
+  TEAM_MEMBER_REMOVED_FATAL_CODE,
   WAKE_RETRY_EPISODE_MS,
   isReopenableHostStreamClose,
   processReconnectEngine,
@@ -165,6 +166,15 @@ describe("close-reason predicates", () => {
     expect(isReopenableHostStreamClose(fatalClose("INCOMPATIBLE"))).toBe(false);
     expect(isReopenableHostStreamClose(fatalClose("INTERNAL"))).toBe(true);
     expect(isReopenableHostStreamClose(fatalClose("UNAUTHORIZED"))).toBe(true);
+  });
+
+  it("isReopenableHostStreamClose holds a removed team member's stream closed for good", () => {
+    expect(TEAM_MEMBER_REMOVED_FATAL_CODE).toBe("TEAM_MEMBER_REMOVED");
+    expect(
+      isReopenableHostStreamClose(fatalClose(TEAM_MEMBER_REMOVED_FATAL_CODE)),
+    ).toBe(false);
+    // An ordinary fatal code beside it still reopens: the hold is this one code.
+    expect(isReopenableHostStreamClose(fatalClose("INTERNAL"))).toBe(true);
   });
 });
 

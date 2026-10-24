@@ -62,6 +62,8 @@ function ReadLayoutUsage(props: {
     editing: true,
     // The Choose picker lists what the provider really reports.
     sample: false,
+    // The picker lists windows; a click in it picks one, and never reads.
+    retryHostId: null,
   });
   const profilesByProvider: Partial<
     Record<RateLimitProviderId, ReadonlyArray<ProviderProfile>>

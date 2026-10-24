@@ -93,6 +93,8 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       </button>
     ),
     DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
+    DropdownMenuRadioGroup: passthrough,
+    DropdownMenuRadioItem: passthrough,
     DropdownMenuShortcut: (props: {
       readonly children: ReactNode;
       readonly "data-testid": string | undefined;
@@ -119,6 +121,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import type { MaxModeContext } from "@/components/home/data/model-max-mode";
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
@@ -1036,6 +1039,7 @@ interface RenderPickerInput {
   > | null;
   readonly embedding?: HarnessModelPickerEmbedding | null;
   readonly hostId?: string | null;
+  readonly maxModeContext?: MaxModeContext;
 }
 
 interface PickerHarness {
@@ -1106,6 +1110,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
         <HarnessModelPicker
           labelDisplay="responsive"
           store={store}
+          maxModeContext={resolvedInput.maxModeContext ?? { kind: "none" }}
           withServiceTier={resolvedInput.withServiceTier ?? false}
           withReasoning={resolvedInput.withReasoning ?? true}
           tuiOnly={resolvedInput.tuiOnly ?? false}
@@ -4531,6 +4536,39 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.getByRole("textbox", { name: /^Search/ })).toBe(input);
   });
 
+  it("steps Standard, Fast, Ultrafast, Standard with the sub-leader digit 0 on a dual-tier model", async () => {
+    const dual = model({
+      slug: "gpt-5.5",
+      label: "GPT-5.5",
+      supportedServiceTiers: [
+        { id: "priority", label: "Fast", description: null },
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+      defaultServiceTier: null,
+    });
+    const seen: ServiceTier[] = [];
+    for (const start of ["", "priority", "ultrafast"] as const) {
+      const { serviceTierChanges } = renderPicker({
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+        withServiceTier: true,
+        serviceTier: start,
+        storeModels: [dual],
+      });
+      await openPicker();
+      act(() => {
+        fireLeaderDigit(0, "alt", false);
+      });
+      seen.push(...serviceTierChanges);
+      cleanup();
+    }
+
+    expect(seen).toEqual(["priority", "ultrafast", ""]);
+  });
+
   it("toggles fast mode off with a second sub-leader digit 0", async () => {
     const { serviceTierChanges } = renderPicker({
       withServiceTier: true,
@@ -4603,7 +4641,7 @@ describe("<HarnessModelPicker />", () => {
 
     // The footer config is present (`withServiceTier: true`) - this is the
     // per-model conditional case, not a caller that disabled Fast outright:
-    // `findUpgradeServiceTierForModel` has nothing to offer, so no Fast
+    // `nonDefaultServiceTiersForModel` has nothing to offer, so no Fast
     // button renders at all.
     expect(screen.queryByRole("button", { name: "Fast mode" })).toBeNull();
 
@@ -4611,7 +4649,7 @@ describe("<HarnessModelPicker />", () => {
       fireLeaderDigit(0, "alt", false);
     });
 
-    // `toggleServiceTier` bails out on the missing upgrade tier rather than
+    // `stepServiceTier` bails out on the missing upgrade tier rather than
     // throwing.
     expect(serviceTierChanges).toEqual([]);
   });
@@ -5380,6 +5418,138 @@ describe("<HarnessModelPicker />", () => {
           ).toBe(false);
         });
       });
+    });
+  });
+
+  describe("Max Mode", () => {
+    const MAX_COPY =
+      "Cursor lists this choice as Max Mode only, which uses a larger context window. On legacy request-based Cursor plans, Max Mode is billed at a higher rate.";
+    const maxModeMetadata = {
+      maxMode: {
+        chat: [{ reasoningEffort: null, fast: false }],
+        judge: [],
+        fastServiceTierId: null,
+      },
+    };
+
+    function installCursorCatalog(models: ReadonlyArray<ModelOption>): void {
+      const codex = codexModels();
+      queryMock.harnesses = [CODEX_HARNESS, CURSOR_HARNESS];
+      queryMock.catalogHarnesses = [
+        catalogHarness(CODEX_HARNESS, codex),
+        catalogHarness(CURSOR_HARNESS, models),
+      ];
+      queryMock.selectedModelsByHarness = new Map([
+        ["codex", codex],
+        ["cursor", models],
+      ]);
+    }
+
+    function maxOnlyModel(): ModelOption {
+      return model({
+        harnessId: "cursor",
+        slug: "max-only",
+        label: "Max Only",
+        metadata: maxModeMetadata,
+      });
+    }
+
+    beforeEach(() => {
+      installCursorCatalog([maxOnlyModel()]);
+    });
+
+    it("adds a Max Mode summary row to the chip tooltip only when the chat tuple is listed", async () => {
+      renderPicker({
+        selection: {
+          harnessId: "cursor",
+          modelSlug: "max-only",
+          profileId: null,
+        },
+        storeModels: [maxOnlyModel()],
+        maxModeContext: {
+          kind: "chat",
+          tuple: { reasoningEffort: null, serviceTier: null },
+        },
+      });
+
+      const trigger = screen.getByRole("button", {
+        name: /Max Only.*Max Mode/,
+      });
+      fireEvent.focus(trigger);
+      const tooltipText = (await screen.findByRole("tooltip")).textContent;
+      expect(tooltipText).toContain("Max Mode");
+      expect(tooltipText).toContain(MAX_COPY);
+    });
+
+    it("shows no chip marker or tooltip row in the none context or while the tuple is unknown", async () => {
+      for (const maxModeContext of [
+        { kind: "none" },
+        { kind: "chat", tuple: null },
+      ] satisfies ReadonlyArray<MaxModeContext>) {
+        const { unmount } = render(
+          pickerHarness({
+            selection: {
+              harnessId: "cursor",
+              modelSlug: "max-only",
+              profileId: null,
+            },
+            storeModels: [maxOnlyModel()],
+            maxModeContext,
+          }).element(false, undefined),
+        );
+        const trigger = screen.getByRole("button", { name: /Max Only/ });
+        expect(trigger.getAttribute("aria-label")).not.toContain("Max Mode");
+        fireEvent.focus(trigger);
+        expect((await screen.findByRole("tooltip")).textContent).not.toContain(
+          "Max Mode",
+        );
+        unmount();
+        cleanup();
+      }
+    });
+
+    it("badges a Max-only row with a tooltip line in a chat context, and not in none or null-tuple contexts", async () => {
+      installCursorCatalog([
+        model({ harnessId: "cursor", slug: "plain", label: "Plain" }),
+        maxOnlyModel(),
+      ]);
+      renderPicker({
+        selection: { harnessId: "cursor", modelSlug: "plain", profileId: null },
+        maxModeContext: {
+          kind: "chat",
+          tuple: { reasoningEffort: null, serviceTier: null },
+        },
+      });
+      await openPickerByTriggerName("Plain");
+
+      const maxRow = screen.getByRole("option", { name: /Max Only/ });
+      expect(within(maxRow).getByText("Max Mode")).not.toBeNull();
+      expect(
+        within(screen.getByRole("option", { name: /Plain/ })).queryByText(
+          "Max Mode",
+        ),
+      ).toBeNull();
+      fireEvent.focus(maxRow);
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        MAX_COPY,
+      );
+    });
+
+    it.each<[string, MaxModeContext]>([
+      ["none", { kind: "none" }],
+      ["chat with an unknown tuple", { kind: "chat", tuple: null }],
+    ])("renders no row badge for %s", async (_name, maxModeContext) => {
+      installCursorCatalog([
+        model({ harnessId: "cursor", slug: "plain", label: "Plain" }),
+        maxOnlyModel(),
+      ]);
+      renderPicker({
+        selection: { harnessId: "cursor", modelSlug: "plain", profileId: null },
+        maxModeContext,
+      });
+      await openPickerByTriggerName("Plain");
+
+      expect(screen.queryByText("Max Mode")).toBeNull();
     });
   });
 });

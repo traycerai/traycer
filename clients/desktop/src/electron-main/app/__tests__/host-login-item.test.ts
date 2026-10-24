@@ -453,7 +453,7 @@ describe("registerHostLoginItem", () => {
           }),
         );
 
-        await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+        await expect(registerHostLoginItem(revalidate, null)).resolves.toBe(
           "deferred-busy",
         );
         expect(
@@ -472,7 +472,7 @@ describe("registerHostLoginItem", () => {
         Promise.resolve(setLoginItemSettings.mock.calls.length < 2),
       );
 
-      await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+      await expect(registerHostLoginItem(revalidate, null)).resolves.toBe(
         "deferred-busy",
       );
       expect(
@@ -510,7 +510,7 @@ describe("registerHostLoginItem", () => {
             // "parked" rather than the prior primary status it used to
             // return in its place - an `enabled` here used to read as a
             // completed register cycle to the caller.
-            await expect(registerHostLoginItem(undefined)).resolves.toBe(
+            await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
               "parked",
             );
             expect(setLoginItemSettings).not.toHaveBeenCalled();
@@ -549,7 +549,7 @@ describe("registerHostLoginItem", () => {
           return Promise.resolve(true);
         });
 
-        await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+        await expect(registerHostLoginItem(revalidate, null)).resolves.toBe(
           "deferred-busy",
         );
         expect(
@@ -571,7 +571,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem(undefined);
+    const status = await registerHostLoginItem(undefined, null);
 
     expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
     // Step 3: transition cleanup of the pre-split serviceName. Never a
@@ -600,7 +600,9 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "enabled",
+    );
     expect(existsSync(legacyCliManifestPath())).toBe(false);
   });
 
@@ -617,7 +619,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "deferred-busy",
     );
     // Only the one throwing call — the cycle never reaches the agent-label
@@ -631,7 +633,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "requires-approval",
     );
   });
@@ -641,7 +643,7 @@ describe("registerHostLoginItem", () => {
     // an unknown shape so the BTM-commit poll exhausts its deadline.
     getLoginItemSettings.mockReturnValue({ status: "something-new" });
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "not-registered",
     );
   });
@@ -655,7 +657,9 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // retry 2
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // committed
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "enabled",
+    );
   });
 
   it("surfaces `not-registered` instead of throwing when the AGENT `setLoginItemSettings` throws - the boundary catch keeps Electron API errors from poisoning the renderer", async () => {
@@ -676,7 +680,7 @@ describe("registerHostLoginItem", () => {
         throw new Error("SMAppService bridge said no");
       });
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "not-registered",
     );
     expect(getLoginItemSettings).toHaveBeenCalledTimes(2);
@@ -689,7 +693,7 @@ describe("registerHostLoginItem", () => {
     writeLegacyCliManifest();
     isHostRemovedByUserMock.mockResolvedValue(true);
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "removed-by-user",
     );
     expect(setLoginItemSettings).not.toHaveBeenCalled();
@@ -712,7 +716,7 @@ describe("registerHostLoginItem", () => {
     writeLegacyCliManifest();
     const revalidate = vi.fn().mockResolvedValue(false);
 
-    await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+    await expect(registerHostLoginItem(revalidate, null)).resolves.toBe(
       "deferred-busy",
     );
     expect(revalidate).toHaveBeenCalledTimes(1);
@@ -728,7 +732,9 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    await expect(registerHostLoginItem(revalidate)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(revalidate, null)).resolves.toBe(
+      "enabled",
+    );
     // Re-checked adjacent to every destructive edge (the top-level entry
     // guard, then once per edge: legacy bootout, legacy clear, primary
     // bootout, primary clear, primary register, pending-revision marker
@@ -766,7 +772,9 @@ describe("registerHostLoginItem", () => {
         getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
       }
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+        "enabled",
+      );
 
       // The successful agent registration is the important assertion: a
       // `not-found` snapshot must not merely avoid logging a park. It also
@@ -810,7 +818,9 @@ describe("registerHostLoginItem", () => {
         getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
       }
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+        "enabled",
+      );
       expect(
         setLoginItemSettings.mock.calls.some(
           ([options]) =>
@@ -862,7 +872,9 @@ describe("registerHostLoginItem", () => {
         }
       });
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+        "enabled",
+      );
       expect(setLoginItemSettings).not.toHaveBeenCalledWith(
         expect.objectContaining({
           openAtLogin: false,
@@ -879,7 +891,9 @@ describe("registerHostLoginItem", () => {
       })
       .mockReturnValueOnce({ status: "enabled" }); // snapshot: legacy
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "parked",
+    );
     expect(setLoginItemSettings).not.toHaveBeenCalled();
     expect(electronLog.warn).toHaveBeenLastCalledWith(
       "[host-login-item] registration parked: prior registration cannot be restored exactly",
@@ -901,7 +915,9 @@ describe("registerHostLoginItem", () => {
         .mockReturnValueOnce({ status: primary }) // snapshot: primary
         .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+      await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+        "parked",
+      );
       expect(setLoginItemSettings).not.toHaveBeenCalled();
     },
   );
@@ -924,7 +940,7 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
       .mockReturnValueOnce({ status: "not-registered" }) // post-primary-clear read
       .mockReturnValueOnce({ status: "requires-approval" }); // post-register (terminal)
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "requires-approval",
     );
     // Genuinely removed, not merely "the cycle didn't park".
@@ -961,7 +977,7 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
           .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
           .mockReturnValue({ status: "not-registered" });
 
-        await expect(registerHostLoginItem(undefined)).resolves.toBe(
+        await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
           "deferred-busy",
         );
         expect(setLoginItemSettings).not.toHaveBeenCalled();
@@ -988,7 +1004,7 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
       .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
       .mockReturnValue({ status: "not-registered" });
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "deferred-busy",
     );
     expect(setLoginItemSettings).not.toHaveBeenCalled();
@@ -1007,7 +1023,9 @@ describe("registerHostLoginItem - legacy manifest retirement (present-manifest d
       .mockReturnValueOnce({ status: "requires-approval" }) // snapshot: primary - disqualifying
       .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "parked",
+    );
     expect(setLoginItemSettings).not.toHaveBeenCalled();
     expect(electronLog.warn).toHaveBeenLastCalledWith(
       "[host-login-item] registration parked: prior registration cannot be restored exactly",
@@ -1950,7 +1968,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem(undefined);
+    const status = await registerHostLoginItem(undefined, null);
 
     expect(status).toBe("enabled");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
@@ -1963,7 +1981,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
-    const status = await registerHostLoginItem(undefined);
+    const status = await registerHostLoginItem(undefined, null);
 
     expect(status).toBe("requires-approval");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
@@ -1974,7 +1992,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem(undefined);
+    const status = await registerHostLoginItem(undefined, null);
 
     expect(status).toBe("enabled");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
@@ -2071,7 +2089,7 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
     stageRegisterSettlingAs("enabled");
     printRunner.mockImplementation(async () => notFound);
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
       "not-registered",
     );
 
@@ -2097,7 +2115,9 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
       .mockResolvedValueOnce(notFound)
       .mockResolvedValueOnce(agentJobLoadedPrintResult());
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "enabled",
+    );
 
     // Exactly two prints: the poll stops at the first loaded answer.
     expect(printRunner).toHaveBeenCalledTimes(2);
@@ -2114,7 +2134,9 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
     writePendingRevisionMarker();
     stageRegisterSettlingAs("enabled");
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "enabled",
+    );
 
     expect(printRunner).toHaveBeenCalledTimes(1);
     expect(printRunner).toHaveBeenCalledWith(agentTarget);
@@ -2131,7 +2153,9 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
       stageRegisterSettlingAs("enabled");
       printRunner.mockImplementation(async () => answer);
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+        "enabled",
+      );
 
       // An unanswerable print ends the poll at once: no waiting out a window
       // for an answer that is not coming.
@@ -2148,7 +2172,9 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
     stageRegisterSettlingAs("enabled");
     printRunner.mockRejectedValue(new Error("spawn EAGAIN"));
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "enabled",
+    );
     expect(printRunner).toHaveBeenCalledTimes(1);
   });
 
@@ -2163,7 +2189,9 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
       // Would flip the result to `not-registered` if it were ever consulted.
       printRunner.mockImplementation(async () => notFound);
 
-      await expect(registerHostLoginItem(undefined)).resolves.toBe(status);
+      await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+        status,
+      );
 
       expect(printRunner).not.toHaveBeenCalled();
       expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
@@ -2217,7 +2245,7 @@ describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
-    await registerHostLoginItem(undefined);
+    await registerHostLoginItem(undefined, null);
     chmodSync(markerDir, 0o755);
 
     // The marker is still on disk, but it was applied by the cycle above -
@@ -2667,7 +2695,9 @@ describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl boo
       .mockReturnValueOnce({ status: "not-registered" }) // post-clear read
       .mockReturnValueOnce({ status: "enabled" }); // post-register (BTM committed)
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined, null)).resolves.toBe(
+      "enabled",
+    );
     // The agent-label clear/register pair (and the legacy-serviceName
     // unregister) still ran despite both bootouts failing - the register
     // cycle's docstring promise that bootout failure degrades to the
@@ -2676,6 +2706,73 @@ describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl boo
     // Both bootout edges ran and failed: the legacy retirement's CLI-label
     // bootout and the step-4 agent-label BTM flush.
     expect(spawnStub).toHaveBeenCalledTimes(2);
+  });
+
+  // The confirmed-target callback is the second half of the same guard the
+  // revalidation callback is: asked at the front and immediately before each
+  // edge that can stop a running host, and not once the stop has happened.
+  it("register cycle confirmed for one host: a target that no longer holds at the front defers with no launchctl bootout and no registration change", async () => {
+    const spawnStub = scriptBootoutExits([0]);
+    const confirmTarget = vi.fn(async () => false);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(registerHostLoginItem(undefined, confirmTarget)).resolves.toBe(
+      "deferred-busy",
+    );
+
+    expect(confirmTarget).toHaveBeenCalledTimes(1);
+    expect(spawnStub).not.toHaveBeenCalled();
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("register cycle confirmed for one host: a target lost after the front check stops the cycle at the legacy retirement, before any launchctl bootout", async () => {
+    const spawnStub = scriptBootoutExits([0]);
+    // Holds at the front; a different host is published before the legacy
+    // retirement's bootout.
+    const confirmTarget = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(registerHostLoginItem(undefined, confirmTarget)).resolves.toBe(
+      "deferred-busy",
+    );
+
+    expect(confirmTarget).toHaveBeenCalledTimes(2);
+    expect(spawnStub).not.toHaveBeenCalled();
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("register cycle confirmed for one host: a target lost only after the agent bootout does not undo the cycle - the callback is not asked again", async () => {
+    const spawnStub = scriptBootoutExits([0]);
+    // Holds through the last bootout (legacy, then agent); counts any ask made
+    // once both have run, which would refuse the host this cycle's own
+    // register publishes.
+    let askedAfterBootouts = 0;
+    const confirmTarget = vi.fn(async () => {
+      if (spawnStub.mock.calls.length < 2) return true;
+      askedAfterBootouts += 1;
+      return false;
+    });
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }) // post-clear read
+      .mockReturnValueOnce({ status: "enabled" }); // post-register (BTM committed)
+
+    await expect(registerHostLoginItem(undefined, confirmTarget)).resolves.toBe(
+      "enabled",
+    );
+
+    expect(spawnStub).toHaveBeenCalledTimes(2);
+    expect(confirmTarget).toHaveBeenCalled();
+    expect(askedAfterBootouts).toBe(0);
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
   });
 
   it("unregister teardown: returns false (not parked) when the primary launchctl bootout exits with an unexpected code - teardown is incomplete", async () => {

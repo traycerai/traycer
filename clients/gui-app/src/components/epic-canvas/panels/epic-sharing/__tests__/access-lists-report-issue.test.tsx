@@ -15,6 +15,7 @@ function renderPeopleError(): void {
     <TooltipProvider>
       <PeopleWithAccess
         loadState="error"
+        ownerTeam={null}
         collaborators={[]}
         accessPermission="owner"
         directOwnerCount={1}

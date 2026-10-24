@@ -331,6 +331,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         reasoningEffort: null,
         fastMode: null,
         permissionMode: "full_access",
+        routing: null,
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
@@ -384,6 +385,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         reasoningEffort: null,
         fastMode: false,
         permissionMode: "full_access",
+        routing: null,
       },
       {
         idempotencyKey: null,
@@ -518,6 +520,9 @@ describe.skipIf(baselines.length === 0)(
             storeFormats: null,
             // @1.5
             install: null,
+            // @1.7
+            processMemory: null,
+            crossHostMessaging: null,
           };
 
           // SELF-CHECKING FIXTURE. Without this, the next released minor a
@@ -592,7 +597,7 @@ describe.skipIf(baselines.length === 0)(
         if (open.kind === "open") {
           expect(open.manifest["synthetic.baselineFallback"]).toBeUndefined();
           expect(open.optionalManifest?.["synthetic.baselineFallback"]).toEqual(
-            { major: 1, minor: 0, supportedMajors: [1] },
+            { major: 1, minor: 0 },
           );
         }
 
@@ -670,7 +675,7 @@ describe.skipIf(baselines.length === 0)(
           ).toBeUndefined();
           expect(
             open.optionalManifest?.["synthetic.baselineUnsupported"],
-          ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
+          ).toEqual({ major: 1, minor: 0 });
         }
 
         // No optionalManifest on the old ack means the optional method is

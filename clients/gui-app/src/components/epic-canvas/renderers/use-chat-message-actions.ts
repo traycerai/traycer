@@ -112,30 +112,29 @@ const DELIVERING_USER_MESSAGE_ACTIONS: Readonly<
 };
 
 /**
- * A preparing row beside the chat's setup card: still copy-only, with no
+ * A preparing row whose wait is already on screen: still copy-only, with no
  * status of its own. See {@link deliveringUserMessageActionsFor}.
  */
-const PREPARING_BESIDE_SETUP_CARD_ACTIONS = deliveringUserMessageActions(null);
+const PREPARING_WAIT_SHOWN_ACTIONS = deliveringUserMessageActions(null);
 
 /**
  * The actions of a row the host has accepted and not started. `pending` always
  * reads "Sending": the host has not yet confirmed it has the prompt, and nothing
  * else on screen says so.
  *
- * `preparing` reads "Setting up" only when the transcript has no setup card.
- * With one, the wait is already on screen in one of two places, and a status
- * here would repeat it. While a workspace is still being created or set up, the
- * card itself spins. Once none is - the card reads ready, failed, or is an
- * earlier window's - the pre-turn "Working…" row is showing: the host marks the
- * turn activating before the phase moves to `preparing`, and
- * `useRenderedMessages` suppresses that row only while the card is in flight.
+ * `preparing` reads "Setting up" only when nothing else on screen shows the
+ * wait, and a status here would repeat it. Two things can: the setup card,
+ * which spins while a workspace is still being created or set up, and the
+ * pre-turn "Working…" row, which a send owns from Enter and which
+ * `useRenderedMessages` suppresses only while that card is in flight.
  */
 export function deliveringUserMessageActionsFor(
   phase: ChatMessageDeliveryPhase,
   setupCardShown: boolean,
+  workingRowShown: boolean,
 ): ChatMessageUserActions {
-  if (phase === "preparing" && setupCardShown) {
-    return PREPARING_BESIDE_SETUP_CARD_ACTIONS;
+  if (phase === "preparing" && (setupCardShown || workingRowShown)) {
+    return PREPARING_WAIT_SHOWN_ACTIONS;
   }
   return DELIVERING_USER_MESSAGE_ACTIONS[phase];
 }
@@ -153,6 +152,22 @@ function unstartedDeliveryPhase(
   const phase = delivery.state.phase;
   return phase === "pending" || phase === "preparing" ? phase : null;
 }
+
+/**
+ * Where the fork dialog's host picker starts and what it lists: `initialHostId`
+ * preselects (`null` is the source chat's own host) and `onlyHostIds` narrows
+ * the list (a team's hosts; `null` is every host).
+ */
+export interface ForkDialogHosts {
+  readonly initialHostId: string | null;
+  readonly onlyHostIds: ReadonlySet<string> | null;
+}
+
+/** Every per-message fork: the source chat's host, every host listed. */
+export const FORK_ON_SOURCE_HOST: ForkDialogHosts = {
+  initialHostId: null,
+  onlyHostIds: null,
+};
 
 export interface ChatMessageActionsInput {
   readonly dispatchUi: (action: ChatTileUiAction) => void;
@@ -172,6 +187,12 @@ export interface ChatMessageActionsInput {
    * "Setting up" status while it does - see `deliveringUserMessageActionsFor`.
    */
   readonly setupCardShown: boolean;
+  /**
+   * Whether the rendered transcript carries the pre-turn "Working…" row
+   * (`transcriptShowsWorkingRow`). A preparing opening prompt drops its own
+   * "Setting up" status while it does, as it does beside a setup card.
+   */
+  readonly workingRowShown: boolean;
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
@@ -254,7 +275,7 @@ export interface ChatMessageActionsResult {
     assistantMessageId: string | null,
     mode: ChatForkMode,
     interviewBlockId: string | null,
-    initialHostId: string | null,
+    hosts: ForkDialogHosts,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
@@ -371,6 +392,7 @@ export function useChatMessageActions(
     canAct,
     messageDelivery,
     setupCardShown,
+    workingRowShown,
     interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
@@ -889,7 +911,7 @@ export function useChatMessageActions(
       assistantMessageId: string | null,
       mode: ChatForkMode,
       interviewBlockId: string | null,
-      initialHostId: string | null,
+      hosts: ForkDialogHosts,
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
@@ -935,7 +957,8 @@ export function useChatMessageActions(
         // plain fork of a completed message — no streaming interview to carry.
         carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
-        initialHostId,
+        initialHostId: hosts.initialHostId,
+        onlyHostIds: hosts.onlyHostIds,
       });
     },
     [
@@ -1001,7 +1024,7 @@ export function useChatMessageActions(
                 assistantMessageId,
                 mode,
                 interviewBlockId,
-                null,
+                FORK_ON_SOURCE_HOST,
               ),
           },
           interviewDeliveryRetry,
@@ -1023,7 +1046,11 @@ export function useChatMessageActions(
         persistentMessageId,
       );
       if (deliveryPhase !== null) {
-        return deliveringUserMessageActionsFor(deliveryPhase, setupCardShown);
+        return deliveringUserMessageActionsFor(
+          deliveryPhase,
+          setupCardShown,
+          workingRowShown,
+        );
       }
       if (
         inlineEditLocksMessageActions(activeInlineEdit, persistentMessageId)
@@ -1094,6 +1121,7 @@ export function useChatMessageActions(
       mentionRoots,
       messageDelivery,
       setupCardShown,
+      workingRowShown,
       pendingActions,
       acceptedActions,
       chatActions,

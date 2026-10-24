@@ -53,6 +53,7 @@ const state = vi.hoisted(() => {
   );
   const organization = {
     supported: true,
+    hostSupport: true as boolean | null,
     userId: "user-1",
     view,
     register: vi.fn(
@@ -66,7 +67,18 @@ const state = vi.hoisted(() => {
     readonly userId: string;
     readonly displayName: string;
   }> = [];
-  return { command, collaboratorRows, organization };
+  // A whole context standing in for `organization`, for the connection
+  // states the shared fixture cannot express (no view yet, no support).
+  const override: {
+    current:
+      | (Omit<typeof organization, "view" | "supported" | "hostSupport"> & {
+          readonly view: OrganizationView | undefined;
+          readonly supported: boolean;
+          readonly hostSupport: boolean | null;
+        })
+      | null;
+  } = { current: null };
+  return { command, collaboratorRows, organization, override };
 });
 
 const queryClient = new QueryClient({
@@ -86,8 +98,8 @@ vi.mock("@/hooks/organization/organization-context", async (load) => {
     await load<typeof import("@/hooks/organization/organization-context")>();
   return {
     ...actual,
-    useOrganization: () => state.organization,
-    useOrganizationTasks: () => state.organization,
+    useOrganization: () => state.override.current ?? state.organization,
+    useOrganizationTasks: () => state.override.current ?? state.organization,
   };
 });
 
@@ -147,6 +159,7 @@ function renderDialog(dialog: OrganizationDialog) {
 }
 
 function resetOrganization(): void {
+  state.override.current = null;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   state.command.mockReset();
   state.command.mockImplementation(() => Promise.resolve());
@@ -561,6 +574,40 @@ describe("organization Revision 2", () => {
     });
   });
 
+  it("stops every edit in a picker that is already open when the host stops taking organization commands", async () => {
+    const user = userEvent.setup();
+    const rendered = render(<TaskAppearancePicker taskId="task-1" />);
+    const icon = screen.getByLabelText("Icon");
+    // An edit begun while the host could take it, and not yet saved.
+    await user.clear(icon);
+    await user.type(icon, "UI");
+    expect(icon.hasAttribute("disabled")).toBe(false);
+
+    // Radix keeps an open submenu mounted when its trigger is disabled, so
+    // the picker sees only the new context, with the same cached view.
+    state.override.current = { ...state.organization, supported: false };
+    rendered.rerender(
+      withQueryClient(<TaskAppearancePicker taskId="task-1" />),
+    );
+
+    expect(screen.getByLabelText("Icon").hasAttribute("disabled")).toBe(true);
+    const colorControls = screen
+      .getByRole("button", { name: "Default" })
+      .closest("fieldset");
+    expect(colorControls?.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Reset" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    // And nothing gets through when it is tried: the drafted icon's save, the
+    // colour buttons, and Reset.
+    fireEvent.submit(screen.getByRole("form", { name: "Task appearance" }));
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    await user.click(screen.getByRole("button", { name: "Choose color" }));
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(state.command).not.toHaveBeenCalled();
+  });
+
   it("does not offer Reset when the task has no personal override", () => {
     state.organization.view.appearances = [
       { taskId: "task-1", version: "0", color: null, icon: null },
@@ -830,5 +877,111 @@ describe("organization Revision 2", () => {
     ];
     render(<OrganizationSyncNote taskId={null} labels={[owned]} />);
     expect(screen.getByRole("status").textContent).toContain("Waiting to sync");
+  });
+});
+
+describe("TaskOrganizationMenu while the host connection is not ready", () => {
+  const user = userEvent.setup();
+
+  function contextOverride(input: {
+    readonly view: OrganizationView | undefined;
+    readonly supported: boolean;
+    readonly hostSupport: boolean | null;
+  }): void {
+    state.override.current = { ...state.organization, ...input };
+  }
+
+  function groupedView(): OrganizationView {
+    return {
+      ...state.organization.view,
+      groups: {
+        version: "0",
+        groups: [
+          { groupId: "group-1", name: "Work", color: "#445566", position: 0 },
+        ],
+        memberships: [],
+      },
+    };
+  }
+
+  function renderTaskMenu() {
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button type="button">Task row</button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <TaskOrganizationMenu
+            taskId="task-1"
+            canEdit
+            title="Task"
+            onEditGroup={null}
+          />
+        </ContextMenuContent>
+      </ContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Task row" }));
+  }
+
+  it("tells the person to update a host that has answered without the organization commands", () => {
+    contextOverride({ view: undefined, supported: false, hostSupport: false });
+
+    renderTaskMenu();
+
+    const update = screen.getByRole("menuitem", {
+      name: "Update this device to organize tasks",
+    });
+    expect(update.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Add to group" })).toBeNull();
+  });
+
+  it("offers nothing, and no update prompt, before the host has answered", () => {
+    contextOverride({ view: undefined, supported: false, hostSupport: null });
+
+    renderTaskMenu();
+
+    expect(screen.queryAllByRole("menuitem")).toEqual([]);
+  });
+
+  it("lists the account's cached groups but disables every command when the host is not ready to take them", async () => {
+    contextOverride({
+      view: groupedView(),
+      supported: false,
+      hostSupport: true,
+    });
+
+    renderTaskMenu();
+    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
+
+    expect(
+      screen.queryByRole("menuitem", {
+        name: "Update this device to organize tasks",
+      }),
+    ).toBeNull();
+    for (const name of ["Labels", "New group…", "Work"]) {
+      expect(
+        screen.getByRole("menuitem", { name }).getAttribute("aria-disabled"),
+        `${name} is enabled`,
+      ).toBe("true");
+    }
+  });
+
+  it("enables the same commands once the host is ready", async () => {
+    contextOverride({
+      view: groupedView(),
+      supported: true,
+      hostSupport: true,
+    });
+
+    renderTaskMenu();
+    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
+
+    for (const name of ["Labels", "New group…", "Work"]) {
+      expect(
+        screen.getByRole("menuitem", { name }).getAttribute("aria-disabled"),
+        `${name} is disabled`,
+      ).toBeNull();
+    }
   });
 });

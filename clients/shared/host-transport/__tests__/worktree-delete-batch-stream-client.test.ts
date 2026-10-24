@@ -485,3 +485,153 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     batch.close();
   });
 });
+
+describe("WorktreeDeleteBatchStreamClient target.complete decline kind", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openWithCompleteSpy(): {
+    readonly socket: StubStreamWebSocket;
+    readonly completions: ReadonlyArray<readonly unknown[]>;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+  } {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const completions: unknown[][] = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onTargetComplete: (...args) => {
+          completions.push(args);
+        },
+      },
+    });
+    completeHandshake(sockets[0]);
+    return { socket: sockets[0], completions, batch };
+  }
+
+  it("passes the decline kind of a non-deletion through to the callback", () => {
+    const { socket, completions, batch } = openWithCompleteSpy();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "not_managed",
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([["/wt/a", false, "not_managed"]]);
+    batch.close();
+  });
+
+  it("reports an absent decline kind as undefined (older host, or a deletion)", () => {
+    const { socket, completions, batch } = openWithCompleteSpy();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([["/wt/a", true, undefined]]);
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient decline kind on a force-delete retry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openForceBatch(): {
+    readonly socket: StubStreamWebSocket;
+    readonly completions: ReadonlyArray<readonly unknown[]>;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+  } {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const completions: unknown[][] = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: true }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onTargetComplete: (...args) => {
+          completions.push(args);
+        },
+      },
+    });
+    return { socket: sockets[0], completions, batch };
+  }
+
+  it("subscribes a stopOwners target at the host's newest minor, so a decline kind survives", () => {
+    const { socket, completions, batch } = openForceBatch();
+    completeHandshake(socket);
+
+    // `@1.1` is the floor the consent needs, not the version declared.
+    expect(subscribeFrame(socket)).toMatchObject({
+      schemaVersion: {
+        major: 1,
+        minor:
+          hostStreamRpcRegistry["worktree.deleteBatchByPath"][1].latestMinor,
+      },
+      params: { mode: "start", targets: [{ stopOwners: true }] },
+    });
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "teardown_failed",
+      hasBinaryPayload: false,
+    });
+    expect(completions).toEqual([["/wt/a", false, "teardown_failed"]]);
+    batch.close();
+  });
+
+  it("still delivers the outcome from a @1.1 host that cannot name a decline kind", () => {
+    const { socket, completions, batch } = openForceBatch();
+    socket.fireOpen();
+    const open = JSON.parse(socket.textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    socket.fireText({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "worktree.deleteBatchByPath": { major: 1, minor: 1 },
+      },
+    });
+
+    expect(subscribeFrame(socket)).toMatchObject({
+      schemaVersion: { major: 1, minor: 1 },
+      params: { mode: "start", targets: [{ stopOwners: true }] },
+    });
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      hasBinaryPayload: false,
+    });
+    expect(completions).toEqual([["/wt/a", false, undefined]]);
+    batch.close();
+  });
+});

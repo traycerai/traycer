@@ -121,6 +121,13 @@ export function admitsLocalPlane(status: AuthStatus): boolean {
  * local host is unaffected: its premise still holds, and that is the case
  * `unverified` was added for.
  *
+ * The same premise fails a second way on a shell that DOES have a local host:
+ * the host verifies the held bearer like any other, and refuses it once it has
+ * expired. After authn has refused the session there is no fresh bearer
+ * coming, so from that expiry on (`hostRefusedHeldBearer`) nothing in the
+ * workspace can load, and the auth surface is again the only place that can
+ * say why and offer the action that helps.
+ *
  * Not a replacement for {@link admitsLocalPlane}: every surface that merely
  * asks "may I render local-plane data" keeps reading that one, and stays
  * mounted under `unverified` exactly as before. This is the narrower
@@ -130,6 +137,7 @@ export function admitsLocalPlane(status: AuthStatus): boolean {
 export function admitsLocalPlaneOnShell(input: {
   readonly status: AuthStatus;
   readonly hasLocalHost: boolean;
+  readonly hostRefusedHeldBearer: boolean;
 }): boolean {
   if (!admitsLocalPlane(input.status)) return false;
   // Positive statements, not a negation of the other arm: `signed-in` is
@@ -137,7 +145,7 @@ export function admitsLocalPlaneOnShell(input: {
   // `AuthStatus` member has to be classified here rather than inheriting an
   // answer from whichever branch it happens to miss.
   if (input.status === "signed-in") return true;
-  return input.hasLocalHost;
+  return input.hasLocalHost && !input.hostRefusedHeldBearer;
 }
 
 /**
@@ -292,6 +300,19 @@ export interface AuthState {
    * while `status === "unverified"`.
    */
   readonly cloudVerdictLoss: CloudVerdictLoss;
+  /**
+   * The bearer this `unverified` session holds has expired or been revoked
+   * ("sign out everywhere"), so the host refuses it, AFTER authn refused the
+   * session, i.e. while `cloudVerdictLoss`
+   * is not `unreachable`. No fresh bearer can arrive in that state, so the
+   * local plane `unverified` holds the app open for is gone too and
+   * {@link admitsLocalPlaneOnShell} sends the person to sign in. The status
+   * stays `unverified` - the identity is still on disk, nothing account-scoped
+   * is purged, and signing back in returns to the same state. Every status
+   * change resets it; `AuthService.noteHostRefusedHeldBearer` sets it, because
+   * only the service holds the bearer whose expiry decides it.
+   */
+  readonly hostRefusedHeldBearer: boolean;
   readonly profile: AuthProfile | null;
   readonly contextMetadata: AuthContextMetadata | null;
   readonly shareableTeams: ReadonlyArray<EpicShareableTeam>;
@@ -318,6 +339,12 @@ export interface AuthState {
    */
   readonly signedOutCause: SignedOutCause | null;
   setCloudVerdictLoss(loss: CloudVerdictLoss): void;
+  /**
+   * Record that the host refuses the held bearer. A no-op unless the session
+   * is `unverified` on a refused cloud verdict - see `hostRefusedHeldBearer`.
+   * The expiry half of the rule is `AuthService`'s, which holds the bearer.
+   */
+  noteHostRefusedHeldBearer(): void;
   setSigningIn(attempt: SignInAttemptKind): void;
   setSignedIn(
     profile: AuthProfile,
@@ -361,6 +388,7 @@ function signedOutState(
   | "contextMetadata"
   | "shareableTeams"
   | "subscriptionStatus"
+  | "hostRefusedHeldBearer"
 > {
   return {
     status: "signed-out",
@@ -370,6 +398,7 @@ function signedOutState(
     contextMetadata: null,
     shareableTeams: [],
     subscriptionStatus: null,
+    hostRefusedHeldBearer: false,
   };
 }
 
@@ -398,14 +427,23 @@ export const useAuthStore = create<AuthState>()((set) => ({
   shareableTeams: [],
   subscriptionStatus: null,
   cloudVerdictLoss: "unreachable",
+  hostRefusedHeldBearer: false,
   setCloudVerdictLoss: (loss: CloudVerdictLoss) => {
     set({ cloudVerdictLoss: loss });
+  },
+  noteHostRefusedHeldBearer: () => {
+    set((state) =>
+      state.status === "unverified" && state.cloudVerdictLoss !== "unreachable"
+        ? { hostRefusedHeldBearer: true }
+        : state,
+    );
   },
   setSigningIn: (attempt: SignInAttemptKind) => {
     set({
       status: "signing-in",
       signingInAttempt: attempt,
       signedOutCause: null,
+      hostRefusedHeldBearer: false,
     });
   },
   setSignedIn: (
@@ -430,6 +468,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       status: "signed-in",
       signingInAttempt: null,
       signedOutCause: null,
+      hostRefusedHeldBearer: false,
       profile: safeProfile,
       contextMetadata,
       shareableTeams,
@@ -454,6 +493,8 @@ export const useAuthStore = create<AuthState>()((set) => ({
       status: "unverified",
       signingInAttempt: null,
       signedOutCause: null,
+      // `AuthService` re-derives it for the bearer it has just projected.
+      hostRefusedHeldBearer: false,
       profile: {
         ...profile,
         userName: coalesceUserName(profile.userName, profile.email),

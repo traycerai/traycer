@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
 
 function Dialog({
   ...props
@@ -43,7 +44,9 @@ function DialogOverlay({
         className,
       )}
       {...props}
-    />
+    >
+      <BackdropDimSource strength="10" />
+    </DialogPrimitive.Overlay>
   );
 }
 

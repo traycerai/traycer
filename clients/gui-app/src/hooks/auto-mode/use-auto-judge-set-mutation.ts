@@ -13,6 +13,7 @@ import {
   hostQueryKeys,
 } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 type SetAutoJudgeContext = {
   readonly hostId: string | null;
@@ -65,6 +66,7 @@ export function useAutoJudgeSetMutation(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostMutation<HostRpcRegistry, "autoJudge.set", SetAutoJudgeContext>(
     {
       client,
@@ -72,7 +74,7 @@ export function useAutoJudgeSetMutation(): UseMutationResult<
       mapVariables: (variables) => variables,
       options: {
         mutationKey: autoModeMutationKeys.setJudge(),
-        scope: autoJudgeWriteScope(client.getActiveHostId() ?? null),
+        scope: autoJudgeWriteScope(requesterHostId),
         onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
         // CANCEL, then write, then revalidate (the hook's note says why the
         // last). The written selection is only authoritative if no older read

@@ -2,9 +2,10 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaPreHtml,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
-  contentBlockSchemaPrePage,
+  contentBlockSchemaPreMcpApp,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
@@ -43,9 +44,10 @@ const jsonContentSchema = getRecordSchema(
 );
 
 /**
- * Browser-annotations ticket 05. One attached annotation bundle: structured
- * fields only (no pixels). The crop rides the existing `imageAttachment`
- * content atom, paired by `imageFileName` / `annotationId`.
+ * One annotation bundle: structured fields only (no pixels). Browser crops
+ * ride the existing `imageAttachment` atom. Canvas selections (1.32) may have
+ * no crop and carry their artifact identity in `source`. The carrier name
+ * stays `browserAnnotations` for compatibility with existing records.
  *
  * Lives on its own array (`browserAnnotations`) rather than folded into
  * `content`. Adding a new content-block kind would be a breaking persist
@@ -118,7 +120,7 @@ export type BrowserViewElementCapture = z.infer<
   typeof browserViewElementCaptureSchema
 >;
 
-export const browserAnnotationRecordSchema = lazySchema(() =>
+export const browserAnnotationRecordSchemaPreCanvas = lazySchema(() =>
   z.object({
     kind: z.literal("browser-annotation"),
     annotationId: z.string().min(1),
@@ -138,6 +140,114 @@ export const browserAnnotationRecordSchema = lazySchema(() =>
     // `.default(0)` so records written before this field parse cleanly.
     droppedElementCount: z.number().int().nonnegative().default(0),
   }),
+);
+/** Canvas stays in chat.db/chat-sync; legacy epic and draft records bind the
+ * browser-only copy above. Browser source is inferred only for legacy inputs. */
+export const browserAnnotationSourceSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("browser"),
+    tabId: z.string().min(1),
+    sessionId: z.string().min(1),
+    origin: z.string(),
+    pageUrl: z.string(),
+    pageTitle: z.string(),
+  }),
+);
+export type BrowserAnnotationSource = z.infer<
+  typeof browserAnnotationSourceSchema
+>;
+
+export const canvasAnnotationSourceSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("canvas"),
+    artifactId: z.string().min(1),
+    boardPath: z.string().min(1),
+    canvasPage: z.string().nullable(),
+    artifactTitle: z.string(),
+  }),
+);
+export type CanvasAnnotationSource = z.infer<
+  typeof canvasAnnotationSourceSchema
+>;
+
+export const canvasElementCaptureSchema = lazySchema(() =>
+  browserViewElementCaptureSchema.extend({
+    sourceRange: z
+      .object({
+        start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(),
+        line: z.number().int().positive(),
+      })
+      .nullable()
+      .default(null),
+    tid: z.string().nullable().default(null),
+    textRange: z
+      .object({
+        start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(),
+        quote: z.string(),
+      })
+      .nullable()
+      .default(null),
+  }),
+);
+export type CanvasElementCapture = z.infer<typeof canvasElementCaptureSchema>;
+
+const sourcedBrowserAnnotationRecordSchema = lazySchema(() =>
+  browserAnnotationRecordSchemaPreCanvas.extend({
+    source: browserAnnotationSourceSchema,
+  }),
+);
+const legacyBrowserAnnotationInputSchema = lazySchema(() =>
+  browserAnnotationRecordSchemaPreCanvas.extend({
+    source: browserAnnotationSourceSchema.optional(),
+  }),
+);
+const browserAnnotationWithSourceSchema = lazySchema(() =>
+  z.codec(
+    legacyBrowserAnnotationInputSchema,
+    sourcedBrowserAnnotationRecordSchema,
+    {
+      decode: (record) => ({
+        ...record,
+        source: record.source ?? {
+          kind: "browser" as const,
+          tabId: record.tabId,
+          sessionId: record.sessionId,
+          origin: record.origin,
+          pageUrl: record.pageUrl,
+          pageTitle: record.pageTitle,
+        },
+      }),
+      encode: (record) => ({
+        ...record,
+        droppedElementCount: record.droppedElementCount ?? 0,
+      }),
+    },
+  ),
+);
+
+export const canvasAnnotationRecordSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("browser-annotation"),
+    annotationId: z.string().min(1),
+    source: canvasAnnotationSourceSchema,
+    capturedAt: z.number(),
+    comment: z.string(),
+    counts: browserAnnotationCountsSchema,
+    elements: z.array(canvasElementCaptureSchema),
+    imageFileName: z.string().min(1).nullable(),
+    imageHash: z.string().min(1).nullable(),
+    droppedElementCount: z.number().int().nonnegative().default(0),
+  }),
+);
+export type CanvasAnnotationRecord = z.infer<
+  typeof canvasAnnotationRecordSchema
+>;
+
+/** The live 1.32 annotation carrier. Canvas needs no fabricated browser identity. */
+export const browserAnnotationRecordSchema = lazySchema(() =>
+  z.union([browserAnnotationWithSourceSchema, canvasAnnotationRecordSchema]),
 );
 export type BrowserAnnotationRecord = z.infer<
   typeof browserAnnotationRecordSchema
@@ -176,7 +286,7 @@ export const userAuthoredMessageSchemaPreAnnotation = lazySchema(() =>
   z.object(userAuthoredMessagePreTicket13Fields),
 );
 
-export const userAuthoredMessageSchema = lazySchema(() =>
+export const userAuthoredMessageSchemaPreCanvas = lazySchema(() =>
   z.object({
     ...userAuthoredMessagePreTicket13Fields,
     /**
@@ -191,10 +301,25 @@ export const userAuthoredMessageSchema = lazySchema(() =>
      * the field here would silently lose the user's annotation for any
      * message that sits in the queue before its turn starts.
      *
-     * Wire: live `chat.subscribe@1.7` only. Frozen 1.0–1.6 copies omit it.
+     * Wire: browser-only on `chat.subscribe@1.7–1.31`. The live 1.32
+     * payload below rebinds the annotation union; 1.0–1.6 omit it.
      */
+    browserAnnotations: z
+      .array(browserAnnotationRecordSchemaPreCanvas)
+      .default([]),
+  }),
+);
+
+export const userAuthoredMessageSchema = lazySchema(() =>
+  userAuthoredMessageSchemaPreCanvas.extend({
     browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
   }),
+);
+export const userMessagePayloadSchemaPreCanvas = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    userAuthoredMessageSchemaPreCanvas,
+    agentUserMessageSchema,
+  ]),
 );
 
 export const userMessagePayloadSchemaPreAnnotation = lazySchema(() =>
@@ -233,7 +358,7 @@ export const userMessageSchemaV18 = lazySchema(() =>
       role: z.literal("user"),
       messageId: z.string(),
       sender: userMessageSenderSchema,
-      message: userMessagePayloadSchema,
+      message: userMessagePayloadSchemaPreCanvas,
       timestamp: z.number(),
       sessionAnchor: chatSessionAnchorSchema.nullable(),
     })
@@ -244,10 +369,72 @@ export const userMessageSchemaV18 = lazySchema(() =>
 // unsubmitted prompt must never become fake provider context in a new chat.
 // Absence retains legacy semantics. Only the host's atomic execution claim
 // removes this marker; a client edit cannot decide that a message was sent.
-export const userMessageSchema = lazySchema(() =>
+//
+// Wire-freeze copy of the user row as `chat.subscribe@1.15` through `@1.24`
+// ship it: the `1.7`/`1.8` field set plus `providerHistory`, without the
+// `conversationRequest` that `1.25` added. Bound by `messageSchemaPreReceipt`
+// (`1.15`-`1.17`), `messageSchemaPreMcpApp` (`1.18`-`1.21`), the `1.15`-`1.21`
+// common frames, and - through `openUserMessageSchemaPreConversation` - the
+// `1.22`-`1.24` open-harness lines. A later key must not reach them through it.
+export const userMessageSchemaPreConversation = lazySchema(() =>
   userMessageSchemaV18.safeExtend({
     providerHistory: z.literal("excluded").optional(),
   }),
+);
+
+/**
+ * The request a human's message in a bot conversation opened (Tracy Bots,
+ * `chat.subscribe@1.25`). Present on EVERY user row of a conversation record
+ * and on no other row: the host mints `requestId` when it writes the row, and
+ * the bot's trunk resolves it through its `traycer_reply` /
+ * `traycer_resolve_request` tools, which set `resolvedAt` (and, for a reply,
+ * the `messageId` of the bot's reply row). `resolvedAt: null` is an OPEN
+ * request: what the trunk's per-turn digest counts and what Home shows.
+ *
+ * Carried on the row rather than as an event so a claim's cloud rebuild keeps
+ * the request state with the message that opened it, and so a reader with the
+ * conversation's user rows alone can list what is still open.
+ */
+export const conversationRequestSchema = lazySchema(() =>
+  z.object({
+    requestId: z.string().min(1),
+    resolvedAt: z.number().nullable(),
+    resolvedByMessageId: z.string().nullable(),
+    /**
+     * `true` on a top-level post its bot answers itself, at the channel's
+     * top level (reply mode `direct`): no thread opens for it, and a member
+     * may open one by replying under it. Absent on every other row, a post
+     * whose thread opened with it included.
+     */
+    direct: z.literal(true).optional(),
+  }),
+);
+export type ConversationRequest = z.infer<typeof conversationRequestSchema>;
+
+/**
+ * The live user row (`chat.subscribe@1.25`): the frozen pre-conversation
+ * shape with the bot-conversation request. ABSENT means "not a conversation
+ * request" - every row outside a bot conversation, and every row written
+ * before the key - so it is `.optional()` for the reason `turnProfile` is: a
+ * defaulted key would be required on the type at the hundreds of sites that
+ * build a user row with no request to state.
+ *
+ * Tolerance, not projection: every line below `1.25` binds the frozen copy
+ * above and strips the key on decode, and such a peer renders the row as the
+ * plain user message it is.
+ */
+export const userMessageSchemaPreCanvas = lazySchema(() =>
+  userMessageSchemaPreConversation.safeExtend({
+    conversationRequest: conversationRequestSchema.optional(),
+  }),
+);
+export const userMessageSchema = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreCanvas.shape,
+      message: userMessagePayloadSchema,
+    })
+    .superRefine(userMessageSenderKindRefine),
 );
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
@@ -362,6 +549,29 @@ export const assistantTurnProfileSchema = lazySchema(() =>
 );
 export type AssistantTurnProfile = z.infer<typeof assistantTurnProfileSchema>;
 
+/**
+ * What a bot announces at its channel's top level (Tracy Bots, decision 41).
+ * `question` is the trunk's ask of a person (decisions 55, 56): an
+ * automation's question the trunk could not settle itself.
+ */
+export const botAnnouncementKindSchema = lazySchema(() =>
+  z.enum(["proposal", "automation", "bot-created", "policy", "question"]),
+);
+export type BotAnnouncementKind = z.infer<typeof botAnnouncementKindSchema>;
+
+/**
+ * A channel bot row's announcement: its kind, and the one thing it points
+ * at - an http(s) URL or an epic-relative path - or `null`. The host's
+ * writer bounds and checks `link`; a reader renders it as a link.
+ */
+export const botAnnouncementSchema = lazySchema(() =>
+  z.object({
+    kind: botAnnouncementKindSchema,
+    link: z.string().min(1).nullable(),
+  }),
+);
+export type BotAnnouncement = z.infer<typeof botAnnouncementSchema>;
+
 // Historical message fields; newer blocks are selected only by the live
 // extension below. Unchanged nested leaves follow the existing freeze pattern.
 export const assistantMessageSchemaV18 = lazySchema(() =>
@@ -462,12 +672,44 @@ export const assistantMessageSchema = lazySchema(() =>
      * this schema happens to extend.
      */
     turnProfile: assistantTurnProfileSchema.optional(),
+    /**
+     * The bot's announcement this row is (Tracy Bots, decision 41). Present
+     * only on a bot row at a bot channel's top level, where it is the only
+     * kind of bot row; absent on every other assistant row. Optional for the
+     * `turnProfile` reason above, and live line only for the same reason.
+     */
+    announcement: botAnnouncementSchema.optional(),
+    /**
+     * The choices a bot reply offers the person (Tracy Bots,
+     * decision 56), shown as clickable choices; a chosen one is posted as an
+     * ordinary message on that surface. Present only on a bot reply that asks;
+     * absent everywhere else. Optional and live line only, as `turnProfile`.
+     */
+    options: z.array(z.string().min(1)).min(1).optional(),
+    /**
+     * The member's post a bot's direct reply answers, by its message id
+     * (Tracy Bots, reply mode `direct`). Present only on a bot reply at a
+     * channel's top level; absent everywhere else. Optional and live line
+     * only, as `turnProfile`. Not the agent sender's `inReplyTo`, which
+     * names an agent-to-agent message.
+     */
+    repliesTo: z.string().min(1).optional(),
   }),
 );
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
+);
+/** Epic records and released chat lines retain the four-kind operation block. */
+export const assistantMessageSchemaPreHtml = lazySchema(() =>
+  assistantMessageSchema.extend({ blocks: z.array(contentBlockSchemaPreHtml) }),
+);
+export const messageSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchemaPreCanvas,
+    assistantMessageSchemaPreHtml,
+  ]),
 );
 export type Message = z.infer<typeof messageSchema>;
 
@@ -831,23 +1073,23 @@ export const assistantMessageSchemaPreReceipt = lazySchema(() =>
 /** The message union shipped on chat.subscribe `1.15` through `1.17`. */
 export const messageSchemaPreReceipt = lazySchema(() =>
   z.discriminatedUnion("role", [
-    userMessageSchema,
+    userMessageSchemaPreConversation,
     assistantMessageSchemaPreReceipt,
   ]),
 );
 
-// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+// ── Wire-freeze variant (pre-MCP-App, `chat.subscribe@1.18`-`@1.21`) ──────────
 // Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
-// complete live shape with `blocks` swapped for `contentBlockSchemaPrePage`, so
-// a tool call's `page` / `mcpApp` stamps (`1.23`) cannot reach them. Same key
+// complete live shape with `blocks` swapped for `contentBlockSchemaPreMcpApp`, so
+// a tool call's `mcpApp` stamp (`1.23`) cannot reach them. Same key
 // order as the live `.extend()` result, because the order is part of the
 // captured digest.
-export const assistantMessageSchemaPrePage = lazySchema(() =>
+export const assistantMessageSchemaPreMcpApp = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
     sender: agentSenderSchema,
-    blocks: z.array(contentBlockSchemaPrePage),
+    blocks: z.array(contentBlockSchemaPreMcpApp),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
     timestamp: z.number(),
@@ -862,10 +1104,10 @@ export const assistantMessageSchemaPrePage = lazySchema(() =>
 );
 
 /** The message union shipped on chat.subscribe `1.18` through `1.21`. */
-export const messageSchemaPrePage = lazySchema(() =>
+export const messageSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("role", [
-    userMessageSchema,
-    assistantMessageSchemaPrePage,
+    userMessageSchemaPreConversation,
+    assistantMessageSchemaPreMcpApp,
   ]),
 );
 

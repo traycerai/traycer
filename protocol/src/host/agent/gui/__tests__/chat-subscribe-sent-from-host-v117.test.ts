@@ -14,10 +14,26 @@ import {
   chatSubscribeV121,
   chatSubscribeV122,
   chatSubscribeV123,
+  chatSubscribeV124,
+  chatSubscribeV125,
+  chatSubscribeV126,
+  chatSubscribeV127,
+  chatSubscribeV128,
+  chatSubscribeV129,
+  chatSubscribeV130,
+  chatSubscribeV131,
+  chatSubscribeV132,
+  chatSubscribeV133,
+  chatSubscribeV134,
+  chatSubscribeV135,
+  chatSubscribeV136,
+  chatSubscribeV137,
   chatSubscribeWindowedClientFrameSchema,
+  chatSubscribeWindowedClientFrameSchemaPreCanvas,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * `chat.subscribe@1.17`: the sender-host line. `sentFromHostId` appears on
@@ -35,7 +51,9 @@ const SENT_FROM_HOST_NEEDLE = '"sentFromHostId":';
 function schemaText(schema: z.ZodType): string {
   return (["input", "output"] as const)
     .map((io) =>
-      JSON.stringify(z.toJSONSchema(schema, { io, unrepresentable: "any" })),
+      JSON.stringify(
+        toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }),
+      ),
     )
     .join("\n");
 }
@@ -48,9 +66,13 @@ const PRE_KEY_LINES = [
 ] as const;
 
 describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.23", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.37", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(23);
+    expect(line.latestMinor).toBe(37);
+    expect(line.versions[37].contract).toBe(chatSubscribeV137);
+    expect(line.versions[36].contract).toBe(chatSubscribeV136);
+    expect(line.versions[35].contract).toBe(chatSubscribeV135);
+    expect(line.versions[34].contract).toBe(chatSubscribeV134);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -61,35 +83,45 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     expect(line.versions[16].contract).toBe(chatSubscribeV116);
   });
 
-  it("1.17, 1.18 and 1.19 keep the live client frames and frozen server frames since 1.20 opened above them", () => {
+  it("1.17, 1.18 and 1.19 share the pre-canvas client frames and frozen server frames since 1.20 opened above them", () => {
     // None of `1.18`, `1.19` or `1.20` adds anything a client sends on the
     // stream (`1.19`'s claim is on the open request), so every line from
-    // `1.17` binds the live client schema; their server frames are
-    // host-authored, so `1.17`'s, `1.18`'s and `1.19`'s froze.
+    // `1.17` binds one client schema; their server frames are host-authored,
+    // so `1.17`'s, `1.18`'s and `1.19`'s froze. That client schema stopped
+    // being the live one when `1.32` let a `send` carry a canvas annotation:
+    // every line below it binds the pre-canvas union, and `1.32` and up bind
+    // the live one (pinned right below).
     expect(chatSubscribeV118.clientFrameSchema).toBe(
-      chatSubscribeWindowedClientFrameSchema,
+      chatSubscribeWindowedClientFrameSchemaPreCanvas,
     );
     expect(chatSubscribeV118.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV117.clientFrameSchema).toBe(
-      chatSubscribeWindowedClientFrameSchema,
+      chatSubscribeWindowedClientFrameSchemaPreCanvas,
     );
     expect(chatSubscribeV119.clientFrameSchema).toBe(
-      chatSubscribeWindowedClientFrameSchema,
+      chatSubscribeWindowedClientFrameSchemaPreCanvas,
     );
     expect(chatSubscribeV119.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV120.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchemaPreCanvas,
+    );
+    expect(chatSubscribeV131.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchemaPreCanvas,
+    );
+    expect(chatSubscribeV132.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
     );
     expect(chatSubscribeV117.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     // 1.20 froze when 1.21 opened above it; 1.21 and 1.22 froze when 1.23
-    // opened above them, with pre-page bodies (1.22 keeps its open harness
-    // leaves); 1.23 binds the open twin a client parses.
+    // opened above them, with pre-MCP-App bodies (1.22 keeps its open harness
+    // leaves); 1.23 froze when 1.24 added the cron next-run key, and 1.24
+    // binds the open twin a client parses.
     expect(chatSubscribeV120.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
@@ -99,8 +131,64 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     expect(chatSubscribeV122.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV123.serverFrameSchema).toBe(
+    expect(chatSubscribeV123.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV124.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV125.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV126.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV127.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.28 froze when 1.29 added the tool-call `agentMessageDelivery` stamp
+    // above it; 1.29 froze when 1.30 opened the html, canvas and file artifact
+    // kinds above it; 1.30 froze when 1.31 added the tool-call `artifact` stamp
+    // above it; 1.31 froze when 1.32 grew the browser annotation record above
+    // it; 1.32 froze when 1.33 widened the accumulated-change `artifact` tag's
+    // kind above it; 1.33 binds the live windowed schema.
+    expect(chatSubscribeV128.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV129.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV130.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV131.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV132.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 froze when
+    // 1.35 added the memory-curation queue item above it; 1.35 froze when
+    // 1.37 added the compaction `notApplied` flag above it; 1.36 aliases
+    // 1.35's frozen frames; 1.37 binds the live windowed schema.
+    expect(chatSubscribeV133.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV134.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV135.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV136.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV137.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.36 carries 1.35's frames unchanged.
+    expect(chatSubscribeV136.serverFrameSchema).toBe(
+      chatSubscribeV135.serverFrameSchema,
     );
   });
 

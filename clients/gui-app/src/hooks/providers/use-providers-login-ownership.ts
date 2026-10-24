@@ -1,6 +1,7 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 export function useProvidersLoginOwnership(): boolean {
   return useProvidersLoginOwnershipForClient(useHostClient());
@@ -10,7 +11,7 @@ export function useProvidersLoginOwnership(): boolean {
 export function useProvidersLoginOwnershipForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): boolean {
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
   const start = useHostMethodSchemaVersion(hostId, "providers.startLogin");
   const cancel = useHostMethodSchemaVersion(hostId, "providers.cancelLogin");
   return (

@@ -132,6 +132,58 @@ const CHAT_SUBSCRIBE_AUTO_JUDGE_NOTICE_MINOR = 16;
 export const CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR = 22;
 
 /**
+ * The first minor whose queue may carry a `conversation-message` item (a
+ * human's message in a bot conversation waiting on the bot's trunk, Tracy
+ * Bots). A literal for the reason the constant above is one. The host omits
+ * the item, and the queue events that name it, from every peer below this
+ * minor (`chat-frame-projection.ts`), the way it omits the port-forward item
+ * below `1.14`; the client needs no predicate on it, since a `1.25` peer
+ * parses with the union its line binds.
+ */
+export const CHAT_SUBSCRIBE_CONVERSATION_MESSAGE_MINOR = 25;
+
+/**
+ * The first minor whose queue may carry a `task-checkin` item (a bot's
+ * check-in on the tasks it tracks, waiting on its trunk, Tracy Bots). Same
+ * posture as the constant above: the host omits the item, and the queue
+ * events that name it, from every peer below this minor
+ * (`chat-frame-projection.ts`); a `1.26` peer parses with the union its line
+ * binds and needs no predicate.
+ */
+export const CHAT_SUBSCRIBE_TASK_CHECKIN_MINOR = 26;
+
+/**
+ * The first minor whose queue may carry a `task-overdue` item (the nudge that
+ * a tracked task's periodic check-in is a whole period late, waiting on its
+ * trunk, Tracy Bots T14). Same posture as the two constants above: the host
+ * omits the item, and the queue events that name it, from every peer below
+ * this minor (`chat-frame-projection.ts`); a `1.27` peer parses with the
+ * union its line binds and needs no predicate.
+ */
+export const CHAT_SUBSCRIBE_TASK_OVERDUE_MINOR = 27;
+
+/**
+ * The first minor whose queue may carry a `memory-curation` item (the ask
+ * that the environment's main bot curate its shared memory, waiting on its
+ * trunk, Tracy Bots T44b). Same posture as the constants above: the host
+ * omits the item, and the queue events that name it, from every peer below
+ * this minor; a `1.35` peer parses with the union its line binds and needs
+ * no predicate.
+ */
+export const CHAT_SUBSCRIBE_MEMORY_CURATION_MINOR = 35;
+
+/**
+ * The first minor whose `tool_call` block and `tool_call.completed` event may
+ * carry `agentMessageDelivery` (where a cross-host send stands). A literal for
+ * the reason the constants above are. The host deletes the key by name from
+ * every block and completed event it sends a peer below this minor
+ * (`chat-frame-projection.ts`), the way it deletes the page stamps below
+ * `1.23`; the client needs no predicate on it, since a `1.29` peer parses with
+ * the schemas its line binds.
+ */
+export const CHAT_SUBSCRIBE_AGENT_MESSAGE_DELIVERY_MINOR = 29;
+
+/**
  * Typed against the live enum on purpose: a rename of the mode breaks this
  * compile rather than leaving a string literal that silently matches nothing.
  *
@@ -375,7 +427,16 @@ export function projectChatClientFrameForVersion(
       "Message delivery acknowledgements require chat.subscribe@1.15 or newer",
     );
   }
-  if (supportsV17(negotiated)) return frame;
+  if (supportsV17(negotiated)) {
+    if (frame.kind !== "send" || supportsCanvasAnnotations(negotiated))
+      return frame;
+    const browserAnnotations = projectCanvasAnnotations(
+      frame.browserAnnotations,
+    );
+    return browserAnnotations === frame.browserAnnotations
+      ? frame
+      : { ...frame, browserAnnotations };
+  }
 
   switch (frame.kind) {
     case "send": {
@@ -733,6 +794,184 @@ export interface ProjectedChatSubscribeServerFrame {
   readonly [key: string]: unknown;
 }
 
+/** Canvas annotations first ride 1.32; older lines carry browser evidence only. */
+export const CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR = 32;
+
+function supportsCanvasAnnotations(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR
+  );
+}
+
+function projectCanvasAnnotations(value: unknown): unknown {
+  if (
+    !Array.isArray(value) ||
+    !value.some(
+      (annotation) =>
+        isRecord(annotation) &&
+        ("source" in annotation ||
+          (Array.isArray(annotation.elements) &&
+            annotation.elements.some(
+              (element) =>
+                isRecord(element) &&
+                ("sourceRange" in element ||
+                  "tid" in element ||
+                  "textRange" in element),
+            ))),
+    )
+  )
+    return value;
+  return value.flatMap((annotation) => {
+    if (!isRecord(annotation)) return [annotation];
+    if (isRecord(annotation.source) && annotation.source.kind === "canvas")
+      return [];
+    const { source: _source, ...record } = annotation;
+    if (!Array.isArray(record.elements)) return [record];
+    return [
+      {
+        ...record,
+        elements: record.elements.map((element) => {
+          if (!isRecord(element)) return element;
+          const {
+            sourceRange: _sourceRange,
+            tid: _tid,
+            textRange: _textRange,
+            ...legacy
+          } = element;
+          return legacy;
+        }),
+      },
+    ];
+  });
+}
+
+function projectCanvasAnnotationPayload(value: unknown): unknown {
+  if (
+    !isRecord(value) ||
+    value.kind !== "user" ||
+    !Array.isArray(value.browserAnnotations) ||
+    value.browserAnnotations.length === 0
+  )
+    return value;
+  const browserAnnotations = projectCanvasAnnotations(value.browserAnnotations);
+  return browserAnnotations === value.browserAnnotations
+    ? value
+    : { ...value, browserAnnotations };
+}
+
+function projectCanvasAnnotationMessage(value: unknown): unknown {
+  if (!isRecord(value) || value.role !== "user") return value;
+  const message = projectCanvasAnnotationPayload(value.message);
+  return message === value.message ? value : { ...value, message };
+}
+
+function projectCanvasAnnotationMessages(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const messages = value.map(projectCanvasAnnotationMessage);
+  return messages.every((message, index) => message === value[index])
+    ? value
+    : messages;
+}
+
+function projectCanvasAnnotationQueueItem(item: unknown): unknown {
+  if (!isRecord(item) || !("message" in item)) return item;
+  const message = projectCanvasAnnotationPayload(item.message);
+  return message === item.message ? item : { ...item, message };
+}
+
+function projectCanvasAnnotationQueueItems(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const items = value.map(projectCanvasAnnotationQueueItem);
+  return items.every((item, index) => item === value[index]) ? value : items;
+}
+
+function projectCanvasAnnotationQueue(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const items = projectCanvasAnnotationQueueItems(value.items);
+  return items === value.items ? value : { ...value, items };
+}
+
+/** Queue events carry the same payload under metadata.item or metadata.items. */
+function projectCanvasAnnotationEvent(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.metadata)) return value;
+  const metadata = value.metadata;
+  const item = projectCanvasAnnotationQueueItem(metadata.item);
+  const items = projectCanvasAnnotationQueueItems(metadata.items);
+  if (item === metadata.item && items === metadata.items) return value;
+  const projected = { ...metadata };
+  if (item !== metadata.item) projected.item = item;
+  if (items !== metadata.items) projected.items = items;
+  return { ...value, metadata: projected };
+}
+
+function projectCanvasAnnotationEvents(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const events = value.map(projectCanvasAnnotationEvent);
+  return events.every((event, index) => event === value[index])
+    ? value
+    : events;
+}
+
+function projectPreCanvasAnnotationFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsCanvasAnnotations(negotiated)) return frame;
+  switch (frame.kind) {
+    case "messageAccepted": {
+      const message = projectCanvasAnnotationMessage(frame.message);
+      return message === frame.message ? frame : { ...frame, message };
+    }
+    case "eventAppended": {
+      const event = projectCanvasAnnotationEvent(frame.event);
+      return event === frame.event ? frame : { ...frame, event };
+    }
+    case "queueChanged": {
+      const queue = projectCanvasAnnotationQueue(frame.queue);
+      return queue === frame.queue ? frame : { ...frame, queue };
+    }
+    case "range": {
+      if (!isRecord(frame.range)) return frame;
+      const messages = projectCanvasAnnotationMessages(frame.range.messages);
+      const events = projectCanvasAnnotationEvents(frame.range.events);
+      if (messages === frame.range.messages && events === frame.range.events)
+        return frame;
+      const range = { ...frame.range };
+      if (messages !== frame.range.messages) range.messages = messages;
+      if (events !== frame.range.events) range.events = events;
+      return { ...frame, range };
+    }
+    case "snapshot": {
+      if (!isRecord(frame.snapshot)) return frame;
+      const original = frame.snapshot;
+      const snapshot = { ...original };
+      for (const key of ["chat", "tail"]) {
+        const container = original[key];
+        if (!isRecord(container)) continue;
+        const messages = projectCanvasAnnotationMessages(container.messages);
+        const events = projectCanvasAnnotationEvents(container.events);
+        if (messages === container.messages && events === container.events)
+          continue;
+        const projected = { ...container };
+        if (messages !== container.messages) projected.messages = messages;
+        if (events !== container.events) projected.events = events;
+        snapshot[key] = projected;
+      }
+      if ("queue" in original)
+        snapshot.queue = projectCanvasAnnotationQueue(original.queue);
+      return snapshot.chat === original.chat &&
+        snapshot.tail === original.tail &&
+        snapshot.queue === original.queue
+        ? frame
+        : { ...frame, snapshot };
+    }
+    default:
+      return frame;
+  }
+}
+
 function stripAnswerSelection(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return value.map((answer) => {
@@ -934,7 +1173,10 @@ export function projectChatServerFrameForVersion(
   // an unknown member - so every pre-1.8 peer must never see the event. A
   // client that cannot render an import provenance row has nothing to do with
   // the value anyway.
-  const preImportSafe = projectPreImportedFrame(bridgeProjected, negotiated);
+  const preImportSafe = projectPreCanvasAnnotationFrame(
+    projectPreImportedFrame(bridgeProjected, negotiated),
+    negotiated,
+  );
   if (supportsV17(negotiated)) return preImportSafe;
   frame = preImportSafe;
 
@@ -1333,3 +1575,12 @@ function projectChatEvents(value: unknown): unknown {
   });
   return changed ? projected : value;
 }
+
+/** Below 1.30 the host omits operation blocks/events for non-markdown kinds. */
+export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 30;
+
+/** Older peers receive the tool row without its inline artifact stamp. */
+export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 31;
+
+/** Older peers receive accumulated changes without new-kind artifact tags. */
+export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 33;

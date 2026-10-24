@@ -85,6 +85,7 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }
@@ -126,6 +127,7 @@ function mountSubmit(args: {
       getActiveTurnForSteer: () => null,
       hasPendingApprovals: false,
       sendDisabled: false,
+      sendDisabledHint: null,
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
@@ -182,11 +184,16 @@ describe("browser annotation attach to send", () => {
     expect(draft.browserAnnotations).toHaveLength(1);
     const record = draft.browserAnnotations[0];
     expect(record.annotationId).toBe(ANNOTATION_ID);
-    expect(record.imageHash.length).toBeGreaterThan(0);
+    // A browser attach always stores a crop; only canvas records may omit one.
+    const imageHash = record.imageHash;
+    if (imageHash === null) {
+      throw new Error("browser annotation record has no crop");
+    }
+    expect(imageHash.length).toBeGreaterThan(0);
     expect(record.imageFileName).toBe(IMAGE_FILE_NAME);
 
     imageStoreMocks.sessionImageBytes.mockImplementation((hash) => {
-      if (hash === record.imageHash) {
+      if (hash === imageHash) {
         return stub.png;
       }
       return null;
@@ -228,8 +235,6 @@ describe("browser annotation attach to send", () => {
     expect(atoms).toHaveLength(1);
     expect(atoms[0]?.fileName).toBe(IMAGE_FILE_NAME);
     expect(record.imageFileName).toBe(atoms[0]?.fileName);
-    expect(imageStoreMocks.sessionImageBytes).toHaveBeenCalledWith(
-      record.imageHash,
-    );
+    expect(imageStoreMocks.sessionImageBytes).toHaveBeenCalledWith(imageHash);
   });
 });

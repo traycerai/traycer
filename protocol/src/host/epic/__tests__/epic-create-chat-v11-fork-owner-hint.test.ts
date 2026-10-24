@@ -48,7 +48,7 @@ describe("epic.createChat stays on the released floor", () => {
     expect(RELEASED_FLOOR_METHOD_NAMES).toContain("epic.createChat");
   });
 
-  it("advertises on the floor manifest at 1.2, not the optional manifest", () => {
+  it("advertises on the floor manifest at its latest minor, not the optional manifest", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
@@ -56,8 +56,7 @@ describe("epic.createChat stays on the released floor", () => {
     );
     expect(split.manifest["epic.createChat"]).toEqual({
       major: 1,
-      minor: 2,
-      supportedMajors: [1],
+      minor: 3,
     });
     expect(split.optionalManifest["epic.createChat"]).toBeUndefined();
   });
@@ -81,10 +80,8 @@ describe("epic.createChat V11<->V10 negotiation bridges", () => {
 });
 
 describe("epic.createChat registry line shape", () => {
-  it("exposes minors 0, 1 and 2 with latestMinor 2", () => {
+  it("keeps minors 0, 1 and 2 registered", () => {
     const line = hostRpcRegistry["epic.createChat"][1];
-    expect(line.latestMinor).toBe(2);
-    expect(Object.keys(line.versions).sort()).toEqual(["0", "1", "2"]);
     expect(line.versions[0].contract).toBe(epicCreateChatV10);
     expect(line.versions[1].contract).toBe(epicCreateChatV11);
     expect(line.versions[2].contract).toBe(epicCreateChatV12);

@@ -25,13 +25,15 @@ import {
 /**
  * A drivable double for one `host.hostInventory.subscribe` session.
  *
- * `getNegotiatedSchemaVersion()` answers `{ major: 1, minor: 0 }` rather than
- * `null` - either is legal per `HostInventoryStreamClient`'s own guard (a
- * `null` negotiated version skips the minor check entirely), but pinning the
- * real value here is what a healthy handshake actually reports.
+ * `getNegotiatedSchemaVersion()` answers `negotiated`, `{ major: 1, minor: 1 }`
+ * by default: the line whose rows are the whole registry, sandbox rows
+ * included, and the only one this module adopts. A test that needs the
+ * `@1.0` line (a host that predates sandboxes, whose rows are the personal
+ * hosts alone) sets it on the session.
  */
 class FakeInventorySession implements IStreamSession {
   closed = false;
+  negotiated: SchemaVersion | null = { major: 1, minor: 1 };
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
 
@@ -51,7 +53,7 @@ class FakeInventorySession implements IStreamSession {
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return { major: 1, minor: 0 };
+    return this.negotiated;
   }
 
   close(): void {
@@ -386,6 +388,43 @@ describe("startLocalHostInventorySubscription", () => {
     subscription.dispose();
   });
 
+  it("A3b: a @1.0 snapshot (a host that predates sandboxes) is never adopted and never arms push coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+    session.negotiated = { major: 1, minor: 0 };
+
+    // Fresh, with personal rows: on @1.1 this would be adopted and arm push.
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+
+    expect(harness.rowsCalls).toEqual([]);
+    expect(harness.pushActiveCalls).not.toContain(true);
+
+    subscription.dispose();
+  });
+
+  it("A3c: a @1.0 snapshot after push was armed on @1.1 withdraws coverage, and adopts nothing", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+    expect(harness.rowsCalls).toHaveLength(1);
+
+    // The session renegotiated down (a host downgrade across a reconnect).
+    session.negotiated = { major: 1, minor: 0 };
+    session.emitSnapshot([buildRow("host-1")], false, 2_000);
+
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    expect(harness.rowsCalls).toHaveLength(1);
+
+    subscription.dispose();
+  });
+
   it("A4: a stale snapshot still adopts the rows, but withdraws (or never arms) push coverage", () => {
     const harness = buildHarness();
     harness.setLocalHost(HOST_1);
@@ -606,13 +645,13 @@ describe("startLocalHostInventorySubscription", () => {
     // The late frame must not gain a `true` on top of the teardown's `false`:
     // arming coverage from a retired stream would leave the new account
     // believing its registry is covered when no usable snapshot for IT has
-    // ever arrived - the new account's poll must keep running.
+    // ever arrived.
     expect(harness.pushActiveCalls).toEqual([true, false]);
 
     subscription.dispose();
   });
 
-  it("B7: a late frame on the OLD session cannot arm coverage before the NEW stream has produced a snapshot of its own - the new account's poll keeps running", () => {
+  it("B7: a late frame on the OLD session cannot arm coverage before the NEW stream has produced a snapshot of its own", () => {
     const harness = buildHarness();
     harness.setLocalHost(HOST_1);
     const subscription = startLocalHostInventorySubscription(harness.deps);
@@ -636,8 +675,7 @@ describe("startLocalHostInventorySubscription", () => {
     firstSession.emitSnapshot([buildRow("host-1")], false, 9_000);
 
     // Coverage must still read false: the new account has no usable snapshot
-    // of its own, so its poll must still be the one serving the registry -
-    // arming here would strand it with neither a snapshot nor a poll.
+    // of its own, and arming here would report a push that covers nothing.
     expect(harness.pushActiveCalls).toEqual([true, false]);
     expect(harness.pushActiveCalls.at(-1)).toBe(false);
 

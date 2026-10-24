@@ -276,6 +276,23 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
   );
 }
 
+/**
+ * The line above a listing whose coverage is reduced. It says only that some
+ * tasks may be missing: where a task lives is not something the person asked
+ * about, and the list is still worth reading.
+ */
+export function EpicsListReducedCoverage(): ReactNode {
+  return (
+    <p
+      className="mb-2 text-ui-xs text-muted-foreground"
+      role="status"
+      data-testid="epics-list-reduced-coverage"
+    >
+      Some tasks may be missing from this list.
+    </p>
+  );
+}
+
 export function EpicsListEmpty(): ReactNode {
   return (
     <div
@@ -360,6 +377,7 @@ export function EpicsListNoRows(props: {
   readonly onRetry: () => void;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending: boolean;
   readonly onLoadMore: () => void;
 }): ReactNode {
   if (props.cloudPagePending) return <EpicsListLoading />;
@@ -380,6 +398,7 @@ export function EpicsListNoRows(props: {
       <EpicsListShowMore
         hasNextPage={props.hasNextPage}
         isFetchingNextPage={props.isFetchingNextPage}
+        isBulkSelectionPending={props.isBulkSelectionPending}
         onLoadMore={props.onLoadMore}
       />
     </>
@@ -402,6 +421,7 @@ export function EpicsListFilteredEmpty(): ReactNode {
 export interface EpicsListShowMoreProps {
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
+  readonly isBulkSelectionPending: boolean;
   readonly onLoadMore: () => void;
 }
 
@@ -413,7 +433,7 @@ export function EpicsListShowMore(props: EpicsListShowMoreProps): ReactNode {
         type="button"
         variant="ghost"
         size="sm"
-        disabled={props.isFetchingNextPage}
+        disabled={props.isFetchingNextPage || props.isBulkSelectionPending}
         onClick={props.onLoadMore}
         data-testid="epics-list-show-more"
       >

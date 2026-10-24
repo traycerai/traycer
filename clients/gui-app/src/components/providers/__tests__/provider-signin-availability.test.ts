@@ -11,6 +11,10 @@ import {
   shouldAutoOpenLoginUrl,
   type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
+import {
+  MACOS_13_SENTENCE,
+  settledMacosBlock,
+} from "@/components/providers/__tests__/macos-requirement-test-support";
 
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   return {
@@ -813,6 +817,107 @@ describe("providerHostBlockLabel", () => {
     };
     expect(providerHostBlockLabel(block, label)).toBe(
       `Preparing ${label}… 42%`,
+    );
+  });
+});
+
+describe("providerHostBlock - macOS requirement", () => {
+  const antigravity = (
+    overrides: Partial<ProviderCliState>,
+  ): ProviderCliState =>
+    providerState({
+      providerId: "antigravity",
+      candidates: [],
+      cliBinaryResolved: false,
+      ...overrides,
+    });
+
+  it("returns the macos kind once the host has settled that nothing can run here", () => {
+    const state = antigravity({ ...settledMacosBlock({}) });
+    for (const gesture of ["sign-in", "sign-in-and-enable"] as const) {
+      expect(providerHostBlock(state, gesture), gesture).toEqual({
+        kind: "macos",
+        requiredMacos: "14.0",
+        runningMacos: "13.6",
+      });
+    }
+  });
+
+  it("takes the lowest floor the host reports, never one it computed itself", () => {
+    const state = antigravity({
+      ...settledMacosBlock({ launch: { requiredMacos: "15.0" } }),
+    });
+    expect(providerHostBlock(state, "sign-in")).toEqual({
+      kind: "macos",
+      requiredMacos: "15.0",
+      runningMacos: "13.6",
+    });
+  });
+
+  it("answers before the pack and checking kinds, but after a disabled provider", () => {
+    const withPack = antigravity({
+      ...settledMacosBlock({}),
+      managedInstallState: { status: "downloading", percent: 10 },
+    });
+    expect(providerHostBlock(withPack, "sign-in")?.kind).toBe("macos");
+    expect(
+      providerHostBlock(
+        antigravity({ ...settledMacosBlock({}), enabled: false }),
+        "sign-in",
+      ),
+    ).toEqual({ kind: "disabled" });
+  });
+
+  it("keeps saying Checking while discovery is pending and launch is null", () => {
+    const state = antigravity({
+      availabilityPending: true,
+      ...settledMacosBlock({ launch: null }),
+    });
+    expect(providerHostBlock(state, "sign-in")).toEqual({
+      kind: "cli-checking",
+    });
+  });
+
+  it("does not block on the managed withhold alone", () => {
+    // `launch` null: something else can run, so there is no block to show.
+    const state = antigravity({
+      cliBinaryResolved: true,
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/agy_acp_server",
+          version: "1.0.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+      ...settledMacosBlock({ launch: null }),
+    });
+    expect(providerHostBlock(state, "sign-in")).toBeNull();
+  });
+
+  it("behaves exactly as before when an older host omits the field", () => {
+    expect(providerHostBlock(antigravity({}), "sign-in")).toEqual({
+      kind: "cli-missing",
+    });
+    expect(
+      providerHostBlock(antigravity({ macosRequirement: null }), "sign-in"),
+    ).toEqual({ kind: "cli-missing" });
+  });
+
+  it("labels the block with the sentence, naming both versions", () => {
+    expect(
+      providerHostBlockLabel(
+        { kind: "macos", requiredMacos: "14.0", runningMacos: "13.6" },
+        "Antigravity",
+      ),
+    ).toBe(MACOS_13_SENTENCE);
+  });
+
+  it("surfaces the sentence through the shared sign-in hint", () => {
+    const state = antigravity({ ...settledMacosBlock({}) });
+    expect(providerSignInUnavailableHint(state, true, "sign-in")).toContain(
+      MACOS_13_SENTENCE,
     );
   });
 });

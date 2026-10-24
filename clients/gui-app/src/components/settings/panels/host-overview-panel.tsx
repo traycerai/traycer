@@ -1,4 +1,5 @@
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
+import { SandboxCard } from "@/components/hosts/sandbox-card";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -11,6 +12,7 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
 import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
@@ -22,12 +24,15 @@ import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
+import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
   type HostOverviewSelectTab,
 } from "@/components/settings/panels/host-overview-tab-state";
 import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
+import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
+import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import {
   describeHostOfflineNotice,
   inFlightUpdateKind,
@@ -42,6 +47,7 @@ import {
   HostOverviewPortsTab,
 } from "@/components/settings/panels/host-overview-ports-tab";
 import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
+import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -123,7 +129,10 @@ import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  isUnenrolledSandboxOption,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -1610,7 +1619,14 @@ export function HostOverviewPanel(props: {
         resetNameDegrade={renameDegrade}
         onRestart={() => openRestartConfirm()}
         onOpenDoctor={() => setDoctorOpen(true)}
-        onMakeActive={() => scope.makeActive(host.hostId)}
+        // None on a management-only row (the Automations pod, a burst or
+        // unconfirmed sandbox): the list shows it, no picker offers it.
+        onMakeActive={
+          hostOptionCanActivate(host)
+            ? () => scope.makeActive(host.hostId)
+            : null
+        }
+        teamOwned={host.sandbox?.teamOwned === true}
         activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
         // A phone's name row never wraps: Activate becomes the menu's first
@@ -1762,7 +1778,7 @@ export function HostOverviewPanel(props: {
     />
   );
 
-  // The four tab bodies, each handed what it draws. Built on every render
+  // The tab bodies, each handed what it draws. Built on every render
   // and cheap to build - a body MOUNTS only once its tab is first visited.
   const versionConnecting =
     scope.status === "connecting" ||
@@ -1835,6 +1851,24 @@ export function HostOverviewPanel(props: {
       hosts={scope.hosts}
     />
   );
+  const simulatorsTab = (
+    <HostOverviewSimulatorsTab
+      client={client}
+      hostId={host.hostId}
+      hostName={displayName}
+    />
+  );
+  const accessTab = (
+    <HostOverviewAccessTab
+      client={client}
+      hostId={scope.hostId}
+      hostName={displayName}
+      connecting={
+        scope.status === "connecting" || host.health.state === "restarting"
+      }
+      usable={usable}
+    />
+  );
   const dataTab = (
     <HostOverviewDataTab
       client={client}
@@ -1880,6 +1914,18 @@ export function HostOverviewPanel(props: {
 
   return (
     <>
+      {host.sandbox === null ? null : (
+        <SandboxCard
+          hostName={displayName}
+          hostState={host.health.state}
+          sandbox={host.sandbox}
+          // Destroying a sandbox no host row stands for removes its row, so
+          // Settings returns to the active host instead of calling it vanished.
+          onDestroyed={
+            isUnenrolledSandboxOption(host) ? scope.returnToActive : null
+          }
+        />
+      )}
       <HostIdentityCard
         host={host}
         displayName={displayName}
@@ -1946,6 +1992,15 @@ export function HostOverviewPanel(props: {
         lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
         {notices}
+        {/* The one-time Remote access question, on every tab like the
+            strip above it; it draws nothing once answered on this desktop. */}
+        <RemoteAccessQuestion
+          client={client}
+          hostId={scope.hostId}
+          enabled={usable}
+        />
+        {/* Whose bots this host runs, for the host the picker names. */}
+        <HostEnvironmentSection scope={scope} />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -1967,8 +2022,10 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
+            access: accessTab,
             data: dataTab,
             ports: portsTab,
+            simulators: simulatorsTab,
           }}
         />
       </HostIdentityCard>

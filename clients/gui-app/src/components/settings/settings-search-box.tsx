@@ -7,6 +7,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -167,12 +168,13 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
             setHighlighted(0);
           }}
           onKeyDown={(event) => {
-            if (event.key === "ArrowDown") {
+            const navigationKey = listNavigationKey(event);
+            if (navigationKey === "ArrowDown") {
               event.preventDefault();
               moveHighlight(1);
               return;
             }
-            if (event.key === "ArrowUp") {
+            if (navigationKey === "ArrowUp") {
               event.preventDefault();
               moveHighlight(-1);
               return;

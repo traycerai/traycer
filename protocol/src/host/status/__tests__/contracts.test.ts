@@ -8,6 +8,8 @@ import {
   hostStatusUpgradeV13ToV14,
   hostStatusUpgradeV14ToV15,
   hostStatusUpgradeV15ToV16,
+  hostStatusUpgradeV16ToV17,
+  hostStatusUpgradeV17ToV18,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
@@ -15,6 +17,8 @@ import {
   hostStatusV14,
   hostStatusV15,
   hostStatusV16,
+  hostStatusV17,
+  hostStatusV18,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -333,6 +337,7 @@ describe("host.status@1.5 install", () => {
     const parsed = hostStatusV15.responseSchema.parse({
       ...V14_RESPONSE,
       install: null,
+      processMemory: null,
     });
     expect(parsed.install).toBeNull();
   });
@@ -372,16 +377,18 @@ describe("host.status@1.5 install", () => {
 });
 
 describe("host.status registry membership", () => {
-  it("v1.4, v1.5 and v1.6 reuse the previous line's request schema by identity", () => {
+  it("v1.4 through v1.8 reuse the previous line's request schema by identity", () => {
     expect(hostStatusV14.requestSchema).toBe(hostStatusV13.requestSchema);
     expect(hostStatusV15.requestSchema).toBe(hostStatusV14.requestSchema);
     expect(hostStatusV16.requestSchema).toBe(hostStatusV15.requestSchema);
+    expect(hostStatusV17.requestSchema).toBe(hostStatusV16.requestSchema);
+    expect(hostStatusV18.requestSchema).toBe(hostStatusV17.requestSchema);
   });
 
-  it("installs @1.0 through @1.6 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.8 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(6);
+    expect(entry[1].latestMinor).toBe(8);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -404,5 +411,158 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[6].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV15ToV16,
     );
+    expect(entry[1].versions[7].contract).toBe(hostStatusV17);
+    expect(entry[1].versions[7].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV16ToV17,
+    );
+    expect(entry[1].versions[8].contract).toBe(hostStatusV18);
+    expect(entry[1].versions[8].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV17ToV18,
+    );
+  });
+});
+
+const V16_RESPONSE = {
+  ...V10_RESPONSE,
+  busy: false,
+  busySessionCount: 0,
+  updateProgress: null,
+  busyBreakdown: null,
+  updateOperation: null,
+  updateTransaction: null,
+  storeFormats: null,
+  install: null,
+  processMemory: null,
+};
+
+describe("hostStatusUpgradeV16ToV17", () => {
+  it("upgrades a v1.6 response with processMemory: null, NOT zeroed counters", () => {
+    const parsed = hostStatusV16.responseSchema.parse(V16_RESPONSE);
+    const upgraded = hostStatusUpgradeV16ToV17.upgradeResponse(parsed);
+    expect(upgraded.processMemory).toBeNull();
+    expect(() => hostStatusV17.responseSchema.parse(upgraded)).not.toThrow();
+  });
+
+  it("leaves the request identity-mapped", () => {
+    expect(hostStatusUpgradeV16ToV17.upgradeRequest({})).toEqual({});
+  });
+
+  it("accepts a reported reading and keeps it byte-for-byte", () => {
+    const processMemory = {
+      heapLimitBytes: 4_831_838_208,
+      heapUsedBytes: 4_100_000_000,
+      rssBytes: 4_750_000_000,
+    };
+    const parsed = hostStatusV17.responseSchema.parse({
+      ...V16_RESPONSE,
+      processMemory,
+    });
+    expect(parsed.processMemory).toEqual(processMemory);
+  });
+
+  it("refuses a negative or fractional counter", () => {
+    for (const bad of [-1, 1.5]) {
+      expect(
+        hostStatusV17.responseSchema.safeParse({
+          ...V16_RESPONSE,
+          processMemory: {
+            heapLimitBytes: bad,
+            heapUsedBytes: 0,
+            rssBytes: 0,
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("strips processMemory when a v1.6 caller re-parses the reply", () => {
+    const parsed = hostStatusV16.responseSchema.parse({
+      ...V16_RESPONSE,
+      processMemory: { heapLimitBytes: 1, heapUsedBytes: 1, rssBytes: 1 },
+    });
+    expect("processMemory" in parsed).toBe(false);
+  });
+});
+
+const V17_RESPONSE = { ...V16_RESPONSE };
+
+describe("hostStatusUpgradeV17ToV18", () => {
+  it("upgrades a v1.7 response with crossHostMessaging: null, NOT a fabricated ok", () => {
+    const parsed = hostStatusV17.responseSchema.parse(V17_RESPONSE);
+    const upgraded = hostStatusUpgradeV17ToV18.upgradeResponse(parsed);
+    expect(upgraded.crossHostMessaging).toBeNull();
+    expect(() => hostStatusV18.responseSchema.parse(upgraded)).not.toThrow();
+  });
+
+  it("leaves the request identity-mapped", () => {
+    expect(hostStatusUpgradeV17ToV18.upgradeRequest({})).toEqual({});
+  });
+
+  it("keeps a paused reading byte-for-byte", () => {
+    const crossHostMessaging = {
+      state: "paused" as const,
+      pausedSince: 1_700_000_000_000,
+      nextRetryAt: 1_700_000_060_000,
+      cause: "breaker-open",
+    };
+    const parsed = hostStatusV18.responseSchema.parse({
+      ...V17_RESPONSE,
+      crossHostMessaging,
+    });
+    expect(parsed.crossHostMessaging).toEqual(crossHostMessaging);
+  });
+
+  it("accepts ok with null times and cause", () => {
+    const crossHostMessaging = {
+      state: "ok" as const,
+      pausedSince: null,
+      nextRetryAt: null,
+      cause: null,
+    };
+    const parsed = hostStatusV18.responseSchema.parse({
+      ...V17_RESPONSE,
+      crossHostMessaging,
+    });
+    expect(parsed.crossHostMessaging).toEqual(crossHostMessaging);
+  });
+
+  it("refuses an unknown state and a negative or fractional time", () => {
+    const base = {
+      state: "paused",
+      pausedSince: 1,
+      nextRetryAt: 2,
+      cause: null,
+    };
+    for (const bad of [
+      { ...base, state: "stalled" },
+      { ...base, pausedSince: -1 },
+      { ...base, nextRetryAt: 1.5 },
+    ]) {
+      expect(
+        hostStatusV18.responseSchema.safeParse({
+          ...V17_RESPONSE,
+          crossHostMessaging: bad,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("requires the key at 1.8 (null is the only 'did not report')", () => {
+    expect(hostStatusV18.responseSchema.safeParse(V17_RESPONSE).success).toBe(
+      false,
+    );
+  });
+
+  it("strips crossHostMessaging when a v1.7 caller re-parses the reply", () => {
+    const parsed = hostStatusV17.responseSchema.parse({
+      ...V17_RESPONSE,
+      crossHostMessaging: {
+        state: "paused",
+        pausedSince: 1,
+        nextRetryAt: null,
+        cause: "transient",
+      },
+    });
+    expect("crossHostMessaging" in parsed).toBe(false);
   });
 });

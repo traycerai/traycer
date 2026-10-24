@@ -15,6 +15,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import type { McpScopeTarget } from "./provider-mcp-scope-picker";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 function resolveLockedScope(
   supportsProject: boolean,
@@ -93,7 +94,7 @@ export function useProviderNativeScope(
   // shells) and falls through to local-only resolution.
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
-  const hostId = client?.getActiveHostId() ?? activeHostId;
+  const hostId = useRequesterHostId(client) ?? activeHostId;
   // The Settings-bound host's own folder bucket - another host's paths can
   // never become a Project workspaceRoot for this host (B6).
   const folders = useWorkspaceFoldersStore(

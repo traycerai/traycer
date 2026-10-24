@@ -53,7 +53,6 @@ describe("agent.tui.validateForkProfile is optional, not floor", () => {
     expect(split.optionalManifest["agent.tui.validateForkProfile"]).toEqual({
       major: 1,
       minor: 0,
-      supportedMajors: [1],
     });
     expect(split.manifest["agent.tui.validateForkProfile"]).toBeUndefined();
   });

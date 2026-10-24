@@ -271,7 +271,7 @@ it resolved exactly what `useHostClient()` resolves.)
 SCOPED one, not the app-wide one. A binding re-provided by a host-scoped panel
 names its host (`HostRuntimeBinding.hostId`), and every consumer below it —
 `useHostClient()`, `useAddressableHostId()`, the wrappers above — resolves to
-that host. Eleven surfaces re-provide — nine through `useScopedHostBinding`,
+that host. Twelve surfaces re-provide — ten through `useScopedHostBinding`,
 plus the two governed exceptions it lists. Resolve a binding through
 `lib/host/binding-host-client.ts` and never inline
 `hostClient.createRequesterForHostId(...)` beside a separately-read host id:
@@ -315,8 +315,12 @@ persistability filter, the purge) counts segments from that layout — add a
 segment and both must move with it.
 
 **Deliberate exception — dictation.** `useDictationAvailability` /
-`useVoiceDictation` stay on the app-wide host (`useHostClient()`) even inside a
-host-pinned composer. They describe the person at the keyboard, not the run:
+`useVoiceDictation` stay on the person's selected host (the effective host,
+resolved explicitly, never a scoped subtree's or an Epic tab's ambient stream)
+even inside a host-pinned composer, and refuse a selected host that is a
+sandbox. The routing table's `selected-host` route
+(`clients/shared/host-client/host-rpc-routing.ts`) enforces the unary half
+for every requester. They describe the person at the keyboard, not the run:
 `speech.dictate` streams live microphone audio and `speech.ensureModel`
 downloads an on-device model, so following a remote run target would ship a
 user's audio to a machine they only picked to execute a turn on, and drop a
@@ -342,19 +346,21 @@ nested-focus dimension still bans the raw store actions underneath.
 
 ## Sandboxed pages and MCP Apps
 
-Agent pages, wireframes and MCP Apps all render in ONE frame component,
+Wireframes and MCP Apps render in ONE frame component,
 `components/sandbox/sandbox-frame.tsx`. Don't frame agent or app HTML any
 other way.
 
 - **One frame, one loader.** The frame is `sandbox="allow-scripts
 allow-forms"`, never `allow-same-origin`, on the loader's own origin
   (`lib/sandbox/sandbox-url.ts`: `traycer-sandbox:` on desktop, `/sandbox/`
-  elsewhere). The loader (`lib/sandbox/sandbox-loader.ts`, built alone into a
-  classic script) waits for the resource, then `document.write`s it over
-  itself in the same frame; there is no inner frame.
-- **Policies.** A page's network policy (`open` / `https-only`) comes from
-  the host's `epic.readFile` answer and is passed through unchanged. An app's
-  CSP is built deny-by-default from normalized metadata (`lib/sandbox/mcp-csp.ts`);
+  elsewhere). The loader (`lib/sandbox/sandbox-loader.ts`, built alone and
+  inlined into `sandbox/index.html` as a classic script) waits for the
+  resource, then `document.write`s it over itself in the same frame; there is
+  no inner frame. That document is the only file the sandbox origin serves,
+  and it fetches nothing: WebKit's `*` does not admit iOS's `capacitor:`
+  scheme from an opaque frame, so a script or font file there never loads.
+  `lib/sandbox/__tests__/sandbox-index.test.ts` holds this.
+- **Policies.** An app's CSP is built deny-by-default from normalized metadata (`lib/sandbox/mcp-csp.ts`);
   its `allow` attribute only from the `SANDBOX_PERMISSIONS` enum.
 - **Bridge** (`lib/sandbox/bridge-host.ts`). Trust is `event.source ===
 frame.contentWindow` (the origin is always `"null"`), armed by the loader's
@@ -373,9 +379,8 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
   An Escape pressed inside the app reaches it too: while the host context
   says `fullscreen`, the bootstrap forwards bare Escape on the shortcut
   channel, and the bridge accepts it only from the proven page in that mode.
-- **Phones.** An inline app row has a fixed height; a page reserves the
-  stamp's measured height nearest its width. A coarse pointer gets the "…"
-  sheet (`components/chat/segments/touch-actions-sheet.tsx`) instead of the
+- **Phones.** An inline app row has a fixed height. A coarse pointer gets
+  the "…" sheet (`components/chat/segments/touch-actions-sheet.tsx`) instead of the
   hover bar.
 - **Native guards** are a second layer behind the parent `frame-src`, not a
   substitute: desktop `will-frame-navigate` and the scheme handler
@@ -383,8 +388,9 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
   the main frame on the app origin reaches the Capacitor bridge), Android the
   `@capacitor/android` patch that removes the `addJavascriptInterface`
   fallbacks.
-- **Bytes** come only through `lib/files/epic-file-rpc.ts` (the tab host's
-  `epic.*File` methods) or a signed https URL. Never a host loopback URL.
+- **Bytes** for captured apps come through `hooks/files/use-artifact-object-text-query.ts`
+  by SHA. Inline artifacts use `lib/sandbox/artifact-serving/`. Never read
+  captured content through a task file path or host loopback URL.
 
 ## Routing
 

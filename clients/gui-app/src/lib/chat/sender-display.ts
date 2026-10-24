@@ -18,6 +18,10 @@ export interface SenderDisplayContext {
     string,
     ReadonlyMap<string, string>
   >;
+  readonly modelServiceTierLabels: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string>
+  >;
 }
 
 export function agentModelKey(provider: string, model: string): string {
@@ -63,7 +67,7 @@ export function resolveAgentReasoningLabel(
   reasoningEffort: string | null,
   context: SenderDisplayContext,
 ): string | null {
-  const normalized = normalizeReasoningEffort(reasoningEffort);
+  const normalized = normalizeNonEmptyValue(reasoningEffort);
   if (normalized === null) return null;
   const modelLabel = reasoningLabelForModel(
     sender.harnessId,
@@ -82,6 +86,24 @@ export function resolveAgentReasoningLabel(
     if (displayNameLabel !== null) return displayNameLabel;
   }
   return normalized;
+}
+
+export function resolveAgentServiceTierLabel(
+  sender: OpenAgentSender,
+  serviceTier: string | null,
+  context: SenderDisplayContext,
+): string | null {
+  const normalized = normalizeNonEmptyValue(serviceTier);
+  if (normalized === null) return null;
+  const labelFor = (model: string) =>
+    context.modelServiceTierLabels
+      .get(agentModelKey(sender.harnessId, model))
+      ?.get(normalized) ?? null;
+  return (
+    labelFor(sender.agentId) ??
+    (sender.displayName === null ? null : labelFor(sender.displayName)) ??
+    normalized
+  );
 }
 
 function agentModelLabel(
@@ -125,11 +147,9 @@ function reasoningLabelForModel(
   );
 }
 
-function normalizeReasoningEffort(
-  reasoningEffort: string | null,
-): string | null {
-  if (reasoningEffort === null) return null;
-  const trimmed = reasoningEffort.trim();
+function normalizeNonEmptyValue(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
 }
 

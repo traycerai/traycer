@@ -1,3 +1,5 @@
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   arch as osArch,
   platform as osPlatform,
@@ -7,6 +9,12 @@ import * as Sentry from "@sentry/node";
 import { resolveCliVersion } from "../cli-version";
 import type { Environment } from "../runner/environment";
 import { destroySentryTransportRequests } from "../sentry-transport";
+import { hostCrashThrottlePath } from "../store/paths";
+import {
+  isWindowsExternalTerminationExit,
+  type CrashReportMemory,
+  type StderrFatalKind,
+} from "./crash-diagnostics";
 import { readHostPidMetadata } from "./pid-metadata";
 
 // Fleet visibility for host crashes.
@@ -57,6 +65,24 @@ export interface HostCrashTelemetry {
   readonly hasDiagnosticReport: boolean;
   /** Wall-clock lifetime of the child, spawn to exit. */
   readonly uptimeMs: number;
+  /**
+   * Whether a stop was asked for when the child ended (the shutdown latch, or
+   * a stop intent the supervisor read). Only the verdict: the intent itself
+   * is not carried.
+   */
+  readonly stopRequested: boolean;
+  /** Whether the child wrote nothing at all to stderr. Only the verdict. */
+  readonly stderrEmpty: boolean;
+  /**
+   * Which kind of fatal the stderr capture holds. Only the closed-set verdict
+   * (`crash-diagnostics.ts`): never the text, which stays on the machine.
+   */
+  readonly stderrFatal: StderrFatalKind;
+  /**
+   * The memory numbers the diagnostic report states, in bytes; a field is
+   * `null` when there was no report or the report did not carry it.
+   */
+  readonly reportMemory: CrashReportMemory;
 }
 
 /** The host's own identity, read from pid.json after the crash. */
@@ -78,6 +104,8 @@ export interface HostCrashIdentity {
  */
 export interface HostCrashEvent {
   readonly message: string;
+  /** `error` for a crash; `warning` for an exit that is not one. */
+  readonly level: "error" | "warning";
   readonly fingerprint: readonly string[];
   readonly hostId: string | null;
   readonly tags: Readonly<Record<string, string>>;
@@ -85,6 +113,43 @@ export interface HostCrashEvent {
 }
 
 export const HOST_CRASH_FINGERPRINT_ROOT = "host-crash";
+
+/**
+ * What the pid.json on disk says about the crashed child: `published` - the
+ * file's pid is the child's pid; `before-publish` - a file exists with another
+ * pid; `unknown` - no readable file, or the spawn yielded no pid to compare.
+ * It is evidence about publishing, not a verdict on how far startup got.
+ */
+export type HostCrashPhase = "published" | "before-publish" | "unknown";
+
+export function hostCrashPhase(
+  identity: HostCrashIdentity | null,
+  childPid: number | null,
+): HostCrashPhase {
+  if (identity === null || childPid === null) return "unknown";
+  return identity.runningVersion !== null ? "published" : "before-publish";
+}
+
+/**
+ * A closed set of lifetimes, so "exits within seconds of spawn" and "ran for
+ * a day" are separate groups in the issue's tag view instead of one number.
+ */
+export type UptimeBucket =
+  | "lt-10s"
+  | "lt-1m"
+  | "lt-10m"
+  | "lt-1h"
+  | "lt-24h"
+  | "gte-24h";
+
+export function uptimeBucket(uptimeMs: number): UptimeBucket {
+  if (uptimeMs < 10_000) return "lt-10s";
+  if (uptimeMs < 60_000) return "lt-1m";
+  if (uptimeMs < 10 * 60_000) return "lt-10m";
+  if (uptimeMs < 60 * 60_000) return "lt-1h";
+  if (uptimeMs < 24 * 60 * 60_000) return "lt-24h";
+  return "gte-24h";
+}
 
 // The identity read is a single small file, but it is on the exit path of a
 // supervisor that may be about to relaunch, so it gets the same treatment as
@@ -132,9 +197,23 @@ export function buildHostCrashEvent(
   const platform = osPlatform();
   const kind = crashKindToken(telemetry.exitCode, telemetry.signal);
   const cause = telemetry.exitMeaning ?? kind;
+  // Ended from outside (not a crash, not proven to be a session end): kept
+  // queryable at a lower severity and under its own fingerprint, so a rise in
+  // mid-session kills is visible without being a crash issue.
+  // (A POSIX exit status never exceeds 255, so the code alone is Windows.)
+  const externallyTerminated =
+    telemetry.exitCode !== null &&
+    isWindowsExternalTerminationExit(telemetry.exitCode);
   return {
-    message: `Host crashed: ${cause}`,
-    fingerprint: [HOST_CRASH_FINGERPRINT_ROOT, platform, kind],
+    message: externallyTerminated
+      ? `Host terminated externally: ${cause}`
+      : `Host crashed: ${cause}`,
+    level: externallyTerminated ? "warning" : "error",
+    fingerprint: [
+      HOST_CRASH_FINGERPRINT_ROOT,
+      platform,
+      externallyTerminated ? "external-termination" : kind,
+    ],
     hostId: identity?.hostId ?? null,
     tags: {
       host_environment: telemetry.environment,
@@ -148,6 +227,21 @@ export function buildHostCrashEvent(
       arch: osArch(),
       os_release: osRelease(),
       crash_kind: kind,
+      ...(externallyTerminated
+        ? { host_exit_kind: "external-termination" }
+        : {}),
+      // The tags below split one exit status into its causes: a stop
+      // that was asked for, a child that never got as far as publishing, one
+      // that said nothing before dying, and how long it ran. Closed sets, so
+      // none can carry a path, a message or an id.
+      stop_requested: telemetry.stopRequested ? "yes" : "no",
+      host_output: telemetry.stderrEmpty ? "silent" : "wrote",
+      // Which kind of fatal that output was (a heap OOM, another V8 fatal, a
+      // CHECK block, a native assertion, ...): the closed set that splits one
+      // exit status, 0xC0000409 above all, into its causes.
+      host_fatal: telemetry.stderrFatal,
+      host_phase: hostCrashPhase(identity, telemetry.childPid),
+      uptime_bucket: uptimeBucket(telemetry.uptimeMs),
     },
     extra: {
       attemptId: telemetry.attemptId,
@@ -159,6 +253,17 @@ export function buildHostCrashEvent(
       hasDiagnosticReport: telemetry.hasDiagnosticReport,
       uptimeMs: telemetry.uptimeMs,
       hostIdKnown: identity !== null,
+      // Plain counters, present only when the report stated them: a missing
+      // reading is absent, never a 0 or -1 that reads as a measurement.
+      ...(telemetry.reportMemory.heapLimitBytes === null
+        ? {}
+        : { heapLimitBytes: telemetry.reportMemory.heapLimitBytes }),
+      ...(telemetry.reportMemory.heapUsedBytes === null
+        ? {}
+        : { heapUsedBytes: telemetry.reportMemory.heapUsedBytes }),
+      ...(telemetry.reportMemory.rssBytes === null
+        ? {}
+        : { rssBytes: telemetry.reportMemory.rssBytes }),
     },
   };
 }
@@ -194,7 +299,7 @@ export async function readHostCrashIdentity(
  */
 export function captureHostCrashEvent(event: HostCrashEvent): void {
   Sentry.withScope((scope) => {
-    scope.setLevel("error");
+    scope.setLevel(event.level);
     scope.setFingerprint([...event.fingerprint]);
     scope.setTags(event.tags);
     scope.setExtras(event.extra);
@@ -203,7 +308,7 @@ export function captureHostCrashEvent(event: HostCrashEvent): void {
       // column count distinct hosts.
       scope.setUser({ id: event.hostId });
     }
-    Sentry.captureMessage(event.message, "error");
+    Sentry.captureMessage(event.message, event.level);
   });
 }
 
@@ -229,6 +334,9 @@ export function captureHostCrashSummary(
   });
 }
 
+/** The most kinds the throttle keeps on disk. */
+const MAX_PERSISTED_KINDS = 32;
+
 /** Crashes of one kind reported in full before the throttle starts counting. */
 export const HOST_CRASH_REPORTS_BEFORE_THROTTLE = 3;
 
@@ -248,7 +356,41 @@ export interface HostCrashReportThrottleDeps {
   ) => void;
   /** Runs `callback` once after `delayMs`; must not keep the process alive. */
   readonly schedule: (callback: () => void, delayMs: number) => void;
+  /**
+   * Called with the whole state after every change, so a later supervisor
+   * process can pick it up (see {@link HostCrashReportThrottle.restore}).
+   * Best-effort: a throw is swallowed and the in-memory state carries on.
+   */
+  readonly persist: (state: PersistedHostCrashThrottle) => void;
 }
+
+/**
+ * The part of a held-back crash a summary is sent from. Deliberately not the
+ * whole {@link HostCrashEvent}: no `extra` (attempt id, pids, memory), which
+ * the summary does not carry and which has no business in a state file.
+ */
+export interface PersistedHostCrashEvent {
+  readonly message: string;
+  readonly level: "error" | "warning";
+  readonly fingerprint: readonly string[];
+  readonly hostId: string | null;
+  readonly tags: Readonly<Record<string, string>>;
+}
+
+/** One kind's throttle state as it is kept on disk. */
+export interface PersistedHostCrashKind {
+  readonly reported: number;
+  readonly lastCrashAt: number;
+  readonly suppressedCount: number;
+  readonly windowStartedAt: number;
+  readonly lastSuppressed: PersistedHostCrashEvent | null;
+}
+
+/** Throttle state by fingerprint key, as written to and read from disk. */
+export type PersistedHostCrashThrottle = ReadonlyMap<
+  string,
+  PersistedHostCrashKind
+>;
 
 interface HostCrashThrottleState {
   /** Full reports sent; only a capture that returned counts. */
@@ -260,8 +402,6 @@ interface HostCrashThrottleState {
   lastSuppressed: HostCrashEvent | null;
   /** When the first crash of the open window was held back. */
   windowStartedAt: number;
-  /** Whether a summary is scheduled for the open window. */
-  summaryScheduled: boolean;
 }
 
 /**
@@ -280,13 +420,23 @@ interface HostCrashThrottleState {
  *
  * Keyed by the event's fingerprint, the same (platform, kind) pair that groups
  * the issue, so a host that starts dying a different way is reported in full
- * again. The state lives in the supervisor process and ends with it: a count
- * still open when the supervisor exits is not sent. A supervisor restart is
- * rare and bounded, and is itself worth a fresh report.
+ * again.
+ *
+ * The bound has to hold across supervisor processes. The supervisor gives up
+ * after a few consecutive relaunches and exits, and the service manager
+ * (systemd, launchd) starts a new one; a host that can never start therefore
+ * lives through many supervisors, and state kept in one of them gave each a
+ * fresh budget of full reports (one machine sent 18 to 84 an hour, every
+ * hour). So every change is handed to {@link HostCrashReportThrottleDeps.persist}
+ * and {@link restore} takes it back at the next supervisor's start: its
+ * budgets carry over, and a count the previous supervisor left open is sent
+ * when its window ends (at once, when it already has).
  */
 export class HostCrashReportThrottle {
   private readonly deps: HostCrashReportThrottleDeps;
   private readonly states = new Map<string, HostCrashThrottleState>();
+  /** Kinds with a summary timer in this process. */
+  private readonly scheduled = new Set<string>();
 
   constructor(deps: HostCrashReportThrottleDeps) {
     this.deps = deps;
@@ -297,7 +447,7 @@ export class HostCrashReportThrottle {
     const at = this.deps.now();
     const existing = this.states.get(key);
     const state =
-      existing !== undefined && !this.hasGoneQuiet(existing, at)
+      existing !== undefined && !this.hasGoneQuiet(key, existing, at)
         ? existing
         : undefined;
     if (state === undefined) {
@@ -310,43 +460,154 @@ export class HostCrashReportThrottle {
         suppressedCount: 0,
         lastSuppressed: null,
         windowStartedAt: at,
-        summaryScheduled: false,
       });
+      this.persist();
       return;
     }
     state.lastCrashAt = at;
     if (state.reported < HOST_CRASH_REPORTS_BEFORE_THROTTLE) {
       this.deps.capture(event);
       state.reported += 1;
+      this.persist();
       return;
     }
     state.suppressedCount += 1;
     state.lastSuppressed = event;
-    if (state.summaryScheduled) {
-      return;
+    if (!this.scheduled.has(key)) {
+      state.windowStartedAt = at;
+      this.scheduleSummary(key, HOST_CRASH_SUMMARY_WINDOW_MS);
     }
-    state.summaryScheduled = true;
-    state.windowStartedAt = at;
+    this.persist();
+  }
+
+  /**
+   * The state worth keeping, for {@link HostCrashReportThrottleDeps.persist}.
+   * A kind that is quiet (nothing held back, a whole window since its last
+   * crash) reads the same as an absent one, so it is left out; if more than
+   * {@link MAX_PERSISTED_KINDS} kinds remain, the most recently crashed are
+   * kept, so a bound on the file never costs the kind that is looping now.
+   */
+  snapshot(): PersistedHostCrashThrottle {
+    const at = this.deps.now();
+    const live: [string, HostCrashThrottleState][] = [];
+    for (const [key, state] of this.states) {
+      if (this.hasGoneQuiet(key, state, at)) continue;
+      live.push([key, state]);
+    }
+    live.sort((a, b) => b[1].lastCrashAt - a[1].lastCrashAt);
+    const out = new Map<string, PersistedHostCrashKind>();
+    for (const [key, state] of live.slice(0, MAX_PERSISTED_KINDS)) {
+      out.set(key, {
+        reported: state.reported,
+        lastCrashAt: state.lastCrashAt,
+        suppressedCount: state.suppressedCount,
+        windowStartedAt: state.windowStartedAt,
+        lastSuppressed:
+          state.lastSuppressed === null
+            ? null
+            : {
+                message: state.lastSuppressed.message,
+                level: state.lastSuppressed.level,
+                fingerprint: state.lastSuppressed.fingerprint,
+                hostId: state.lastSuppressed.hostId,
+                tags: state.lastSuppressed.tags,
+              },
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Take in what an earlier supervisor (or a concurrent one) left on disk. A
+   * kind this process has seen more recently keeps its own state. A count that
+   * was left open is sent when its window ends, at once when it already has:
+   * the supervisor that opened it may not have lived to send it, and a kind
+   * with a count still unsent never counts as quiet.
+   */
+  restore(persisted: PersistedHostCrashThrottle): void {
+    const now = this.deps.now();
+    let clamped = false;
+    for (const [key, kind] of persisted) {
+      // No time in the state may lie ahead of now, so a clock that stepped
+      // back holds a kind for at most one window, as any recent crash does,
+      // and never for as long as the step. (Treating a future time as "long
+      // quiet" instead would give every clock correction a fresh budget.)
+      const lastCrashAt = Math.min(kind.lastCrashAt, now);
+      const windowStartedAt = Math.min(kind.windowStartedAt, now);
+      const existing = this.states.get(key);
+      if (existing !== undefined && existing.lastCrashAt >= lastCrashAt) {
+        continue;
+      }
+      if (
+        lastCrashAt !== kind.lastCrashAt ||
+        windowStartedAt !== kind.windowStartedAt
+      ) {
+        clamped = true;
+      }
+      this.states.set(key, {
+        reported: kind.reported,
+        lastCrashAt,
+        suppressedCount: kind.suppressedCount,
+        windowStartedAt,
+        lastSuppressed:
+          kind.lastSuppressed === null
+            ? null
+            : { ...kind.lastSuppressed, extra: {} },
+      });
+    }
+    // The clamped times are what the scheduling below counts from, so they are
+    // what the next supervisor has to start from too: otherwise a run of short
+    // supervisors would each restart the full hour from the same future time.
+    if (clamped) this.persist();
+    for (const [key, state] of [...this.states]) {
+      if (
+        state.suppressedCount === 0 ||
+        state.lastSuppressed === null ||
+        this.scheduled.has(key)
+      ) {
+        continue;
+      }
+      const remaining =
+        state.windowStartedAt + HOST_CRASH_SUMMARY_WINDOW_MS - now;
+      if (remaining <= 0) {
+        this.sendSummary(key);
+      } else {
+        this.scheduleSummary(key, remaining);
+      }
+    }
+  }
+
+  private scheduleSummary(key: string, delayMs: number): void {
+    this.scheduled.add(key);
     this.deps.schedule(() => {
-      this.sendSummary(state);
-    }, HOST_CRASH_SUMMARY_WINDOW_MS);
+      this.sendSummary(key);
+    }, delayMs);
   }
 
   /**
    * Quiet for a whole window with nothing left to send. A count whose summary
    * failed is kept, so the next window's summary carries it.
    */
-  private hasGoneQuiet(state: HostCrashThrottleState, at: number): boolean {
+  private hasGoneQuiet(
+    key: string,
+    state: HostCrashThrottleState,
+    at: number,
+  ): boolean {
     return (
-      !state.summaryScheduled &&
+      !this.scheduled.has(key) &&
       state.suppressedCount === 0 &&
       at - state.lastCrashAt >= HOST_CRASH_SUMMARY_WINDOW_MS
     );
   }
 
-  private sendSummary(state: HostCrashThrottleState): void {
-    state.summaryScheduled = false;
-    if (state.suppressedCount === 0 || state.lastSuppressed === null) {
+  private sendSummary(key: string): void {
+    this.scheduled.delete(key);
+    const state = this.states.get(key);
+    if (
+      state === undefined ||
+      state.suppressedCount === 0 ||
+      state.lastSuppressed === null
+    ) {
       return;
     }
     try {
@@ -362,21 +623,306 @@ export class HostCrashReportThrottle {
     }
     state.suppressedCount = 0;
     state.lastSuppressed = null;
+    this.persist();
+  }
+
+  private persist(): void {
+    try {
+      this.deps.persist(this.snapshot());
+    } catch {
+      // Best-effort: the in-memory state still bounds this process.
+    }
   }
 }
 
-const hostCrashReportThrottle = new HostCrashReportThrottle({
-  now: () => Date.now(),
-  capture: captureHostCrashEvent,
-  captureSummary: (event, suppressedCount, windowStartedAt) => {
-    captureHostCrashSummary(event, suppressedCount, windowStartedAt);
-    retireStalledTransportAfterBudget();
-  },
-  schedule: (callback, delayMs) => {
-    const timer = setTimeout(callback, delayMs);
-    timer.unref?.();
-  },
-});
+const MAX_PERSISTED_STRING = 256;
+const MAX_PERSISTED_TAGS = 48;
+const MAX_PERSISTED_BYTES = 256 * 1024;
+const PERSISTED_THROTTLE_VERSION = 1;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBoundedString(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_PERSISTED_STRING;
+}
+
+function isCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+  );
+}
+
+function isTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function parsePersistedEvent(value: unknown): PersistedHostCrashEvent | null {
+  if (!isRecord(value)) return null;
+  const { message, level, fingerprint, hostId, tags } = value;
+  if (!isBoundedString(message)) return null;
+  if (level !== "error" && level !== "warning") return null;
+  if (
+    !Array.isArray(fingerprint) ||
+    fingerprint.length === 0 ||
+    fingerprint.length > 8 ||
+    !fingerprint.every(isBoundedString)
+  ) {
+    return null;
+  }
+  if (hostId !== null && !isBoundedString(hostId)) return null;
+  if (!isRecord(tags)) return null;
+  const tagEntries = Object.entries(tags);
+  if (tagEntries.length > MAX_PERSISTED_TAGS) return null;
+  const parsedTags: Record<string, string> = {};
+  for (const [name, tagValue] of tagEntries) {
+    if (typeof tagValue !== "string") return null;
+    // A tag the host wrote can be longer than the cap (a local install's
+    // version is derived from a path). Cut, never reject: rejecting would
+    // drop the whole kind and hand a crash loop a fresh budget.
+    parsedTags[name] = tagValue.slice(0, MAX_PERSISTED_STRING);
+  }
+  return {
+    message,
+    level,
+    fingerprint: [...fingerprint],
+    hostId,
+    tags: parsedTags,
+  };
+}
+
+/**
+ * Read the throttle state file's text back. Anything that is not exactly what
+ * {@link serializeHostCrashThrottle} writes is not state: a torn or foreign
+ * file reads as empty (every kind then reports in full) and one bad kind is
+ * dropped alone. Never throws.
+ */
+export function parsePersistedHostCrashThrottle(
+  text: string,
+): Map<string, PersistedHostCrashKind> {
+  const out = new Map<string, PersistedHostCrashKind>();
+  if (text.length > MAX_PERSISTED_BYTES) return out;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  if (!isRecord(parsed) || parsed.version !== PERSISTED_THROTTLE_VERSION) {
+    return out;
+  }
+  const kinds = parsed.kinds;
+  if (!isRecord(kinds)) return out;
+  for (const [key, value] of Object.entries(kinds)) {
+    if (out.size >= MAX_PERSISTED_KINDS) break;
+    if (!isBoundedString(key) || !isRecord(value)) continue;
+    const { reported, lastCrashAt, suppressedCount, windowStartedAt } = value;
+    if (
+      !isCount(reported) ||
+      !isTime(lastCrashAt) ||
+      !isCount(suppressedCount) ||
+      !isTime(windowStartedAt)
+    ) {
+      continue;
+    }
+    const lastSuppressed =
+      value.lastSuppressed === null
+        ? null
+        : parsePersistedEvent(value.lastSuppressed);
+    // A count with no event to send it as is not a count that can be sent.
+    if (suppressedCount > 0 && lastSuppressed === null) continue;
+    out.set(key, {
+      reported,
+      lastCrashAt,
+      suppressedCount,
+      windowStartedAt,
+      lastSuppressed,
+    });
+  }
+  return out;
+}
+
+export function serializeHostCrashThrottle(
+  state: PersistedHostCrashThrottle,
+): string {
+  const kinds: Record<string, PersistedHostCrashKind> = {};
+  for (const [key, kind] of state) {
+    kinds[key] = kind;
+  }
+  return `${JSON.stringify({ version: PERSISTED_THROTTLE_VERSION, kinds })}\n`;
+}
+
+/**
+ * The file's text, or the empty string for a file longer than
+ * {@link MAX_PERSISTED_BYTES}: the size is checked on the open handle before
+ * anything is allocated, and the read is capped at the cap either way (a file
+ * can grow between the check and the read).
+ */
+async function readBounded(path: string): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const { size } = await handle.stat();
+    if (size > MAX_PERSISTED_BYTES) return "";
+    const buffer = Buffer.alloc(size + 1);
+    // A read can return fewer bytes than asked without being at the end, so
+    // read until the buffer is full (the file grew) or the file ends.
+    let filled = 0;
+    while (filled < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        filled,
+        buffer.length - filled,
+        filled,
+      );
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    return filled > size ? "" : buffer.toString("utf8", 0, filled);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * One environment's throttle with its state file. The file is replaced whole
+ * by a rename, so a reader sees one writer's complete state or the other's,
+ * never a mix; two supervisors on one machine can lose a count to each other,
+ * which only ever reports a little more, never throws and never corrupts.
+ */
+class HostCrashThrottleEntry {
+  readonly throttle: HostCrashReportThrottle;
+  private readonly path: string;
+  private writes: Promise<void> = Promise.resolve();
+  private transport: Promise<void> = Promise.resolve();
+
+  constructor(environment: Environment) {
+    this.path = hostCrashThrottlePath(environment);
+    this.throttle = new HostCrashReportThrottle({
+      now: () => Date.now(),
+      capture: captureHostCrashEvent,
+      captureSummary: (event, suppressedCount, windowStartedAt) => {
+        captureHostCrashSummary(event, suppressedCount, windowStartedAt);
+        this.trackTransport(retireStalledTransportAfterBudget());
+      },
+      schedule: (callback, delayMs) => {
+        const timer = setTimeout(callback, delayMs);
+        timer.unref?.();
+      },
+      persist: (state) => {
+        const text = serializeHostCrashThrottle(state);
+        this.writes = this.writes.then(() => this.write(text));
+      },
+    });
+  }
+
+  /** Read the file into the throttle; a missing or unreadable file is empty. */
+  async load(): Promise<void> {
+    let text = "";
+    try {
+      text = await readBounded(this.path);
+    } catch {
+      // No file yet, or none readable: nothing carries over.
+    }
+    this.throttle.restore(parsePersistedHostCrashThrottle(text));
+  }
+
+  /** Resolves once every write queued so far has settled. Never rejects. */
+  writesSettled(): Promise<void> {
+    return this.writes;
+  }
+
+  /**
+   * Remember an envelope still on its way out. A summary clears its count on
+   * disk when it is queued, so one lost with the process is not retried.
+   */
+  trackTransport(delivery: Promise<void>): void {
+    this.transport = Promise.all([this.transport, delivery]).then(
+      () => undefined,
+    );
+  }
+
+  /**
+   * Resolves once the state writes and the envelopes sent so far have settled
+   * (the transport within its own timeout). Never rejects.
+   */
+  async settled(): Promise<void> {
+    // A summary timer can queue more while this waits, so go round again
+    // until neither tail has moved.
+    for (;;) {
+      const writes = this.writes;
+      const transport = this.transport;
+      await writes;
+      await transport;
+      if (writes === this.writes && transport === this.transport) return;
+    }
+  }
+
+  private async write(text: string): Promise<void> {
+    const temporary = join(
+      dirname(this.path),
+      `.host-crash-throttle.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+    );
+    try {
+      await mkdir(dirname(this.path), { recursive: true });
+      await writeFile(temporary, text, { encoding: "utf8", mode: 0o600 });
+      await rename(temporary, this.path);
+    } catch {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+const hostCrashThrottles = new Map<Environment, HostCrashThrottleEntry>();
+
+function hostCrashThrottleFor(
+  environment: Environment,
+): HostCrashThrottleEntry {
+  const existing = hostCrashThrottles.get(environment);
+  if (existing !== undefined) return existing;
+  const created = new HostCrashThrottleEntry(environment);
+  hostCrashThrottles.set(environment, created);
+  return created;
+}
+
+/**
+ * Resolves once every throttle state write queued so far, by a crash report or
+ * by a summary timer, and every envelope sent with them has settled (an upload
+ * within its transport timeout). Never rejects. The supervisor's exit waits for
+ * it, so a summary a timer sent just before a clean stop is neither sent again
+ * by the next supervisor nor lost with the process.
+ */
+export async function settleHostCrashThrottleWrites(): Promise<void> {
+  await Promise.all(
+    [...hostCrashThrottles.values()].map((entry) => entry.settled()),
+  );
+}
+
+/**
+ * Called when a supervisor starts: take the throttle state the previous
+ * supervisor left, so a count it left open is sent when its window ends even
+ * if this one never sees a crash. This resolves once what it sent has been
+ * written to disk and has left the machine (or its transport timeout passed):
+ * a summary clears its count on disk when it is queued, so a supervisor that
+ * exits with the upload still queued (an early exit for a live incumbent)
+ * would otherwise lose it. The supervisor's exit waits
+ * {@link HOST_CRASH_REPORT_TIMEOUT_MS} for the whole of this.
+ * Never throws.
+ */
+export async function resumeHostCrashReports(
+  environment: Environment,
+): Promise<void> {
+  try {
+    const entry = hostCrashThrottleFor(environment);
+    await entry.load();
+    await entry.settled();
+  } catch {
+    // Best-effort, like every step of this module.
+  }
+}
 
 /**
  * The default `reportHostCrash` dependency: bounded identity read, then one
@@ -405,12 +951,16 @@ export async function reportHostCrashToSentry(
     identity = null;
   }
   try {
-    hostCrashReportThrottle.report(buildHostCrashEvent(telemetry, identity));
+    const entry = hostCrashThrottleFor(telemetry.environment);
+    await entry.load();
+    entry.throttle.report(buildHostCrashEvent(telemetry, identity));
+    // The supervisor may exit right after its last relaunch; the state it
+    // leaves for the next one has to be on disk by then.
+    await entry.writesSettled();
+    entry.trackTransport(retireStalledTransportAfterBudget());
   } catch {
     // Intentionally silent: see the module comment.
-    return;
   }
-  retireStalledTransportAfterBudget();
 }
 
 /**
@@ -420,8 +970,8 @@ export async function reportHostCrashToSentry(
  * socket. `flush` resolves early when the queue drains, so a healthy upload
  * costs nothing; only a stalled one reaches the destroy.
  */
-function retireStalledTransportAfterBudget(): void {
-  void Sentry.flush(HOST_CRASH_TRANSPORT_TIMEOUT_MS)
+function retireStalledTransportAfterBudget(): Promise<void> {
+  return Sentry.flush(HOST_CRASH_TRANSPORT_TIMEOUT_MS)
     .then((drained) => {
       if (!drained) destroySentryTransportRequests();
     })

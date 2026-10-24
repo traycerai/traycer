@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -14,7 +15,20 @@ import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__
 import { selectedModelRejectsImageAttachments } from "@/lib/composer/chat-run-settings";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { appLogger } from "@/lib/logger";
+import {
+  NO_QUEUED_MESSAGE_STAGES,
+  QueuedMessageStagesContext,
+} from "@/components/chat/queued-message-stages";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { BrowserAnnotationSource } from "@traycer/protocol/persistence/epic/schemas";
+
+/** Flat test overrides: the browser source's fields sit beside the record's own. */
+type BrowserRecordOverrides = Partial<
+  Omit<BrowserAnnotationSource, "kind"> &
+    Omit<BrowserAnnotationRecord, "source">
+>;
 
 const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
@@ -62,17 +76,26 @@ const IMAGE_FILE_NAME = `browser-annotation-${ANNOTATION_ID}.png`;
 const IMAGE_HASH = "hash-ann-7f3a";
 
 function annotationRecord(
-  overrides: Partial<BrowserAnnotationRecord> | null,
+  overrides: BrowserRecordOverrides | null,
 ): BrowserAnnotationRecord {
   const input = overrides ?? {};
-  return {
-    kind: "browser-annotation",
-    annotationId: input.annotationId ?? ANNOTATION_ID,
+  const source: BrowserAnnotationSource = {
+    kind: "browser",
     tabId: input.tabId ?? "t-1",
     sessionId: input.sessionId ?? "s-1",
     origin: input.origin ?? "https://example.com",
     pageUrl: input.pageUrl ?? "https://example.com/",
     pageTitle: input.pageTitle ?? "Example Domain",
+  };
+  return {
+    kind: "browser-annotation",
+    annotationId: input.annotationId ?? ANNOTATION_ID,
+    tabId: source.tabId,
+    sessionId: source.sessionId,
+    origin: source.origin,
+    pageUrl: source.pageUrl,
+    pageTitle: source.pageTitle,
+    source,
     capturedAt: input.capturedAt ?? 1_700_000_000_000,
     comment: input.comment ?? "Make this hero section pop more",
     counts: input.counts ?? { elements: 1, regions: 0, strokes: 0 },
@@ -133,6 +156,7 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }
@@ -188,6 +212,7 @@ function mountSubmit(args: {
       getActiveTurnForSteer: () => null,
       hasPendingApprovals: false,
       sendDisabled: false,
+      sendDisabledHint: null,
       workspaceBlocked: false,
       imagesUnsupported: args.imagesUnsupported,
       attachmentPreparationPending: false,
@@ -764,6 +789,114 @@ describe("browser annotation image gating", () => {
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+});
+
+// A submit that was allowed to start can still be refused by the live re-check
+// after its awaited read, when the stream went away during the read. That
+// refusal was silent; it now leaves the same line as an immediate refusal.
+describe("useChatComposerSubmit: a refusal at the live re-check is logged", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("names the stage when the stream drops while the crop bytes resolve", async () => {
+    const info = vi.spyOn(appLogger, "info");
+    const taskId = "chat-ann-recheck";
+    useComposerDraftStore
+      .getState()
+      .addBrowserAnnotation(taskId, annotationRecord(null));
+    let release: (() => void) | null = null;
+    imageStoreMocks.getImageBytes.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(CROP_BYTES);
+        }),
+    );
+    const submit = vi.fn((_input: ChatComposerSubmitInput) => true);
+    const toolbarStore = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "browser-annotation-recheck",
+      values: {
+        permission: "supervised",
+        selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
+        reasoning: "medium",
+        serviceTier: "auto",
+      },
+      onSettingsChange: null,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      hostId: null,
+    });
+    const pickerStore = createComposerPickerStore();
+    const editor = fakeEditor(EMPTY_DOC);
+    // Re-read by the wrapper on every `rerender`, which re-renders it too.
+    let streamStatus: StreamConnectionStatus = "open";
+    const { result, rerender } = renderHook(
+      (props: { readonly sendDisabled: boolean }) =>
+        useChatComposerSubmit({
+          taskId,
+          editorRef: { current: editor },
+          pickerStore,
+          toolbarStore,
+          activeTurnStatus: null,
+          steerCapable: false,
+          steerEnabled: true,
+          steerProtocolSupported: true,
+          getActiveTurnForSteer: () => null,
+          hasPendingApprovals: false,
+          sendDisabled: props.sendDisabled,
+          sendDisabledHint: null,
+          workspaceBlocked: false,
+          imagesUnsupported: false,
+          attachmentPreparationPending: false,
+          onSubmitMessage: submit,
+          onSideChat: null,
+          targetHostId: "host-tab",
+          queueEditTargetId: null,
+          getDraftBlobBridgeSupported: () => false,
+        }),
+      {
+        initialProps: { sendDisabled: false },
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueuedMessageStagesContext
+            value={{
+              ...NO_QUEUED_MESSAGE_STAGES,
+              connectionStatus: streamStatus,
+            }}
+          >
+            {children}
+          </QueuedMessageStagesContext>
+        ),
+      },
+    );
+    act(() => {
+      result.current.submitDraft("enter");
+    });
+    expect(info).not.toHaveBeenCalled();
+
+    // The stream goes away during the read.
+    streamStatus = "reconnecting";
+    rerender({ sendDisabled: true });
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(info).toHaveBeenCalledWith(
+        "[composer] submit refused: send disabled",
+        {
+          chatId: taskId,
+          hostId: "host-tab",
+          connectionStatus: "reconnecting",
+          reason: "stream-not-open",
+          stage: "after-attachments",
+        },
+      );
     });
     expect(submit).not.toHaveBeenCalled();
   });

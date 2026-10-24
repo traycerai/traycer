@@ -1,4 +1,5 @@
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { epicArtifactMentionToken } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   ACTIVE_AGENT_DND_TYPE,
@@ -26,7 +27,7 @@ import { epicTreeRecordForNodeId } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getBasename } from "@/lib/path/cross-platform-path";
 
-type EntityContextType = "chat" | "terminal-agent" | EpicArtifactKind;
+type EntityContextType = "chat" | "terminal-agent" | MarkdownArtifactKind;
 
 function entityMentionAttachment(args: {
   readonly contextType: EntityContextType;
@@ -100,6 +101,13 @@ function sidebarNodeMention(
   ) {
     return null;
   }
+  // New artifact kinds have no composer mention arm yet.
+  if (
+    record.type !== "chat" &&
+    record.type !== "terminal-agent" &&
+    !isMarkdownArtifactKind(record.type)
+  )
+    return null;
   return entityMentionAttachment({
     contextType: record.type,
     epicId: source.epicId,
@@ -205,6 +213,8 @@ export function mentionAttachmentFromDragSource(
     case GIT_DIFF_TILE_DND_TYPE:
       return gitDiffMention(source, targetHostId);
     case CHAT_ARTIFACT_DND_TYPE:
+      // These kinds have no composer mention arm yet.
+      if (!isMarkdownArtifactKind(source.artifact.type)) return null;
       if (source.artifact.hostId !== targetHostId) return null;
       return entityMentionAttachment({
         contextType: source.artifact.type,

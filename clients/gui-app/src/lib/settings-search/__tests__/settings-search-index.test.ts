@@ -21,7 +21,9 @@ import {
   settingsSearchResultKey,
 } from "@/lib/settings-search/settings-search";
 import {
+  DEV_ONLY_SETTINGS_SECTION_IDS,
   SETTINGS_SECTIONS,
+  type SettingsSectionGroupId,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
@@ -54,6 +56,12 @@ const DEFINITION_MODULES = import.meta.glob<Record<string, unknown>>(
   "/src/components/settings/**/*.definitions.ts",
   { eager: true },
 );
+
+// The dev-only proof pages carry no collection: search runs in production
+// builds too, where navigation does not offer them.
+const SEARCHABLE_SECTION_IDS = SETTINGS_SECTIONS.map(
+  (section) => section.id,
+).filter((id) => !DEV_ONLY_SETTINGS_SECTION_IDS.has(id));
 
 const indexedAnchors = SETTINGS_SEARCH_ENTRIES.flatMap((entry) =>
   entry.anchor === null ? [] : [entry.anchor],
@@ -115,10 +123,17 @@ describe("settings search index", () => {
     // host-scoped page (Permissions' tab bar and its app-scoped Modes row), and
     // the executor is what proves it: an anchored entry there is allowed only
     // when that section's registered fixture mounts it under a connecting host.
+    // Personal and Account pages read through the window's own host and gate
+    // on it just as Host pages do, so all three groups are held to this rule.
+    const hostReadingGroups = new Set<SettingsSectionGroupId>([
+      "personal",
+      "account",
+      "host",
+    ]);
     const hostSections = new Set(
-      SETTINGS_SECTIONS.filter((section) => section.group === "host").map(
-        (section) => section.id,
-      ),
+      SETTINGS_SECTIONS.filter((section) =>
+        hostReadingGroups.has(section.group),
+      ).map((section) => section.id),
     );
     const provenWithoutAHost = new Set<SettingsSectionId>(
       SETTINGS_SEARCH_FIXTURES.filter(
@@ -158,9 +173,7 @@ describe("settings search assembly", () => {
       (collection) => collection.section,
     );
     expect(duplicates(assembled)).toEqual([]);
-    expect([...assembled].sort()).toEqual(
-      SETTINGS_SECTIONS.map((section) => section.id).sort(),
-    );
+    expect([...assembled].sort()).toEqual([...SEARCHABLE_SECTION_IDS].sort());
   });
 
   it("assembles every collection a definitions module exports", () => {
@@ -172,7 +185,7 @@ describe("settings search assembly", () => {
     );
     // The glob found the modules at all — an empty match would pass the
     // membership checks below vacuously.
-    expect(exported.length).toBe(SETTINGS_SECTIONS.length);
+    expect(exported.length).toBe(SEARCHABLE_SECTION_IDS.length);
     const unassembled = exported
       .filter(({ value }) => !SETTINGS_SEARCH_COLLECTIONS.includes(value))
       .map(({ label }) => label);

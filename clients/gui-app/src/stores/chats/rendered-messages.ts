@@ -2,11 +2,17 @@ import {
   codexRetryVisibility,
   codexRetryTitle,
 } from "@traycer/protocol/host/agent/gui/retry-feedback";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {
+  resolveTurnPresentation,
+  type PendingTurn,
+  type TurnPresentation,
+} from "@/stores/chats/chat-send-state";
 import type {
   AssistantTurnProfile,
   ChatSessionAnchor,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { BotAnnouncement } from "@traycer/protocol/persistence/epic/messages";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -143,13 +149,22 @@ function isRenderablePlanBlock(block: PlanContentBlock): boolean {
 }
 
 export interface RenderedMessagesDisplayContext {
+  readonly resolveProfileLabel?: (profileId: string | null) => string | null;
   readonly resolveUserSenderLabel: (sender: OpenUserMessageSender) => string;
+  /** The sender's picture, or null to show none (every chat but a bot's). */
+  readonly resolveUserSenderAvatarUrl: (
+    sender: OpenUserMessageSender,
+  ) => string | null;
   readonly resolveAgentSenderDisplay: (
     sender: OpenAgentSender,
   ) => AgentSenderDisplay;
   readonly resolveAgentReasoningLabel: (
     sender: OpenAgentSender,
     reasoningEffort: string | null,
+  ) => string | null;
+  readonly resolveAgentServiceTierLabel: (
+    sender: OpenAgentSender,
+    serviceTier: string | null,
   ) => string | null;
   readonly contentBlocksPreview: (
     blocks: ReadonlyArray<OpenContentBlock>,
@@ -181,6 +196,8 @@ export interface RenderedMessagesInput {
    */
   readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  readonly pendingTurn?: PendingTurn | null;
+  readonly turnObservedAt?: number;
   /**
    * Prompt ids the host still has in the queue. An optimistic row with one of
    * these ids is bookkeeping for a send that already has a queue row, so the
@@ -330,9 +347,32 @@ function blockContentVersion(block: OpenContentBlock): number {
       return extractPlainTextFromComposerJSONContent(block.content).length;
     case "plan":
       return planBlockContentVersion(block);
+    case "tool_call":
+      return toolCallBlockContentVersion(block);
     default:
       return 0;
   }
+}
+
+/**
+ * A sent-message card keeps changing after its call settles: the host stamps
+ * `agentMessageDelivery` (queued, then possibly expired or failed) and
+ * `agentMessageReceipt` as an ordinary row update that leaves the block's
+ * status and timestamp alone. Without `blocksVersion` those are all
+ * `turnSignature` sees, so a card would keep its cached sent segment; both
+ * stamps are hashed here. Every other tool call keeps the cheap `0`.
+ */
+function toolCallBlockContentVersion(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): number {
+  const delivery = absentAsNull(block.agentMessageDelivery);
+  const receipt = absentAsNull(block.agentMessageReceipt);
+  if (delivery === null && receipt === null) return 0;
+  const hash = hashStringField(
+    TURN_SIGNATURE_HASH_OFFSET,
+    JSON.stringify(delivery),
+  );
+  return hashStringField(hash, JSON.stringify(receipt));
 }
 
 function errorBlockContentVersion(
@@ -615,11 +655,6 @@ interface PendingTurnMetaInput {
   readonly profileLabel: string | null;
   readonly reasoningEffort: string | null;
   readonly serviceTier: string | null;
-}
-
-interface ActiveTurnProjection {
-  readonly turnId: string | null;
-  readonly metaInput: PendingTurnMetaInput;
 }
 
 const NO_TURN_PAUSE: TurnPauseAccounting = {
@@ -1092,17 +1127,12 @@ function isInterviewWaitEndEvent(event: OpenChatEvent): boolean {
  * values: a per-field `activeTurn?.x ?? null` at the call site is five
  * branches in the hook body for no gain, and the absent turn is one decision,
  * not five.
- *
- * `startedAt` is the turn's real wall-clock start. The pre-turn indicator is
- * synthesized with a `createdAt` that is a list anchor rather than an instant,
- * so this is the only place that row can learn when its turn actually began.
  */
 function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
   readonly turnId: string | null;
   readonly userMessageId: string | null;
   readonly harnessId: ChatActiveTurn["harnessId"] | null;
   readonly profileId: string | null;
-  readonly startedAt: number | null;
 } {
   if (activeTurn === null) {
     return {
@@ -1110,7 +1140,6 @@ function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
       userMessageId: null,
       harnessId: null,
       profileId: null,
-      startedAt: null,
     };
   }
   return {
@@ -1118,7 +1147,6 @@ function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
     userMessageId: activeTurn.userMessageId,
     harnessId: activeTurn.harnessId,
     profileId: activeTurn.profileId,
-    startedAt: activeTurn.startedAt,
   };
 }
 
@@ -1135,7 +1163,6 @@ export function useRenderedMessages(
     userMessageId: activeTurnUserMessageId,
     harnessId: activeTurnHarnessId,
     profileId: activeTurnProfileId,
-    startedAt: activeTurnStartedAt,
   } = activeTurnPrimitives(input.activeTurn);
   // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
   // carries the same context object, so the map is at most one entry per
@@ -1170,16 +1197,37 @@ export function useRenderedMessages(
       activeTurnProfileId,
     ],
   );
-  const activeTurnProjection = projectActiveTurn(
-    input.activeTurn,
-    profileLabelsByTurnKey,
+  const pendingTurn = input.pendingTurn ?? null;
+  const [firstObservedAt] = useState(() => Date.now());
+  const observedAt = input.turnObservedAt ?? firstObservedAt;
+  const localPrompt = localPromptForPresentation(input, pendingTurn);
+  const presentation = resolveTurnPresentation({
+    chatId: input.ownerId,
+    pendingTurn,
+    activeTurn: input.activeTurn,
+    observedAt,
+    localMessageCreatedAt: localPrompt?.timestamp ?? null,
+    hostAnchorAt: input.activeTurn?.startedAt ?? null,
+  });
+  const activeTurnMetaInput = useMemo(
+    () =>
+      presentationTurnMeta(
+        presentation.settings,
+        profileLabelsByTurnKey.get(activeTurnId ?? ""),
+        displayContext.resolveProfileLabel,
+      ),
+    [
+      presentation.settings,
+      profileLabelsByTurnKey,
+      activeTurnId,
+      displayContext.resolveProfileLabel,
+    ],
   );
-  const activeTurnMetaInput = activeTurnProjection.metaInput;
-  const runStatus = input.runStatus;
-  // The run-state indicator belongs to the single active turn; `idle`
-  // surfaces no indicator on any row.
-  const activeRunState: ChatMessageRunState | null =
-    runStatus === "idle" ? null : runStatus;
+  const activeRunMeta = useMemo(
+    () => pendingTurnMeta(activeTurnMetaInput, displayContext),
+    [activeTurnMetaInput, displayContext],
+  );
+  const activeRunState = pendingRunState(input.runStatus, pendingTurn);
   const pendingApprovals = input.pendingApprovals ?? NO_PENDING_APPROVALS;
   const pendingFileEditApprovals =
     input.pendingFileEditApprovals ?? NO_PENDING_FILE_EDIT_APPROVALS;
@@ -1515,14 +1563,9 @@ export function useRenderedMessages(
       withdrawnMessageId,
     );
     const shownPending = withoutWithdrawnUserRow(pending, withdrawnMessageId);
-    // Pre-turn window: the host reports `running`/`stopping` (a send was
-    // accepted) but no assistant row exists yet - provider-session/worktree
-    // setup runs before the turn materializes. Synthesize a pending-assistant
-    // row so the response area shows "Working…" immediately. It shares the live
-    // row's key, so when the real turn arrives it swaps in place (no flicker).
-    // `pending` (the optimistic user messages, timestamped `Date.now()`) is
-    // included so the indicator's `createdAt` floor sits above them and the row
-    // sorts BELOW the just-sent message instead of jumping above it.
+    // A transcript send owns its working row from Enter. The host turn later
+    // replaces the placeholder id; its presentation keeps the same send origin.
+    // Local message timestamps also floor the row's position below its prompt.
     // Suppress the pre-turn "Working…" indicator only while the LIVE setup
     // lifecycle is in flight: the open (current) window has a workspace still
     // `setting-up`, so the card itself stands in for the awaited turn. Two
@@ -1544,21 +1587,22 @@ export function useRenderedMessages(
             workspace.state === "creating" || workspace.state === "setting-up",
         ),
     );
-    const trailing = setupGating
-      ? []
-      : renderPendingRunIndicator({
-          activeRunState,
-          activeTurnId,
-          activeTurnStartedAt,
-          activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
-          turnPauseAccounting,
-          rendered: [
-            ...shownPersisted,
-            ...shownActiveTurn,
-            ...shownPending,
-            ...live,
-          ],
-        });
+    const trailing =
+      setupGating && pendingTurn === null
+        ? []
+        : renderPendingRunIndicator({
+            activeRunState,
+            activeTurnId,
+            activeTurnStartedAt: presentation.elapsedStartedAt,
+            activeTurnMeta: activeRunMeta,
+            turnPauseAccounting,
+            rendered: [
+              ...shownPersisted,
+              ...shownActiveTurn,
+              ...shownPending,
+              ...live,
+            ],
+          });
 
     // A prompt is drawn in one place.
     //
@@ -1595,7 +1639,16 @@ export function useRenderedMessages(
       ...autoJudgeUnattendedDenialMessages,
       ...autoJudgeNoticeMessages,
       ...trailing,
-    ];
+    ].map((row) =>
+      row.role === "assistant" &&
+      row.runState !== null &&
+      localPrompt !== undefined
+        ? {
+            ...row,
+            createdAt: Math.max(row.createdAt, localPrompt.timestamp + 1),
+          }
+        : row,
+    );
 
     // Overwhelmingly common case - this chat has no worktree setup card: a plain
     // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
@@ -1680,18 +1733,100 @@ export function useRenderedMessages(
     withdrawnMessageId,
     activeRunState,
     activeTurnId,
-    activeTurnStartedAt,
-    activeTurnMetaInput,
+    activeRunMeta,
+    pendingTurn,
+    localPrompt,
+    presentation.elapsedStartedAt,
     turnPauseAccounting,
-    displayContext,
   ]);
   // A memo of its own, off the one above: `chatWorking` flips with every
   // background edge and must not rebuild the row list to restamp one row.
   const chatWorking = input.chatWorking ?? false;
   return useMemo(
-    () => withOwedAutonomousResume(rows, chatWorking),
-    [rows, chatWorking],
+    () =>
+      withOwedAutonomousResume(
+        presentActiveRows({
+          rows,
+          input: { ownerId: input.ownerId, activeTurn: input.activeTurn },
+          pendingTurn,
+          observedAt,
+          localPrompt,
+          meta: activeRunMeta,
+        }),
+        chatWorking,
+      ),
+    [
+      rows,
+      input.ownerId,
+      input.activeTurn,
+      pendingTurn,
+      observedAt,
+      localPrompt,
+      activeRunMeta,
+      chatWorking,
+    ],
   );
+}
+
+function pendingRunState(
+  runStatus: ChatRunStatus,
+  pendingTurn: PendingTurn | null,
+): ChatMessageRunState | null {
+  if (runStatus !== "idle") return runStatus;
+  return pendingTurn === null ? null : "running";
+}
+
+function localPromptForPresentation(
+  input: RenderedMessagesInput,
+  pendingTurn: PendingTurn | null,
+): PendingUserMessage | undefined {
+  const id = input.activeTurn?.userMessageId ?? pendingTurn?.messageId;
+  if (
+    id === undefined ||
+    input.messages.some((message) => message.messageId === id)
+  )
+    return undefined;
+  return input.pendingUserMessages.find((message) => message.messageId === id);
+}
+
+function activePresentationMeta(
+  resolved: AssistantTurnMeta | null,
+  recorded: AssistantTurnMeta | null,
+): AssistantTurnMeta | null {
+  if (resolved === null) return recorded;
+  const envCredentialVar = recorded?.envCredentialVar ?? null;
+  const costUsd = recorded?.costUsd ?? null;
+  if (envCredentialVar === null && costUsd === null) return resolved;
+  return { ...resolved, envCredentialVar, costUsd };
+}
+
+function presentActiveRows(args: {
+  readonly rows: ReadonlyArray<ChatMessageModel>;
+  readonly input: Pick<RenderedMessagesInput, "ownerId" | "activeTurn">;
+  readonly pendingTurn: PendingTurn | null;
+  readonly observedAt: number;
+  readonly localPrompt: PendingUserMessage | undefined;
+  readonly meta: AssistantTurnMeta | null;
+}): ReadonlyArray<ChatMessageModel> {
+  const { rows, input, pendingTurn, observedAt, localPrompt, meta } = args;
+  return rows.map((row) => {
+    if (row.role !== "assistant" || row.runState === null) return row;
+    const resolved = resolveTurnPresentation({
+      chatId: input.ownerId,
+      pendingTurn,
+      activeTurn: input.activeTurn,
+      observedAt,
+      localMessageCreatedAt: localPrompt?.timestamp ?? null,
+      hostAnchorAt: row.createdAt,
+    });
+    return {
+      ...row,
+      createdAt: resolved.rowAnchorAt,
+      elapsedStartedAt: resolved.elapsedStartedAt,
+      workingVerbSeed: resolved.verbSeed,
+      assistantMeta: activePresentationMeta(meta, row.assistantMeta),
+    };
+  });
 }
 
 /**
@@ -1756,22 +1891,31 @@ export function transcriptShowsSetupCard(
   );
 }
 
-function projectActiveTurn(
-  activeTurn: ChatActiveTurn | null,
-  profileLabelsByTurnKey: ReadonlyMap<string, string>,
-): ActiveTurnProjection {
-  if (activeTurn === null) {
-    return { turnId: null, metaInput: NO_PENDING_TURN_META_INPUT };
-  }
+/**
+ * Whether the rendered transcript carries an in-progress assistant row: the
+ * trailing pre-turn "Working…" row `renderPendingRunIndicator` adds, or the
+ * turn's own row once it has one. While it does, an unstarted opening prompt
+ * drops its own "Setting up" status, because that row already shows the wait.
+ */
+export function transcriptShowsWorkingRow(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) => row.role === "assistant" && row.runState !== null);
+}
+
+function presentationTurnMeta(
+  settings: TurnPresentation["settings"],
+  recordedProfile: string | undefined,
+  resolveProfileLabel: RenderedMessagesDisplayContext["resolveProfileLabel"],
+): PendingTurnMetaInput {
+  if (settings === null) return NO_PENDING_TURN_META_INPUT;
   return {
-    turnId: activeTurn.turnId,
-    metaInput: {
-      harnessId: activeTurn.harnessId,
-      model: activeTurn.model,
-      profileLabel: profileLabelsByTurnKey.get(activeTurn.turnId) ?? null,
-      reasoningEffort: activeTurn.reasoningEffort,
-      serviceTier: activeTurn.serviceTier,
-    },
+    harnessId: settings.harnessId,
+    model: settings.model,
+    profileLabel:
+      recordedProfile ?? resolveProfileLabel?.(settings.profileId) ?? null,
+    reasoningEffort: settings.reasoningEffort,
+    serviceTier: settings.serviceTier,
   };
 }
 
@@ -2113,7 +2257,7 @@ function buildAutoJudgeNoticeMessages(
  * Build the run-metadata for the pre-turn pending indicator from the active
  * turn's primitive fields, mirroring what `renderAssistantTurnSlice` derives
  * for the live/persisted row so the provider icon + hover tooltip are present
- * during setup too. `null` when no active turn is known yet.
+ * during setup too. The pending send supplies these values before activation.
  */
 function pendingTurnMeta(
   turn: PendingTurnMetaInput,
@@ -2140,6 +2284,10 @@ function pendingTurnMeta(
       turn.reasoningEffort,
     ),
     serviceTier: turn.serviceTier,
+    serviceTierLabel: ctx.resolveAgentServiceTierLabel(
+      sender,
+      turn.serviceTier,
+    ),
     // Every field above is settings-derived - what the user PICKED - which is
     // all that exists pre-turn. The credential a spawn actually used is not
     // knowable yet (this indicator renders during setup, before the provider
@@ -2226,6 +2374,12 @@ interface AssistantTurnAccumulator {
   envCredentialVar: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
+  /** The bot announcement a channel's bot row is; `null` on every other turn. */
+  announcement: BotAnnouncement | null;
+  /** The choices a bot reply offers; `null` on every other turn. */
+  options: ReadonlyArray<string> | null;
+  /** The member's post a bot's direct reply answers; `null` on every other turn. */
+  repliesTo: string | null;
   imageResolutionsByBlockId: Map<
     string,
     ReadonlyArray<AssistantMarkdownImageResolution>
@@ -2776,6 +2930,20 @@ function renderPersistedAssistantMessageTurn(
   return models;
 }
 
+/**
+ * A bot row's announcement, options and the post it answers, first non-null:
+ * the host writes them on the one record a bot row is, and a sibling record
+ * never unsets them.
+ */
+function mergeBotRowFields(
+  existing: AssistantTurnAccumulator,
+  message: OpenAssistantMessage,
+): void {
+  existing.announcement = existing.announcement ?? message.announcement ?? null;
+  existing.options = existing.options ?? message.options ?? null;
+  existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
+}
+
 function addAssistantMessageToAccumulator(
   turnAccumulator: Map<string, AssistantTurnAccumulator>,
   message: OpenAssistantMessage,
@@ -2821,6 +2989,7 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    mergeBotRowFields(existing, message);
     existing.turnMessageIds = [
       ...(existing.turnMessageIds ?? [existing.messageId]),
       message.messageId,
@@ -2844,6 +3013,9 @@ function addAssistantMessageToAccumulator(
     serviceTier: message.serviceTier,
     envCredentialVar: message.envCredentialVar,
     costUsd: message.usage?.costUsd ?? null,
+    announcement: message.announcement ?? null,
+    options: message.options ?? null,
+    repliesTo: message.repliesTo ?? null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
@@ -3573,6 +3745,10 @@ function renderAssistantTurnSlice(
       input.acc.reasoningEffort,
     ),
     serviceTier: input.acc.serviceTier,
+    serviceTierLabel: input.ctx.resolveAgentServiceTierLabel(
+      input.acc.sender,
+      input.acc.serviceTier,
+    ),
     envCredentialVar: input.acc.envCredentialVar,
     costUsd: input.acc.costUsd,
   };
@@ -3629,6 +3805,14 @@ function renderAssistantTurnSlice(
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
     ...(input.acc.turnId === null ? {} : { turnId: input.acc.turnId }),
+    // Only a bot channel's bot rows carry one; absent everywhere else.
+    ...(input.acc.announcement === null
+      ? {}
+      : { announcement: input.acc.announcement }),
+    // Only a bot reply that asks carries them; absent everywhere else.
+    ...(input.acc.options === null ? {} : { options: input.acc.options }),
+    // Only a bot's direct reply in its channel carries it; absent everywhere else.
+    ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
     // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
     // sender label to carry here.
@@ -3767,6 +3951,10 @@ function renderSteerBlockUserMessage(
     sender: block.sender,
     senderLabel:
       block.sender === null ? null : ctx.resolveUserSenderLabel(block.sender),
+    senderAvatarUrl:
+      block.sender === null
+        ? null
+        : ctx.resolveUserSenderAvatarUrl(block.sender),
     settings: null,
     steerBadge: {
       status: "steered",
@@ -3782,6 +3970,7 @@ function renderSteeredUserMessage(input: {
   readonly persistentMessageId: string | null;
   readonly sender: OpenUserMessageSender | null;
   readonly senderLabel: string | null;
+  readonly senderAvatarUrl: string | null;
   readonly settings: ChatMessageModel["settings"];
   readonly steerBadge: ChatMessageSteerBadge;
 }): ChatMessageModel {
@@ -3809,6 +3998,7 @@ function renderSteeredUserMessage(input: {
     stopped: null,
     persistentMessageId: input.persistentMessageId,
     senderLabel: input.senderLabel,
+    ...senderAvatarField(input.senderAvatarUrl),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo:
@@ -3870,6 +4060,7 @@ function renderUserMessage(
     stopped: null,
     persistentMessageId: message.messageId,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
+    ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -3877,7 +4068,22 @@ function renderUserMessage(
     runState: null,
     sessionAnchor: message.sessionAnchor,
     steerBadge,
+    // Only a bot conversation's user rows carry one; the key stays absent
+    // everywhere else so no row outside a conversation grows a request state.
+    ...(message.conversationRequest === undefined
+      ? {}
+      : { conversationRequest: message.conversationRequest }),
   };
+}
+
+/**
+ * A user row's `senderAvatarUrl`: the key only when there is a picture, so
+ * no row outside a bot conversation grows one.
+ */
+function senderAvatarField(
+  avatarUrl: string | null,
+): Pick<ChatMessageModel, "senderAvatarUrl"> {
+  return avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl };
 }
 
 function renderPendingUserMessage(
@@ -3914,6 +4120,7 @@ function renderPendingUserMessage(
     stopped: null,
     persistentMessageId: null,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
+    ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
     assistantMeta: null,
     statusLabel: "Pending",
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -3963,6 +4170,11 @@ function renderLiveAssistant(
     // A live turn has no final cost yet; it surfaces once the turn completes
     // and re-renders via the persisted path. The live footer is suppressed.
     costUsd: null,
+    // An announcement, like a reply's options, is a host-written record,
+    // never a streamed turn.
+    announcement: null,
+    options: null,
+    repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
@@ -4039,10 +4251,7 @@ function renderPendingRunIndicator(input: {
     rendered,
   } = input;
   if (activeRunState === null) return [];
-  const hasInProgressAssistant = rendered.some(
-    (message) => message.role === "assistant" && message.runState !== null,
-  );
-  if (hasInProgressAssistant) return [];
+  if (transcriptShowsWorkingRow(rendered)) return [];
   const latestCreatedAt = rendered.reduce(
     (max, message) => Math.max(max, message.createdAt),
     0,
@@ -4343,6 +4552,7 @@ function toolCardParent(tool: ToolSegment): SubagentSegment {
   return {
     id: tool.id,
     kind: "subagent",
+    toolImageResults: tool.imageResults,
     name: tool.toolName,
     agentType: null,
     task: tool.inputSummary,
@@ -4933,23 +5143,28 @@ function parentIdField(parentBlockId: string | null | undefined): {
     : { parentId: parentBlockId };
 }
 
-/**
- * A tool call's page stamp, or `null` for a record that never carried the
- * field. Same hazard as `assistantImageResolutions`: a snapshot taken on a
- * SHALLOW parse path (`ChatStreamClient`, live and `1.6` lines alike) runs no
- * zod defaults, so a block a pre-pages host stored arrives typed as carrying
- * `page: null` and genuinely `undefined` - and every `page !== null` check
- * downstream would promote it to a page row with no page.
- */
-function toolCallPageStamp(
+/** An artifact stamp, or `null`, normalizing older records that omit the field. */
+function toolCallArtifactStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
-): Extract<OpenContentBlock, { type: "tool_call" }>["page"] {
-  // Read through `unknown` for the reason `assistantImageResolutions` gives.
-  const page: unknown = block.page;
-  return page === undefined ? null : block.page;
+): Extract<OpenContentBlock, { type: "tool_call" }>["artifact"] {
+  const artifact: unknown = block.artifact;
+  return artifact === undefined ? null : block.artifact;
 }
 
-/** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+/**
+ * A tool block field the shallow parse path may hand over absent, as `null`,
+ * normalizing older records that omit the field. Used for the agent-message
+ * fields a sent-message card reads: each is defaulted `null` by the schema, and
+ * the card treats anything but `null` as present, so an absent one would be
+ * read as a value and throw.
+ */
+function absentAsNull<T>(value: T | null): T | null {
+  // Read through `unknown` for the reason `assistantImageResolutions` gives.
+  const read: unknown = value;
+  return read === undefined ? null : value;
+}
+
+/** A tool call's app stamp, or `null`, normalizing older records that omit the field. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
 ): Extract<OpenContentBlock, { type: "tool_call" }>["mcpApp"] {
@@ -5018,9 +5233,10 @@ const BLOCK_HANDLERS: {
     inputDetail: block.inputDetail,
     taskTodoItems: block.taskTodoItems,
     error: block.error,
-    agentMessageSend: block.agentMessageSend,
+    agentMessageSend: absentAsNull(block.agentMessageSend),
     managedCommand: block.managedCommand,
-    agentMessageReceipt: block.agentMessageReceipt,
+    agentMessageReceipt: absentAsNull(block.agentMessageReceipt),
+    agentMessageDelivery: absentAsNull(block.agentMessageDelivery),
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,
@@ -5031,7 +5247,7 @@ const BLOCK_HANDLERS: {
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
-    page: toolCallPageStamp(block),
+    artifact: toolCallArtifactStamp(block),
     mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({
@@ -5067,6 +5283,7 @@ const BLOCK_HANDLERS: {
     isRenderableSubAgentBlock(block)
       ? {
           kind: "subagent",
+          toolImageResults: [],
           name: block.name,
           agentType: block.agentType,
           task: block.task,
@@ -5141,6 +5358,7 @@ const BLOCK_HANDLERS: {
   compaction: (block) => ({
     kind: "compaction",
     status: block.status,
+    notApplied: block.notApplied,
     trigger: block.trigger,
     preTokens: block.preTokens,
     postTokens: block.postTokens,

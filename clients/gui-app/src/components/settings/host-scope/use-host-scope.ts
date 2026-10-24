@@ -8,6 +8,7 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { toast } from "sonner";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -18,12 +19,18 @@ import {
 } from "@/components/settings/host-scope/host-scope-status";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
   resolveScopedHost,
   transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import {
+  hostOptionCanActivate,
+  TEAM_HOST_ACTIVATE_REASON,
+} from "@/components/settings/host-scope/host-option-model";
 
 export interface HostScope {
   /** Every host this account owns or this client can dial, merged and sorted. */
@@ -105,14 +112,52 @@ export interface HostScopeSelection {
 }
 
 /**
- * The one host-scope hook for Settings. Every host-scoped panel reads this and
- * nothing else, which is what makes the sidebar switcher authoritative rather
- * than one more picker among five.
+ * The one host-scope hook for the Host group in Settings. Every panel under the
+ * sidebar's picker reads this and nothing else, which is what makes the
+ * switcher authoritative rather than one more picker among five.
  */
 export function useHostScope(): HostScope {
   const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
   const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
   return useHostScopeFor({ scopedHostId, setScopedHostId });
+}
+
+/**
+ * Environment and Account pages never read through the Host picker: a pick
+ * made under the Host group never changes what they show, and nothing on them
+ * can re-point it - the setter is a no-op.
+ *
+ * Account pages follow the person, so they read through the window's own
+ * host, `useHostScopeFor`'s answer to a `null` selection. Environment pages
+ * read through the host the Environment dropdown names: a Local row's
+ * computer, and the window's own host for Personal (and for a team, whose
+ * pages P1 reads through the pool).
+ */
+const WINDOW_HOST_SELECTION: HostScopeSelection = {
+  scopedHostId: null,
+  setScopedHostId: () => undefined,
+};
+
+function noScopedHostWrite(): void {
+  return undefined;
+}
+
+export function usePersonalHostScope(): HostScope {
+  const pick = useEnvironmentPick();
+  const localHostId = pick.kind === "local" ? pick.hostId : null;
+  const selection = useMemo(
+    (): HostScopeSelection => ({
+      scopedHostId: localHostId,
+      setScopedHostId: noScopedHostWrite,
+    }),
+    [localHostId],
+  );
+  return useHostScopeFor(selection);
+}
+
+/** The window's own host, for Account pages. */
+export function useAccountHostScope(): HostScope {
+  return useHostScopeFor(WINDOW_HOST_SELECTION);
 }
 
 /**
@@ -172,9 +217,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
   // so for a connectable host the only reason one comes back null is a missing
   // request context or unbound user. That is a credential gap, not a connection
   // in progress, and it must not render as a spinner that can never resolve.
-  const hasRequestAuthority =
-    ambientClient.getRequestContext() !== null &&
-    ambientClient.getRequestContextUserId() !== null;
+  const hasRequestAuthority = useRequestContextUserId(ambientClient) !== null;
 
   const status = deriveHostScopeStatus({
     isFollowing,
@@ -292,6 +335,14 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
     (hostId: string) => {
       if (pendingActivations.has(authority)) return;
       const option = findHostOption(hosts, hostId);
+      // Defence for every caller, not only the Overview that hides the
+      // button: a management-only row is never made the window's host.
+      if (option !== null && !hostOptionCanActivate(option)) {
+        appLogger.debug("[host-scope] activate refused: management-only host", {
+          hostId,
+        });
+        return;
+      }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
       void requestActivate(authority, hostId, option).finally(() => {
@@ -344,6 +395,9 @@ export async function requestActivate(
     return;
   }
   if (result.ok) {
+    // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
+    // so it is woken, and derivation serves a fallback until it is up.
+    if (option !== null) wakeSandboxOnPick(option);
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",
@@ -366,7 +420,8 @@ export async function requestActivate(
  * trouble to distinguish. That is exactly how `persist-failed` arrived.
  *
  * Two families, and the split matters for the copy: `unknown-host` /
- * `incompatible` are statements ABOUT THE HOST and name it; `not-attached` /
+ * `incompatible` are statements ABOUT THE HOST and name it (`team-host` is
+ * one too, said once for every team host); `not-attached` /
  * `persist-failed` are failures of this window's own machinery, where naming
  * the host would misattribute the fault to a machine that is fine.
  */
@@ -378,6 +433,7 @@ const ACTIVATE_REFUSAL_COPY: Record<
     `${label} is no longer registered to this account.`,
   incompatible: (label) =>
     `${label} needs a host update before it can be activated.`,
+  "team-host": () => TEAM_HOST_ACTIVATE_REASON,
   "not-attached": () =>
     "This window lost its connection to the selection service - reload and try again.",
   // Nothing moved: the preference was refused BEFORE any state changed and no

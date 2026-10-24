@@ -15,7 +15,21 @@ import type {
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import {
+  TaskHostReachContext,
+  useOwnerHostNotReachable,
+} from "@/hooks/epic/use-task-host-reach";
+import {
+  AgentReachHoverLine,
+  AgentReachRowMark,
+} from "@/components/epic-canvas/sidebar/agent-reach-mark";
+import {
+  otherPrincipalHostIds,
+  TASK_HOST_UNREACHABLE_LINE,
+} from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
+import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
@@ -31,6 +45,7 @@ import {
   SET_CHAT_ARCHIVED_METHOD,
 } from "@/hooks/epic/use-chat-archive-support";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import {
   CHAT_NOT_ADOPTED_COPY,
@@ -51,8 +66,8 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
-  computeDescendantCountsFromTree,
-  formatCascadeSummary,
+  countDirectAgentChildren,
+  formatAgentDeleteNesting,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
@@ -218,6 +233,7 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -989,6 +1005,14 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const isDisconnected = connectionStatus === "closed";
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
+  const taskHostsView = useTaskHostsView(epicId);
+  // The hosts whose agents get the reach mark, computed once here and read by
+  // each row from context. From `reach` alone; no rows, no marks.
+  const taskHosts = taskHostsView.kind === "hosts" ? taskHostsView.hosts : null;
+  const unreachableHostIds = useMemo(
+    () => otherPrincipalHostIds(taskHosts ?? []),
+    [taskHosts],
+  );
   // Read-only (viewer) indication is epic-level, so it is resolved ONCE here
   // and threaded down as a boolean rather than re-subscribing every row to
   // `useEpicPermissionRole()`. `viewer` specifically - a null (not-yet-known)
@@ -1341,9 +1365,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
           <m.div
             key="tree"
             // The tree fills the panel, which is what puts its empty space
-            // below the rows where a drop un-nests to root. With a section
-            // following it that space would fall BETWEEN the rows and the
-            // section, so the rows shrink to their own height and the hits sit
+            // below the rows where a drop un-nests to root. With the message
+            // hits following it that space would fall BETWEEN the rows and the
+            // hits, so the rows shrink to their own height and the hits sit
             // directly under them.
             className={cn(
               "flex min-h-0 flex-col",
@@ -1437,36 +1461,40 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     >
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
-        <SidebarViewerContext.Provider value={isViewer}>
-          <SidebarSortContext.Provider value={comparator}>
-            <SidebarSortClockContext.Provider value={sortClock}>
-              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
-                  <ChatSearchHeaderInput
-                    tabId={tabId}
-                    resultCount={searchResultCount}
-                  />
-                ) : null}
-                {/* One clock for the tree's rows, owner cards and name labels
+        <TaskHostReachContext value={unreachableHostIds}>
+          <SidebarViewerContext.Provider value={isViewer}>
+            <SidebarSortContext.Provider value={comparator}>
+              <SidebarSortClockContext.Provider value={sortClock}>
+                <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                  {searchOpen &&
+                  !selectionMode &&
+                  surfaceSearchQuery === null ? (
+                    <ChatSearchHeaderInput
+                      tabId={tabId}
+                      resultCount={searchResultCount}
+                    />
+                  ) : null}
+                  {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
-                <HoverCardGroup>
-                  <SidebarContent>
-                    <SidebarGroup className="min-h-0 flex-1">
-                      <SidebarGroupContent
-                        ref={treeRegionRef}
-                        className="flex min-h-0 flex-1 flex-col"
-                        data-testid="epic-chat-tree-region"
-                      >
-                        {panelContent}
-                        {messageHits.node}
-                      </SidebarGroupContent>
-                    </SidebarGroup>
-                  </SidebarContent>
-                </HoverCardGroup>
-              </SidebarFilterVisibilityContext.Provider>
-            </SidebarSortClockContext.Provider>
-          </SidebarSortContext.Provider>
-        </SidebarViewerContext.Provider>
+                  <HoverCardGroup>
+                    <SidebarContent>
+                      <SidebarGroup className="min-h-0 flex-1">
+                        <SidebarGroupContent
+                          ref={treeRegionRef}
+                          className="flex min-h-0 flex-1 flex-col"
+                          data-testid="epic-chat-tree-region"
+                        >
+                          {panelContent}
+                          {messageHits.node}
+                        </SidebarGroupContent>
+                      </SidebarGroup>
+                    </SidebarContent>
+                  </HoverCardGroup>
+                </SidebarFilterVisibilityContext.Provider>
+              </SidebarSortClockContext.Provider>
+            </SidebarSortContext.Provider>
+          </SidebarViewerContext.Provider>
+        </TaskHostReachContext>
       </SidebarChatSharingContext.Provider>
     </ChatIndicatorHostScopes>
   );
@@ -1615,8 +1643,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // The cascade-delete summary, subscribed to its ANSWER rather than to the
-  // record list it is computed from.
+  // How many agents sit directly under this row (they move to the top level
+  // when it is deleted), subscribed to its ANSWER rather than to the record
+  // list it is computed from.
   //
   // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
   // ANY record in the epic changes - a body write, a chat token, a timestamp
@@ -1625,18 +1654,11 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
   // defence, because this is the row's OWN subscription rather than a prop.
   //
-  // The tree walk is the same counts by a different route: `childrenByParent`
-  // and `nodeById` are the normalised structure this sidebar already renders, so
-  // it agrees with what the user sees. `useShallow` is required rather than
-  // decorative - the selector returns a fresh object per call, and without it
-  // `useSyncExternalStore` sees a change on every notification and loops.
-  //
-  // The artifact row was moved to exactly this in `d1cb1b3a`; this row is the
-  // same defect in the second copy of it.
-  const cascadeCounts = useEpicStore(
-    useShallow((state: OpenEpicState) =>
-      computeDescendantCountsFromTree(state.tree, nodeId),
-    ),
+  // `childrenByParent` and `nodeById` are the normalised structure this sidebar
+  // already renders, so the count agrees with what the user sees. The selector
+  // returns a number, so it needs no `useShallow`.
+  const nestedAgentCount = useEpicStore((state: OpenEpicState) =>
+    countDirectAgentChildren(state.tree, nodeId),
   );
 
   const expanded = expandedIds.has(nodeId);
@@ -1673,8 +1695,15 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const ownerHostId = useEpicNodeHostId(nodeId);
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
-  const archiveSupported = useHostSupportsMethod(
+  // Gated on the host the archive will be SENT to: a live stand-in when the
+  // owner is down, whose manifest this renderer has, rather than an owner that
+  // may never have handshaken with it.
+  const archiveServingHostId = useRecordWriteServingHostId(
     mutationHostId,
+    "epic.setChatArchived",
+  );
+  const archiveSupported = useHostSupportsMethod(
+    archiveServingHostId,
     SET_CHAT_ARCHIVED_METHOD,
   );
   const isArchived = useEpicNodeArchived(nodeId);
@@ -1987,7 +2016,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const cascadeSummary = formatCascadeSummary(cascadeCounts);
+  const nestingNote = formatAgentDeleteNesting(nestedAgentCount);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -2043,7 +2072,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onPerformDelete={performDelete}
       confirmDeleteOpen={confirmDeleteOpen}
       onConfirmDeleteOpenChange={setConfirmDeleteOpen}
-      cascadeSummary={cascadeSummary}
+      nestingNote={nestingNote}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       archive={archiveRow}
@@ -2093,7 +2122,7 @@ interface ChatNodeShellProps {
   readonly onPerformDelete: () => void;
   readonly confirmDeleteOpen: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
-  readonly cascadeSummary: string | null;
+  readonly nestingNote: string | null;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly archive: ChatRowArchiveInputs;
@@ -2194,7 +2223,7 @@ function ChatNodeShellBody(
     onPerformDelete,
     confirmDeleteOpen,
     onConfirmDeleteOpenChange,
-    cascadeSummary,
+    nestingNote,
     deletePending,
     onConfirmDelete,
     archive: archiveRow,
@@ -2368,8 +2397,12 @@ function ChatNodeShellBody(
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
-        description="This action cannot be undone."
-        cascadeSummary={cascadeSummary}
+        description={
+          nestingNote === null
+            ? "This action cannot be undone."
+            : `This action cannot be undone. ${nestingNote}`
+        }
+        cascadeSummary={null}
         actionLabel="Delete"
         isPending={deletePending}
         onConfirm={onConfirmDelete}
@@ -2922,6 +2955,7 @@ function chatRowAriaLabel(input: {
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
   readonly offlineLock: OfflineRowLock | null;
+  readonly ownerNotReachable: boolean;
   readonly sessionState: AgentSessionState | null;
 }): string {
   const stateSuffix = [
@@ -2929,6 +2963,7 @@ function chatRowAriaLabel(input: {
     describeSessionStateForAria(input.sessionState, input.isArchived, true),
     input.sharedWithTask ? "shared with task" : null,
     describeOfflineLockForAria(input.offlineLock),
+    input.ownerNotReachable ? TASK_HOST_UNREACHABLE_LINE : null,
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
@@ -2978,6 +3013,14 @@ function offlineRowLockTooltip(lock: OfflineRowLock): string {
   return lock.access === "published-copy"
     ? `Lives on ${lock.hostLabel}, which is offline. Opens read-only from the last published copy.`
     : `Lives on ${lock.hostLabel}, which is offline. The agent and its transcript stay on that machine, and it becomes available again when ${lock.hostLabel} is back.`;
+}
+
+/**
+ * The hover card's reach line, or `null`: the card hangs a section under any
+ * non-null content, so an absent fact must be `null` and not an empty element.
+ */
+function reachHoverContent(ownerNotReachable: boolean): ReactElement | null {
+  return ownerNotReachable ? <AgentReachHoverLine /> : null;
 }
 
 // Only chats and terminal-agents own a resource-tracked process tree; other
@@ -3126,16 +3169,24 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
   const ownerIsUnreachable = ownerReachability.status === "unreachable";
+  // Reach, not connectivity: the owner host is another principal's. Independent
+  // of the lock above, which is liveness.
+  const ownerNotReachable = useOwnerHostNotReachable(ownerHostId);
   // The reachable-but-too-old owner (`HOST_OLDER_THAN_DATA`), read from the
   // same registry `ChatNode` builds the click's ref from.
   const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
+  // A CHAT whose owner is a sandbox at rest opens live (the pool serves it),
+  // so its lock reads the same narrowed verdict the click does. A terminal
+  // agent has no at-rest serving and keeps the raw one below.
+  const ownerSandboxOpensLive = useOwnerSandboxOpensLive(ownerHostId);
+  const chatOwnerIsUnreachable = ownerIsUnreachable && !ownerSandboxOpensLive;
   const offlineLock = useMemo<OfflineRowLock | null>(() => {
     if (
       chatOpensPublishedCopy({
         isChat: artifactType === "chat",
         ownerHostId,
         ownerUserId: rowOwnerUserId,
-        ownerIsUnreachable,
+        ownerIsUnreachable: chatOwnerIsUnreachable,
         ownerRefusesStore,
       })
     ) {
@@ -3145,7 +3196,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
         // Offline outranks the store verdict: a host that is not answering
         // is the fact a reader can act on now, and the refusal is only
         // known to hold for a build that is currently running.
-        reason: ownerIsUnreachable ? "owner-offline" : "host-older-than-data",
+        reason: chatOwnerIsUnreachable
+          ? "owner-offline"
+          : "host-older-than-data",
       };
     }
     // The terminal-agent sibling. It needs no owner-user check where the chat
@@ -3162,6 +3215,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     };
   }, [
     artifactType,
+    chatOwnerIsUnreachable,
     ownerHostId,
     ownerIsUnreachable,
     ownerReachability.hostLabel,
@@ -3309,6 +3363,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         isArchived,
         sharedWithTask: showSharedIndicator,
         offlineLock,
+        ownerNotReachable,
         sessionState: sessionFacet.sessionState,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
@@ -3377,6 +3432,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
                 />
               </LazySidebarTooltipWrapper>
             ) : null}
+            <AgentReachRowMark
+              ownerHostId={ownerHostId}
+              testId={`epic-sidebar-tree-reach-${nodeId}`}
+            />
             <AgentRoleBadgesForOwner
               ownerKind={resourceOwnerKind}
               claims={roleClaims}
@@ -3423,14 +3482,16 @@ function ChatRowButton(props: ChatRowButtonProps) {
       nodeId={nodeId}
       nodeName={nodeName}
       hostId={ownerHostId}
-      // THE SAME verdict the offline lock above reads, from the same call.
-      // Two subscriptions on one host id could momentarily disagree, and this
-      // row would then show a lock while its hover promised live worktree
-      // metadata from the machine that lock says is gone.
+      // THE SAME reachability call the offline lock above reads. Two
+      // subscriptions on one host id could momentarily disagree, and this row
+      // would then show a lock while its hover promised live worktree
+      // metadata from the machine that lock says is gone. The raw verdict,
+      // not the chat lock's narrowed one: a sandbox at rest cannot answer a
+      // metadata read.
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
-      extraContent={null}
+      extraContent={reachHoverContent(ownerNotReachable)}
       side={popoverSide}
     />
   );

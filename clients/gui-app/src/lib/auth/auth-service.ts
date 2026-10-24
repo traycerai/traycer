@@ -10,6 +10,7 @@ import type {
   TokenRotateOutcome,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -37,6 +38,30 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import type {
+  SandboxAutomationFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxControlFailure,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
+  SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SecretRequestDecideFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+  SandboxPatchRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -162,6 +187,19 @@ export class SupersededAuthEraError extends Error {
   constructor() {
     super("Refusing a read issued for a superseded credential era");
     this.name = "SupersededAuthEraError";
+  }
+}
+
+/**
+ * Thrown by {@link AuthService.fetchAuthenticatedUser} when the check it ran
+ * was overtaken: its answer is about a credential that is no longer the live
+ * one (an account switch, an adoption) or it stood down for an interactive
+ * sign-in. Retryable: asking again revalidates the live credential.
+ */
+export class SupersededUserCheckError extends Error {
+  constructor() {
+    super("The user check was overtaken by a newer credential");
+    this.name = "SupersededUserCheckError";
   }
 }
 
@@ -417,6 +455,20 @@ export type LinkLoginProgressListener = (
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
+ * What a live revalidation of the current context answers. `null` means only
+ * that there is no live context, or the service is disposed. `superseded`
+ * means a live context exists but this check's answer is stale: a newer
+ * identity, credential, revalidation or interactive sign-in overtook it, or
+ * it stood down for an attempt in flight. Ask again, and the next check
+ * revalidates the live state. The internal stages return `null` for "stale
+ * or absent" alike and drop their side effects; only
+ * {@link AuthService.revalidateCurrentContext} tells the two apart.
+ */
+export type LiveRevalidationOutcome =
+  | ValidationOutcome
+  | { readonly kind: "superseded" };
+
+/**
  * The result of applying a same-user `rotate` outcome to the live session:
  *   - `rotated`    → the lease was rotated in place to `token`;
  *   - `signed-out` → a terminal outcome cleared the UI session (file kept);
@@ -520,6 +572,12 @@ function linkResultForTokenApplication(
 export interface RevokedCloudAuthorization {
   /** The bearer the cloud rejected - the fence a copy held elsewhere applies. */
   readonly token: string;
+  /**
+   * `user-epoch` when the refusal was the user's own "sign out everywhere".
+   * A host refuses such a bearer at once rather than at its expiry, so a
+   * sibling window holding it needs to know (`revokedHeldBearer`).
+   */
+  readonly revocation: "user-epoch" | null;
 }
 
 export class AuthService {
@@ -588,7 +646,8 @@ export class AuthService {
   // §4 owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
-  private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
+  private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
+    null;
   private currentRevalidationBearer: OpenFrameBearerSource | null = null;
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
@@ -714,7 +773,47 @@ export class AuthService {
    */
   private setSessionRecoveryTerminallyRejected(loss: CloudVerdictLoss): void {
     this.sessionRecoveryTerminallyRejected = loss !== "unreachable";
+    if (loss === "unreachable") {
+      this.revokedHeldBearer = null;
+    }
     useAuthStore.getState().setCloudVerdictLoss(loss);
+    // The stored-session arms latch AFTER projecting `unverified`, so this is
+    // their moment to notice a held bearer that has already expired.
+    this.noteHostRefusedHeldBearer();
+  }
+
+  /**
+   * The bearer held when authn's refusal was a user-epoch revocation ("sign
+   * out everywhere"). The host refuses a revoked bearer as soon as the
+   * account's token floor reaches it, not at the bearer's expiry, so it counts
+   * as refused straight away. Cleared with the latch.
+   */
+  private revokedHeldBearer: string | null = null;
+
+  /**
+   * A host refused the bearer this session holds - or would, because it has
+   * expired or been revoked. On a session authn has refused (the terminal
+   * latch) no fresh bearer can arrive, so the local plane `unverified` holds
+   * the app open for is gone too, and the shell sends the person to sign in
+   * (`hostRefusedHeldBearer`).
+   *
+   * Gated on the held bearer being EXPIRED or REVOKED, not on a refusal alone:
+   * a host also answers UNAUTHORIZED to requests that need the cloud verdict
+   * this session no longer has, while it keeps serving the local plane on the
+   * same bearer until then. A token whose expiry cannot be read is not treated
+   * as expired, as in `applyProvisionalSession`.
+   *
+   * Called wherever that can change: on a host refusal (unary and stream), when
+   * the latch is set, and on every `unverified` projection.
+   */
+  noteHostRefusedHeldBearer(): void {
+    const bearer = this.currentBearer;
+    if (!this.sessionRecoveryTerminallyRejected || bearer === null) {
+      return;
+    }
+    if (bearer === this.revokedHeldBearer || hasExpired(bearer)) {
+      useAuthStore.getState().noteHostRefusedHeldBearer();
+    }
   }
   // Superseded-save undos whose conditional deletes have not LANDED yet
   // (in flight or failed): each stale pair may still be durable. Every
@@ -1142,6 +1241,7 @@ export class AuthService {
     provisional: AuthenticatedUser,
     startGeneration: number,
   ): Promise<void> {
+    const credentialGeneration = this.getCredentialGeneration();
     const outcome = await this.validateToken(stored.token);
     if (
       this.shouldStopStartFlow(startGeneration) ||
@@ -1158,6 +1258,14 @@ export class AuthService {
       // `revalidateLiveSession` already applies to a validated live session:
       // project the entitlement, and re-sign-in only when the bearer turns out
       // to name a different user.
+      // The same bearer can still have been demoted while authn answered (a
+      // revocation withdraws the verdict and latches without rotating), and
+      // that newer state outranks this verdict, which then writes nothing.
+      // Every bearer change advances the credential generation, a same-token
+      // demotion included.
+      if (this.getCredentialGeneration() !== credentialGeneration) {
+        return;
+      }
       this.commitSubscriptionStatus(
         outcome.user.userSubscription.subscriptionStatus,
       );
@@ -1437,6 +1545,10 @@ export class AuthService {
           revocation: refreshRejectionRevocation(rejection),
         });
         this.setLastError(refreshRejectedCredentialError(rejection));
+        this.revokedHeldBearer =
+          refreshRejectionRevocation(rejection) === "user-epoch"
+            ? stored.token
+            : null;
         this.applyUnverifiedSession(stored);
         this.setSessionRecoveryTerminallyRejected("session-rejected");
         this.settleSessionRecovery("refresh-rejected-credential");
@@ -2271,13 +2383,22 @@ export class AuthService {
    * source rather than relying on the idempotence guard downstream to absorb
    * a loop it never intended to run.
    */
-  ingestCloudAuthorizationRevoked(rejectedToken: string): void {
+  ingestCloudAuthorizationRevoked(
+    rejectedToken: string,
+    revocation: "user-epoch" | null,
+  ): void {
     if (this.disposed) return;
     if (rejectedToken.length === 0) return;
     if (this.currentBearer !== rejectedToken) return;
     if (!this.hasVerifiedSession()) return;
     this.suppressCloudAuthorizationRevokedFanOut = true;
     try {
+      // The sibling saw a "sign out everywhere", so the host refuses this
+      // bearer now, not at its expiry. Recorded before the demotion latches,
+      // which is when `noteHostRefusedHeldBearer` reads it. A shell that
+      // predates the scope passes nothing here, which reads as no revocation.
+      this.revokedHeldBearer =
+        revocation === "user-epoch" ? rejectedToken : null;
       // The same entry point the local terminal-verdict paths use, so an
       // inbound revoke and a locally-observed one cannot drift: it builds the
       // session from `currentProfile` and returns false when there is no
@@ -2400,15 +2521,32 @@ export class AuthService {
    *                             signed-out.
    *   - `network-error`       → leaves auth state untouched; a transient
    *                             outage must not log the user out.
+   *   - `superseded`          → stale under a live context (overtaken, or
+   *                             standing down for an interactive sign-in);
+   *                             ask again.
    *
-   * No-op when the user is not currently signed-in.
+   * `null` when there is no live context (or the service is disposed).
    */
-  async revalidateCurrentContext(): Promise<ValidationOutcome | null> {
+  async revalidateCurrentContext(): Promise<LiveRevalidationOutcome | null> {
     const expected = this.contextProvider.current()?.credentials ?? null;
     if (expected === null) {
       return null;
     }
-    return this.revalidateExpectedContext(expected);
+    const outcome = await this.revalidateExpectedContext(expected);
+    // An internal fence's `null` is "stale or absent". Under a live context
+    // every one of them is stale: a join on a different bearer, the check
+    // after a force refresh finding its credential no longer current,
+    // credentials released or no longer the expected ones, the identity
+    // fence, and `rotateLiveSession`'s fences. None is a case where the
+    // context is gone, so a consumer must not read it as one.
+    if (
+      outcome === null &&
+      !this.isDisposed() &&
+      this.contextProvider.current() !== null
+    ) {
+      return { kind: "superseded" };
+    }
+    return outcome;
   }
 
   /**
@@ -2433,8 +2571,18 @@ export class AuthService {
     if (!this.isIdentityCurrent(generation) || outcome === null) {
       return "superseded";
     }
-    if (outcome.kind === "rejected" || outcome.kind === "network-error") {
-      return outcome.kind;
+    if (outcome.kind === "superseded") {
+      // Something newer overtook this authority's recovery, and that settles
+      // the session: the call fails once, with no latch and no refresh spent.
+      return "superseded";
+    }
+    if (outcome.kind === "rejected") {
+      // This method's caller is a host that just refused `expected`.
+      this.noteHostRefusedHeldBearer();
+      return "rejected";
+    }
+    if (outcome.kind === "network-error") {
+      return "network-error";
     }
     return this.isExpectedBearerLive(expected, generation)
       ? "rotated"
@@ -2443,7 +2591,7 @@ export class AuthService {
 
   private revalidateExpectedContext(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.currentRevalidation !== null) {
       return this.currentRevalidationBearer === expected
         ? this.currentRevalidation
@@ -2473,7 +2621,7 @@ export class AuthService {
    */
   private async revalidateAfterPendingForceRefresh(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.currentForceRefresh !== null) {
       await this.currentForceRefresh;
       if (this.isDisposed() || !this.isExpectedBearerCurrent(expected)) {
@@ -2489,7 +2637,9 @@ export class AuthService {
    * context against AuthnV3's `/api/v3/user`. Returns `null` when signed-out
    * or when validation does not yield a user (`rejected` / no live context).
    * Throws on `network-error` so a transient outage surfaces as a retryable
-   * query error instead of a misleading "no subscription" empty state.
+   * query error instead of a misleading "no subscription" empty state, and
+   * {@link SupersededUserCheckError} on `superseded` so the query asks again
+   * rather than caching "no user" for the live account.
    *
    * The Settings subscription panel consumes this through TanStack Query so
    * credits live only in the query cache - never duplicated into the store.
@@ -2503,6 +2653,13 @@ export class AuthService {
     }
     if (outcome.kind === "valid") {
       return outcome.user;
+    }
+    // A stale answer describes a credential that is no longer the live one,
+    // so there is no user to show from it - and "no user" would be cached as
+    // the live account's answer. Throw so the query asks again, against the
+    // live credential.
+    if (outcome.kind === "superseded") {
+      throw new SupersededUserCheckError();
     }
     // `network-error`: a transient outage that did NOT sign the user out. Throw
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
@@ -2903,9 +3060,231 @@ export class AuthService {
     return this.runnerHost.deregisterHostFromAccount(bearer, hostId);
   }
 
+  /**
+   * The sandbox control plane (`/api/sandboxes` on traycer-server) via the
+   * runner host, which runs it where {@link fetchRegisteredHosts} runs (Electron
+   * main on desktop, for CORS). The reads answer `unauthorized` with no cloud
+   * bearer, the way a list has an empty state to render; the writes throw, for
+   * the reason {@link updateHostVersionPolicy} gives.
+   */
+  /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
+  sandboxControlUnavailableReason(): string | null {
+    return this.runnerHost.sandboxControlUnavailableReason;
+  }
+
+  /**
+   * The floor under every sandbox call: a build that cannot reach the
+   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging)
+   * sends none of them, and each answers this failure instead.
+   */
+  private sandboxControlRefusal(): SandboxControlFailure | null {
+    const reason = this.sandboxControlUnavailableReason();
+    return reason === null ? null : { kind: "unavailable", reason };
+  }
+
+  async listSandboxes(): Promise<SandboxListFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.listSandboxes(bearer);
+  }
+
+  async getSandboxCosts(): Promise<SandboxCostsFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCosts(bearer);
+  }
+
+  async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCatalogue(bearer);
+  }
+
+  async createSandbox(
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to create a sandbox.");
+    }
+    return this.runnerHost.createSandbox(bearer, request);
+  }
+
+  async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to destroy this sandbox.");
+    }
+    return this.runnerHost.destroySandbox(bearer, sandboxId);
+  }
+
+  async patchSandbox(
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to change this sandbox.");
+    }
+    return this.runnerHost.patchSandbox(bearer, sandboxId, request);
+  }
+
+  async keepSandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to keep this sandbox.");
+    }
+    return this.runnerHost.keepSandbox(bearer, sandboxId);
+  }
+
+  /**
+   * A lifecycle verb: the card's suspend / resume / stop / start, and the
+   * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
+   * than throwing, because the tab-open wake reads it as an outcome.
+   */
+  async runSandboxVerb(
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxLifecycleVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb, timeoutMs);
+  }
+
+  /**
+   * `GET /api/sandboxes/automation`: the user's Automations host, or a team's
+   * pods when `environmentId` names the team's environment. A read.
+   */
+  async getSandboxAutomation(
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxAutomation(bearer, environmentId);
+  }
+
+  /**
+   * `POST /api/sandboxes/automation`: creates or wakes it, a write; a team's
+   * pod when `target` names it.
+   */
+  async openSandboxAutomation(
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to start Automations.");
+    }
+    return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /**
+   * The secrets one sandbox host may use, from the broker (authn). No
+   * `sandboxControlRefusal` here: the broker is authn, which every build
+   * reaches, and a build with no sandboxes simply never asks.
+   */
+  async getSandboxGrants(
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxGrants(bearer, environmentId, hostId);
+  }
+
+  /**
+   * A team's environment id, read for a team the person picked in the create
+   * form. The route creates the environment and syncs the member's items on its
+   * first call, so it is never read for every team.
+   */
+  async getTeamEnvironment(
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getTeamEnvironment(bearer, teamId);
+  }
+
+  /** An environment's provider counts: its API keys and linked plans. */
+  async getEnvironmentProviders(
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  /** The user's answer to an agent's grant request. */
+  async decideSecretRequest(
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.decideSecretRequest(
+      bearer,
+      environmentId,
+      requestId,
+      decision,
+    );
+  }
+
+  /**
+   * An executable-write grant for one host, minted on this user's session
+   * (`lib/environment/executable-write-grant.ts` is the caller and the cache).
+   */
+  async mintExecutableWriteGrant(
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintExecutableWriteGrant(bearer, hostId);
+  }
+
   private async revalidateCurrentContextOnce(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.isDisposed()) {
       return null;
     }
@@ -2922,13 +3301,58 @@ export class AuthService {
     ) {
       return null;
     }
+    // An interactive sign-in owns the session while it runs, and this
+    // automatic check stands down for one as session recovery does, whatever
+    // authn would answer or the latch below holds: a refusal would demote
+    // `signing-in` to `unverified` under the running attempt, and a verdict
+    // would promote it, either way taking the approval screen away while the
+    // attempt's own result is still to land. A check started before the
+    // attempt is fenced by the identity generation the attempt advanced.
+    if (this.isInteractiveAttemptInFlight()) {
+      return { kind: "superseded" };
+    }
+    // A session authn has already refused, held open for its local plane.
+    // Asking again cannot change the answer: `/api/v3/user` refuses the same
+    // bearer, and the rotate re-spends a refresh token authn has refused and
+    // re-raises "session expired". Every host request that failed on the held
+    // bearer used to run that round trip, so the toast came back after each
+    // one (a refresh every ~3 s, measured). The wake nudge stands down on the
+    // same latch; a successful sign-in clears it. `signed-in` is excluded: it
+    // holds a verdict, whatever the latch says.
+    if (
+      this.sessionRecoveryTerminallyRejected &&
+      useAuthStore.getState().status === "unverified"
+    ) {
+      return { kind: "rejected" };
+    }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
+    const credentialGeneration = this.getCredentialGeneration();
     // Access-only (§3): validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
     const outcome = await this.validateToken(currentToken);
     if (!this.isIdentityCurrent(generation)) {
       return null;
+    }
+    // The stand-down again, after the await: a sibling window's `signing-in`
+    // arrives as a projection alone, with no attempt of ours and no identity
+    // generation advanced, so the fence above lets it through. Acting on the
+    // answer from here would spend the refresh token and could demote
+    // `unverified` over the projected attempt.
+    if (this.isInteractiveAttemptInFlight()) {
+      return { kind: "superseded" };
+    }
+    // The answer is about `currentToken` as it stood when the check was sent.
+    // Adoptions, demotions and a cross-window account switch leave the
+    // identity generation alone, so a credential that moved meanwhile (a
+    // reconcile adopting a bearer authn has refused, a demotion that withdrew
+    // the verdict, a sibling window signing in as someone else) is caught
+    // here, whatever the answer. A verdict would be written onto a credential
+    // it is not about, or name a user who may not be the live one; a refusal
+    // would rotate the previous credential, and against another account's
+    // stored pair that rotate signs the live session out.
+    if (this.getCredentialGeneration() !== credentialGeneration) {
+      return { kind: "superseded" };
     }
 
     if (outcome.kind === "valid") {
@@ -2949,11 +3373,12 @@ export class AuthService {
         // entitlement left every other field one launch stale. Projection plus
         // the service's own profile copy, gated on a real difference - see
         // `reprojectSameUserIdentity` for why re-entering `applySignedIn` is
-        // not available here.
+        // not available for a `signed-in` session, and why one that is not
+        // yet signed in is promoted through it.
         this.reprojectSameUserIdentity(outcome.user);
         // ...and DURABLY, which the projection alone is not. `applySignedIn`
-        // is the only other writer of this snapshot and this path deliberately
-        // avoids it, so nothing else on this branch persists anything: the
+        // is the only other writer of this snapshot and this path avoids it
+        // for a `signed-in` session, so nothing else there persists anything: the
         // next launch paints the cached identity again, and if that launch's
         // validation takes the accepted network-error path the stale name and
         // avatar stand for the whole session. `settleProvisionalSession` pairs
@@ -3161,66 +3586,82 @@ export class AuthService {
         this.clearUiSession();
         return { status: "signed-out" };
       case "refresh-rejected-account":
-      case "refresh-rejected-credential": {
-        // The ordinary mid-session expiry: a signed-in user editing local work
-        // whose refresh authn rejects with a verdict about the TOKEN. This arm
-        // used to `clearUiSession()`, which is cold-review P1-4 - it produced a
-        // real `signed-out`, redirecting the shell out from under the work and
-        // firing `useAuthIdentityTransition`'s destructive arm (which PURGES
-        // account-scoped persisted state; reading positions are deleted from
-        // disk). The stored-session path has always treated the identical
-        // verdict as credential-scoped and held the plane, so the two disagreed
-        // about the same outcome.
-        //
-        // The bearer in hand is the right one to hold on: the REFRESH token is
-        // what was rejected, the access token keeps its own TTL, and it is the
-        // credential the host is already serving local epics on. Identity comes
-        // from the live profile rather than the file, because this path never
-        // re-reads the file and `rotated.pair` is `null` on every rejection.
-        // Same demotion, DIFFERENT copy. Both hold the plane, but one is an
-        // expiry the user can clear by signing in again and the other is
-        // terminal for this account - telling the second group to "sign in
-        // again" sends them round a loop with no exit. Within the credential
-        // arm the copy splits once more, exactly as the stored-session path
-        // splits it: a user-epoch revoke is the user's own "sign out
-        // everywhere" landing on this live session, and it is told so rather
-        // than "expired" - `rotated.rejection` carries the scope here for that
-        // purpose, and reading only the outcome string would drop it on the
-        // path a signed-in user actually takes.
-        if (rotated.outcome === "refresh-rejected-credential") {
-          appLogger.info("[auth] live session refresh rejected", {
-            trigger,
-            scope: "credential",
-            revocation: refreshRejectionRevocation(rotated.rejection),
-          });
-        }
-        this.setLastError(
-          rotated.outcome === "refresh-rejected-account"
-            ? AUTH_ERROR_ACCOUNT_UNAVAILABLE
-            : refreshRejectedCredentialError(rotated.rejection),
+      case "refresh-rejected-credential":
+        return this.applyLiveRefreshRejection(
+          rotated.outcome,
+          rotated.rejection,
+          trigger,
         );
-        if (
-          !this.demoteLiveSessionOnTerminalVerdict(
-            this.currentBearer,
-            refreshRejectedLoss(rotated.outcome),
-          )
-        ) {
-          // No live identity to hold a plane FOR. Nothing to demote, so take
-          // the old behaviour rather than inventing a session.
-          this.clearUiSession();
-          return { status: "signed-out" };
-        }
-        // NOT `signed-out` (the session was demoted, not cleared) and NOT
-        // `transient` (callers read that as retriable, and re-driving a dead
-        // refresh is the spend this whole path avoids).
-        return { status: "credential-dead" };
-      }
       case "lock-busy":
       case "spend-pending":
       case "refresh-network":
         // Transient; the access token in hand stays valid for its TTL.
         return { status: "transient" };
     }
+  }
+
+  /**
+   * The ordinary mid-session expiry: a signed-in user editing local work whose
+   * refresh authn rejects with a verdict about the TOKEN. This arm used to
+   * `clearUiSession()`, which is cold-review P1-4 - it produced a real
+   * `signed-out`, redirecting the shell out from under the work and firing
+   * `useAuthIdentityTransition`'s destructive arm (which PURGES account-scoped
+   * persisted state; reading positions are deleted from disk). The
+   * stored-session path has always treated the identical verdict as
+   * credential-scoped and held the plane, so the two disagreed about the same
+   * outcome.
+   *
+   * The bearer in hand is the right one to hold on: the REFRESH token is what
+   * was rejected, the access token keeps its own TTL, and it is the credential
+   * the host is already serving local epics on. Identity comes from the live
+   * profile rather than the file, because this path never re-reads the file
+   * and the rotate's `pair` is `null` on every rejection.
+   * Same demotion, DIFFERENT copy. Both hold the plane, but one is an expiry
+   * the user can clear by signing in again and the other is terminal for this
+   * account - telling the second group to "sign in again" sends them round a
+   * loop with no exit. Within the credential arm the copy splits once more,
+   * exactly as the stored-session path splits it: a user-epoch revoke is the
+   * user's own "sign out everywhere" landing on this live session, and it is
+   * told so rather than "expired" - `rejection` carries the scope here for
+   * that purpose, and reading only the outcome string would drop it on the
+   * path a signed-in user actually takes.
+   */
+  private applyLiveRefreshRejection(
+    outcome: "refresh-rejected-account" | "refresh-rejected-credential",
+    rejection: AuthRefreshRejection | null,
+    trigger: string,
+  ): SameUserRotateResult {
+    if (outcome === "refresh-rejected-credential") {
+      appLogger.info("[auth] live session refresh rejected", {
+        trigger,
+        scope: "credential",
+        revocation: refreshRejectionRevocation(rejection),
+      });
+    }
+    this.setLastError(
+      outcome === "refresh-rejected-account"
+        ? AUTH_ERROR_ACCOUNT_UNAVAILABLE
+        : refreshRejectedCredentialError(rejection),
+    );
+    this.revokedHeldBearer =
+      refreshRejectionRevocation(rejection) === "user-epoch"
+        ? this.currentBearer
+        : null;
+    if (
+      !this.demoteLiveSessionOnTerminalVerdict(
+        this.currentBearer,
+        refreshRejectedLoss(outcome),
+      )
+    ) {
+      // No live identity to hold a plane FOR. Nothing to demote, so take the
+      // old behaviour rather than inventing a session.
+      this.clearUiSession();
+      return { status: "signed-out" };
+    }
+    // NOT `signed-out` (the session was demoted, not cleared) and NOT
+    // `transient` (callers read that as retriable, and re-driving a dead
+    // refresh is the spend this whole path avoids).
+    return { status: "credential-dead" };
   }
 
   /**
@@ -4047,6 +4488,18 @@ export class AuthService {
   }
 
   /**
+   * An interactive sign-in owns the session: one of this window's attempts, or
+   * a sibling window's `signing-in` projected here, which starts no attempt of
+   * ours. Read fresh after every await - the projection can land during one.
+   */
+  private isInteractiveAttemptInFlight(): boolean {
+    return (
+      this.activeAttempt !== null ||
+      useAuthStore.getState().status === "signing-in"
+    );
+  }
+
+  /**
    * Epoch-currency check used by async finalization paths. Returns true iff
    * the captured epoch still matches the live attempt's epoch. A finalizer that
    * captured epoch `E` no-ops once a newer `signIn()` has replaced the active
@@ -4658,9 +5111,12 @@ export class AuthService {
 
   /**
    * Re-projects a same-user verdict's person-facing identity into the auth
-   * store and the service's own live-credential copy - and nothing else.
+   * store and the service's own live-credential copy - and nothing else, for a
+   * session already `signed-in`. A session not yet `signed-in` is promoted
+   * through `applySignedIn` instead (see the first branch below).
    *
-   * Deliberately not `applySignedIn` / `applySessionProjection`. Those restart
+   * For a `signed-in` session, deliberately not `applySignedIn` /
+   * `applySessionProjection`. Those restart
    * the refresh scheduler and - the part that is load-bearing rather than
    * merely wasteful - would put the identity back through the context
    * provider, where "same user => same context object" is an invariant the
@@ -4683,10 +5139,34 @@ export class AuthService {
    * rather than trusted.
    */
   private reprojectSameUserIdentity(user: AuthenticatedUser): void {
+    const current = useAuthStore.getState();
+    // A session that is not yet `signed-in` (an `unverified` one whose bearer
+    // a reactive refresh swapped in place) holds a context with no cloud
+    // verdict, and a valid check for it IS the verdict. Writing the store
+    // alone here would show `signed-in` while every host call still carries
+    // `cloudAuthorized: false` and is refused, and recovery would stand down
+    // on the live bearer. `applySignedIn` restores the verdict on that same
+    // context, settles recovery and announces it, so the store reads
+    // `signed-in` only when the context holds the verdict. Without a live
+    // bearer there is nothing to authorize, and the store is left alone.
+    //
+    // An interactive sign-in is never raced, as session recovery never races
+    // one: promoting here would end its `signing-in` while the attempt still
+    // runs, and the attempt's own result would then land on the promoted
+    // session. Its success settles the session through `applySignedIn`.
+    if (current.status !== "signed-in") {
+      if (
+        this.currentBearer !== null &&
+        this.activeAttempt === null &&
+        current.status !== "signing-in"
+      ) {
+        this.applySignedIn(this.currentBearer, user, undefined);
+      }
+      return;
+    }
     const profile = this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
     const shareableTeams = projectShareableTeams(user);
-    const current = useAuthStore.getState();
     // Keyed by id, not by INDEX. `projectShareableTeams` preserves the server's
     // order verbatim, so an index-wise compare reads a pure reorder of an
     // identical team set as a change - which writes the store and fires an
@@ -4995,7 +5475,11 @@ export class AuthService {
         this.cloudAuthorizationRevokedListeners,
       )) {
         try {
-          listener({ token: session.token });
+          listener({
+            token: session.token,
+            revocation:
+              this.revokedHeldBearer === session.token ? "user-epoch" : null,
+          });
         } catch (error) {
           appLogger.warn(
             "[auth] a cloud-authorization-revoked listener failed",
@@ -5135,6 +5619,10 @@ export class AuthService {
       userId: identity.userId,
       username: identity.username,
     });
+    // The projection reset the refusal; re-derive it for the bearer just
+    // projected, so re-admitting an expired, refused bearer (recovery after a
+    // cancelled sign-in) goes straight back to the sign-in page.
+    this.noteHostRefusedHeldBearer();
     this.emitSessionSnapshot();
     // THE WITHDRAWAL, ON THE WIRE. The in-place branch above deliberately does
     // not mint or abort a context, so nothing tears down and nothing redials -
@@ -5307,6 +5795,15 @@ function refreshRejectionRevocation(
   rejection: AuthRefreshRejection | null,
 ): "user-epoch" | null {
   return rejection?.kind === "credential" ? rejection.revocation : null;
+}
+
+/**
+ * Whether an access token's `exp` has passed on this machine's clock - the
+ * clock the local host checks it against. An unreadable expiry is not expired.
+ */
+function hasExpired(token: string): boolean {
+  const expiresAtMs = readAccessTokenExpiryMs(token);
+  return expiresAtMs !== null && expiresAtMs <= Date.now();
 }
 
 /**

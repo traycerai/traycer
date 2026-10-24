@@ -1,12 +1,13 @@
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
-  AutoPolicyGetResponse,
+  AutoPolicyGetResponseV11,
   AutoPolicySetRequest,
   AutoPolicySetResponse,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   autoModeMutationKeys,
@@ -50,7 +51,8 @@ export function useAutoPolicySetMutation(): UseMutationResult<
   AutoPolicySetRequest,
   SetAutoPolicyContext
 > {
-  const client = useHostClient();
+  // The account's policy is the pool's family (see `usePoolTierHostClient`).
+  const client = usePoolTierHostClient(useHostClient());
   const queryClient = useQueryClient();
   const viewerUserId = useCloudChatViewerId();
   return useHostMutation<
@@ -102,7 +104,7 @@ export function useAutoPolicySetMutation(): UseMutationResult<
         // cached entry, which A is served synchronously on the next identity
         // switch. That is the cross-identity leak the read partition exists to
         // close, arriving through the write path.
-        queryClient.setQueriesData<AutoPolicyGetResponse>(
+        queryClient.setQueriesData<AutoPolicyGetResponseV11>(
           { queryKey },
           (previous) => ({
             body: variables.body,
@@ -119,6 +121,10 @@ export function useAutoPolicySetMutation(): UseMutationResult<
             // moment somebody saved a policy, which is exactly when they have
             // most reason to look at it.
             shippedDefaults: previous?.shippedDefaults,
+            // Carried too: a team host's policy state is the host's, not the
+            // account policy's, and this write does not change it. Dropping
+            // it would make a team host read as personal until a refetch.
+            team: previous?.team ?? null,
           }),
         );
       },

@@ -18,6 +18,7 @@ import {
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { worktreeQuerySuccessOrderFor } from "@/lib/worktree/worktree-query-success-order";
 
 const SAFE_QUERY_KEY_MARKERS = new Set([
@@ -62,6 +63,7 @@ export function createAppQueryClient(): QueryClient {
     }),
     defaultOptions: {
       queries: {
+        queryKeyHashFn: hashAppQueryKey,
         staleTime: 60 * 1000,
         // A `RetryableTransportError` has already been retried to exhaustion by
         // the transport layer (`createRetryingMessenger`); retrying it again here

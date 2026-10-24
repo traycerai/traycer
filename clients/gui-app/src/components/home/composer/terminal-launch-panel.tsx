@@ -37,6 +37,12 @@ interface TerminalLaunchPanelProps {
    */
   readonly disabledHint: string | null;
   /**
+   * A staged sandbox takes this Start ahead of its handoff. This host's
+   * catalog and provider pack gate nothing then: the launch is assembled
+   * again on the sandbox, against what it offers.
+   */
+  readonly stagedAhead: boolean;
+  /**
    * The host the terminal agent launches on: the picker's harnesses / models
    * / profiles and this panel's own saved-args read (`providers.list`) all
    * resolve against it. `null` follows the app-wide default (the landing
@@ -72,6 +78,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     store,
     pending,
     disabledHint,
+    stagedAhead,
     hostId,
     terminalLoginSurface,
     onStart,
@@ -148,10 +155,12 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   // pack is still being readied.
   const launchHint =
     disabledHint ??
-    (selectionIsTuiCapable
-      ? null
-      : "Select a terminal-capable coding agent to start.") ??
-    packPreparingHint;
+    sourceHostLaunchHint({
+      stagedAhead,
+      harnessId,
+      selectionIsTuiCapable,
+      packPreparingHint,
+    });
   const startDisabled = pending || launchHint !== null;
 
   const start = useCallback((): void => {
@@ -190,6 +199,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           aria-hidden
         />
         <HarnessModelPicker
+          maxModeContext={{ kind: "none" }}
           labelDisplay="responsive"
           store={store}
           withServiceTier={false}
@@ -286,6 +296,24 @@ function StartButton(props: StartButtonProps) {
       <span className="inline-flex">{button}</span>
     </TooltipWrapper>
   );
+}
+
+/**
+ * Why this host cannot start the selected harness, or null when it can. A
+ * staged sandbox ahead of its handoff asks only that the harness is a
+ * terminal one: the sandbox's own catalog and packs gate its launch there.
+ */
+function sourceHostLaunchHint(input: {
+  readonly stagedAhead: boolean;
+  readonly harnessId: GuiHarnessId;
+  readonly selectionIsTuiCapable: boolean;
+  readonly packPreparingHint: string | null;
+}): string | null {
+  const tuiCapable = input.stagedAhead
+    ? isTuiHarnessId(input.harnessId)
+    : input.selectionIsTuiCapable;
+  if (!tuiCapable) return "Select a terminal-capable coding agent to start.";
+  return input.stagedAhead ? null : input.packPreparingHint;
 }
 
 /**
