@@ -17,6 +17,7 @@ import {
   type ComposerControls,
 } from "@/lib/commands/composer-controls-registry";
 import type { FocusedComposerKind } from "@/lib/commands/types";
+import { useChatOpencodeLine } from "@/hooks/harnesses/chat-opencode-line-context";
 
 /**
  * `hostClient` is the composer's target host (see
@@ -25,6 +26,8 @@ import type { FocusedComposerKind } from "@/lib/commands/types";
  * change must re-register (and notify subscribers), not just be picked up on
  * the next dispatch. Client identity only changes on real host events
  * (directory resolution, auth), so the re-registration churn is negligible.
+ * The chat's OpenCode line (`FocusedComposerEntry.opencodeLine`) is read here,
+ * inside the composer's tree, and re-registers the same way.
  */
 export function useRegisterFocusedComposerControls(
   kind: FocusedComposerKind | null,
@@ -32,6 +35,7 @@ export function useRegisterFocusedComposerControls(
   hostClient: HostClient<HostRpcRegistry> | null,
 ): void {
   const controlsRef = useRef<ComposerControls>(controls);
+  const opencodeLine = useChatOpencodeLine();
 
   useEffect(() => {
     controlsRef.current = controls;
@@ -59,7 +63,8 @@ export function useRegisterFocusedComposerControls(
         },
       },
       hostClient,
+      opencodeLine,
     );
     return dispose;
-  }, [hostClient, kind]);
+  }, [hostClient, kind, opencodeLine]);
 }

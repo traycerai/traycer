@@ -544,11 +544,31 @@ export function useGuiHarnessCatalog(
 /**
  * Client-scoped harness + model catalog; see `useGuiHarnessesQueryForClient`.
  * The model picker reads its rail/rows through this with the composer's
- * run-target client.
+ * run-target client. OpenCode's models are the line of the chat around the
+ * caller (`ChatOpencodeLineContext`).
  */
 export function useGuiHarnessCatalogForClient(
   client: HostClient<HostRpcRegistry> | null,
   workingDirectory: string | null,
+  activity: CatalogQueryActivityOptions,
+): GuiHarnessCatalog {
+  return useGuiHarnessCatalogForClientLine(
+    client,
+    workingDirectory,
+    useChatOpencodeLine(),
+    activity,
+  );
+}
+
+/**
+ * `useGuiHarnessCatalogForClient` with OpenCode's line passed in, for a reader
+ * outside the chat tile's line context: the command palette lists the focused
+ * composer's line (`FocusedComposerEntry.opencodeLine`).
+ */
+export function useGuiHarnessCatalogForClientLine(
+  client: HostClient<HostRpcRegistry> | null,
+  workingDirectory: string | null,
+  opencodeLine: OpencodeLine | null,
   activity: CatalogQueryActivityOptions,
 ): GuiHarnessCatalog {
   const harnessesQuery = useGuiHarnessesQueryForClient(client, activity);
@@ -569,7 +589,6 @@ export function useGuiHarnessCatalogForClient(
     );
   }, [attached, harnessesQuery.data?.harnesses]);
 
-  const opencodeLine = useChatOpencodeLine();
   const requests = useMemo(() => {
     if (harnessIds.length === 0) return EMPTY_GUI_MODEL_REQUESTS;
     return harnessIds.map((harnessId) => ({
