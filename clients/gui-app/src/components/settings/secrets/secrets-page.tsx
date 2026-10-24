@@ -21,6 +21,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import {
   SECRETS_ADD_LABEL,
   SECRETS_EMPTY_TEXT,
+  SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
@@ -66,7 +67,7 @@ export function SecretsPage(props: {
         >
           <span className="min-w-0 max-w-[72ch]">
             {list.error instanceof HostMethodVersionUnsatisfiedError
-              ? "These secrets need an updated host."
+              ? SECRETS_NEED_UPDATED_HOST
               : list.error.message}
           </span>
           <Button

@@ -37,8 +37,10 @@ function historySubject(subject: DetailsSubject): HistorySubject {
   return { kind: subject.kind, key: subject.key };
 }
 
+/** A host's state for the read's subject; the chip's subject names no item. */
 function hostStatus(
   host: HistoryResponse["hostStates"][number],
+  itemKind: string | null,
 ): DetailsHostStatus {
   return {
     hostId: host.hostId,
@@ -48,7 +50,7 @@ function hostStatus(
     reason: host.reason,
     at: host.at,
     lastReportedAt: host.lastReportedAt,
-    recovery: recoveryForHost(host.state, host.reason, host.hostId),
+    recovery: recoveryForHost(host.state, host.reason, host.hostId, itemKind),
   };
 }
 
@@ -89,7 +91,9 @@ async function environmentDetailsProvider(
     changedBy: latest?.actor?.label ?? null,
     changedAt: latest?.at ?? null,
     reason: null,
-    hosts: response.hostStates.map(hostStatus),
+    hosts: response.hostStates.map((host) =>
+      hostStatus(host, historySubject(subject)?.kind ?? null),
+    ),
   };
   if (subject.kind === "secret") {
     const secret = await loadSecretDetails(subject, context, status);

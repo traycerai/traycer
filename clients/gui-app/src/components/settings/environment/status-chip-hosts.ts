@@ -31,7 +31,9 @@ function itemRow(
   if (item.status === "applied") state = "applied";
   if (item.status === "failed") {
     state = "not_applied";
-    recovery = { kind: "retry", hostId: host.hostId };
+    // Retry reruns the setup script; the host re-applies any other item itself.
+    if (item.kind === "setup_script")
+      recovery = { kind: "retry", hostId: host.hostId };
     const { code } = item;
     if (code === "not_installed") {
       reason = "Not installed on this host";

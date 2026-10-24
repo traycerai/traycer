@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from "react";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentSecretsVerifyResponse,
@@ -34,6 +37,7 @@ import {
   SECRET_RECOVERY_TITLE,
   SECRET_RESTART_LINE,
   SECRET_REVOKED_LABEL,
+  SECRETS_NEED_UPDATED_HOST,
   secretRemovePreview,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { cn } from "@/lib/utils";
@@ -101,6 +105,8 @@ function removalFailure(
     | undefined,
   error: Error | null,
 ): string | null {
+  if (error instanceof HostMethodVersionUnsatisfiedError)
+    return SECRETS_NEED_UPDATED_HOST;
   if (error !== null) return error.message;
   if (answer?.outcome === "refused")
     return (

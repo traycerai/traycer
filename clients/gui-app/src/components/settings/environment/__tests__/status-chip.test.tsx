@@ -248,7 +248,7 @@ describe("the detail rows of a pool source", () => {
     );
   }
 
-  it("offers Install, Repair and Retry per reason, each stamped at its step", async () => {
+  it("offers Install and Repair per reason, each stamped at its step", async () => {
     const { onRecover } = openProblems();
     await userEvent.click(screen.getByRole("button"));
 
@@ -273,10 +273,44 @@ describe("the detail rows of a pool source", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Repair on dev-box" }),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRecover.mock.calls.map(([recovery]) => recovery)).toEqual([
       { kind: "install", hostId: "host-dev-box" },
       { kind: "repair", hostId: "host-dev-box" },
+    ]);
+  });
+
+  it("shows a failed setting's reason with no Retry, since Retry reruns the setup script", async () => {
+    openProblems();
+    await userEvent.click(screen.getByRole("button"));
+
+    const other = screen
+      .getAllByRole("listitem")
+      .find((row) => row.textContent.includes("OTHER"));
+    expect(other?.textContent).toContain("apply_failed");
+    expect(within(other as HTMLElement).queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("offers Retry on a failed setup script", async () => {
+    const { onRecover } = renderChip(
+      poolOf(
+        [
+          reportWith("dev-box", [
+            {
+              itemKey: "setup_script:macos",
+              state: "not_applied",
+              reason: "apply_failed",
+              at: STEP_AT,
+            },
+          ]),
+        ],
+        new Set(["setup_script"]),
+      ),
+    );
+    await userEvent.click(screen.getByRole("button"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRecover.mock.calls.map(([recovery]) => recovery)).toEqual([
       { kind: "retry", hostId: "host-dev-box" },
     ]);
   });
@@ -415,22 +449,32 @@ describe("the detail rows of the host source", () => {
             status: "failed",
             code: "apply_failed",
           }),
+          itemStatusFixture({
+            kind: "setup_script",
+            key: "macos",
+            status: "failed",
+            code: "apply_failed",
+          }),
           itemStatusFixture({ kind: "variable", key: "OK" }),
         ],
       }),
     ]);
 
-    expect(chipText()).toBe("3 not applied on dev-box");
+    expect(chipText()).toBe("4 not applied on dev-box");
     await userEvent.click(screen.getByRole("button"));
 
     const rows = screen.getAllByRole("listitem");
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     for (const row of rows) {
       expect(row.textContent).toContain("Not applied · unknown");
       expect(row.textContent).toContain(
         `Last reported ${formatted(REPORTED_AT)}`,
       );
     }
+    // A failed setting shows its reason; only the setup script reruns.
+    const broken = rows.find((row) => row.textContent.includes("BROKEN"));
+    expect(broken?.textContent).toContain("Couldn't apply this setting");
+    expect(within(broken as HTMLElement).queryByRole("button")).toBeNull();
     await userEvent.click(
       screen.getByRole("button", { name: "Install on dev-box" }),
     );

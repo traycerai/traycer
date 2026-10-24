@@ -11,6 +11,8 @@ export const SECRETS_EMPTY_TEXT =
 
 export const SECRETS_ADD_LABEL = "Add a secret";
 
+export const SECRETS_NEED_UPDATED_HOST = "These secrets need an updated host.";
+
 /** Under each personal secret: where its value is readable. */
 export const SECRET_READABLE_WHERE =
   "Written as a plain value on every host you own; agents there can read it. Brokered on your sandboxes.";

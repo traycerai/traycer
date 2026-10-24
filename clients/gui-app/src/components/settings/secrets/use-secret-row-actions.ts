@@ -55,13 +55,12 @@ export function useSecretRowActions(props: {
     client: props.client,
     method: "environment.secrets.destroy",
     mapVariables: (variables) => variables,
-    requiredHostMethodVersion: (variables) =>
-      variables.environmentId === null
-        ? null
-        : {
-            method: "environment.secrets.destroy",
-            version: { major: 1, minor: 1 },
-          },
+    // Remove targets the current version: @1.0 refuses it, @1.1 revokes it,
+    // whatever the environment scope.
+    requiredHostMethodVersion: () => ({
+      method: "environment.secrets.destroy",
+      version: { major: 1, minor: 1 },
+    }),
     options: {
       mutationKey: settingsDetailsMutationKeys.secretDestroy(),
       onMutate: () => ({ hostId: props.hostId }),

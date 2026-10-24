@@ -206,6 +206,27 @@ describe("the drawer's reader scopes", () => {
     expect(screen.getByText(`Traycer · ${formatted(AT - DAY)}`)).toBeTruthy();
   });
 
+  it("offers Retry for a failed setup script, and only the reason for a failed setting", async () => {
+    const failedHost = { ...brokenHost, reason: "apply_failed" };
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () => history({ hostStates: [failedHost] }),
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
+
+    expect(
+      await screen.findByText(`Not applied · ${formatted(AT)} · apply_failed`),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    cleanup();
+    openDrawer(harness, { kind: "setup_script", key: "macos" }, "Setup");
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(hoisted.recover.mock.calls).toEqual([
+      [{ kind: "retry", hostId: "host-a" }],
+    ]);
+  });
+
   it("sends the subject, or null for the chip, to environment.history", async () => {
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => history({}),

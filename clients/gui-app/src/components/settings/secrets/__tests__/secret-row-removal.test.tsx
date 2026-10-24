@@ -26,6 +26,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import {
   mountTeamPage,
+  mountTeamPageNegotiating,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -135,6 +136,39 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
   return harness;
 }
 
+/** A Personal host whose connection negotiated `environment.secrets.destroy@1.0`. */
+function mountPersonalRowAtDestroy10(host: Host): TeamPageHarness {
+  const harness = mountTeamPageNegotiating(
+    { kind: "host" },
+    {
+      "environment.secrets.list": () => ({
+        secrets: host.secrets,
+        removed: [],
+      }),
+      "environment.secrets.versions": () => ({
+        versions: versionsFixture(),
+        removal: host.removal,
+      }),
+      "environment.secrets.destroy": () => host.destroyAnswer,
+      "environment.secrets.rotation": () => ({
+        rotation: null,
+        lastVerify: null,
+      }),
+    },
+    { "environment.secrets.destroy": { major: 1, minor: 0 } },
+  );
+  const client = requireTeamHostClient();
+  render(
+    <SecretsPage
+      client={client}
+      hostId={client.getActiveHostId()}
+      hostName={(hostId) => hostId}
+    />,
+    { wrapper: harness.Wrapper },
+  );
+  return harness;
+}
+
 function freshHost(overrides: Partial<Host>): Host {
   return {
     removal: null,
@@ -211,6 +245,56 @@ describe("Remove on a team secret", () => {
 
     expect((await within(dialog).findByRole("alert")).textContent).not.toBe("");
     expect(screen.queryByTestId("secret-removal-status")).toBeNull();
+  });
+});
+
+describe("Remove on a Personal host that negotiated destroy@1.0", () => {
+  it("shows the update remedy for the current version and sends nothing", async () => {
+    // @1.0 refuses the current version; only @1.1 revokes it.
+    const harness = mountPersonalRowAtDestroy10(
+      freshHost({
+        destroyAnswer: { outcome: "refused", code: "version_current" },
+      }),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId("secret-row-remove"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    await waitFor(() => {
+      expect(dialog.textContent).toContain("Current version 2.");
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "These secrets need an updated host.",
+    );
+    expect(destroyCalls(harness)).toEqual([]);
+  });
+
+  it("still destroys a replaced version", async () => {
+    const harness = mountPersonalRowAtDestroy10(
+      freshHost({ destroyAnswer: { outcome: "destroyed", destroyedAt: AT } }),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId("secret-row-versions"));
+    const [, replaced] = await screen.findAllByTestId("secret-version");
+    await user.click(within(replaced).getByTestId("secret-version-destroy"));
+    await user.click(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByRole(
+        "button",
+        { name: "Destroy" },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(destroyCalls(harness)).toHaveLength(1);
+    });
+    expect(destroyCalls(harness)[0]?.params).toEqual({
+      secretId: "sec-1",
+      versionId: "ver-1",
+      environmentId: null,
+    });
   });
 });
 

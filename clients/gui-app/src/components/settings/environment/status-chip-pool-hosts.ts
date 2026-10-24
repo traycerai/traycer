@@ -36,7 +36,7 @@ function reportRows(
       reason: item.reason,
       at: item.at,
       lastReportedAt: host.lastReportedAt,
-      recovery: recoveryForHost(item.state, item.reason, host.hostId),
+      recovery: recoveryForHost(item.state, item.reason, host.hostId, kind),
     });
   }
   return rows;
