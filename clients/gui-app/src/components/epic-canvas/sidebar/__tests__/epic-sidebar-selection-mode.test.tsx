@@ -761,6 +761,13 @@ vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () => ({ kind: "none" }),
 }));
 
+// The agent hover card's host projection reads the sandbox list, and this
+// suite's eager hover-card mock mounts that card on every agent row; left out
+// for the same reason: its real hook reads the host binding.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: undefined }),
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export since redesign P2.1.
