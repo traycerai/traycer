@@ -2985,6 +2985,19 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     only when the surface's host advertises both (the method is optional), so
     an older host shows nothing here. Holds a local echo of a flip until the
     host's read-back lands, like the per-provider judge select.
+  - **Session name** (`claude-session-name-group.tsx`), Claude Code only: one
+    "Name template" field (saved on blur/Enter) for the name the scoped host
+    gives a Claude Code session it starts on the Terminal interface, passed as
+    `claude --name` at the launch that creates the session (first launch or
+    fork; a resume keeps its name). Stored as `sessionNames.claudeTemplate`
+    in `~/.traycer/cli/config.json` on that machine over
+    `config.sessionNames.get` / `set` (optional methods; a host without them
+    draws nothing). Default `Traycer · {project} · {date}`. The placeholders
+    listed and accepted are the ones the host's `get` reports; an unknown one
+    shows an inline error and is not saved. A live preview renders the draft
+    with `renderSessionName` (`@traycer/protocol/config/session-name-template`,
+    the same renderer the host uses) against sample values; Reset writes the
+    default.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared

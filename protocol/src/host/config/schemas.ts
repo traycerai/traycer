@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
 import { AGENT_WORKTREE_CREATE_POLICIES } from "@traycer/protocol/config/schema";
+import { SESSION_NAME_TEMPLATE_MAX_LENGTH } from "@traycer/protocol/config/session-name-template";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
@@ -479,6 +480,48 @@ export const configVisualizationSetResponseSchema =
   configVisualizationResponseSchema;
 export type ConfigVisualizationSetResponse = z.infer<
   typeof configVisualizationSetResponseSchema
+>;
+
+/**
+ * Reads the template the host renders into the name of a Claude Code session
+ * it starts on the Terminal interface (`sessionNames.claudeTemplate`), with the
+ * default and the placeholders THIS host knows, so the Settings field offers
+ * and accepts only what the host renders. Read at the launch that creates the
+ * session, so a change applies to sessions started after it.
+ */
+export const configSessionNamesGetRequestSchema = emptyRequestSchema;
+export type ConfigSessionNamesGetRequest = z.infer<
+  typeof configSessionNamesGetRequestSchema
+>;
+
+export const configSessionNamesResponseSchema = lazySchema(() =>
+  z.object({
+    claudeTemplate: z.string(),
+    defaultClaudeTemplate: z.string(),
+    placeholders: z.array(z.string()),
+  }),
+);
+export type ConfigSessionNamesResponse = z.infer<
+  typeof configSessionNamesResponseSchema
+>;
+
+/**
+ * Writes the Claude session name template. The host refuses a template that
+ * names a placeholder it does not know.
+ */
+export const configSessionNamesSetRequestSchema = lazySchema(() =>
+  z.object({
+    claudeTemplate: z.string().max(SESSION_NAME_TEMPLATE_MAX_LENGTH),
+  }),
+);
+export type ConfigSessionNamesSetRequest = z.infer<
+  typeof configSessionNamesSetRequestSchema
+>;
+
+export const configSessionNamesSetResponseSchema =
+  configSessionNamesResponseSchema;
+export type ConfigSessionNamesSetResponse = z.infer<
+  typeof configSessionNamesSetResponseSchema
 >;
 
 /**

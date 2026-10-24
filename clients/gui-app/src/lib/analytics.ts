@@ -337,6 +337,7 @@ export type AnalyticsSetting =
   | "catalogProbeTimeout"
   | "catalogProbeTimeoutSameForAll"
   | "chatAutoArchive"
+  | "claudeSessionName"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
@@ -1446,6 +1447,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     catalogProbeTimeout: true,
     catalogProbeTimeoutSameForAll: true,
     chatAutoArchive: true,
+    claudeSessionName: true,
     codeFontFamily: true,
     codeFontSize: true,
     composerMode: true,

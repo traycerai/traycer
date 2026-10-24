@@ -35,6 +35,10 @@ import {
   configVisualizationResponseSchema,
   configVisualizationSetRequestSchema,
   configVisualizationSetResponseSchema,
+  configSessionNamesGetRequestSchema,
+  configSessionNamesResponseSchema,
+  configSessionNamesSetRequestSchema,
+  configSessionNamesSetResponseSchema,
   configShellAddResponseSchema,
   configShellGetRequestSchema,
   configShellGetResponseSchema,
@@ -229,6 +233,22 @@ export const configVisualizationSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configVisualizationSetRequestSchema,
   responseSchema: configVisualizationSetResponseSchema,
+});
+
+/** Reads the Claude terminal session name template. */
+export const configSessionNamesGetV10 = defineRpcContract({
+  method: "config.sessionNames.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configSessionNamesGetRequestSchema,
+  responseSchema: configSessionNamesResponseSchema,
+});
+
+/** Writes the Claude terminal session name template. */
+export const configSessionNamesSetV10 = defineRpcContract({
+  method: "config.sessionNames.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configSessionNamesSetRequestSchema,
+  responseSchema: configSessionNamesSetResponseSchema,
 });
 
 /** Reads the shared catalog probe timeout and its bounds. */
