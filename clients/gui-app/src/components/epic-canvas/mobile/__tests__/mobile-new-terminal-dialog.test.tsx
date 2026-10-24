@@ -44,6 +44,29 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useTerminalWorkspaceBindingsForClient: () => bindingsQuery.current,
 }));
 
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => null,
+  }),
+);
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+}));
+// No sandbox is staged here, so the picker names no sandbox host to read.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -95,6 +118,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 import { MobileNewTerminalDialog } from "../mobile-new-terminal-dialog";
+import { notifyStagedTerminalLaunch } from "@/components/epic-canvas/sidebar/new-terminal-staged-launch";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
@@ -242,6 +266,28 @@ describe("<MobileNewTerminalDialog />", () => {
     bindingsQuery.current = null;
     cleanup();
     resetEpicTerminalDurableCreatesForTests();
+  });
+
+  it("closes, and closes the sheet, when its tab launches the staged sandbox's terminal", () => {
+    const onOpenChange = vi.fn();
+    const onLaunched = vi.fn();
+    render(
+      <MobileNewTerminalDialog
+        epicId="epic-1"
+        tabId="tab-1"
+        open
+        onOpenChange={onOpenChange}
+        onLaunched={onLaunched}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    notifyStagedTerminalLaunch("tab-2");
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    notifyStagedTerminalLaunch("tab-1");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onLaunched).toHaveBeenCalledTimes(1);
   });
 
   it("caps its height and pins Launch outside the scrolled region", () => {

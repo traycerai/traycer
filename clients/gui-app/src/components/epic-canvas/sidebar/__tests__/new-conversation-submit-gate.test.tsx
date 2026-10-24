@@ -8,7 +8,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStore } from "zustand/vanilla";
+import { createStore, type StoreApi } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 
@@ -27,6 +27,10 @@ import {
 import { createAppQueryClient } from "@/lib/query-client";
 import type { TaskHostGroup } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import type {
+  useStagedSandboxHandoff,
+  useStagedSandboxSend,
+} from "@/components/composer/use-staged-sandbox-send";
 import {
   composerMirrorLineSeen,
   useComposerMirrorLineSeenStore,
@@ -56,6 +60,27 @@ interface GateCreateChatRequest {
   } | null;
 }
 
+/** The toolbar slices the modal reads; the catalog is the new host's answer. */
+interface ToolbarMockState {
+  readonly selection: {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  readonly catalog: {
+    readonly hostId: string | null;
+    readonly harnesses: readonly unknown[] | undefined;
+    readonly modelsLoaded: boolean;
+  };
+  readonly permission: string;
+  readonly reasoning: string;
+  readonly serviceTier: string;
+  readonly agentMode: string;
+}
+
+type StagedSendInput = Parameters<typeof useStagedSandboxSend>[0];
+type StagedHandoffInput = Parameters<typeof useStagedSandboxHandoff>[0];
+
 const testState = vi.hoisted(() => ({
   createChat: vi.fn<
     (request: GateCreateChatRequest) => Promise<{
@@ -82,6 +107,37 @@ const testState = vi.hoisted(() => ({
   // test on `DIRTY_CONTENT`; the generation-guard tests below swap it MID-AWAIT,
   // which is the one thing a fixed-content stub cannot express.
   editorDoc: null as JsonContent | null,
+  toolbarStore: null as StoreApi<ToolbarMockState> | null,
+  /** What the modal hands the staged send on its latest render. */
+  stagedSendInput: null as StagedSendInput | null,
+  stagedHandoffInput: null as StagedHandoffInput | null,
+}));
+
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: () => null,
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => null,
+  }),
+);
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: (input: StagedSendInput) => {
+    testState.stagedSendInput = input;
+    return { intercept: () => false, line: null };
+  },
+  useStagedSandboxHandoff: (input: StagedHandoffInput) => {
+    testState.stagedHandoffInput = input;
+  },
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -158,18 +214,23 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
   };
 });
 
+const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
+  selection: {
+    harnessId: "claude",
+    modelSlug: "claude-sonnet",
+    profileId: null,
+  },
+  // No catalog answered yet.
+  catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
+  permission: "supervised",
+  reasoning: "medium",
+  serviceTier: "",
+  agentMode: "regular",
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore(() => ({
-    selection: {
-      harnessId: "claude",
-      modelSlug: "claude-sonnet",
-      profileId: null,
-    },
-    permission: "supervised",
-    reasoning: "medium",
-    serviceTier: "",
-    agentMode: "regular",
-  }));
+  const toolbarStore = createStore<ToolbarMockState>(() => TOOLBAR_DEFAULTS);
+  testState.toolbarStore = toolbarStore;
   return { useComposerToolbarStore: () => toolbarStore };
 });
 
@@ -442,6 +503,9 @@ afterEach(() => {
   testState.bodyInitialSelection = null;
   testState.bodySnapshot = null;
   testState.editorDoc = null;
+  testState.stagedSendInput = null;
+  testState.stagedHandoffInput = null;
+  testState.toolbarStore?.setState(TOOLBAR_DEFAULTS, true);
   useAuthStore.setState({ profile: null });
   imageStoreMocks.sessionImageBytes.mockReset();
   imageStoreMocks.getImageBytes.mockReset();
@@ -519,6 +583,54 @@ function QueryWrapper({ children }: { readonly children: ReactNode }) {
 }
 
 describe("NewConversationModalBody direct submit gate", () => {
+  it("resubmits on a staged sandbox only once its catalog answers, and refuses with no agent to run", () => {
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={null}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+      { wrapper: QueryWrapper },
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const staged = () => {
+      const input = testState.stagedHandoffInput;
+      if (input === null) throw new Error("expected the staged handoff");
+      return input;
+    };
+    const toolbar = testState.toolbarStore;
+    if (toolbar === null) throw new Error("expected the toolbar store");
+
+    // The new host's catalog has not answered: no resubmit yet.
+    expect(staged().canSubmit).toBe(false);
+
+    // It answers with no agent: the resubmit is refused, and nothing is created.
+    act(() => {
+      toolbar.setState({
+        selection: { ...TOOLBAR_DEFAULTS.selection, modelSlug: "" },
+        catalog: { hostId: "host-1", harnesses: [], modelsLoaded: false },
+      });
+    });
+    expect(staged().canSubmit).toBe(true);
+    expect(staged().submit()).toBe(false);
+    expect(testState.createChat).not.toHaveBeenCalled();
+
+    // With a default model, the resubmit is the person's send.
+    act(() => {
+      toolbar.setState({ selection: TOOLBAR_DEFAULTS.selection });
+    });
+    act(() => {
+      expect(staged().submit()).toBe(true);
+    });
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+  });
+
   it("submits a new chat with Cmd+Enter from anywhere in the modal", () => {
     render(
       <NewConversationModalBody

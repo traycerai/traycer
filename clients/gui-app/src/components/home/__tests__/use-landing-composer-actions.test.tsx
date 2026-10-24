@@ -531,6 +531,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -577,6 +578,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -632,6 +634,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -677,6 +680,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -722,6 +726,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -760,6 +765,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -833,6 +839,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -880,6 +887,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -898,6 +906,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -934,6 +943,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: {
           ...defaultToolbar(),
           selection: {
@@ -973,18 +983,19 @@ describe("useLandingComposerActions", () => {
     );
 
     act(() => {
-      result.current.selectTerminalAgent(
-        {
+      result.current.selectTerminalAgent({
+        launch: {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
           profileId: null,
         },
-        null,
-        null,
-        false,
-      );
+        draftId: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+      });
     });
 
     await waitFor(() => {
@@ -1028,18 +1039,19 @@ describe("useLandingComposerActions", () => {
     );
 
     act(() => {
-      result.current.selectTerminalAgent(
-        {
+      result.current.selectTerminalAgent({
+        launch: {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
           profileId: "work-profile",
         },
-        null,
-        null,
-        false,
-      );
+        draftId: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+      });
     });
 
     await waitFor(() => {
@@ -1081,6 +1093,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: {
           ...defaultToolbar(),
           selection: { harnessId: "codex", modelSlug: "", profileId: null },
@@ -1127,6 +1140,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1208,6 +1222,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1274,6 +1289,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1326,6 +1342,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1379,6 +1396,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1393,6 +1411,96 @@ describe("useLandingComposerActions", () => {
     expect(
       landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
     ).toBe(false);
+
+    queryClient.clear();
+  });
+
+  it("tells the caller its create went out only once a restored image is read, though the composer unmounted meanwhile", async () => {
+    setSingleWorkspace();
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    const read: { resolve: ((bytes: Uint8Array) => void) | null } = {
+      resolve: null,
+    };
+    imageStoreMocks.getImageBytes.mockReturnValue(
+      new Promise<Uint8Array>((resolve) => {
+        read.resolve = resolve;
+      }),
+    );
+    const settled = vi.fn<(dispatched: boolean) => void>();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result, unmount } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage("hash-restored", "restored draft"),
+        slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith(
+        "hash-restored",
+      );
+    });
+    // Another draft took the start page while the bytes were read.
+    unmount();
+    expect(settled).not.toHaveBeenCalled();
+
+    await act(async () => {
+      read.resolve?.(HELLO_BYTES);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+    expect(settled.mock.calls).toEqual([[true]]);
+
+    queryClient.clear();
+  });
+
+  it("tells the caller its send stopped short when an image's bytes are missing", async () => {
+    setSingleWorkspace();
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    imageStoreMocks.getImageBytes.mockResolvedValue(undefined);
+    const settled = vi.fn<(dispatched: boolean) => void>();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage("hash-missing", "wiped image"),
+        slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(settled.mock.calls).toEqual([[false]]);
+    });
 
     queryClient.clear();
   });
@@ -1456,6 +1564,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1499,6 +1608,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1556,6 +1666,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
       result.current.submit({
@@ -1564,6 +1675,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1626,6 +1738,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1718,6 +1831,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1825,6 +1939,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -1922,6 +2037,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2005,6 +2121,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2064,6 +2181,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2117,6 +2235,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2177,6 +2296,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2260,6 +2380,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2316,6 +2437,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2386,6 +2508,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2447,6 +2570,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2520,6 +2644,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2588,6 +2713,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2667,6 +2793,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2743,6 +2870,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2760,6 +2888,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2808,18 +2937,19 @@ describe("useLandingComposerActions", () => {
     );
 
     act(() => {
-      result.current.selectTerminalAgent(
-        {
+      result.current.selectTerminalAgent({
+        launch: {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
           profileId: null,
         },
-        draftA,
-        null,
-        false,
-      );
+        draftId: draftA,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+      });
     });
     await waitFor(() => {
       expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
@@ -2870,6 +3000,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -2925,6 +3056,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -3000,6 +3132,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -3095,6 +3228,7 @@ describe("useLandingComposerActions", () => {
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -3153,18 +3287,19 @@ describe("useLandingComposerActions", () => {
     );
 
     act(() => {
-      result.current.selectTerminalAgent(
-        {
+      result.current.selectTerminalAgent({
+        launch: {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
           profileId: null,
         },
-        null,
-        null,
-        false,
-      );
+        draftId: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+      });
     });
     await waitFor(() => {
       expect(
@@ -3239,6 +3374,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3282,6 +3418,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3336,6 +3473,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3388,18 +3526,19 @@ describe("useLandingComposerActions", () => {
       );
 
       act(() => {
-        result.current.selectTerminalAgent(
-          {
+        result.current.selectTerminalAgent({
+          launch: {
             harnessId: "claude",
             model: null,
             reasoningEffort: null,
             terminalAgentArgs: "",
             profileId: null,
           },
-          null,
-          null,
-          false,
-        );
+          draftId: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
+          settled: null,
+        });
       });
 
       await waitFor(() => {
@@ -3458,18 +3597,19 @@ describe("useLandingComposerActions", () => {
       );
 
       act(() => {
-        result.current.selectTerminalAgent(
-          {
+        result.current.selectTerminalAgent({
+          launch: {
             harnessId: "claude",
             model: null,
             reasoningEffort: null,
             terminalAgentArgs: "",
             profileId: null,
           },
-          null,
-          null,
-          false,
-        );
+          draftId: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
+          settled: null,
+        });
       });
 
       await waitFor(() => {
@@ -3541,6 +3681,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3614,6 +3755,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3684,6 +3826,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3771,6 +3914,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3913,6 +4057,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -3998,6 +4143,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -4048,6 +4194,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -4093,6 +4240,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -4148,6 +4296,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -4201,6 +4350,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });
@@ -4249,6 +4399,7 @@ describe("useLandingComposerActions", () => {
           slashCatalog: null,
           owner: null,
           teamSandboxHarnessBlocked: false,
+          settled: null,
           toolbar: defaultToolbar(),
         });
       });

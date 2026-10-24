@@ -4,6 +4,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   type SandboxCreateAccepted,
@@ -22,38 +23,39 @@ import {
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  sandboxCreateOpenIdNow,
-  sandboxCreateOpenIsCurrent,
-  useSandboxCreateDialogStore,
-} from "@/stores/settings/sandbox-create-dialog-store";
 
 /**
- * What the form submits: the request, and the team's name when it belongs to
+ * What a create sends: the request, and the team's name when it belongs to
  * a team, so a refusal can name it (the server names no team).
  */
 export interface SandboxCreateSubmit {
   readonly request: SandboxCreateRequest;
   readonly teamName: string | null;
-  /** The team it is created for, `null` for Personal. */
-  readonly teamId: string | null;
 }
 
 /**
  * A refused create, carrying the server's refusal `code` and its `reason`
- * (`null` for a failure with none) so the form can answer
+ * (`null` for a failure with none) so a caller can answer
  * `insufficient_credit` on a team pick with the capacity line rather than
- * only a toast.
+ * only a toast, and the `failure` itself (`null` when nothing was sent) so a
+ * Retry can tell a refusal from an answer that never came.
  */
 export class SandboxCreateError extends Error {
   readonly code: string | null;
   readonly reason: string | null;
+  readonly failure: SandboxControlFailure | null;
 
-  constructor(message: string, code: string | null, reason: string | null) {
+  constructor(
+    message: string,
+    code: string | null,
+    reason: string | null,
+    failure: SandboxControlFailure | null,
+  ) {
     super(message);
     this.name = "SandboxCreateError";
     this.code = code;
     this.reason = reason;
+    this.failure = failure;
   }
 }
 
@@ -61,12 +63,10 @@ interface SandboxCreateContext {
   readonly directory: HostDirectoryService | null;
   /** The account signed in when the create started. */
   readonly userId: string | null;
-  /** The dialog open that sent it, `null` when no dialog was open. */
-  readonly openId: number | null;
 }
 
 /**
- * `POST /api/sandboxes` from the create form. The server answers `202` once
+ * `POST /api/sandboxes` for a failed row's Retry. The server answers `202` once
  * the sandbox is created and its host is enrolling (the request can take
  * minutes: provider capacity, boot, boot-token delivery); the sandbox then
  * appears in the host list and the sandbox list, so the end of the request
@@ -88,7 +88,6 @@ export function useSandboxCreate(): UseMutationResult<
     onMutate: (): SandboxCreateContext => ({
       directory: binding === null ? null : binding.directory,
       userId: signedInUserId(),
-      openId: sandboxCreateOpenIdNow(),
     }),
     mutationFn: async ({
       request,
@@ -97,6 +96,7 @@ export function useSandboxCreate(): UseMutationResult<
       if (binding === null) {
         throw new SandboxCreateError(
           "Sign in to create a sandbox.",
+          null,
           null,
           null,
         );
@@ -109,22 +109,12 @@ export function useSandboxCreate(): UseMutationResult<
         sandboxCreateFailureMessage(result, teamName),
         result.kind === "refused" ? result.code : null,
         result.kind === "refused" ? result.reason : null,
+        result,
       );
     },
-    // At hook level, not the form's `mutate` call: the form unmounts when the
-    // dialog closes, and a create can take minutes, so only the mutation
-    // itself is still there to say it finished.
-    // The open that sent it closes, or offers the team task, from here rather
-    // than from the form's own `mutate` callback: that callback is dropped
-    // when the form remounted while the create ran.
-    onSuccess: (accepted, { request, teamId }, context) => {
+    onSuccess: (_accepted, { request }, context) => {
       if (!settledForStartingAccount(context)) return;
       toast.success(`Created ${request.displayName}`);
-      if (sandboxCreateOpenIsCurrent(context.openId)) {
-        useSandboxCreateDialogStore
-          .getState()
-          .setCreated({ hostId: accepted.hostId, teamId });
-      }
     },
     // Settled, not only success: a `502 provider_failed` leaves a `failed`
     // row behind, which the lists must show so it can be destroyed.
@@ -135,7 +125,7 @@ export function useSandboxCreate(): UseMutationResult<
         queryKey: authQueryKeys.registeredHostsAll(),
       });
       // The server says the person is no longer in the team: the team's
-      // environment, read once per session, is read again so the form
+      // environment, read once per session, is read again so the next create
       // answers from membership rather than from the stale id.
       if (
         error instanceof SandboxCreateError &&
@@ -146,18 +136,10 @@ export function useSandboxCreate(): UseMutationResult<
         });
       }
     },
-    // The open that sent it says it, beside the values that were sent;
-    // a create that outlived its open, closed or replaced by a new one, toasts.
     onError: (error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;
-      if (sandboxCreateOpenIsCurrent(context.openId)) {
-        useSandboxCreateDialogStore.getState().setFailure({
-          message:
-            error instanceof SandboxCreateError
-              ? error.message
-              : "Couldn't create the sandbox. Try again.",
-          code: error instanceof SandboxCreateError ? error.code : null,
-        });
+      if (error instanceof SandboxCreateError) {
+        toast.error(error.message);
         return;
       }
       toastFromAuthError(error, "Couldn't create the sandbox.");

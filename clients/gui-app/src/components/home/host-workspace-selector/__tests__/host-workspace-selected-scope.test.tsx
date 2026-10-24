@@ -13,6 +13,15 @@ const mocks = vi.hoisted(() => ({
   pinSetSelection: vi.fn<(selection: string | null) => void>(),
 }));
 
+// The picker's sandbox staging reads the account and the catalogue; this suite
+// stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: undefined }),
+}));
+
 // Ours' pin arm resolves a per-host requester; `null` = follow the app-wide
 // client, which is all these scope-routing cases need.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -172,6 +181,7 @@ function renderStacked(hostScope: HostWorkspaceControlsHostScope): void {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          sandboxStaging={null}
           disabled={false}
           // Scaffolding only — these cases assert on `hostScope`, never on
           // staged state, so the slot sits in the unresolved-host bucket

@@ -24,3 +24,20 @@ export function teamHostDisclosureSeen(
 ): boolean {
   return keyedSeen(seen, viewerUserId, hostId);
 }
+
+/**
+ * The consequences block's full render, recorded as SHOWN in the same store:
+ * a staged sandbox has no host id yet, so it is keyed by its context (the
+ * configuration, the audience category and the wording version).
+ */
+export function consequencesShownKey(context: string): string {
+  return `consequences\u0000${context}`;
+}
+
+export function consequencesShown(
+  seen: SeenRecord,
+  viewerUserId: string,
+  context: string,
+): boolean {
+  return keyedSeen(seen, viewerUserId, consequencesShownKey(context));
+}

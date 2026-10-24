@@ -6,6 +6,7 @@ import {
 } from "zustand/middleware";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { basePersistOptions, surfaceHostSelectionKey } from "@/lib/persist";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 /**
  * Per-surface host pin. `null` follows the surface's derived default, falling
@@ -390,6 +391,9 @@ export const useSurfaceHostSelectionStore =
       (set, get) => ({
         selections: {},
         setSelection: (surfaceKey, selection) => {
+          useLandingPanelStore
+            .getState()
+            .dropTerminalRequestOnSelection(surfaceKey, selection);
           const current = get().selections;
           const existing = current[surfaceKey];
           if (selection === null) {

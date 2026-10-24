@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactNode } from "react";
 import {
   act,
@@ -16,7 +24,16 @@ import type {
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { NewTerminalStagedHandoff } from "../new-terminal-staged-handoff";
+import { subscribeStagedTerminalLaunch } from "../new-terminal-staged-launch";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   PaneSurfaceActivityContext,
@@ -56,16 +73,82 @@ const bindingsQuery = vi.hoisted(() => ({
   current: null as BindingsQueryStub | null,
 }));
 
+/** The staged sandbox the picker's staging reads. */
+const staged = vi.hoisted(() => ({
+  staging: null as object | null,
+}));
+
+/** The staged sandbox's host: dialable, with its own folderless cwd. */
+const SANDBOX_HOST = "sbx-host";
+
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: () => null,
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => staged.staging,
+  }),
+);
+vi.mock(
+  "@/components/composer/use-staged-sandbox-send",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-staged-sandbox-send")
+    >()),
+    useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  }),
+);
+
+const SANDBOX_BINDINGS = {
+  data: { rows: [], folderlessCwd: "/home/sandbox" },
+  isPending: false,
+  isError: false,
+  isFetching: false,
+};
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
   useWorktreeListBindingsForEpicForClient: () => bindingsQuery.current,
   useTerminalWorkspaceBindings: () => bindingsQuery.current,
-  useTerminalWorkspaceBindingsForClient: () => bindingsQuery.current,
+  // The sandbox's own client (see `useHostClientForHostId` below) reads its
+  // own, empty bindings.
+  useTerminalWorkspaceBindingsForClient: (input: {
+    readonly client: unknown;
+  }) =>
+    input.client === SANDBOX_HOST ? SANDBOX_BINDINGS : bindingsQuery.current,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  // Only the staged sandbox's host is named here; it stands in for its client.
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === SANDBOX_HOST ? SANDBOX_HOST : null,
 }));
+// The picker reads a directory entry only for the staged sandbox's host.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === SANDBOX_HOST ? { hostId: SANDBOX_HOST } : null,
+}));
+vi.mock("@/lib/host/transport-key", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/transport-key")>();
+  return {
+    ...actual,
+    dialableHostEndpoint: (
+      entry: Parameters<typeof actual.dialableHostEndpoint>[0],
+    ) =>
+      entry !== null && entry.hostId === SANDBOX_HOST
+        ? "sbx-endpoint"
+        : actual.dialableHostEndpoint(entry),
+  };
+});
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
@@ -218,6 +301,8 @@ describe("<NewTerminalPicker />", () => {
     retryBindings.mockClear();
     useSurfaceHostSelectionStore.getState().resetForTests();
     stubLoadedBindings();
+    staged.staging = null;
+    useStagedSandboxStore.setState({ bySurface: {} });
   });
 
   afterEach(() => {
@@ -227,6 +312,73 @@ describe("<NewTerminalPicker />", () => {
       reportIssueContext: null,
     });
     resetEpicTerminalDurableCreatesForTests();
+  });
+
+  it("opens the staged sandbox's terminal in its own directory once it is ready, with the picker closed", () => {
+    // The task binds workspace rows on host-1 and host-2; the picker that
+    // staged the sandbox closed while it booted, and the run handed it off.
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    const surfaceKey = tabSurfaceKey("new-terminal", tabId);
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, {
+      kind: "existing",
+      hostId: SANDBOX_HOST,
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.report(surfaceKey, {
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      sendTaken: true,
+    });
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, SANDBOX_HOST);
+
+    renderWithClient(
+      <NewTerminalStagedHandoff epicId="epic-1" tabId={tabId} />,
+    );
+
+    const launched = tabTiles(tabId).filter(
+      (tile) => launchedTerminalCwd(tile) !== undefined,
+    );
+    expect(launched.map(launchedTerminalCwd)).toEqual(["/home/sandbox"]);
+    expect(readStagedSandbox(surfaceKey)).toBeNull();
+  });
+
+  it("closes the tab's open picker, popover and phone dialog alike, when the staged sandbox's terminal launches", () => {
+    const tabId = openPicker();
+    expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
+    const dialogClosed = vi.fn();
+    const unsubscribe = subscribeStagedTerminalLaunch(tabId, dialogClosed);
+    onTestFinished(unsubscribe);
+    const surfaceKey = tabSurfaceKey("new-terminal", tabId);
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, {
+      kind: "existing",
+      hostId: SANDBOX_HOST,
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.report(surfaceKey, {
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      sendTaken: true,
+    });
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, SANDBOX_HOST);
+
+    renderWithClient(
+      <NewTerminalStagedHandoff epicId="epic-1" tabId={tabId} />,
+    );
+
+    expect(screen.queryByTestId("new-terminal-picker-popover")).toBeNull();
+    expect(dialogClosed).toHaveBeenCalledTimes(1);
   });
 
   it("opens a popover with the host section and workspace rows", () => {

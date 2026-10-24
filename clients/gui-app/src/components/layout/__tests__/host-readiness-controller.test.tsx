@@ -7,6 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type {
@@ -359,7 +360,8 @@ describe("local-plane admission for the removal-sentinel read", () => {
     const runnerHost = buildRunnerHost(management, seedCredential);
     const queryClient = new QueryClient({
       defaultOptions: {
-        queries: { retry: false },
+        // The app's own hash: keys hold live services (the AuthService).
+        queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
         mutations: { retry: false },
       },
     });
@@ -558,7 +560,8 @@ describe("SurfaceReadinessFallback - desktop no-local-host card", () => {
   function renderNoHostFallback(runnerHost: IRunnerHost) {
     const queryClient = new QueryClient({
       defaultOptions: {
-        queries: { retry: false },
+        // The app's own hash: keys hold live services (the AuthService).
+        queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
         mutations: { retry: false },
       },
     });

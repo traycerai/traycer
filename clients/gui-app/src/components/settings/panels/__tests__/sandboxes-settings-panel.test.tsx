@@ -1,0 +1,556 @@
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import type {
+  SandboxCatalogue,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  sandboxPeriodLabel,
+  sandboxRowActionLabel,
+  sandboxRowActions,
+  type SandboxPageConfiguration,
+} from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  KEPT_UNTIL_YOU_DESTROY_IT,
+  SANDBOXES_CANT_BE_CREATED,
+} from "@/lib/sandboxes/sandbox-strings";
+import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
+
+const CATALOGUE: SandboxCatalogue = {
+  providers: [
+    {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 102400,
+        diskDefaultMb: 20480,
+      },
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      dockerInGuest: true,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [
+        {
+          id: "us-east",
+          label: "US East",
+          fromPriceMcPerHour: { awakeMc: 120, suspendedMc: 4, stoppedMc: 2 },
+          pricing: null,
+        },
+      ],
+    },
+  ],
+};
+
+const mocks = vi.hoisted(() => ({
+  sandboxes: [] as readonly SandboxSummary[],
+  /** `false` while the list query has not answered. */
+  listed: true,
+  configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
+  catalogue: null as SandboxCatalogue | null,
+}));
+
+/** The router's commit boundary: every navigation the page asks for. */
+const navigations = vi.hoisted(() => [] as object[]);
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => (options: object) => {
+    navigations.push(options);
+    return new Promise<void>(() => undefined);
+  },
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: () => ({
+      configurations: mocks.configurations,
+      teamEnvironmentIds: new Set(
+        mocks.configurations.flatMap((configuration) =>
+          configuration.kind === "team" && configuration.environmentId !== null
+            ? [configuration.environmentId]
+            : [],
+        ),
+      ),
+      complete: true,
+    }),
+    useSandboxWakeString: () => null,
+  }),
+);
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({
+    data: mocks.listed ? { sandboxes: mocks.sandboxes } : undefined,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
+  useSandboxCosts: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
+  useRefreshSandboxCosts: () => undefined,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+}));
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostKey: () => "landing:window-test",
+}));
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "laptop",
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
+  useSandboxControlUnavailableReason: () => null,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-destroy-batch-mutation", () => ({
+  useSandboxDestroyBatch: () => ({
+    data: undefined,
+    isPending: false,
+    mutate: vi.fn(),
+    reset: vi.fn(),
+  }),
+}));
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ signInUrl: "https://example.test" }),
+}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ close: vi.fn(), openSettings: vi.fn() }),
+}));
+// The actions have their own verbs and dialogs; the page's contract is which
+// primary action each row offers, so the stub renders the model's own pick.
+vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
+  SandboxRowActions: (props: {
+    summary: SandboxSummary;
+    configuration: SandboxPageConfiguration;
+    unreachable: boolean;
+    frozenNeedsOwnCredits: boolean;
+  }) => {
+    const { primary } = sandboxRowActions(props);
+    return (
+      <span data-testid="row-primary">
+        {primary === null
+          ? ""
+          : sandboxRowActionLabel(primary, props.configuration)}
+      </span>
+    );
+  },
+}));
+
+import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
+import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
+import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
+
+const SETTINGS_REF: TabRef = { kind: "settings", id: "settings" };
+
+/** A window whose tab strip holds Settings as its selected tab. */
+async function withSettingsTabSelected(): Promise<void> {
+  navigations.length = 0;
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  __resetTabSyncCoordinatorForTesting();
+  __resetTabNavigationControllerForTesting();
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(SETTINGS_REF), ref: SETTINGS_REF }],
+    activeItemId: tabItemId(SETTINGS_REF),
+    stripOrder: [SETTINGS_REF],
+    systemTabs: {
+      history: null,
+      settings: {
+        id: "settings",
+        kind: "settings",
+        name: "Settings",
+        lastPath: "/settings/sandboxes",
+      },
+    },
+  });
+  installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function row(id: string, overrides: Partial<SandboxSummary>): SandboxSummary {
+  return sandboxSummaryFixture({
+    id,
+    hostId: `host-${id}`,
+    displayName: id,
+    ...overrides,
+  });
+}
+
+function renderPanel(sandboxes: readonly SandboxSummary[]): void {
+  mocks.sandboxes = sandboxes;
+  render(<SandboxesSettingsPanel />);
+}
+
+function rowOf(id: string): HTMLElement {
+  const found = screen
+    .getAllByTestId("sandboxes-row")
+    .find((candidate) => candidate.getAttribute("data-sandbox-row") === id);
+  if (found === undefined) throw new Error(`no row ${id}`);
+  return found;
+}
+
+function names(): string[] {
+  return screen
+    .queryAllByTestId("sandboxes-row-name")
+    .map((node) => node.textContent);
+}
+
+describe("<SandboxesSettingsPanel />", () => {
+  beforeEach(() => {
+    mocks.sandboxes = [];
+    mocks.listed = true;
+    mocks.configurations = [{ kind: "personal" }];
+    mocks.catalogue = null;
+    useSandboxesPageStore.setState({
+      requestedConfiguration: null,
+      revealSandboxId: null,
+      revealConfigurationPending: false,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    useSandboxShapeMemoryStore.setState({
+      byHost: {},
+      lastConfigurationByHost: {},
+    });
+  });
+
+  it("shows … for the default shape only while the catalogue has not answered", () => {
+    renderPanel([]);
+    expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+      "…",
+    );
+  });
+
+  it("says sandboxes can't be created once the catalogue answers with no shape", () => {
+    mocks.catalogue = { providers: [] };
+    renderPanel([]);
+    expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+      SANDBOXES_CANT_BE_CREATED,
+    );
+  });
+
+  it("shows the person's remembered pick in the defaults, else the spec's", () => {
+    mocks.catalogue = CATALOGUE;
+    renderPanel([]);
+    expect(
+      screen.getByTestId("sandboxes-defaults-shape").textContent,
+    ).toContain("2 vCPU");
+    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+      sandboxPeriodLabel(30),
+    );
+    expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+      sandboxPeriodLabel(7 * 24 * 60),
+    );
+    cleanup();
+
+    useSandboxShapeMemoryStore.getState().remember("laptop", "personal", {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: null,
+      region: "us-east",
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: null,
+    });
+    renderPanel([]);
+
+    expect(
+      screen.getByTestId("sandboxes-defaults-shape").textContent,
+    ).toContain("4 vCPU");
+    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+      sandboxPeriodLabel(45),
+    );
+    expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+      KEPT_UNTIL_YOU_DESTROY_IT,
+    );
+  });
+  afterEach(() => cleanup());
+
+  it("renders one row per state with its badge and primary action", () => {
+    renderPanel([
+      row("awake-1", { state: "awake" }),
+      row("suspended-1", { state: "suspended" }),
+      row("stopped-1", { state: "stopped" }),
+      row("frozen-1", { state: "suspended", frozen: true, frozenAt: 1 }),
+      row("failed-1", { state: "failed", failureCode: "boom" }),
+    ]);
+
+    const expected: Record<string, [string, string]> = {
+      "awake-1": ["Awake", "Suspend"],
+      "suspended-1": ["Suspended", "Resume"],
+      "stopped-1": ["Stopped", "Start"],
+      "frozen-1": ["Frozen", "Add credits ↗"],
+      "failed-1": ["Failed", "Retry"],
+    };
+    for (const [id, [badge, primary]] of Object.entries(expected)) {
+      const element = rowOf(id);
+      expect(
+        within(element).getByTestId("sandboxes-row-state").textContent,
+      ).toBe(badge);
+      expect(within(element).getByTestId("row-primary").textContent).toBe(
+        primary,
+      );
+    }
+  });
+
+  it("offers an awake agent sandbox Keep instead of Suspend", () => {
+    renderPanel([row("agent-1", { state: "awake", burst: true })]);
+    expect(
+      within(rowOf("agent-1")).getByTestId("row-primary").textContent,
+    ).toBe("Keep this sandbox");
+  });
+
+  it("narrows the list by the search and by the state filter, with a count badge", () => {
+    renderPanel([
+      row("alpha", { state: "awake" }),
+      row("beta", { state: "suspended" }),
+      row("gamma", { state: "suspended" }),
+    ]);
+    expect(names().sort()).toEqual(["alpha", "beta", "gamma"]);
+
+    fireEvent.change(screen.getByTestId("sandboxes-search"), {
+      target: { value: "bet" },
+    });
+    expect(names()).toEqual(["beta"]);
+    fireEvent.change(screen.getByTestId("sandboxes-search"), {
+      target: { value: "" },
+    });
+
+    fireEvent.pointerDown(screen.getByTestId("sandboxes-filter"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("sandboxes-filter-state-awake"));
+    expect(names()).toEqual(["alpha"]);
+    expect(screen.getByTestId("sandboxes-filter-count").textContent).toBe("1");
+  });
+
+  it("lists exactly the filtered idle agent sandboxes in Destroy all idle", () => {
+    renderPanel([
+      row("idle-a", { state: "suspended", burst: true }),
+      row("idle-b", { state: "stopped", burst: true }),
+      row("idle-c", { state: "suspended", burst: true }),
+      row("awake-agent", { state: "awake", burst: true }),
+      row("plain-suspended", { state: "suspended", burst: false }),
+    ]);
+    expect(screen.queryByTestId("sandboxes-destroy-all-idle")).toBeNull();
+
+    fireEvent.pointerDown(screen.getByTestId("sandboxes-filter"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("sandboxes-filter-kind-agent"));
+    fireEvent.click(screen.getByTestId("sandboxes-filter-state-suspended"));
+
+    fireEvent.click(screen.getByTestId("sandboxes-destroy-all-idle"));
+    const targets = screen.getByTestId("sandbox-destroy-all-idle-targets");
+    expect(
+      Array.from(targets.querySelectorAll("li")).map((li) => li.textContent),
+    ).toEqual(["idle-a", "idle-c"]);
+  });
+
+  it("scrolls a revealed row into view once per reveal, not again on each refetch", () => {
+    const scrolled: string[] = [];
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(function record(this: Element) {
+        scrolled.push(this.getAttribute("data-sandbox-row") ?? "");
+      });
+    onTestFinished(() => scrollIntoView.mockRestore());
+    let open: (sandboxId: string) => void = () => undefined;
+    function Opener() {
+      open = useOpenSandboxesPage();
+      return null;
+    }
+    const page = (
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>
+    );
+    mocks.sandboxes = [row("box-a", { burst: false })];
+    const { rerender } = render(page);
+
+    act(() => open("box-a"));
+    expect(scrolled).toEqual(["box-a"]);
+
+    // A refetch answers with a new list while the reader scrolls elsewhere.
+    mocks.sandboxes = [row("box-a", { burst: false })];
+    rerender(
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>,
+    );
+    expect(scrolled).toEqual(["box-a"]);
+
+    // Asked for again, it scrolls again.
+    act(() => open("box-a"));
+    expect(scrolled).toEqual(["box-a", "box-a"]);
+  });
+
+  it("reveals a notification's team row on its team once a list that had not answered settles", () => {
+    mocks.configurations = [
+      { kind: "personal" },
+      {
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+        environmentId: "env-acme",
+      },
+    ];
+    mocks.listed = false;
+    let open: (sandboxId: string) => void = () => undefined;
+    function Opener() {
+      open = useOpenSandboxesPage();
+      return null;
+    }
+    const { rerender } = render(
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>,
+    );
+    act(() => open("team-box"));
+
+    mocks.listed = true;
+    mocks.sandboxes = [
+      row("team-box", {
+        environmentId: "env-acme",
+        burst: false,
+        state: "suspended",
+      }),
+    ];
+    rerender(
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>,
+    );
+
+    // The page moved the Environment group's pick to the row's team.
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-acme",
+    });
+    expect(rowOf("team-box").className).toContain("bg-info/10");
+  });
+
+  it("lists the Environment group's picked configuration, with no picker of its own", () => {
+    mocks.configurations = [
+      { kind: "personal" },
+      {
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+        environmentId: "env-acme",
+      },
+    ];
+    renderPanel([
+      row("mine", { environmentId: null, createdBy: null }),
+      row("acme-box", { environmentId: "env-acme" }),
+    ]);
+    expect(names()).toEqual(["mine"]);
+    expect(screen.queryByTestId("sandboxes-configuration")).toBeNull();
+
+    act(() => {
+      useSettingsEnvironmentPickStore
+        .getState()
+        .setPick({ kind: "team", environmentId: "env-acme" });
+    });
+
+    expect(names()).toEqual(["acme-box"]);
+  });
+
+  it("says No sandboxes yet. when the configuration has none", () => {
+    renderPanel([]);
+    expect(screen.getByTestId("sandboxes-empty").textContent).toContain(
+      "No sandboxes yet.",
+    );
+  });
+
+  it("stages this configuration's New sandbox row on a new task's tab from New task, creating nothing", async () => {
+    useStagedSandboxStore.setState({ bySurface: {} });
+    mocks.catalogue = CATALOGUE;
+    // Settings is open as a tab of its own, the selected one.
+    await withSettingsTabSelected();
+    renderPanel([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+
+    // A new task's draft tab is selected, not only routed to.
+    const selected = useTabsStore.getState().activeItemId;
+    expect(selected).not.toBe(tabItemId(SETTINGS_REF));
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    if (draftId === null) throw new Error("expected a new task's draft");
+    expect(selected).toBe(tabItemId({ kind: "draft", id: draftId }));
+    expect(navigations).toContainEqual(
+      expect.objectContaining({
+        to: "/draft/$draftId",
+        params: { draftId },
+      }),
+    );
+
+    const stage = readStagedSandbox("landing:window-test");
+    expect(stage?.phase).toBe("staged");
+    expect(stage?.target).toMatchObject({
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: { os: "linux", cpus: 2, memoryMb: 4096, region: "us-east" },
+    });
+    useStagedSandboxStore.setState({ bySurface: {} });
+  });
+});

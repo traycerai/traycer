@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,6 +45,7 @@ import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
@@ -51,6 +53,7 @@ import {
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
 import {
+  isOpenLandingDraft,
   landingRowIsForeign,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -66,10 +69,7 @@ import {
   type DraftRuntimeState,
 } from "@/stores/home/draft-runtime-registry";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
-import {
-  deriveFolderlessAllowedWorkspaceAvailability,
-  workspaceComposerCanStart,
-} from "@/lib/composer/workspace-composer-availability";
+import { deriveFolderlessAllowedWorkspaceAvailability } from "@/lib/composer/workspace-composer-availability";
 import {
   useLandingComposerActions,
   type TerminalAgentLaunch,
@@ -83,6 +83,26 @@ import {
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  useStagedSandboxHandoff,
+  useStagedSandboxSend,
+  type StagedResubmit,
+} from "@/components/composer/use-staged-sandbox-send";
+import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+  useStagedTerminalLaunch,
+  type HandoffOwnerWatch,
+} from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import {
+  stagedResubmitReady,
+  stagedTerminalLaunchOnHost,
+} from "@/components/composer/staged-terminal-launch";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
@@ -427,7 +447,13 @@ export function LandingComposer(props: LandingComposerProps) {
       resolvedWorkspace.isError,
     ],
   );
-  const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
+  // The window's pin key, which a staged sandbox is staged under.
+  const composerSurfaceKey = useComposerSurfaceHostKey();
+  const workspaceGate = useStagedWorkspaceGate(
+    composerSurfaceKey,
+    workspaceAvailability,
+  );
+  const workspaceCanStart = workspaceGate.canStart;
   const runnerHost = useRunnerHost();
   const paste = useLandingComposerPaste({
     editorRef,
@@ -463,10 +489,11 @@ export function LandingComposer(props: LandingComposerProps) {
   // host resolver is the authoritative backstop either way.
   const packGate = useProviderPackGate(harnessId);
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
-    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    workspaceDisabledHint: workspaceGate.disabledHint,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
     profileDisabled: profileEligibility.disabled,
+    stagedAhead: workspaceGate.stagedAhead,
   });
   const canSubmit = landingComposerCanSubmit({
     isSubmitting,
@@ -474,6 +501,98 @@ export function LandingComposer(props: LandingComposerProps) {
     submitBlocked,
     workspaceCanStart,
     hasSubmittableContent,
+  });
+
+  // The staged sandbox's send (sandboxes plan D1). Phase 2 resets the
+  // draft's workspace to the new host's, which starts empty, then resubmits.
+  // The latest resubmit, which is declared below and reads this hook.
+  const stagedSubmitRef = useRef<() => StagedResubmit>(() => false);
+  const prepareSandboxHandoff = useCallback(
+    (hostId: string): void => {
+      // A terminal asked for on the stage (a row's Open terminal, the
+      // panel's `+`) besides this send, now that its sandbox is awake. Asked
+      // once, so the mark is cleared: a composer that remounts mid-handoff
+      // prepares again.
+      if (readStagedSandbox(composerSurfaceKey)?.openTerminal === true) {
+        useLandingPanelStore
+          .getState()
+          .requestTerminal(composerSurfaceKey, hostId);
+        useStagedSandboxStore
+          .getState()
+          .report(composerSurfaceKey, { openTerminal: false });
+      }
+      const id = draftId ?? createdUnboundDraftIdRef.current;
+      if (id === null) return;
+      useLandingDraftStore.getState().restoreDraftWorkspaceForHost(id, hostId);
+    },
+    [composerSurfaceKey, draftId],
+  );
+  const submitOnSandbox = useCallback(
+    (): StagedResubmit => stagedSubmitRef.current(),
+    [],
+  );
+  // A terminal agent's Start that a staged sandbox took: launched on the new
+  // host in phase 2, as the chat send resubmits there.
+  const stagedTerminalLaunch = useStagedTerminalLaunch(composerSurfaceKey);
+  // Phase 2 resubmits once the new host's catalog has answered, so the
+  // selection holds its default model, or none when it offers no agent (the
+  // line then says the sandbox is awake but cannot run one). A Start also
+  // waits for its providers, which say whether the profile is offered there.
+  const catalogSettled = useStore(toolbarStore, (s) =>
+    catalogSettledFor(s, resolvedHostId),
+  );
+  const stagedProviders = useProvidersListForClient(hostClient, {
+    enabled: stagedTerminalLaunch !== null,
+    subscribed: stagedTerminalLaunch !== null,
+  });
+  // The window's drafts share its pin and so its stage: the handoff is the
+  // sending draft's alone. It is gone when the draft closes, not when this
+  // composer unmounts for another draft or an evicted page: that draft's
+  // composer resubmits when it is back.
+  const stagedOwnerId = draftId ?? props.pendingCreateId;
+  const watchStagedOwner = useCallback<HandoffOwnerWatch>(
+    (onGone) => {
+      const open = (): boolean => {
+        const draft = useLandingDraftStore
+          .getState()
+          .drafts.find((entry) => entry.id === stagedOwnerId);
+        return draft !== undefined && isOpenLandingDraft(draft);
+      };
+      if (!open()) {
+        onGone();
+        return () => undefined;
+      }
+      return useLandingDraftStore.subscribe(() => {
+        if (!open()) onGone();
+      });
+    },
+    [stagedOwnerId],
+  );
+  useStagedSandboxHandoff({
+    surfaceKey: composerSurfaceKey,
+    resolvedHostId,
+    canSubmit: stagedResubmitReady({
+      catalogSettled,
+      launch: stagedTerminalLaunch,
+      harnessId,
+      canSubmit,
+      canStart: [workspaceCanStart, !isSubmitting],
+      providers: stagedProviders,
+    }),
+    submit: submitOnSandbox,
+    prepareHandoff: prepareSandboxHandoff,
+    ownerId: stagedOwnerId,
+    watchOwner: watchStagedOwner,
+  });
+  const stagedSend = useStagedSandboxSend({
+    surfaceKey: composerSurfaceKey,
+    // No epic before the send: the landing panel's terminals follow the
+    // composer's host, which phase 2 pins to the new one.
+    terminal: null,
+    taskId: null,
+    ownerId: stagedOwnerId,
+    // Each draft is its own: a line action here never sends another's.
+    claimsSend: false,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
@@ -632,66 +751,97 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
-  const handleSubmit = useCallback((): boolean => {
-    if (!canSubmit) return false;
-    const toolbar = toolbarStore.getState();
-    if (toolbar.selection.modelSlug.length === 0) return false;
-    // Submit is "delete the draft here, create the chat". A draft this host
-    // does not own is sent as it is: its retirement receipt keeps the row
-    // from being ingested back here, and its cloud row is retracted on the
-    // user's authority underneath. Nothing waits on ownership.
-    const refusal = actions.submit({
-      // `handleDocumentChange` mints the unbound draft the moment the first
-      // edit becomes submittable, but `props.draftId` only catches up on the
-      // parent's next render - so a type-then-Enter still reads `null` here.
-      // Without this fallback `ensureSubmissionDraft` would mint a SECOND
-      // draft and strand the one already holding the user's content.
-      draftId: draftId ?? createdUnboundDraftIdRef.current,
-      editor: editorRef.current,
-      slashCatalog: pickerStore.getState().knownSlashCommands,
-      toolbar: {
-        selection: toolbar.selection,
-        reasoning: toolbar.reasoning,
-        serviceTier: toolbar.serviceTier,
-        permission: toolbar.permission,
-      },
-      owner,
-      teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
-        toolbar.selection.harnessId,
-      ),
-    });
-    // Nothing was created when a refusal comes back - the draft, its content
-    // and its staged workspace are exactly as the user left them, and the
-    // reason is stated inline above the composer rather than as a toast.
-    raiseHostNotice(
-      refusal === null ? null : { kind: "refused", message: refusal.message },
-    );
-    if (refusal === null) setComposerExpanded(false);
-    return refusal === null;
-  }, [
-    actions,
-    canSubmit,
-    draftId,
-    owner,
-    pickerStore,
-    raiseHostNotice,
-    setComposerExpanded,
-    teamSandboxHarnessBlockedFor,
-    toolbarStore,
-  ]);
-
-  const dispatchStartTerminal = useCallback(
-    (launch: TerminalAgentLaunch): boolean => {
-      const refusal = actions.selectTerminalAgent(
-        launch,
-        draftId,
+  /** Whether the submit went ahead; `settled` hears whether its create went out. */
+  const submitDraft = useCallback(
+    (settled: ((dispatched: boolean) => void) | null): boolean => {
+      if (!canSubmit) return false;
+      // A staged sandbox takes the first send: it is created or woken, and
+      // this submit runs again on it once it is ready. The draft stays. It
+      // needs no model yet: a person with no host has no catalog to pick one
+      // from, and the resubmit takes the new host's default.
+      if (
+        stagedSend.intercept(
+          composerDisplayPlainText(
+            editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
+          ),
+          null,
+        )
+      ) {
+        return false;
+      }
+      const toolbar = toolbarStore.getState();
+      if (toolbar.selection.modelSlug.length === 0) return false;
+      // Submit is "delete the draft here, create the chat". A draft this host
+      // does not own is sent as it is: its retirement receipt keeps the row
+      // from being ingested back here, and its cloud row is retracted on the
+      // user's authority underneath. Nothing waits on ownership.
+      const refusal = actions.submit({
+        // `handleDocumentChange` mints the unbound draft the moment the first
+        // edit becomes submittable, but `props.draftId` only catches up on the
+        // parent's next render - so a type-then-Enter still reads `null` here.
+        // Without this fallback `ensureSubmissionDraft` would mint a SECOND
+        // draft and strand the one already holding the user's content.
+        draftId: draftId ?? createdUnboundDraftIdRef.current,
+        editor: editorRef.current,
+        slashCatalog: pickerStore.getState().knownSlashCommands,
+        toolbar: {
+          selection: toolbar.selection,
+          reasoning: toolbar.reasoning,
+          serviceTier: toolbar.serviceTier,
+          permission: toolbar.permission,
+        },
         owner,
-        teamSandboxHarnessBlockedFor(launch.harnessId),
-      );
+        teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
+          toolbar.selection.harnessId,
+        ),
+        settled,
+      });
+      // Nothing was created when a refusal comes back - the draft, its content
+      // and its staged workspace are exactly as the user left them, and the
+      // reason is stated inline above the composer rather than as a toast.
       raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
+      if (refusal === null) setComposerExpanded(false);
       return refusal === null;
+    },
+    [
+      actions,
+      canSubmit,
+      draftId,
+      owner,
+      pickerStore,
+      raiseHostNotice,
+      setComposerExpanded,
+      stagedSend,
+      teamSandboxHarnessBlockedFor,
+      toolbarStore,
+    ],
+  );
+  const handleSubmit = useCallback(
+    (): boolean => submitDraft(null),
+    [submitDraft],
+  );
+  // Whether the terminal agent's create went out: false on a refusal, which
+  // says why inline, and on a hold, which creates nothing.
+  const dispatchStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch): boolean => {
+      const dispatched = { value: false };
+      const refusal = actions.selectTerminalAgent({
+        launch,
+        draftId,
+        owner,
+        teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
+          launch.harnessId,
+        ),
+        settled: (sent) => {
+          dispatched.value = sent;
+        },
+      });
+      raiseHostNotice(
+        refusal === null ? null : { kind: "refused", message: refusal.message },
+      );
+      return dispatched.value;
     },
     [actions, draftId, owner, raiseHostNotice, teamSandboxHarnessBlockedFor],
   );
@@ -707,10 +857,60 @@ export function LandingComposer(props: LandingComposerProps) {
       if (assembledFor !== null && assembledFor !== resolvedHostId) {
         return false;
       }
+      // A staged sandbox takes the Start as it takes a send.
+      if (stagedSend.intercept("terminal", launch)) return false;
       return dispatchStartTerminal(launch);
     },
-    [dispatchStartTerminal, isSubmitting, resolvedHostId, workspaceCanStart],
+    [
+      dispatchStartTerminal,
+      isSubmitting,
+      resolvedHostId,
+      stagedSend,
+      workspaceCanStart,
+    ],
   );
+  // A layout effect, so the staged handoff's effect (a passive one, declared
+  // earlier) reads this render's submit, not the last one's. No model or no
+  // launch on the new host is no agent there; any other refusal, or a send
+  // that stops short while its images are read, is a send that did not go.
+  useLayoutEffect(() => {
+    const providers = stagedProviders.data?.providers;
+    stagedSubmitRef.current =
+      stagedTerminalLaunch === null
+        ? () => {
+            if (toolbarStore.getState().selection.modelSlug.length === 0) {
+              return false;
+            }
+            // The executor runs now: a create that goes out in this call is
+            // sent already, and one still reading its images settles later.
+            const sent = { value: false };
+            const accepted = new Promise<boolean>((resolve) => {
+              const submitted = submitDraft((dispatched) => {
+                sent.value = dispatched;
+                resolve(dispatched);
+              });
+              if (!submitted) resolve(false);
+            });
+            return sent.value ? true : accepted;
+          }
+        : () => {
+            const launch = stagedTerminalLaunchOnHost(
+              stagedTerminalLaunch,
+              toolbarStore.getState(),
+              providers,
+            );
+            if (launch === null) return false;
+            return dispatchStartTerminal(launch)
+              ? true
+              : Promise.resolve(false);
+          };
+  }, [
+    dispatchStartTerminal,
+    submitDraft,
+    stagedProviders.data,
+    stagedTerminalLaunch,
+    toolbarStore,
+  ]);
 
   const handleRemoveImage = useCallback(
     (id: string) => {
@@ -754,11 +954,13 @@ export function LandingComposer(props: LandingComposerProps) {
       editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
+      stagedAhead={workspaceGate.stagedAhead}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
       expansion={composerExpansion}
       topBanner={
         <>
+          {stagedSend.line}
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}
@@ -852,16 +1054,23 @@ export function LandingComposer(props: LandingComposerProps) {
  * user with an unusable workspace would sit through `Preparing… 40%` and find
  * the button still dead once the download finished, with the real reason only
  * appearing then.
+ *
+ * A staged sandbox ahead of its handoff drops the profile and pack gates:
+ * they are this host's, and the send runs again on the sandbox under its own.
  */
 function resolveLandingSubmitBlock(args: {
   readonly workspaceDisabledHint: string | null;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
   readonly profileDisabled: boolean;
+  readonly stagedAhead: boolean;
 }): {
   readonly submitBlocked: boolean;
   readonly submitBlockedHint: string | null;
 } {
+  if (args.stagedAhead) {
+    return { submitBlocked: false, submitBlockedHint: null };
+  }
   return {
     submitBlocked: args.profileDisabled || args.packBlocked,
     submitBlockedHint:

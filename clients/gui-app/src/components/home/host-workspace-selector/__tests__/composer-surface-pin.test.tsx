@@ -23,6 +23,15 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
  * nothing at all (§55).
  */
 
+// The picker's sandbox staging reads the account and the catalogue; this suite
+// stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: undefined }),
+}));
+
 // The composer key is the BROWSER TAB's identity now, not the literal
 // `"browser"` every tab used to share - two tabs on one origin would otherwise
 // hydrate each other's placement pin out of localStorage. Pinned to a known id
@@ -170,6 +179,7 @@ function renderComposerPicker(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          sandboxStaging={null}
           disabled={false}
           stagingKey={{ surface: "landing", hostId: null, draftId }}
           workspaceSeed={null}
