@@ -145,3 +145,48 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     expect(mounted.viewFocus).not.toHaveBeenCalled();
   });
 });
+
+// Tiptap's focus command is a no-op on a view that already has DOM focus, so
+// both arms below start from a blurred field. Without this the off-mobile arm
+// passes for the wrong reason (nothing to do) and proves nothing about clear.
+function blurActiveElement(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) active.blur();
+}
+
+async function clearFromBlurred(mounted: MountedComposer): Promise<void> {
+  const handle = readyHandle(mounted);
+  act(() => {
+    blurActiveElement();
+  });
+  mounted.viewFocus.mockClear();
+  act(() => {
+    handle.clear();
+  });
+  // Settled through frames on purpose: Tiptap defers the real `view.focus()`
+  // to an animation frame, and that deferred call is the one that matters.
+  await settleEditor();
+}
+
+describe("ComposerPromptEditor clear vs the mobile app", () => {
+  it("returns the caret after a clear off the mobile app", async () => {
+    setMobileApp(false);
+    const mounted = await mountComposer(true);
+
+    await clearFromBlurred(mounted);
+
+    expect(mounted.viewFocus).toHaveBeenCalled();
+  });
+
+  // A send clears the composer and then blurs it so the keyboard goes away
+  // with the message. A focus queued by the clear would run after that blur
+  // and raise the keyboard again.
+  it("queues no focus after a clear on the mobile app", async () => {
+    setMobileApp(true);
+    const mounted = await mountComposer(true);
+
+    await clearFromBlurred(mounted);
+
+    expect(mounted.viewFocus).not.toHaveBeenCalled();
+  });
+});
