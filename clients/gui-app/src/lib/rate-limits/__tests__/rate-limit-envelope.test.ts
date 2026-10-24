@@ -929,6 +929,14 @@ const OPENROUTER_GOOD: ProviderRateLimits = {
   balance: null,
 };
 
+const KIMI_GOOD: ProviderRateLimits = {
+  provider: "kimi",
+  available: true,
+  fiveHour: { usedPercent: 10, resetsAt: null, durationMinutes: 300 },
+  weekly: null,
+  monthly: null,
+};
+
 describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", () => {
   function invalidateSpyFor(client: QueryClient) {
     return vi.spyOn(client, "invalidateQueries").mockResolvedValue(undefined);
@@ -999,6 +1007,17 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
     const invalidateSpy = invalidateSpyFor(queryClient);
     mapResponseToProviderRateLimitEnvelope({
       response: response(OPENROUTER_GOOD),
+      queryClient,
+      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
+    });
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not invalidate providers.list for kimi (windowed, but it carries no managed profiles)", () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = invalidateSpyFor(queryClient);
+    mapResponseToProviderRateLimitEnvelope({
+      response: response(KIMI_GOOD),
       queryClient,
       queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
     });

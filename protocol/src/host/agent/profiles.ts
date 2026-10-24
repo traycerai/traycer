@@ -44,6 +44,7 @@ import {
   providerRateLimitsSchemaV70,
   providerRateLimitsSchemaV80,
   providerRateLimitsSchemaV91,
+  providerRateLimitsSchemaV151,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   agentFacingHarnessIdSchema,
@@ -1109,23 +1110,13 @@ export const agentGetProviderProfileRateLimitsV60 = defineRpcContract({
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV6,
 });
 
-// The LIVE line. Ranges over `providerRateLimitsSchema`; the moment a tag
-// ships `7`, freeze it against a snapshot union and open `8` - do not edit
-// this comment to say the line is safe because it is newest.
-//
-// This method deliberately does NOT follow its siblings, where the head
-// contract names the un-suffixed base schema. Here the head gets its own
-// `...ResponseSchemaVN` object and the base name
-// `agentGetProviderProfileRateLimitsResponseSchema` stays a structurally
-// identical but DISTINCT object that is canonical for nothing. That is not an
-// oversight: it is the fixture
-// `clients/traycer-cli/src/internal/__tests__/host-rpc.test.ts` uses to prove
-// the CLI's `assertCanonicalResponseSchema` backstop actually fires. Collapse
-// the two and that test has nothing left to falsify with.
+// Frozen `@7.0`: the 1.5.1 tags shipped this line, so it ranges over
+// `providerRateLimitsSchemaV151` (every available arm through Antigravity)
+// rather than the live union.
 export const agentGetProviderProfileRateLimitsResponseSchemaV7 = lazySchema(
   () =>
     z.object({
-      rateLimits: providerRateLimitsSchema,
+      rateLimits: providerRateLimitsSchemaV151,
       usageUpdatedAt: z.number().nullable(),
     }),
 );
@@ -1304,6 +1295,165 @@ export const agentGetProviderProfileRateLimitsDowngradeV70ToV10 =
       }
       return { ok: true, value: parsed.data };
     },
+  });
+
+// The LIVE line. Ranges over `providerRateLimitsSchema`; the moment a tag
+// ships `8`, freeze it against a snapshot union and open `9` - do not edit
+// this comment to say the line is safe because it is newest.
+//
+// This method deliberately does NOT follow its siblings, where the head
+// contract names the un-suffixed base schema. Here the head gets its own
+// `...ResponseSchemaVN` object and the base name
+// `agentGetProviderProfileRateLimitsResponseSchema` stays a structurally
+// identical but DISTINCT object that is canonical for nothing. That is not an
+// oversight: it is the fixture
+// `clients/traycer-cli/src/internal/__tests__/host-rpc.test.ts` uses to prove
+// the CLI's `assertCanonicalResponseSchema` backstop actually fires. Collapse
+// the two and that test has nothing left to falsify with.
+export const agentGetProviderProfileRateLimitsResponseSchemaV8 = lazySchema(
+  () =>
+    z.object({
+      rateLimits: providerRateLimitsSchema,
+      usageUpdatedAt: z.number().nullable(),
+    }),
+);
+
+export const agentGetProviderProfileRateLimitsV80 = defineRpcContract({
+  method: "agent.getProviderProfileRateLimits",
+  schemaVersion: { major: 8, minor: 0 } as const,
+  requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
+  responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV8,
+});
+
+export const agentGetProviderProfileRateLimitsUpgradeV70ToV80 =
+  defineUpgradePath<
+    typeof agentGetProviderProfileRateLimitsV70,
+    typeof agentGetProviderProfileRateLimitsV80
+  >({
+    from: { major: 7, minor: 0 },
+    to: { major: 8, minor: 0 },
+    // Request shape is identical - only the response's union grows (kimi).
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+// One provider per response, so every 8.0 bridge passes the response through
+// or refuses it: a Kimi-available snapshot has no arm on any older line and
+// fails that line's parse. The negotiator looks up one direct bridge per
+// target major, so each older major gets its own. The message names no
+// provider so it stays honest as the enum grows.
+const RATE_LIMITS_REQUIRE_NEWER_CLIENT = {
+  code: "DOWNGRADE_UNSUPPORTED" as const,
+  message:
+    "Reading this provider's rate limits requires a newer Traycer client.",
+};
+
+function passOrRefuse<T>(
+  parsed: { success: true; data: T } | { success: false },
+):
+  | { ok: true; value: T }
+  | { ok: false; error: typeof RATE_LIMITS_REQUIRE_NEWER_CLIENT } {
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : { ok: false, error: RATE_LIMITS_REQUIRE_NEWER_CLIENT };
+}
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV70 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV70
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 7, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV7.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV60 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV60
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 6, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV6.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV50 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV50
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 5, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV5.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV40 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV40
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 4, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV4.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV30 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV30
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV20 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV20
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse(response),
+      ),
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV80ToV10 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV80,
+    typeof agentGetProviderProfileRateLimitsV10
+  >({
+    from: { major: 8, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) =>
+      passOrRefuse(
+        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse(response),
+      ),
   });
 
 export const agentGetProviderProfileRateLimitsUpgradeV50ToV60 =

@@ -369,6 +369,32 @@ function projectedLiveWindows(
           now,
         }),
       ].filter((window): window is ProfileUsageWindow => window !== null);
+    case "kimi":
+      // The CLI's own three rows; a window Kimi's backend left out is null and
+      // projects nothing.
+      return [
+        windowProjection({
+          id: "five-hour",
+          role: "primary",
+          name: "5-hour",
+          window: rateLimits.fiveHour,
+          now,
+        }),
+        windowProjection({
+          id: "weekly",
+          role: "secondary",
+          name: "Weekly",
+          window: rateLimits.weekly,
+          now,
+        }),
+        windowProjection({
+          id: "monthly",
+          role: "extra",
+          name: "Monthly",
+          window: rateLimits.monthly,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
     case "huggingface": {
       const credits = huggingFaceCreditProjection(rateLimits);
       return credits === null ? [] : [credits];
