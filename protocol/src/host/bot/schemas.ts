@@ -665,6 +665,16 @@ export const botTaskEntrySchema = lazySchema(() =>
       endedReason: z
         .enum(["by-bot", "deleted", "archived", "completed"])
         .nullable(),
+      /**
+       * The member who set the task up, read off the open request of the
+       * bot thread that created it (T46b); the cloud keeps it only for a
+       * member of the bot's environment. A mention target and a provenance
+       * mark, never an authorization input: nothing reads it to decide who
+       * may act on the bot or the task. `null` for a task the trunk created,
+       * and when the thread had no open request. Defaulted so a host that
+       * predates the field serves an entry without it.
+       */
+      createdByUserId: z.string().min(1).max(36).nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
@@ -694,8 +704,9 @@ export type BotSubscribeOpenRequest = z.infer<
 
 /**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
- * re-sent whole whenever the bot row, its task list, a task's last check-in
- * or its open-request count changes on this host; `deleted` ends it (the bot
+ * re-sent whole whenever the bot row, its task list, a task's last check-in,
+ * its open-request count or its conversations' rows change on this host;
+ * `deleted` ends it (the bot
  * was archived, or the caller lost it). The conversation rows stay
  * authoritative for open requests; `openRequestCount` is a hint, as the GUI
  * spec says.
@@ -713,6 +724,13 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
        * (a later snapshot carries the count).
        */
       openRequestCount: z.number().int().nonnegative().nullable(),
+      /**
+       * Changes whenever a row is written to the bot's channel or a thread
+       * record on the bound host (a post, a reply, an announcement, a
+       * verdict): a changed value says to read the threads' listing again.
+       * `null` when the serving host is not the bound one.
+       */
+      conversationsRevision: z.number().int().nonnegative().nullable(),
       /** `boundHostId` and `hostEpoch` restated for cheap comparison. */
       boundHost: z.object({
         /** Null when no host runs the bot. */

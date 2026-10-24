@@ -623,6 +623,9 @@ import {
   botConversationListV10,
   botConversationSendV10,
   botThreadListV10,
+  botOnboardingChooseV10,
+  botOnboardingCompleteV10,
+  botOnboardingReadV10,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
@@ -9020,6 +9023,46 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botThreadListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // A team environment's onboarding (T48). Same optional posture.
+  "bot.onboarding.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botOnboardingReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.onboarding.choose": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botOnboardingChooseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.onboarding.complete": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botOnboardingCompleteV10,
           upgradeFromPreviousVersion: null,
         },
       },

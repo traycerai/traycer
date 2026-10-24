@@ -67,8 +67,16 @@ export type BotTranscriptSurface =
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
       /** Opens a post's thread; `null` where threads cannot be opened. */
       readonly openThread: ((postMessageId: string) => void) | null;
+      /** Opens the thread under a question or proposal; `null` where threads cannot be opened. */
+      readonly openAnnouncementThread:
+        | ((announcementId: string) => void)
+        | null;
     }
-  | { readonly kind: "thread" };
+  | {
+      readonly kind: "thread";
+      /** Posts a reply's chosen option in the thread. */
+      readonly chooseOption: (choice: string) => void;
+    };
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
@@ -341,6 +349,8 @@ function BotChatTranscriptBody(props: {
         scrollToMessage,
         threadLine: null,
         openThread: null,
+        openAnnouncementThread: null,
+        chooseOption: surface.chooseOption,
       };
     }
     return {
@@ -349,6 +359,8 @@ function BotChatTranscriptBody(props: {
       scrollToMessage: null,
       threadLine: surface.threadLine,
       openThread: surface.openThread,
+      openAnnouncementThread: surface.openAnnouncementThread,
+      chooseOption: null,
     };
   }, [scrollToMessage, surface, title]);
 

@@ -12,8 +12,9 @@ const MESSAGE_MAX = 100_000;
 /**
  * Slack's message box, for a bot's channel and its threads (Tracy Bots): a
  * post at the channel's top level (`threadId: null`), which opens a thread
- * the bot answers in, or a reply in a thread. Enter sends, Shift+Enter
- * breaks the line.
+ * the bot answers in, a reply in a thread, or a reply under a question or
+ * proposal (`announcementId`), which opens the thread hung off it. Enter
+ * sends, Shift+Enter breaks the line.
  *
  * A send is a request to the bot, not a turn: there is no model to choose,
  * nothing to approve and nothing to attach, and the bot may be paused - the
@@ -25,13 +26,23 @@ export function BotMessageComposer(props: {
   readonly conversationId: string;
   /** The thread the reply goes into; `null` posts at the channel's top level. */
   readonly threadId: string | null;
+  /** The question or proposal the reply answers, opening its thread; `null` otherwise. */
+  readonly announcementId: string | null;
   /** "Message #name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
   readonly label: string;
   readonly testId: string;
 }): ReactNode {
-  const { botId, conversationId, threadId, placeholder, label, testId } = props;
+  const {
+    botId,
+    conversationId,
+    threadId,
+    announcementId,
+    placeholder,
+    label,
+    testId,
+  } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
@@ -45,7 +56,7 @@ export function BotMessageComposer(props: {
   const submit = (): void => {
     if (!canSend) return;
     send.mutate(
-      { botId, conversationId, text: trimmed, threadId },
+      { botId, conversationId, text: trimmed, threadId, announcementId },
       {
         onSuccess: (response) => {
           setText("");

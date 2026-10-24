@@ -83,6 +83,7 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     nextAt: null,
     state: "tracking",
     endedReason: null,
+    createdByUserId: null,
     ...overrides,
   };
 }
@@ -229,6 +230,7 @@ export function botSnapshotFrame(
     bot,
     tasks,
     openRequestCount,
+    conversationsRevision: null,
     boundHost: {
       hostId: bot.boundHostId,
       epoch: bot.hostEpoch,

@@ -6127,7 +6127,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                   "proposal",
                                   "automation",
                                   "bot-created",
-                                  "policy"
+                                  "policy",
+                                  "question"
                                 ]
                               },
                               "link": {
@@ -6147,6 +6148,14 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "link"
                             ],
                             "additionalProperties": false
+                          },
+                          "options": {
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
                           }
                         },
                         "required": [
