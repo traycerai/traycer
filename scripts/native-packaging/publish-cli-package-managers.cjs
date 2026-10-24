@@ -19,8 +19,8 @@
 //
 // External repository assumptions (configured via secrets in workflows):
 //   - Homebrew tap:   traycerai/homebrew-traycer   (Formula/traycer.rb, Casks/traycer-desktop.rb)
-//   - winget:        microsoft/winget-pkgs forks   (manifests/t/Traycer/CLI)
-//   - scoop:         traycerai/scoop-traycer        (bucket/traycer-cli.json)
+//   - winget:        microsoft/winget-pkgs forks   (manifests/t/Traycer/CLI, manifests/t/Traycer/Desktop)
+//   - scoop:         traycerai/scoop-traycer        (bucket/traycer-cli.json, bucket/traycer-desktop.json)
 //   - deb/rpm:       traycerai/traycer-apt-rpm     (versions.json)
 //
 // Required secrets (used by the calling workflow, not this script):
@@ -77,6 +77,16 @@ function parseArgs(argv) {
       i += 1;
     } else if (token === "--desktop-cask") {
       out.desktopCask = true;
+    } else if (token === "--desktop-winget") {
+      out.desktopWinget = true;
+    } else if (token === "--desktop-scoop") {
+      out.desktopScoop = true;
+    } else if (token === "--win-x64-url") {
+      out.winX64Url = valueFor(token, i);
+      i += 1;
+    } else if (token === "--win-x64-sha256") {
+      out.winX64Sha256 = valueFor(token, i);
+      i += 1;
     } else if (token === "--homebrew-versioned-only") {
       out.homebrewVersionedOnly = true;
     } else if (token === "--target-homebrew-version") {
@@ -167,6 +177,12 @@ function maybePlatform(byPlatform, key) {
 
 const DEFAULT_MANAGERS = ["homebrew", "winget", "scoop", "deb-rpm"];
 const HOMEBREW_LINUX_CASK_MIN_VERSION = "4.5.0";
+const WINGET_MANIFEST_VERSION = "1.10.0";
+const DESKTOP_WINGET_ID = "Traycer.Desktop";
+// The host's per-user logon task, as `clients/desktop/uninstall-host-autostart.nsh`
+// names it for the production package.
+const DESKTOP_WINDOWS_TASK_NAME = "\\Traycer\\Host";
+const DESKTOP_WINDOWS_TASK_FOLDER = "Traycer";
 
 function selectedManagers(rawManagers) {
   if (typeof rawManagers !== "string" || rawManagers.trim().length === 0) {
@@ -373,6 +389,139 @@ cask "${token}" do
   auto_updates true
 end
 `;
+}
+
+// Desktop winget manifest - three YAML files for the signed NSIS installer
+// the desktop-v<version> release ships (`clients/desktop/package.json`
+// `build.nsis`: assisted, per-user). winget runs the installer itself, so the
+// in-app updater's own NSIS updates stay visible to `winget upgrade`.
+function renderDesktopWingetManifests({
+  version,
+  homepage,
+  license,
+  releaseNotesUrl,
+  winX64,
+}) {
+  const header = `PackageIdentifier: ${DESKTOP_WINGET_ID}
+PackageVersion: ${version}
+`;
+  return {
+    [`${DESKTOP_WINGET_ID}.yaml`]: `${header}DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: ${WINGET_MANIFEST_VERSION}
+`,
+    [`${DESKTOP_WINGET_ID}.installer.yaml`]: `${header}MinimumOSVersion: 10.0.0.0
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+UpgradeBehavior: install
+ReleaseDate: ${new Date().toISOString().slice(0, 10)}
+Installers:
+  - Architecture: x64
+    InstallerUrl: ${winX64.url}
+    InstallerSha256: ${winX64.sha256.toUpperCase()}
+ManifestType: installer
+ManifestVersion: ${WINGET_MANIFEST_VERSION}
+`,
+    [`${DESKTOP_WINGET_ID}.locale.en-US.yaml`]: `${header}PackageLocale: en-US
+Publisher: Traycer AI
+PublisherUrl: ${homepage}
+PackageName: Traycer
+PackageUrl: ${homepage}
+License: ${license}
+ShortDescription: Traycer desktop app
+ReleaseNotesUrl: ${releaseNotesUrl}
+ManifestType: defaultLocale
+ManifestVersion: ${WINGET_MANIFEST_VERSION}
+`,
+  };
+}
+
+// Desktop Scoop manifest. Scoop installs portable apps, so the NSIS installer
+// is unpacked rather than run: `#/dl.7z` makes Scoop extract the installer,
+// and the electron-builder payload `$PLUGINSDIR\app-64.7z` holds the app.
+// `resources\package-type` = `scoop` tells the in-app updater to leave updates
+// to `scoop update` (`clients/desktop/src/electron-main/app/scoop-install.ts`);
+// its NSIS updater would otherwise install a second copy Scoop never tracks.
+//
+// The uninstaller ports the NSIS uninstaller's `customUnInstall`
+// (`clients/desktop/uninstall-host-autostart.nsh`): on `scoop uninstall` only
+// (never on `scoop update`, which also runs it), it removes the host's logon
+// task when the task is this account's, the account's launcher, and the
+// `\Traycer` task folder once empty. Everything is best-effort.
+function renderDesktopScoopManifest({
+  version,
+  homepage,
+  license,
+  releaseNotesUrl,
+  releaseRepo,
+  winX64,
+}) {
+  const assetName = basenameFromUrl(winX64.url);
+  return {
+    version,
+    description: "Traycer desktop app",
+    homepage,
+    license,
+    notes: `Release notes: ${releaseNotesUrl}`,
+    architecture: {
+      "64bit": {
+        url: `${winX64.url}#/dl.7z`,
+        hash: winX64.sha256,
+      },
+    },
+    installer: {
+      script: [
+        'Expand-7zipArchive "$dir\\`$PLUGINSDIR\\app-64.7z" "$dir"',
+        'Remove-Item "$dir\\`$*", "$dir\\Uninst*" -Force -Recurse -ErrorAction SilentlyContinue',
+        "Set-Content -Path \"$dir\\resources\\package-type\" -Value 'scoop' -NoNewline -Encoding ascii",
+      ],
+    },
+    uninstaller: {
+      script: [
+        "if ($cmd -eq 'uninstall') {",
+        "  try {",
+        "    $s = New-Object -ComObject Schedule.Service",
+        "    $s.Connect()",
+        "    $task = $null",
+        "    $gone = $false",
+        `    try { $task = $s.GetFolder('\\').GetTask('${DESKTOP_WINDOWS_TASK_NAME}') } catch { $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }; $gone = ($e.HResult -eq -2147024894) -or ($e.HResult -eq -2147024893) }`,
+        "    $mine = $false",
+        "    if ($task) {",
+        "      $u = [string]$task.Definition.Principal.UserId",
+        "      if ($u -notmatch '^S-1-[0-9]+(-[0-9]+)+$') { $u = (New-Object System.Security.Principal.NTAccount($u)).Translate([System.Security.Principal.SecurityIdentifier]).Value }",
+        "      $mine = $u -ieq [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        "    }",
+        "    if ($mine) {",
+        `      schtasks /End /TN '${DESKTOP_WINDOWS_TASK_NAME}' | Out-Null`,
+        `      schtasks /Delete /TN '${DESKTOP_WINDOWS_TASK_NAME}' /F | Out-Null`,
+        "    }",
+        "    if ($mine -or $gone) {",
+        `      $folder = $s.GetFolder('\\${DESKTOP_WINDOWS_TASK_FOLDER}')`,
+        `      if ((@($folder.GetTasks(1)).Count -eq 0) -and (@($folder.GetFolders(0)).Count -eq 0)) { $s.GetFolder('\\').DeleteFolder('${DESKTOP_WINDOWS_TASK_FOLDER}', 0) }`,
+        "    }",
+        "  } catch {}",
+        '  Remove-Item "$env:USERPROFILE\\.traycer\\cli\\host-start-hidden.vbs" -Force -ErrorAction SilentlyContinue',
+        "}",
+      ],
+    },
+    shortcuts: [["Traycer.exe", "Traycer"]],
+    // The release list is newest first and also carries cli-v*, host-v* and
+    // desktop RC tags; the regex takes the newest stable desktop tag.
+    checkver: {
+      url: `https://api.github.com/repos/${releaseRepo}/releases?per_page=100`,
+      regex: '"tag_name":\\s*"desktop-v([\\d.]+)"',
+    },
+    autoupdate: {
+      architecture: {
+        "64bit": {
+          url: `https://github.com/${releaseRepo}/releases/download/desktop-v$version/${assetName}#/dl.7z`,
+        },
+      },
+    },
+  };
 }
 
 // winget manifest - three YAML files per package version (version,
@@ -666,6 +815,74 @@ function main() {
     `https://github.com/${releaseRepo}/releases/tag/cli-v${version}`;
   const homepage = args.homepage || "https://traycer.ai";
   const license = args.license || "MIT";
+  if (args.desktopWinget === true || args.desktopScoop === true) {
+    const desktopReleaseNotesUrl =
+      args.releaseNotesUrl ||
+      `https://github.com/${releaseRepo}/releases/tag/desktop-v${version}`;
+    const winX64 = {
+      url: requiredArg(args, "winX64Url"),
+      sha256: requiredArg(args, "winX64Sha256"),
+    };
+    const outputs = [];
+    if (args.desktopWinget === true) {
+      const files = renderDesktopWingetManifests({
+        version,
+        homepage,
+        license,
+        releaseNotesUrl: desktopReleaseNotesUrl,
+        winX64,
+      });
+      for (const [name, content] of Object.entries(files)) {
+        outputs.push({
+          manager: "winget-desktop",
+          path: path.join(
+            staging,
+            "winget",
+            "manifests",
+            "t",
+            "Traycer",
+            "Desktop",
+            version,
+            name,
+          ),
+          content,
+        });
+      }
+    }
+    if (args.desktopScoop === true) {
+      const manifest = renderDesktopScoopManifest({
+        version,
+        homepage,
+        license,
+        releaseNotesUrl: desktopReleaseNotesUrl,
+        releaseRepo,
+        winX64,
+      });
+      outputs.push({
+        manager: "scoop-desktop",
+        path: path.join(staging, "scoop", "bucket", "traycer-desktop.json"),
+        content: `${JSON.stringify(manifest, null, 2)}\n`,
+      });
+    }
+    for (const output of outputs) {
+      writeFile(output.path, output.content);
+    }
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          version,
+          written: outputs.map((output) => ({
+            manager: output.manager,
+            path: output.path,
+            sha256: sha256OfString(output.content),
+          })),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
   if (args.desktopCask === true) {
     const macArm = {
       url: requiredArg(args, "macArmUrl"),
