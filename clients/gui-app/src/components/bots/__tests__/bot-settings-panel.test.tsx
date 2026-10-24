@@ -150,6 +150,7 @@ const BOT: BotRecord = {
   createdAt: 1_000,
   archivedAt: null,
   directive: null,
+  appConversationChatId: null,
 };
 
 function mountPanel(bot: BotRecord, isMain: boolean | null): void {

@@ -1669,7 +1669,10 @@ export interface IDeviceFlowHost {
  * that plane grants nothing new.
  *
  *   - `credential` — 400/401. A verdict about the token.
- *   - `account`    — 403/404. A verdict about the account.
+ *   - `account`    — 403/404 answered by authn itself (its error envelope on
+ *                    the body). A verdict about the account. The same status
+ *                    from anything else at the URL is an outage, not a verdict,
+ *                    and reads as `network-error`.
  *
  * BOTH hold the local plane. The distinction is real and worth carrying, but it
  * decides the COPY and the recovery policy, not whether local data renders:

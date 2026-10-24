@@ -27,7 +27,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 interface ThreadListCall {
   readonly botId: string;
   readonly enabled: boolean;
-  readonly poll: boolean;
 }
 
 interface IndicatorState {
@@ -50,12 +49,13 @@ const mocks = vi.hoisted(() => {
     threadListCalls: [] as Array<{
       botId: string;
       enabled: boolean;
-      poll: boolean;
     }>,
     state: {
       paneVisible: true,
       threadListSupported: true,
       conversations: [] as Array<{ conversationId: string; createdAt: number }>,
+      // What the bot record names as the channel; `null` from an older host.
+      appConversationChatId: null as string | null,
       threads: [] as BotThreadSummary[],
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
@@ -85,7 +85,7 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: (
     _client: unknown,
     botId: string,
-    args: { enabled: boolean; poll: boolean },
+    args: { enabled: boolean },
   ) => {
     mocks.threadListCalls.push({ botId, ...args });
     return {
@@ -257,6 +257,7 @@ function mount(options: MountOptions): {
             botId={BOT_ID}
             hostId={HOST_ID}
             botTitle="Release Bot"
+            appConversationChatId={mocks.state.appConversationChatId}
             paused={options.paused}
             resolveMember={resolveMember}
             openThreadPostId={openThreadPostId}
@@ -295,6 +296,7 @@ beforeEach(() => {
     { conversationId: "conversation-later", createdAt: 9_000 },
     { conversationId: "conversation-channel", createdAt: 1_000 },
   ];
+  mocks.state.appConversationChatId = "conversation-channel";
   mocks.state.threads = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
@@ -311,7 +313,7 @@ afterEach(() => {
 });
 
 describe("<BotChannelView /> channel", () => {
-  it("posts at the channel's top level on the bot's first conversation", () => {
+  it("posts at the channel's top level on the conversation the bot record names", () => {
     mount({ paused: false, openThreadPostId: null });
 
     const composer = screen.getByTestId("stub-bot-channel-composer");
@@ -330,25 +332,52 @@ describe("<BotChannelView /> channel", () => {
     ).toBe("conversation-channel");
   });
 
-  it("reads the thread list only while the pane is on screen, and not at all while paused or unsupported", () => {
+  it("opens the named conversation even when another one under the bot is older", () => {
+    // A bound host can file a conversation under the bot with any timestamp.
+    mocks.state.conversations = [
+      { conversationId: "conversation-backdated", createdAt: 1 },
+      { conversationId: "conversation-channel", createdAt: 1_000 },
+    ];
     mount({ paused: false, openThreadPostId: null });
-    expect(lastThreadListCall()).toEqual({
-      botId: BOT_ID,
-      enabled: true,
-      poll: true,
-    });
+
+    expect(
+      screen
+        .getByTestId("stub-bot-channel-composer")
+        .getAttribute("data-conversation-id"),
+    ).toBe("conversation-channel");
+    expect(
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-chat-id"),
+    ).toBe("conversation-channel");
+  });
+
+  it("says the bot has no channel, rather than opening another, when the named conversation is not listed", () => {
+    mocks.state.conversations = [
+      { conversationId: "conversation-other", createdAt: 1 },
+    ];
+    mount({ paused: false, openThreadPostId: null });
+
+    expect(screen.getByTestId("bot-channel-empty")).toBeTruthy();
+    expect(screen.queryByTestId("stub-bot-channel-composer")).toBeNull();
+  });
+
+  it("falls back to the earliest conversation only when the host names none", () => {
+    mocks.state.appConversationChatId = null;
+    mount({ paused: false, openThreadPostId: null });
+
+    expect(
+      screen
+        .getByTestId("stub-bot-channel-composer")
+        .getAttribute("data-conversation-id"),
+    ).toBe("conversation-channel");
+  });
+
+  it("reads the thread list, and not at all while paused or unsupported", () => {
+    mount({ paused: false, openThreadPostId: null });
+    expect(lastThreadListCall()).toEqual({ botId: BOT_ID, enabled: true });
     cleanup();
 
-    mocks.state.paneVisible = false;
-    mount({ paused: false, openThreadPostId: null });
-    expect(lastThreadListCall()).toEqual({
-      botId: BOT_ID,
-      enabled: true,
-      poll: false,
-    });
-    cleanup();
-
-    mocks.state.paneVisible = true;
     mount({ paused: true, openThreadPostId: null });
     expect(lastThreadListCall().enabled).toBe(false);
     cleanup();

@@ -49,3 +49,15 @@ export function settingsDashboardUrl(
 ): string {
   return `${resolvePlatformBaseUrl(signInUrl)}/team/${encodeURIComponent(teamName)}/environment/providers`;
 }
+
+/**
+ * The team's GitHub page in the dashboard, where an admin links GitHub,
+ * installs the App and ticks the team's repositories, and where the
+ * installing admin is changed. `teamName` as for `settingsDashboardUrl`.
+ */
+export function teamGithubDashboardUrl(
+  signInUrl: string,
+  teamName: string,
+): string {
+  return `${resolvePlatformBaseUrl(signInUrl)}/team/${encodeURIComponent(teamName)}/environment/github`;
+}

@@ -18,6 +18,12 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotOnboardingChooseRequest,
+  BotOnboardingChooseResponse,
+  BotOnboardingCompleteRequest,
+  BotOnboardingCompleteResponse,
+} from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -189,6 +195,76 @@ export function useBotConversationSendMutation(
           ),
         });
       },
+    },
+  });
+}
+
+/**
+ * Every host's cached onboarding read: the choice and the completion are the
+ * cloud's, identical whichever host answered, as for `bot.list`.
+ */
+function invalidateBotOnboarding(queryClient: QueryClient): Promise<void> {
+  return queryClient.invalidateQueries({
+    predicate: (query) =>
+      hostQueryKeys.matchesMethodOnAnyHost(
+        query.queryKey,
+        "bot.onboarding.read",
+      ),
+  });
+}
+
+/**
+ * Keeps the team's choice of areas (Tracy Bots T48). The mutation stays
+ * pending until the onboarding read is fetched again, so a checkbox showing
+ * the sent choice never flips back to the old one in between. Any member,
+ * before or after GitHub is connected.
+ */
+export function useBotOnboardingChooseMutation(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  BotOnboardingChooseResponse,
+  HostRpcError,
+  BotOnboardingChooseRequest
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<HostRpcRegistry, "bot.onboarding.choose">({
+    client,
+    method: "bot.onboarding.choose",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: botMutationKeys.onboardingChoose(),
+      onSuccess: () => invalidateBotOnboarding(queryClient),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't save the bots you chose."),
+    },
+  });
+}
+
+/**
+ * Creates the chosen bots on the host behind `client`, the one they will be
+ * bound to, and marks the onboarding complete. Safe to repeat: a repeat
+ * answers with the bots the first made.
+ */
+export function useBotOnboardingCompleteMutation(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  BotOnboardingCompleteResponse,
+  HostRpcError,
+  BotOnboardingCompleteRequest
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<HostRpcRegistry, "bot.onboarding.complete">({
+    client,
+    method: "bot.onboarding.complete",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: botMutationKeys.onboardingComplete(),
+      onSuccess: async () => {
+        invalidateBotLists(queryClient);
+        await invalidateBotOnboarding(queryClient);
+      },
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't create the bots."),
     },
   });
 }

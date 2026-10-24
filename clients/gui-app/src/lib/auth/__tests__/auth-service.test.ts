@@ -1391,7 +1391,18 @@ describe("AuthService", () => {
       { id: "user-1", email: "test@example.com", name: "Test User" },
     );
     restoreFetch();
-    restoreFetch = installFetch(() => status(404));
+    // authn's own answer for a missing user row: `UserNotFoundError` through
+    // its error handler, `{ statusCode, error }` on the body. The refresh's
+    // account verdict requires that envelope; a bare 404 is what anything
+    // other than authn answers on the URL and classifies as an outage.
+    restoreFetch = installFetch(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ statusCode: 404, error: "User not found" }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
 
     await service.start();
 
