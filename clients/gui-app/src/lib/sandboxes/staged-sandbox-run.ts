@@ -264,7 +264,9 @@ async function environmentIdFor(
  * The create, as the app's create mutation runs it (`useSandboxCreate`):
  * keyed, and refreshing the directory and the lists once it settles, a
  * refusal included, since a `502 provider_failed` leaves a `failed` row.
- * The answer comes back as the fetch result; the line words a refusal.
+ * The answer comes back as the fetch result; the line words a refusal. A
+ * request that threw (the desktop bridge refusing it) reads as a create that
+ * could not be confirmed, so the line stops instead of waiting forever.
  */
 function createSandbox(
   request: SandboxCreateRequest,
@@ -298,7 +300,13 @@ function createSandbox(
   // Subscribed for the mutation's life, so the cache can collect it once it
   // settles.
   const unsubscribe = observer.subscribe(() => undefined);
-  return observer.mutate().finally(unsubscribe);
+  return observer
+    .mutate()
+    .catch((error: unknown): SandboxCreateFetchResult => ({
+      kind: "network-error",
+      detail: error instanceof Error ? error.message : String(error),
+    }))
+    .finally(unsubscribe);
 }
 
 /** A refused create, as the line or the inline refusal says it. */

@@ -939,3 +939,48 @@ describe("settling under another account", () => {
     });
   });
 });
+
+describe("useSandboxDestroyBatch under another account", () => {
+  beforeEach(() => {
+    state.binding = createFakeSandboxBinding();
+  });
+  afterEach(() => {
+    cleanup();
+    act(() => {
+      useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    });
+  });
+
+  it("destroys nothing once the account that confirmed the batch is gone", async () => {
+    signInAs("user-a");
+    state.binding?.auth.listSandboxes.mockImplementation(() => {
+      // Another account signs in while the batch reads the list.
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "user-b", username: "user-b" },
+      });
+      return Promise.resolve({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            sandboxSummaryFixture({
+              id: "sbx_1",
+              burst: true,
+              state: "suspended",
+            }),
+          ],
+        },
+      });
+    });
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
+
+    await act(async () => {
+      await result.current
+        .mutateAsync([{ sandboxId: "sbx_1", name: "one" }])
+        .catch(() => undefined);
+    });
+
+    expect(state.binding?.auth.destroySandbox).not.toHaveBeenCalled();
+  });
+});

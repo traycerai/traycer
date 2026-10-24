@@ -388,6 +388,18 @@ describe("runStagedSandbox through the query cache", () => {
 });
 
 describe("runStagedSandbox refusals", () => {
+  it("stops on a create that threw instead of waiting forever", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({}, true);
+    vi.spyOn(auth, "createSandbox").mockRejectedValueOnce(
+      new Error("createSandbox.request.destroyAfterRestingMinutes"),
+    );
+
+    await run(false, deps);
+
+    expect(stageOf().failure).toEqual({ kind: "unverified" });
+  });
+
   it("maps insufficient_credit to the credits failure with the shortfall", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { deps } = harness(

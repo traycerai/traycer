@@ -25,7 +25,7 @@ import {
   SandboxSuspendDialog,
 } from "@/components/hosts/sandbox-confirm-dialogs";
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
@@ -42,6 +42,8 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -293,14 +295,17 @@ export function SandboxRowActions(props: {
  * `Open a tab` and `Open terminal`: points the landing composer (and the
  * terminal panel beside it, which follows the composer's host) at this
  * sandbox and leaves Settings for a new task. A resting sandbox wakes on the
- * first action there, never on this.
+ * first action there, never on this. A pick of a host is the composer's
+ * choice, so a sandbox staged there before is dropped: the next send must
+ * not create it instead.
  */
 function useOpenSandboxOnLanding(): (hostId: string) => void {
-  const pin = useComposerSurfaceHostPin();
+  const surfaceKey = useComposerSurfaceHostKey();
   const { close } = useSystemTabModalActions();
   const router = useRouter();
   return (hostId: string) => {
-    pin.setSelection(hostId);
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, hostId);
     close();
     void router.navigate({ to: "/" });
   };

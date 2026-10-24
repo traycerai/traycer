@@ -51,7 +51,9 @@ interface SandboxDestroyBatchContext {
  * one by one, and never more. Each target is re-read at execution: a row
  * that woke or was kept meanwhile is skipped rather than destroyed, and a
  * retry passes the same targets, so it never widens the set. The server
- * rechecks authority per target.
+ * rechecks authority per target. Each request carries whoever is signed in
+ * when it is sent, so the batch stops if the account that confirmed it is no
+ * longer the one signed in.
  */
 export function useSandboxDestroyBatch(): UseMutationResult<
   readonly SandboxBatchResult[],
@@ -75,8 +77,15 @@ export function useSandboxDestroyBatch(): UseMutationResult<
       if (binding === null) {
         throw new Error("Sign in to destroy these sandboxes.");
       }
+      const startedBy = signedInUserId();
+      const stopIfAccountChanged = (): void => {
+        if (signedInUserId() !== startedBy) {
+          throw new Error("The account changed, so the batch stopped.");
+        }
+      };
       const results: SandboxBatchResult[] = [];
       for (const target of targets) {
+        stopIfAccountChanged();
         // Read again right before this destroy: another member may have
         // resumed or kept the row while the batch worked through the others.
         const listed = await binding.auth.listSandboxes();
@@ -98,6 +107,7 @@ export function useSandboxDestroyBatch(): UseMutationResult<
           results.push({ ...target, outcome: { kind: "skipped" } });
           continue;
         }
+        stopIfAccountChanged();
         const result = await binding.auth.destroySandbox(target.sandboxId);
         if (result.kind === "ok") {
           results.push({

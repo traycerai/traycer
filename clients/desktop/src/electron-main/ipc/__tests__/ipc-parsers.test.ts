@@ -168,6 +168,12 @@ describe("parseSandboxCreateRequest", () => {
 
   it("returns a valid request unchanged, nulls kept as the server's defaults", () => {
     expect(parseSandboxCreateRequest(VALID)).toEqual(VALID);
+  });
+
+  it("passes a resting period of 0, which is never", () => {
+    expect(
+      parseSandboxCreateRequest({ ...VALID, destroyAfterRestingMinutes: 0 }),
+    ).toEqual({ ...VALID, destroyAfterRestingMinutes: 0 });
     expect(
       parseSandboxCreateRequest({
         ...VALID,
@@ -245,7 +251,7 @@ describe("parseSandboxCreateRequest", () => {
       ["environmentId", { environmentId: "" }],
       ["environmentId", { environmentId: undefined }],
       ["environmentId", { environmentId: 7 }],
-      ["destroyAfterRestingMinutes", { destroyAfterRestingMinutes: 0 }],
+      ["destroyAfterRestingMinutes", { destroyAfterRestingMinutes: -1 }],
       ["createdByTaskId", { createdByTaskId: "" }],
       ["clientRequestId", { clientRequestId: undefined }],
     ];

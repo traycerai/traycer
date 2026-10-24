@@ -575,8 +575,9 @@ export function parseSandboxCreateRequest(
     environmentId: nullOr(obj.environmentId, (v) =>
       requireNonEmptyString(v, "createSandbox.request.environmentId"),
     ),
+    // `0` is never, as on a patch; `null` is the configuration's default.
     destroyAfterRestingMinutes: nullOr(obj.destroyAfterRestingMinutes, (v) =>
-      requirePositiveInteger(
+      requireNonNegativeInteger(
         v,
         "createSandbox.request.destroyAfterRestingMinutes",
       ),
