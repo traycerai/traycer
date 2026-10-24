@@ -12,7 +12,11 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  PROVIDER_CATALOG_INVALIDATIONS,
+  PROVIDER_INVALIDATIONS,
+} from "@/hooks/providers/invalidations";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
@@ -116,6 +120,52 @@ function seedProviderScopes(queryClient: QueryClient, hostId: string): void {
   }
 }
 
+/** One harness's model and command catalog slots, keyed as `useHostQuery` keys them. */
+function seedCatalogScopes(
+  queryClient: QueryClient,
+  hostId: string,
+  harnessId: "claude" | "opencode",
+): void {
+  queryClient.setQueryData(
+    hostQueryKeys.method<HostRpcRegistry, "agent.gui.listModels">(
+      hostId,
+      "agent.gui.listModels",
+      { harnessId, workingDirectory: null },
+    ),
+    { harnessId },
+  );
+  queryClient.setQueryData(
+    hostQueryKeys.method<HostRpcRegistry, "agent.gui.listCommands">(
+      hostId,
+      "agent.gui.listCommands",
+      {
+        harnessId,
+        workingDirectory: null,
+        workingDirectories: [],
+        profileId: null,
+      },
+    ),
+    { harnessId },
+  );
+}
+
+function expectCatalogScopesInvalidated(
+  queryClient: QueryClient,
+  hostId: string,
+  harnessId: "claude" | "opencode",
+  invalidated: boolean,
+): void {
+  for (const method of PROVIDER_CATALOG_INVALIDATIONS) {
+    const states = queryClient
+      .getQueryCache()
+      .findAll({
+        queryKey: [...hostQueryKeys.methodScope(hostId, method), { harnessId }],
+      })
+      .map((query) => query.state.isInvalidated);
+    expect(states).toEqual([invalidated]);
+  }
+}
+
 function expectProviderScopesInvalidated(
   queryClient: QueryClient,
   hostId: string,
@@ -140,10 +190,12 @@ describe("<ProvidersChangedStreamMount />", () => {
     providersMountStreamState.hasClient = true;
   });
 
-  it("invalidates only the captured host's provider scopes on changed", async () => {
+  it("invalidates only the captured host's provider scopes, and only the changed provider's catalogs, on changed", async () => {
     const queryClient = createAppQueryClient();
     seedProviderScopes(queryClient, "host-A");
     seedProviderScopes(queryClient, "host-B");
+    seedCatalogScopes(queryClient, "host-A", "claude");
+    seedCatalogScopes(queryClient, "host-A", "opencode");
 
     renderProvidersChangedStreamMount(queryClient);
     expect(providersMountStreamState.opened).toHaveLength(1);
@@ -157,12 +209,18 @@ describe("<ProvidersChangedStreamMount />", () => {
       expectProviderScopesInvalidated(queryClient, "host-A", true);
     });
     expectProviderScopesInvalidated(queryClient, "host-B", false);
+    // The event named Claude Code: its harness's catalogs refetch, OpenCode's
+    // (whose cold read spawns a server) are left alone.
+    expectCatalogScopesInvalidated(queryClient, "host-A", "claude", true);
+    expectCatalogScopesInvalidated(queryClient, "host-A", "opencode", false);
   });
 
-  it("invalidates only the captured host's provider scopes when it opens", async () => {
+  it("invalidates only the captured host's provider scopes, every harness's catalogs included, when it opens", async () => {
     const queryClient = createAppQueryClient();
     seedProviderScopes(queryClient, "host-A");
     seedProviderScopes(queryClient, "host-B");
+    seedCatalogScopes(queryClient, "host-A", "claude");
+    seedCatalogScopes(queryClient, "host-A", "opencode");
 
     renderProvidersChangedStreamMount(queryClient);
     act(() => {
@@ -173,6 +231,9 @@ describe("<ProvidersChangedStreamMount />", () => {
       expectProviderScopesInvalidated(queryClient, "host-A", true);
     });
     expectProviderScopesInvalidated(queryClient, "host-B", false);
+    // The catch-up names no provider: any may have changed while disconnected.
+    expectCatalogScopesInvalidated(queryClient, "host-A", "claude", true);
+    expectCatalogScopesInvalidated(queryClient, "host-A", "opencode", true);
   });
 
   it("retains reopen backoff across short churn, then resets after an event", () => {
