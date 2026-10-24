@@ -42,6 +42,16 @@ function reportRows(
   return rows;
 }
 
+/** Whether a page-scoped report has an item the host has yet to settle. */
+export function poolReportPending(
+  host: ConfigurationHostReport,
+  kinds: ReadonlySet<string> | null,
+): boolean {
+  return reportRows(host, kinds).some(
+    (row) => row.state === "received" || row.state === "waiting_resume",
+  );
+}
+
 /** Page-scoped delivery reports, with the server's step and report timestamps. */
 export function poolConfigurationChip(
   host: ConfigurationHostReport,

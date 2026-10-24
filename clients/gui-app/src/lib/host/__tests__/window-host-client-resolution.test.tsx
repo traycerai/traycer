@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createContext, use, type ReactNode } from "react";
-import { act, cleanup, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -110,6 +116,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_B: HostDirectoryEntry = {
   ...mockLocalHostEntry,
@@ -163,6 +170,7 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   spineRef.value = null;
   personalScopeRef.value = null;
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   bindingRef.value = null;
   messengerRef.value = null;
 });
@@ -374,6 +382,39 @@ describe("useHostClient under a re-provided binding", () => {
     });
 
     render(
+      <EnvironmentHostBinding>
+        <HostClientProbe />
+      </EnvironmentHostBinding>,
+    );
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(HOST_B.hostId);
+  });
+
+  it("shows the unusable host beneath EnvironmentHostBinding, never the window's host, until the Local row's host resolves", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_B.hostId, hostName: "Old laptop" },
+    });
+    personalScopeRef.value = scopeShowingHostB({
+      status: "unreachable",
+      client: null,
+      activeHostId: mockLocalHostEntry.hostId,
+    });
+
+    const { rerender } = render(
+      <EnvironmentHostBinding>
+        <HostClientProbe />
+      </EnvironmentHostBinding>,
+    );
+
+    expect(seenClient.value).toBeNull();
+    expect(screen.getByText(`Can't reach ${HOST_B.hostId} from here`));
+
+    personalScopeRef.value = scopeShowingHostB({
+      status: "ready",
+      client: requesterForHostB(),
+      activeHostId: mockLocalHostEntry.hostId,
+    });
+    rerender(
       <EnvironmentHostBinding>
         <HostClientProbe />
       </EnvironmentHostBinding>,

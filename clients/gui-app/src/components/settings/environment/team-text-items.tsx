@@ -35,7 +35,9 @@ export function TeamTextItems(props: {
     <div className="flex flex-col gap-3">
       {rows.map((item) => (
         <TeamTextItemEditor
-          key={`${item.key}:${item.revision}`}
+          // A row is kind+key+os, and its key carries any provider prefix;
+          // the draft seeds from it once, so a new address must remount.
+          key={`${item.os}:${item.key}:${item.revision}`}
           item={item}
           kind={props.kind}
           os={props.os}

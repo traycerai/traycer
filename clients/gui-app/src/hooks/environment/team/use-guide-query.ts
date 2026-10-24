@@ -6,6 +6,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -40,6 +41,7 @@ export function useConfigurationGuideMutations() {
   const scope = useTeamViewingHost();
   const queries = useQueryClient();
   const reread = (environmentId: string, hostId: string | null): void => {
+    invalidateEnvironmentHostReports(queries, environmentId);
     void queries.invalidateQueries({
       queryKey: hostQueryKeys.method(
         hostId,

@@ -1,5 +1,6 @@
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useQueryClient } from "@tanstack/react-query";
+import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -15,6 +16,7 @@ export function useConfigurationItemMutations() {
     hostId: string | null,
     result: EnvironmentConfigurationItemWriteResponse,
   ): void => {
+    invalidateEnvironmentHostReports(queries, environmentId);
     if (hostId === null) return;
     if (result.outcome === "forbidden")
       void queries.invalidateQueries({

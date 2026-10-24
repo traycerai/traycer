@@ -3,6 +3,8 @@ import {
   type ConfigurationItem,
 } from "./use-configuration-items-query";
 import { configurationPolicyValueSchema } from "./configuration-item-values";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient } from "@/lib/host";
@@ -27,6 +29,7 @@ export function useConfigurationPolicyQuery() {
 }
 
 export function useConfigurationPolicyMutation() {
+  const queries = useQueryClient();
   return useHostScopedMutationForClient(
     usePoolTierHostClient(useHostClient()),
     {
@@ -38,6 +41,8 @@ export function useConfigurationPolicyMutation() {
         cloudVerdictPreflight("environment.configuration.policy.put")();
         return Promise.resolve(request);
       },
+      onSuccess: (_result, request) =>
+        invalidateEnvironmentHostReports(queries, request.environmentId),
     },
   );
 }

@@ -142,6 +142,59 @@ describe("TeamVariablesAndShells", () => {
     ).toMatchObject({ revision: 4 });
   });
 
+  it("shows and saves each operating system's own value when two share a key and revision", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          variable("NODE_ENV", "production", 3),
+          configurationItem({
+            kind: "variable",
+            key: "NODE_ENV",
+            os: "linux",
+            value: { value: "linux-value" },
+            revision: 3,
+          }),
+        ],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 4,
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    const user = userEvent.setup();
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
+      "value",
+      "production",
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: "Operating system" }),
+    );
+    await user.click(await screen.findByRole("option", { name: "Linux" }));
+    const field = screen.getByLabelText("NODE_ENV value");
+    expect(field).toHaveProperty("value", "linux-value");
+
+    await user.type(field, "!");
+    await user.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "variable",
+        key: "NODE_ENV",
+        os: "linux",
+        value: { value: "linux-value!" },
+        revision: 3,
+      },
+    ]);
+  });
+
   it("says live values need a host while the team has none", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items: [] }),

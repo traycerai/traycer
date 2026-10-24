@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
@@ -11,7 +11,10 @@ import { localPickerRow } from "@/components/settings/environment/environment-pi
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
 import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
 import { hostConfigurationChip } from "@/components/settings/environment/status-chip-hosts";
-import { poolConfigurationChip } from "@/components/settings/environment/status-chip-pool-hosts";
+import {
+  poolConfigurationChip,
+  poolReportPending,
+} from "@/components/settings/environment/status-chip-pool-hosts";
 import { chipPageKinds } from "@/components/settings/environment/status-chip-page-kinds";
 import { useConfigurationSavingOffline } from "@/components/settings/environment/status-chip-mutations";
 import { useDetailsRecovery } from "@/components/settings/details/use-details-recovery";
@@ -21,6 +24,10 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { Button } from "@/components/ui/button";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
+
+/** The cadence Personal pages poll `environment.status` at. */
+const REPORTS_PENDING_REFRESH_MS = 5_000;
 
 export interface PageChipProps {
   readonly section: SettingsSectionId;
@@ -155,6 +162,22 @@ function TeamPageChip(props: {
     hostIds,
     "environment.status",
   );
+  const kinds = chipPageKinds(props.section);
+  // The method is unpolled; only an item still on its way needs a reread,
+  // since nothing else tells the page the host finished.
+  const pending =
+    hosts.data?.hosts.some((host) => poolReportPending(host, kinds)) === true;
+  const { refetch } = hosts;
+  useEffect(() => {
+    if (!pending) return;
+    return startVisibleInterval({
+      tick: () => {
+        void refetch({ cancelRefetch: false });
+      },
+      intervalMs: REPORTS_PENDING_REFRESH_MS,
+      fireOnShow: true,
+    });
+  }, [pending, refetch]);
   if (hosts.isError)
     return (
       <Button
@@ -167,7 +190,6 @@ function TeamPageChip(props: {
       </Button>
     );
   if (hosts.data === undefined) return null;
-  const kinds = chipPageKinds(props.section);
   const chips = hosts.data.hosts.map((host) =>
     poolConfigurationChip(host, kinds, versions.get(host.hostId) ?? null),
   );
