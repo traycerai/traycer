@@ -282,6 +282,7 @@ describe("<ChatMessage /> in a bot thread", () => {
         openThread: null,
         openAnnouncementThread: null,
         chooseOption: null,
+        repliedPost: null,
       },
     );
 
