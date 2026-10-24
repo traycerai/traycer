@@ -32,6 +32,7 @@ import {
   startStagedTerminal,
   useStagedSandboxHandoff,
   useStagedSandboxSend,
+  type StagedResubmit,
   type StagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
@@ -365,7 +366,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
 /** One landing draft's composer: the window's drafts share the surface. */
 function DraftComposer(props: {
   readonly draftId: string;
-  readonly submit: () => boolean;
+  readonly submit: () => StagedResubmit;
   readonly onSend: (send: StagedSandboxSend) => void;
 }) {
   const { onSend } = props;
@@ -1134,6 +1135,58 @@ describe("useStagedSandboxSend after the start page draft that sent is closed", 
     expect(submitA).not.toHaveBeenCalled();
     expect(submitB).not.toHaveBeenCalled();
     expect(typing).not.toHaveBeenCalled();
+  });
+});
+
+describe("useStagedSandboxSend's resubmit while its images are read", () => {
+  it("holds the handoff until the create goes out, through a remount, and offers Retry for one that stopped short", async () => {
+    handoffWaitingOn("draft-a");
+    const answers: Array<(sent: boolean) => void> = [];
+    const submit = vi.fn(
+      (): StagedResubmit =>
+        new Promise<boolean>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const client = new QueryClient();
+    const composer = (key: string) => (
+      <QueryClientProvider client={client}>
+        <DraftComposer
+          key={key}
+          draftId="draft-a"
+          submit={submit}
+          onSend={() => undefined}
+        />
+      </QueryClientProvider>
+    );
+    const view = render(composer("first"));
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "handoff",
+      failure: null,
+    });
+    // The draft's page goes away and comes back while the images are read.
+    view.rerender(composer("second"));
+    await afterCommit();
+    expect(submit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      answers[0]?.(false);
+      await Promise.resolve();
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "handoff",
+      failure: { kind: "not-sent" },
+    });
+
+    fireEvent.click(screen.getByTestId("sandbox-refusal-send-again"));
+    expect(submit).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      answers[1]?.(true);
+      await Promise.resolve();
+    });
+    expect(readStagedSandbox(SURFACE)).toBeNull();
   });
 });
 

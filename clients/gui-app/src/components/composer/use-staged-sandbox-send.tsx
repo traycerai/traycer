@@ -41,6 +41,7 @@ import {
   useStagedSandbox,
   useStagedSandboxStore,
   type HandoffOwnerWatch,
+  type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 
 /** A sandbox's name when the shape sheet set none: the message's first words. */
@@ -223,6 +224,22 @@ export function useStagedSandboxSend(input: {
     },
     [claimsSend, ownerId, run, surfaceKey],
   );
+  // The draft's resubmit on the ready sandbox, again. A draft that is gone
+  // leaves nothing to send but where this composer holds it.
+  const onSendAgain = useCallback((): void => {
+    if (surfaceKey === null) return;
+    const current = readStagedSandbox(surfaceKey);
+    if (current === null) return;
+    if (handoffOwnerLive(surfaceKey, current.ownerId)) {
+      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+    } else if (claimsSend) {
+      useStagedSandboxStore
+        .getState()
+        .report(surfaceKey, { ownerId, failure: null });
+    } else {
+      useStagedSandboxStore.getState().clear(surfaceKey);
+    }
+  }, [claimsSend, ownerId, surfaceKey]);
   const newHost = useNewHostActions(
     surfaceKey,
     stage?.createdHostId ?? null,
@@ -328,6 +345,7 @@ export function useStagedSandboxSend(input: {
             useStagedSandboxStore.getState().clear(surfaceKey),
           onRetryCreation: () => runFromLine(true),
           onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
+          onSendAgain,
           onChangeShape: () => {
             useStagedSandboxStore.getState().cancel(surfaceKey);
             openStagedShapeSheet(surfaceKey);
@@ -347,11 +365,64 @@ export function useStagedSandboxSend(input: {
 }
 
 /**
+ * What a staged resubmit did: `true` its create went out, `false` it was
+ * refused because no agent runs on the new host, or, while the send is still
+ * being prepared (its images read and inlined), a promise of whether it
+ * reached its create.
+ */
+export type StagedResubmit = boolean | Promise<boolean>;
+
+/**
+ * The handoff each surface's resubmit is still being prepared for, so the
+ * sending draft's composer mounted again meanwhile (a draft switch and back)
+ * waits for it rather than sending it a second time.
+ */
+const resubmitsInFlight = new Map<string, string>();
+
+function handoffIdentity(stage: StagedSandbox): string {
+  return [stage.clientRequestId, stage.createdHostId, stage.ownerId].join(
+    "\u0000",
+  );
+}
+
+/**
+ * A prepared resubmit's answer, for the handoff it was made for only: one
+ * cleared or replaced meanwhile is not this send's. Sent, the stage ends;
+ * stopped short, the line says so and Retry makes it again.
+ */
+function settleResubmit(
+  surfaceKey: string,
+  handedOff: string,
+  accepted: boolean,
+): void {
+  if (resubmitsInFlight.get(surfaceKey) === handedOff) {
+    resubmitsInFlight.delete(surfaceKey);
+  }
+  const current = readStagedSandbox(surfaceKey);
+  if (
+    current === null ||
+    current.phase !== "handoff" ||
+    handoffIdentity(current) !== handedOff
+  ) {
+    return;
+  }
+  if (accepted) {
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    return;
+  }
+  useStagedSandboxStore
+    .getState()
+    .report(surfaceKey, { failure: { kind: "not-sent" } });
+}
+
+/**
  * Phase 2 of a staged sandbox: once the surface's placement resolves to the
  * new host, the surface's own `submit` runs again, so the create, the by-hash
- * upload and the backstop run on the new host's client as for any host; then
- * the stage clears. `prepareHandoff` runs once before that resubmit (the
- * landing composer resets its workspace to the new host's empty one).
+ * upload and the backstop run on the new host's client as for any host; the
+ * stage clears once that create goes out, and holds the handoff while its
+ * images are prepared. `prepareHandoff` runs once before that resubmit (the
+ * landing composer resets its workspace to the new host's empty one). A
+ * refusal on the line holds the resubmit until its Retry clears it.
  *
  * Mounted by whatever outlives the sending surface: the composer itself, or
  * a tab-level owner where the surface is a popover. A handoff whose sending
@@ -362,7 +433,7 @@ export function useStagedSandboxHandoff(input: {
   readonly surfaceKey: string | null;
   readonly resolvedHostId: string | null;
   readonly canSubmit: boolean;
-  readonly submit: () => boolean;
+  readonly submit: () => StagedResubmit;
   readonly prepareHandoff: (hostId: string) => void;
   readonly ownerId: string | null;
   /** When the draft is gone once this unmounts; stable across renders. */
@@ -391,14 +462,23 @@ export function useStagedSandboxHandoff(input: {
     (count: number) => count + 1,
     0,
   );
-  const handoffHostId =
+  const handoff =
     stage !== null && stage.phase === "handoff" && stage.ownerId === ownerId
-      ? stage.createdHostId
+      ? stage
       : null;
+  const preparedHostId = handoff?.createdHostId ?? null;
+  const handoffHostId =
+    handoff !== null && handoff.failure === null ? handoff.createdHostId : null;
+  const handoffId = handoff === null ? null : handoffIdentity(handoff);
   useEffect(() => {
-    if (surfaceKey === null || handoffHostId === null) {
+    if (surfaceKey === null || preparedHostId === null || handoffId === null) {
       // No handoff now: a later one to the same host runs again.
       preparedRef.current = null;
+      handedOffRef.current = null;
+      return;
+    }
+    if (handoffHostId === null) {
+      // Refused: Retry clears the refusal and the resubmit runs again.
       handedOffRef.current = null;
       return;
     }
@@ -413,19 +493,32 @@ export function useStagedSandboxHandoff(input: {
       return;
     }
     if (handedOffRef.current === key || !canSubmit) return;
+    if (resubmitsInFlight.get(surfaceKey) === handoffId) return;
     handedOffRef.current = key;
-    if (submit()) {
+    const outcome = submit();
+    if (outcome === true) {
       useStagedSandboxStore.getState().clear(surfaceKey);
       return;
     }
-    // Refused on the new host (no agent it can run): the sandbox stays
-    // awake, the draft stays, and the line says why with what to do next.
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { failure: { kind: "no-provider" } });
+    if (outcome === false) {
+      // Refused on the new host (no agent it can run): the sandbox stays
+      // awake, the draft stays, and the line says why with what to do next.
+      useStagedSandboxStore
+        .getState()
+        .report(surfaceKey, { failure: { kind: "no-provider" } });
+      return;
+    }
+    resubmitsInFlight.set(surfaceKey, handoffId);
+    void outcome
+      .catch(() => false)
+      .then((accepted) => {
+        settleResubmit(surfaceKey, handoffId, accepted);
+      });
   }, [
     canSubmit,
     handoffHostId,
+    handoffId,
+    preparedHostId,
     preparations,
     prepareHandoff,
     resolvedHostId,

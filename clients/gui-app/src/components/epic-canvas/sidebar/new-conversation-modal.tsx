@@ -154,6 +154,7 @@ import {
 import {
   useStagedSandboxHandoff,
   useStagedSandboxSend,
+  type StagedResubmit,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
@@ -415,6 +416,18 @@ function closeRequestOwnedBy(epicId: string, tabId: string): void {
  * has not settled yet. Phase 2 resubmits from the body, so the body is kept
  * while this holds; a failure, a cancel or a clear ends it.
  */
+type StagedAcceptance = (accepted: boolean) => void;
+
+/** Tells the waiting staged resubmit, once, whether its create went out. */
+function settleStagedAcceptance(
+  ref: { current: StagedAcceptance | null },
+  accepted: boolean,
+): void {
+  const settle = ref.current;
+  ref.current = null;
+  settle?.(accepted);
+}
+
 function modalHandoffPending(
   stage: StagedSandbox | undefined,
   tabId: string,
@@ -765,6 +778,18 @@ export function NewConversationModalBody(props: {
    * re-entry takes no argument, so the marker is the whole of it.
    */
   const submitReentryQueued = useRef(false);
+  /**
+   * The staged resubmit waiting to hear whether its create went out: told
+   * `true` where the create is dispatched and `false` wherever the send stops
+   * short. A preparation outlives this body, so its exit tells it either way.
+   */
+  const stagedAcceptanceRef = useRef<StagedAcceptance | null>(null);
+  // Stopped short unless a preparation is still running or queued to run
+  // again: that one settles it.
+  const settleStagedUnlessPreparing = useCallback((): void => {
+    if (draftImagePrepFlight.current || submitReentryQueued.current) return;
+    settleStagedAcceptance(stagedAcceptanceRef, false);
+  }, []);
   // The picker store is lifted onto the always-mounted dialog so it survives
   // this body's focus-driven unmount (see the transient context); the hook falls
   // back to a local store when rendered outside the dialog.
@@ -1086,7 +1111,7 @@ export function NewConversationModalBody(props: {
   );
   // The latest resubmit, set below once `handleSubmit` and the terminal
   // dispatch are declared.
-  const stagedSubmitRef = useRef<() => boolean>(() => false);
+  const stagedSubmitRef = useRef<() => StagedResubmit>(() => false);
   // A terminal agent's Start that a staged sandbox took: launched on the new
   // host in phase 2, as the chat send resubmits there. The stage keeps it, and
   // the host keeps this body, so closing the modal while the sandbox boots
@@ -1107,7 +1132,7 @@ export function NewConversationModalBody(props: {
     catalogSettledFor(s, resolvedHostId),
   );
   const submitOnSandbox = useCallback(
-    (): boolean => stagedSubmitRef.current(),
+    (): StagedResubmit => stagedSubmitRef.current(),
     [],
   );
   // Folders picked on the old host are not the new one's: the draft takes the
@@ -1537,6 +1562,7 @@ export function NewConversationModalBody(props: {
       // The toast (with the host's reason) is the shared create hook's, which
       // is mutation-level and so survives this close.
       cleanupAfterSubmit();
+      settleStagedAcceptance(stagedAcceptanceRef, true);
     },
     [
       canSubmit,
@@ -1898,6 +1924,7 @@ export function NewConversationModalBody(props: {
           // and the argument dies the day someone adds an await to the fast
           // path.
           if (!submitReentryQueued.current) submitReentryAttempt.current = 0;
+          settleStagedUnlessPreparing();
           return;
         }
         submitReentryRequested.current = false;
@@ -1938,12 +1965,14 @@ export function NewConversationModalBody(props: {
         message:
           "The images in this prompt could not be prepared. The draft has been kept - try again.",
       });
+      settleStagedUnlessPreparing();
     });
   }, [
     canSubmit,
     epicId,
     raiseHostNotice,
     resolvedHostId,
+    settleStagedUnlessPreparing,
     // The client the by-hash upload dispatches on, and it must be the CURRENT
     // one: the host picker stays live while the upload runs, and bytes put on
     // the machine the chip stopped showing are bytes the create's host never
@@ -1976,7 +2005,8 @@ export function NewConversationModalBody(props: {
     handledSubmitReentryTick.current = submitReentryTick;
     submitReentryQueued.current = false;
     handleSubmit();
-  }, [submitReentryTick, handleSubmit]);
+    settleStagedUnlessPreparing();
+  }, [submitReentryTick, handleSubmit, settleStagedUnlessPreparing]);
   // Whether the create was sent: false on a refusal, which says why inline.
   const dispatchStartTerminal = useCallback(
     (launch: TerminalAgentLaunch): boolean => {
@@ -2060,9 +2090,10 @@ export function NewConversationModalBody(props: {
     [canMutate, dispatchStartTerminal, stagedSend, workspaceCanStart],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
-  // earlier) reads this render's resubmit, not the last one's. A chat send is
-  // refused when no model resolved on the new host; a Start is assembled
-  // again for it.
+  // earlier) reads this render's resubmit, not the last one's. No model or no
+  // launch on the new host is no agent there; a Start is assembled again for
+  // it. Any other refusal, or a send that stops short while its images are
+  // read, is a send that did not go.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
     stagedSubmitRef.current =
@@ -2071,8 +2102,22 @@ export function NewConversationModalBody(props: {
             if (toolbarStore.getState().selection.modelSlug.length === 0) {
               return false;
             }
-            handleSubmit();
-            return true;
+            // One left waiting from an earlier handoff is over.
+            settleStagedAcceptance(stagedAcceptanceRef, false);
+            // Its images may still be read and inlined: the stage holds the
+            // handoff, and this body, until the create goes out. The executor
+            // runs now, so a create that goes out in this call is sent
+            // already, and one still reading its images settles later.
+            const sent = { value: false };
+            const accepted = new Promise<boolean>((resolve) => {
+              stagedAcceptanceRef.current = (dispatched) => {
+                sent.value = dispatched;
+                resolve(dispatched);
+              };
+              handleSubmit();
+              settleStagedUnlessPreparing();
+            });
+            return sent.value ? true : accepted;
           }
         : () => {
             const launch = stagedTerminalLaunchOnHost(
@@ -2080,11 +2125,15 @@ export function NewConversationModalBody(props: {
               toolbarStore.getState(),
               providers,
             );
-            return launch !== null && dispatchStartTerminal(launch);
+            if (launch === null) return false;
+            return dispatchStartTerminal(launch)
+              ? true
+              : Promise.resolve(false);
           };
   }, [
     dispatchStartTerminal,
     handleSubmit,
+    settleStagedUnlessPreparing,
     stagedProviders.data,
     stagedTerminalLaunch,
     toolbarStore,

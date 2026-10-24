@@ -16,6 +16,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
   type RenderResult,
 } from "@testing-library/react";
@@ -26,6 +27,7 @@ import type { ComposerBodyProps } from "@/components/home/composer/composer-body
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
+  StagedResubmit,
   useStagedSandboxHandoff,
   useStagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
@@ -55,6 +57,42 @@ const DIRTY_CONTENT: JsonContent = {
 
 const gateState = vi.hoisted(() => ({
   blockedIds: new Set<string>(),
+}));
+
+/** A prompt whose image is held by hash: its bytes are read before a send. */
+const HASH_IMAGE_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "imageAttachment",
+          attrs: {
+            id: "img-1",
+            fileName: "shot.png",
+            mimeType: "image/png",
+            size: 4,
+            hash: "1122334455667788990011223344556677889900112233445566778899aabbcc",
+          },
+        },
+        { type: "text", text: "look at this" },
+      ],
+    },
+  ],
+};
+
+// The image's bytes come from the composer's image store, read per test.
+const imageStore = vi.hoisted(() => ({
+  getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
+    Promise.resolve(undefined),
+  ),
+}));
+vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/composer/landing-image-store")
+  >()),
+  getImageBytes: imageStore.getImageBytes,
 }));
 
 vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => {
@@ -122,6 +160,10 @@ const testState = vi.hoisted(() => ({
   installEditor: null as (() => void) | null,
   /** How many composer bodies mounted: one per editor instance. */
   bodyMounts: 0,
+  /** How many of them unmounted, letting their editor go. */
+  bodyUnmounts: 0,
+  /** What the editor holds. */
+  editorContent: null as JsonContent | null,
   /** A toolbar popover the person left open in the composer. */
   toolbarPopoverOpen: false,
   placement: ((): { current: PlacementTargetShape } => ({
@@ -156,9 +198,15 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
+      const { editorRef } = props;
       React.useEffect(() => {
         testState.bodyMounts += 1;
-      }, []);
+        return () => {
+          // The editor's handle goes with it, as the real editor's does.
+          testState.bodyUnmounts += 1;
+          editorRef.current = null;
+        };
+      }, [editorRef]);
       return React.createElement(
         "div",
         { "data-testid": "composer-body-mock" },
@@ -190,7 +238,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
-    getJSON: () => DIRTY_CONTENT,
+    getJSON: () => testState.editorContent ?? DIRTY_CONTENT,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,
@@ -529,6 +577,10 @@ afterEach(() => {
   testState.stagedSendInput = null;
   testState.stagedHandoffInput = null;
   testState.bodyMounts = 0;
+  testState.bodyUnmounts = 0;
+  testState.editorContent = null;
+  imageStore.getImageBytes.mockReset();
+  imageStore.getImageBytes.mockResolvedValue(undefined);
   testState.toolbarPopoverOpen = false;
   useStagedSandboxStore.setState({ bySurface: {} });
   useNewConversationModalOpenStore.getState().close();
@@ -724,7 +776,7 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
       });
     });
     expect(staged().canSubmit).toBe(true);
-    let launched = false;
+    let launched: StagedResubmit = false;
     act(() => {
       launched = staged().submit();
     });
@@ -904,6 +956,42 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
       });
     });
   }
+
+  it("sends an image held by hash from the closed modal once its bytes are read, keeping the body until the create goes out", async () => {
+    testState.editorContent = HASH_IMAGE_CONTENT;
+    const read: { resolve: ((bytes: Uint8Array) => void) | null } = {
+      resolve: null,
+    };
+    imageStore.getImageBytes.mockReturnValue(
+      new Promise<Uint8Array>((resolve) => {
+        read.resolve = resolve;
+      }),
+    );
+    renderHost();
+    sendOnStagedSandbox();
+    setOpen(false, null);
+
+    handOff(true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toMatchObject({
+      phase: "handoff",
+      failure: null,
+    });
+    expect(testState.bodyUnmounts).toBe(0);
+
+    await act(async () => {
+      read.resolve?.(new Uint8Array([9, 8, 7, 6]));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(testState.createChat).toHaveBeenCalledTimes(1);
+    });
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
+    expect(testState.bodyUnmounts).toBe(1);
+  });
 
   it("closes its @/slash menu when it hides with the send still booting", () => {
     renderHost();

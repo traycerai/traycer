@@ -67,7 +67,9 @@ export type StagedSandboxFailure =
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
   /** The sandbox is up; no usable provider runs agents on it. */
-  | { readonly kind: "no-provider" };
+  | { readonly kind: "no-provider" }
+  /** The sandbox is up; the send handed to it stopped short of its create. */
+  | { readonly kind: "not-sent" };
 
 export interface StagedSandbox {
   readonly target: StagedSandboxTarget;
@@ -137,6 +139,7 @@ export function refusedBeforeCreate(
     case "settings":
     case "timed-out":
     case "no-provider":
+    case "not-sent":
       return false;
   }
 }

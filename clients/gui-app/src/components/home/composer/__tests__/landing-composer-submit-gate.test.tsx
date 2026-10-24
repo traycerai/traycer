@@ -13,7 +13,11 @@ import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
-import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
+import type {
+  LandingComposerSubmitArgs,
+  LandingTerminalAgentArgs,
+  TerminalAgentLaunch,
+} from "@/components/home/hooks/use-landing-composer-actions";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
@@ -30,7 +34,11 @@ const DIRTY_CONTENT: JsonContent = {
 
 const testState = vi.hoisted(() => ({
   submit: vi.fn(),
-  selectTerminalAgent: vi.fn<(launch: TerminalAgentLaunch) => null>(() => null),
+  // Dispatches, as the real action does with no refusal to give.
+  selectTerminalAgent: vi.fn((args: LandingTerminalAgentArgs): null => {
+    args.settled?.(true);
+    return null;
+  }),
   bodySubmit: null as (() => void) | null,
   startTerminal: null as ComposerBodyProps["onStartTerminal"] | null,
   installEditor: null as (() => void) | null,
@@ -579,7 +587,7 @@ describe("LandingComposer direct submit gate", () => {
     });
 
     expect(testState.selectTerminalAgent).toHaveBeenCalledTimes(1);
-    expect(testState.selectTerminalAgent.mock.calls[0][0]).toEqual({
+    expect(testState.selectTerminalAgent.mock.calls[0][0].launch).toEqual({
       harnessId: "claude",
       model: "claude-sonnet",
       reasoningEffort: "medium",
@@ -779,6 +787,84 @@ describe("LandingComposer direct submit gate", () => {
       });
     });
     expect(testState.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a send's handoff while its images are read through a draft switch, and ends it once the create goes out", async () => {
+    landingDrafts.drafts = [
+      { id: "draft-a", closed: false },
+      { id: "draft-b", closed: false },
+    ];
+    onTestFinished(() => {
+      landingDrafts.drafts = [];
+    });
+    const store = useStagedSandboxStore.getState();
+    store.stage("landing:window-test", {
+      kind: "existing",
+      hostId: "host-test",
+      sandboxId: "sbx-build",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.begin("landing:window-test", false, Date.now());
+    store.report("landing:window-test", {
+      phase: "handoff",
+      createdHostId: "host-test",
+      ownerId: "draft-a",
+      sendTaken: true,
+    });
+    // The resubmit reads its images before its create goes out.
+    const created: { settle: ((dispatched: boolean) => void) | null } = {
+      settle: null,
+    };
+    testState.submit.mockImplementationOnce(
+      (args: LandingComposerSubmitArgs) => {
+        created.settle = args.settled;
+        return null;
+      },
+    );
+    const draft = (id: string) => (
+      <LandingComposer
+        key={id}
+        draftId={id}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />
+    );
+    const view = render(draft("draft-a"));
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    view.rerender(draft("draft-a"));
+
+    act(() => {
+      testState.catalogHostId = "host-test";
+      testState.toolbarStore?.setState({
+        catalog: { hostId: "host-test", harnesses: [], modelsLoaded: true },
+      });
+    });
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+    expect(readStagedSandbox("landing:window-test")).toMatchObject({
+      phase: "handoff",
+      failure: null,
+    });
+
+    // Another draft takes the page while the images are read.
+    view.rerender(draft("draft-b"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readStagedSandbox("landing:window-test")?.phase).toBe("handoff");
+
+    await act(async () => {
+      created.settle?.(true);
+      await Promise.resolve();
+    });
+    expect(readStagedSandbox("landing:window-test")).toBeNull();
   });
 
   it("waits for the new sandbox's agent pack before launching a staged Start there", () => {

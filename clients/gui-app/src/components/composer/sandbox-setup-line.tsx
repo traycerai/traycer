@@ -48,6 +48,7 @@ import {
   settingsDidntApplyLine,
   shapeNotOfferedLine,
   awakeButNoCodingAgentLine,
+  readyButNotSentLine,
   stepApplyingSettings,
   takingLongerDetail,
   teamAllowanceShortLine,
@@ -70,6 +71,8 @@ export interface SandboxSetupLineActions {
   readonly onRetryCreation: () => void;
   /** The same create or wake again, with the same key. */
   readonly onRetry: () => void;
+  /** The send handed to the ready sandbox, made again from its draft. */
+  readonly onSendAgain: () => void;
   /** The shape sheet: Change shape or region, Choose a smaller shape. */
   readonly onChangeShape: () => void;
   /** Repairs the settings on the new host, then waits again. */
@@ -145,7 +148,8 @@ type RefusalFailure = Extract<
       | "shape"
       | "unavailable"
       | "refused"
-      | "no-provider";
+      | "no-provider"
+      | "not-sent";
   }
 >;
 
@@ -156,7 +160,8 @@ function isRefusal(failure: StagedSandboxFailure): failure is RefusalFailure {
     failure.kind === "shape" ||
     failure.kind === "unavailable" ||
     failure.kind === "refused" ||
-    failure.kind === "no-provider"
+    failure.kind === "no-provider" ||
+    failure.kind === "not-sent"
   );
 }
 
@@ -289,6 +294,20 @@ function SandboxRefusalLine(props: {
       );
       break;
     }
+    case "not-sent":
+      // Kept: the draft is still there, and Retry hands it to the sandbox.
+      sentence = readyButNotSentLine(props.name);
+      remedies = (
+        <>
+          <LineButton
+            label={RETRY}
+            testId="sandbox-refusal-send-again"
+            onClick={actions.onSendAgain}
+          />
+          {chooseAnother}
+        </>
+      );
+      break;
   }
   return (
     <div

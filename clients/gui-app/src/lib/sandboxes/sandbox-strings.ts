@@ -333,6 +333,13 @@ export function awakeButNoCodingAgentLine(
 ): string {
   return `${name} is awake, but no coding agent is signed in on ${configuration}.`;
 }
+/**
+ * The new sandbox is up but the send handed to it stopped short:
+ * `review-box is ready, but nothing was sent from this draft.`
+ */
+export function readyButNotSentLine(name: string): string {
+  return `${name} is ready, but nothing was sent from this draft.`;
+}
 export function openProvidersLabel(configuration: string): string {
   return `Open ${configuration}'s Providers`;
 }

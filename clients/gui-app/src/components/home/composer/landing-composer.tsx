@@ -87,6 +87,7 @@ import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-hos
 import {
   useStagedSandboxHandoff,
   useStagedSandboxSend,
+  type StagedResubmit,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
@@ -504,8 +505,8 @@ export function LandingComposer(props: LandingComposerProps) {
 
   // The staged sandbox's send (sandboxes plan D1). Phase 2 resets the
   // draft's workspace to the new host's, which starts empty, then resubmits.
-  // The latest `handleSubmit`, which is declared below and reads this hook.
-  const stagedSubmitRef = useRef<() => boolean>(() => false);
+  // The latest resubmit, which is declared below and reads this hook.
+  const stagedSubmitRef = useRef<() => StagedResubmit>(() => false);
   const prepareSandboxHandoff = useCallback(
     (hostId: string): void => {
       // A terminal asked for on the stage (a row's Open terminal, the
@@ -527,7 +528,7 @@ export function LandingComposer(props: LandingComposerProps) {
     [composerSurfaceKey, draftId],
   );
   const submitOnSandbox = useCallback(
-    (): boolean => stagedSubmitRef.current(),
+    (): StagedResubmit => stagedSubmitRef.current(),
     [],
   );
   // A terminal agent's Start that a staged sandbox took: launched on the new
@@ -750,80 +751,97 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
-  const handleSubmit = useCallback((): boolean => {
-    if (!canSubmit) return false;
-    // A staged sandbox takes the first send: it is created or woken, and
-    // this submit runs again on it once it is ready. The draft stays. It
-    // needs no model yet: a person with no host has no catalog to pick one
-    // from, and the resubmit takes the new host's default.
-    if (
-      stagedSend.intercept(
-        composerDisplayPlainText(
-          editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
-        ),
-        null,
-      )
-    ) {
-      return false;
-    }
-    const toolbar = toolbarStore.getState();
-    if (toolbar.selection.modelSlug.length === 0) return false;
-    // Submit is "delete the draft here, create the chat". A draft this host
-    // does not own is sent as it is: its retirement receipt keeps the row
-    // from being ingested back here, and its cloud row is retracted on the
-    // user's authority underneath. Nothing waits on ownership.
-    const refusal = actions.submit({
-      // `handleDocumentChange` mints the unbound draft the moment the first
-      // edit becomes submittable, but `props.draftId` only catches up on the
-      // parent's next render - so a type-then-Enter still reads `null` here.
-      // Without this fallback `ensureSubmissionDraft` would mint a SECOND
-      // draft and strand the one already holding the user's content.
-      draftId: draftId ?? createdUnboundDraftIdRef.current,
-      editor: editorRef.current,
-      slashCatalog: pickerStore.getState().knownSlashCommands,
-      toolbar: {
-        selection: toolbar.selection,
-        reasoning: toolbar.reasoning,
-        serviceTier: toolbar.serviceTier,
-        permission: toolbar.permission,
-      },
-      owner,
-      teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
-        toolbar.selection.harnessId,
-      ),
-    });
-    // Nothing was created when a refusal comes back - the draft, its content
-    // and its staged workspace are exactly as the user left them, and the
-    // reason is stated inline above the composer rather than as a toast.
-    raiseHostNotice(
-      refusal === null ? null : { kind: "refused", message: refusal.message },
-    );
-    if (refusal === null) setComposerExpanded(false);
-    return refusal === null;
-  }, [
-    actions,
-    canSubmit,
-    draftId,
-    owner,
-    pickerStore,
-    raiseHostNotice,
-    setComposerExpanded,
-    stagedSend,
-    teamSandboxHarnessBlockedFor,
-    toolbarStore,
-  ]);
-  const dispatchStartTerminal = useCallback(
-    (launch: TerminalAgentLaunch): boolean => {
-      const refusal = actions.selectTerminalAgent(
-        launch,
-        draftId,
+  /** Whether the submit went ahead; `settled` hears whether its create went out. */
+  const submitDraft = useCallback(
+    (settled: ((dispatched: boolean) => void) | null): boolean => {
+      if (!canSubmit) return false;
+      // A staged sandbox takes the first send: it is created or woken, and
+      // this submit runs again on it once it is ready. The draft stays. It
+      // needs no model yet: a person with no host has no catalog to pick one
+      // from, and the resubmit takes the new host's default.
+      if (
+        stagedSend.intercept(
+          composerDisplayPlainText(
+            editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
+          ),
+          null,
+        )
+      ) {
+        return false;
+      }
+      const toolbar = toolbarStore.getState();
+      if (toolbar.selection.modelSlug.length === 0) return false;
+      // Submit is "delete the draft here, create the chat". A draft this host
+      // does not own is sent as it is: its retirement receipt keeps the row
+      // from being ingested back here, and its cloud row is retracted on the
+      // user's authority underneath. Nothing waits on ownership.
+      const refusal = actions.submit({
+        // `handleDocumentChange` mints the unbound draft the moment the first
+        // edit becomes submittable, but `props.draftId` only catches up on the
+        // parent's next render - so a type-then-Enter still reads `null` here.
+        // Without this fallback `ensureSubmissionDraft` would mint a SECOND
+        // draft and strand the one already holding the user's content.
+        draftId: draftId ?? createdUnboundDraftIdRef.current,
+        editor: editorRef.current,
+        slashCatalog: pickerStore.getState().knownSlashCommands,
+        toolbar: {
+          selection: toolbar.selection,
+          reasoning: toolbar.reasoning,
+          serviceTier: toolbar.serviceTier,
+          permission: toolbar.permission,
+        },
         owner,
-        teamSandboxHarnessBlockedFor(launch.harnessId),
-      );
+        teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
+          toolbar.selection.harnessId,
+        ),
+        settled,
+      });
+      // Nothing was created when a refusal comes back - the draft, its content
+      // and its staged workspace are exactly as the user left them, and the
+      // reason is stated inline above the composer rather than as a toast.
       raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
+      if (refusal === null) setComposerExpanded(false);
       return refusal === null;
+    },
+    [
+      actions,
+      canSubmit,
+      draftId,
+      owner,
+      pickerStore,
+      raiseHostNotice,
+      setComposerExpanded,
+      stagedSend,
+      teamSandboxHarnessBlockedFor,
+      toolbarStore,
+    ],
+  );
+  const handleSubmit = useCallback(
+    (): boolean => submitDraft(null),
+    [submitDraft],
+  );
+  // Whether the terminal agent's create went out: false on a refusal, which
+  // says why inline, and on a hold, which creates nothing.
+  const dispatchStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch): boolean => {
+      const dispatched = { value: false };
+      const refusal = actions.selectTerminalAgent({
+        launch,
+        draftId,
+        owner,
+        teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
+          launch.harnessId,
+        ),
+        settled: (sent) => {
+          dispatched.value = sent;
+        },
+      });
+      raiseHostNotice(
+        refusal === null ? null : { kind: "refused", message: refusal.message },
+      );
+      return dispatched.value;
     },
     [actions, draftId, owner, raiseHostNotice, teamSandboxHarnessBlockedFor],
   );
@@ -852,23 +870,43 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
-  // earlier) reads this render's submit, not the last one's.
+  // earlier) reads this render's submit, not the last one's. No model or no
+  // launch on the new host is no agent there; any other refusal, or a send
+  // that stops short while its images are read, is a send that did not go.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
-        ? handleSubmit
+        ? () => {
+            if (toolbarStore.getState().selection.modelSlug.length === 0) {
+              return false;
+            }
+            // The executor runs now: a create that goes out in this call is
+            // sent already, and one still reading its images settles later.
+            const sent = { value: false };
+            const accepted = new Promise<boolean>((resolve) => {
+              const submitted = submitDraft((dispatched) => {
+                sent.value = dispatched;
+                resolve(dispatched);
+              });
+              if (!submitted) resolve(false);
+            });
+            return sent.value ? true : accepted;
+          }
         : () => {
             const launch = stagedTerminalLaunchOnHost(
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
             );
-            return launch !== null && dispatchStartTerminal(launch);
+            if (launch === null) return false;
+            return dispatchStartTerminal(launch)
+              ? true
+              : Promise.resolve(false);
           };
   }, [
     dispatchStartTerminal,
-    handleSubmit,
+    submitDraft,
     stagedProviders.data,
     stagedTerminalLaunch,
     toolbarStore,

@@ -538,6 +538,7 @@ function DelayedBranchValidationHarness() {
             slashCatalog: null,
             owner: null,
             teamSandboxHarnessBlocked: false,
+            settled: null,
             toolbar: {
               selection: {
                 harnessId: "codex",
