@@ -207,6 +207,31 @@ describe("useStagedSandboxSend's setup line", () => {
     );
   });
 
+  it("starts nothing when another sandbox was picked while the repair ran", () => {
+    stageCreated("applying", { kind: "settings", code: "SBX-0520" });
+    let finishRepair: () => void = () => undefined;
+    mocks.repairMutate.mockImplementationOnce((_variables, options) => {
+      finishRepair = options.onSuccess;
+    });
+    mount(vi.fn());
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-retry-applying"));
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "existing",
+        hostId: "other-host",
+        sandboxId: "sbx-2",
+        name: "other",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      });
+    });
+    finishRepair();
+
+    expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("staged");
+  });
+
   it("names the sandbox the send creates and counts as a stopwatch", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, {

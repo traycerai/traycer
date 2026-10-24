@@ -1839,6 +1839,39 @@ describe("<LandingTerminalPanel />", () => {
     expect(state.panelReveal).toBeNull();
   });
 
+  it("opens a requested terminal in the host's home into a CLOSED panel, whatever folder the draft has", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+
+    act(() => {
+      useLandingPanelStore.getState().requestTerminal("host-a");
+    });
+
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    // Drain the open transition's settlement: a gesture would re-target the
+    // draft's folder and spawn a second shell there.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    const state = useLandingPanelStore.getState();
+    const terminals = landingTerminalTabs(state.tabs);
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ hostId: "host-a", cwd: "/Users/dev" });
+    expect(state.activeInstanceId).toBe(terminals[0]?.instanceId);
+    expect(landingPanelLayoutFor(state, TEST_LANDING_PAGE_ID).panelOpen).toBe(
+      true,
+    );
+    expect(state.terminalRequest).toBeNull();
+  });
+
   it("adopts a sign-in session another window started, from terminal.list, on a capable host whose projection cannot carry it", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";

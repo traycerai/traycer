@@ -85,7 +85,11 @@ import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
-import { useStagedTerminalLaunch } from "@/stores/composer/staged-sandbox-store";
+import {
+  readStagedSandbox,
+  useStagedTerminalLaunch,
+} from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   stagedResubmitReady,
   stagedTerminalLaunchOnHost,
@@ -498,11 +502,16 @@ export function LandingComposer(props: LandingComposerProps) {
   const stagedSubmitRef = useRef<() => boolean>(() => false);
   const prepareSandboxHandoff = useCallback(
     (hostId: string): void => {
+      // The terminal a resting row's Open terminal staged, now that its
+      // sandbox is awake.
+      if (readStagedSandbox(composerSurfaceKey)?.openTerminal === true) {
+        useLandingPanelStore.getState().requestTerminal(hostId);
+      }
       const id = draftId ?? createdUnboundDraftIdRef.current;
       if (id === null) return;
       useLandingDraftStore.getState().restoreDraftWorkspaceForHost(id, hostId);
     },
-    [draftId],
+    [composerSurfaceKey, draftId],
   );
   const submitOnSandbox = useCallback(
     (): boolean => stagedSubmitRef.current(),

@@ -125,6 +125,7 @@ import {
   type LandingTerminalKillVariables,
 } from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
+import { landingPaneAnchorDraftIds } from "./landing-pane-anchor-store";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
   useLandingTerminalGesture,
@@ -1362,6 +1363,43 @@ export function LandingTerminalPanel(): ReactNode {
     deferredSettlementRef.current = null;
     runReconciliationSettlement(deferred.generation, deferred.context);
   }, [runReconciliationSettlement, surfaceActive]);
+
+  // A folderless terminal asked for from outside the panel (a sandbox row's
+  // Open terminal). It waits until the panel targets that host and can start
+  // one there - the host awake, its authority ready, its home reconciled -
+  // which the reconciliation publishes whether or not the panel is open. Then
+  // it is shown as the sign-in terminal is: a REVEAL of the tab just added,
+  // across every start page with a pane, so the open is not settled as a
+  // gesture that would re-target the draft's folder.
+  const terminalRequest = useLandingPanelStore(
+    (state) => state.terminalRequest,
+  );
+  useEffect(() => {
+    if (terminalRequest === null || !surfaceActive) return;
+    if (target.hostId !== terminalRequest) return;
+    const store = useLandingPanelStore.getState();
+    // Read live: a run with this render's values may already have served it.
+    if (store.terminalRequest !== terminalRequest) return;
+    const instanceId = createTerminalTab({
+      ...target,
+      launchWorkspacePath: null,
+    });
+    if (instanceId === null) return;
+    store.clearTerminalRequest();
+    const anchoredPageIds = landingPaneAnchorDraftIds();
+    store.revealPanel({
+      landingPageIds: [...new Set([landingPageId, ...anchoredPageIds])],
+      everyPage: anchoredPageIds.length === 0,
+      instanceId,
+    });
+    focusTerminalInstance(instanceId);
+  }, [
+    createTerminalTab,
+    landingPageId,
+    surfaceActive,
+    target,
+    terminalRequest,
+  ]);
 
   useLandingTerminalReconciliation({
     activeHostId: target.hostId,

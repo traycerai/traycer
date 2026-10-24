@@ -179,6 +179,7 @@ export function useStagedSandboxSend(input: {
     [binding, queryClient, surfaceKey, taskId, userId],
   );
   const newHost = useNewHostActions(
+    surfaceKey,
     stage?.createdHostId ?? null,
     terminal,
     run,
@@ -361,6 +362,7 @@ interface StagedSandboxTerminal {
  * opens a folderless one there once the host can.
  */
 function useNewHostActions(
+  surfaceKey: string | null,
   createdHostId: string | null,
   terminal: StagedSandboxTerminal | null,
   run: (fresh: boolean) => void,
@@ -375,8 +377,27 @@ function useNewHostActions(
   );
   return {
     onRetryApplying: () => {
-      if (createdHostId === null) return;
-      repair.mutate({}, { onSuccess: () => run(false) });
+      if (surfaceKey === null || createdHostId === null) return;
+      const origin = readStagedSandbox(surfaceKey);
+      if (origin === null) return;
+      repair.mutate(
+        {},
+        {
+          // The wait resumes only for the stage the repair was for: another
+          // pick made meanwhile is created by its own send, never by this.
+          onSuccess: () => {
+            const current = readStagedSandbox(surfaceKey);
+            if (
+              current === null ||
+              current.clientRequestId !== origin.clientRequestId ||
+              current.createdHostId !== createdHostId
+            ) {
+              return;
+            }
+            run(false);
+          },
+        },
+      );
     },
     onOpenTerminal:
       terminal === null || terminalTarget === null

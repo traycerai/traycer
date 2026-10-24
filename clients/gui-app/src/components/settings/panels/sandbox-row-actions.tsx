@@ -46,6 +46,7 @@ import {
 import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -146,8 +147,10 @@ export function SandboxRowActions(props: {
           },
         },
       ),
-    "open-tab": () => openOnLanding(summary, configuration),
-    "open-terminal": () => openOnLanding(summary, configuration),
+    "open-tab": () =>
+      openOnLanding(summary, configuration, { terminal: false }),
+    "open-terminal": () =>
+      openOnLanding(summary, configuration, { terminal: true }),
   };
 
   const run = (action: SandboxRowAction): void => {
@@ -302,21 +305,26 @@ export function SandboxRowActions(props: {
  * sandbox and leaves Settings for a new task. A resting sandbox wakes on the
  * first action there, never on this: it is staged to resume or start, which
  * replaces a New sandbox staged there before, so the next send never creates
- * one instead.
+ * one instead. `terminal` also opens a folderless terminal there: at once
+ * for an awake sandbox, on the handoff for a resting one.
  */
 function useOpenSandboxOnLanding(): (
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
+  intent: { readonly terminal: boolean },
 ) => void {
   const surfaceKey = useComposerSurfaceHostKey();
   const { close } = useSystemTabModalActions();
   const navigate = useNavigate();
-  return (summary, configuration) => {
+  return (summary, configuration, intent) => {
     // Staged as the composer's picker stages it, so a dead lease's pin cannot
     // send to the fallback host; an awake one drops whatever was staged.
     const verb = summary.frozen ? null : restingVerb(summary.state);
     if (verb === null) {
       useStagedSandboxStore.getState().clear(surfaceKey);
+      if (intent.terminal) {
+        useLandingPanelStore.getState().requestTerminal(summary.hostId);
+      }
     } else {
       useStagedSandboxStore.getState().stage(surfaceKey, {
         kind: "existing",
@@ -333,6 +341,11 @@ function useOpenSandboxOnLanding(): (
             : { kind: "personal" },
         verb,
       });
+      if (intent.terminal) {
+        useStagedSandboxStore
+          .getState()
+          .report(surfaceKey, { openTerminal: true });
+      }
     }
     useSurfaceHostSelectionStore
       .getState()

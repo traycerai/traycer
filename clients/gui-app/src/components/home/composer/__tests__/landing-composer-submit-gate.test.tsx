@@ -18,6 +18,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
@@ -566,6 +567,52 @@ describe("LandingComposer direct submit gate", () => {
       terminalAgentArgs: "--resume",
       profileId: null,
     });
+  });
+
+  it("opens the terminal a resting row's Open terminal staged once its sandbox is awake, not before", () => {
+    useLandingPanelStore.getState().resetForTests();
+    const store = useStagedSandboxStore.getState();
+    store.stage("landing:window-test", {
+      kind: "existing",
+      hostId: "host-test",
+      sandboxId: "sbx-build",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.report("landing:window-test", { openTerminal: true });
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const start = testState.startTerminal;
+    if (start === null) throw new Error("expected ComposerBody seam");
+    act(() => {
+      start(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        },
+        "host-test",
+      );
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+
+    act(() => {
+      useStagedSandboxStore.getState().report("landing:window-test", {
+        phase: "handoff",
+        createdHostId: "host-test",
+      });
+    });
+
+    expect(useLandingPanelStore.getState().terminalRequest).toBe("host-test");
   });
 
   it("waits for the new sandbox's agent pack before launching a staged Start there", () => {

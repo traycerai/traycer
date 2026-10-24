@@ -565,6 +565,34 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(testState.intercepts).toBe(1);
     expect(testState.createChat).not.toHaveBeenCalled();
   });
+
+  it("drops the folders picked on the old host before the resubmit on the new one", () => {
+    const store = useNewConversationModalStore.getState();
+    store.addResolvedFolders(
+      "epic-1",
+      { folders: [], folderInfoByPath: {}, primaryPath: null },
+      [
+        {
+          path: "/Users/me/api",
+          name: "api",
+          repoIdentifier: null,
+          hostId: "host-a",
+        },
+      ],
+    );
+    renderModal();
+    const input = testState.stagedSendInput;
+    if (input === null) throw new Error("expected the staged send");
+
+    act(() => {
+      input.prepareHandoff("sbx-host");
+    });
+
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"];
+    expect(patch?.workspace).toBeNull();
+    expect(draftSurvived()).toBe(true);
+  });
 });
 
 describe("new-conversation modal's terminal Start on a staged sandbox", () => {

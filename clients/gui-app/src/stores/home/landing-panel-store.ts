@@ -443,6 +443,15 @@ export interface LandingPanelStoreState {
    * panel consumes this on its next open transition to tell the two apart.
    */
   readonly panelReveal: string | null;
+  /**
+   * The host a folderless terminal was asked for from outside the panel (a
+   * sandbox row's Open terminal), or `null`. Not persisted. The panel opens
+   * it once that host is the one it targets and can start a terminal there,
+   * then clears it; a later ask replaces it.
+   */
+  readonly terminalRequest: string | null;
+  readonly requestTerminal: (hostId: string) => void;
+  readonly clearTerminalRequest: () => void;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
   /**
    * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and
@@ -741,6 +750,12 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
     (set, get) => ({
       ...initialLandingPanelState(),
       panelReveal: null,
+      terminalRequest: null,
+      requestTerminal: (hostId) => set({ terminalRequest: hostId }),
+      clearTerminalRequest: () =>
+        set((state) =>
+          state.terminalRequest === null ? state : { terminalRequest: null },
+        ),
       setPanelOpen: (landingPageId, panelOpen) =>
         set((state) =>
           updateLandingPanelLayout(state, landingPageId, {
@@ -1078,7 +1093,11 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
           };
         }),
       resetForTests: () =>
-        set({ ...initialLandingPanelState(), panelReveal: null }),
+        set({
+          ...initialLandingPanelState(),
+          panelReveal: null,
+          terminalRequest: null,
+        }),
     }),
     {
       ...basePersistOptions(landingTerminalsKey(null)),

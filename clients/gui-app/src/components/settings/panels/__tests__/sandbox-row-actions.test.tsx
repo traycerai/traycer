@@ -8,6 +8,7 @@ import {
   readStagedSandbox,
   useStagedSandboxStore,
 } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
 const SURFACE = "landing:window-test";
@@ -57,6 +58,7 @@ beforeEach(() => {
   createMutate.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
+  useLandingPanelStore.getState().resetForTests();
 });
 
 afterEach(cleanup);
@@ -141,6 +143,68 @@ describe("<SandboxRowActions />", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
       "host-build",
     );
+  });
+
+  it.each([
+    { item: "Open a tab", request: null },
+    { item: "Open terminal", request: "host-build" },
+  ])(
+    "asks the landing panel for a terminal on an awake sandbox from $item: $request",
+    async ({ item, request }) => {
+      render(
+        <SandboxRowActions
+          summary={sandboxSummaryFixture({
+            id: "sbx-build",
+            hostId: "host-build",
+            state: "awake",
+            burst: false,
+            guestConfigured: true,
+          })}
+          configuration={{ kind: "personal" }}
+          unreachable={false}
+          frozenNeedsOwnCredits={false}
+        />,
+      );
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /^More actions for/ }),
+      );
+      await userEvent.click(
+        await screen.findByRole("menuitem", { name: item }),
+      );
+
+      expect(useLandingPanelStore.getState().terminalRequest).toBe(request);
+    },
+  );
+
+  it("carries a suspended sandbox's Open terminal on its stage, so the terminal opens after the wake", async () => {
+    render(
+      <SandboxRowActions
+        summary={sandboxSummaryFixture({
+          id: "sbx-build",
+          hostId: "host-build",
+          state: "suspended",
+          burst: false,
+          frozen: false,
+        })}
+        configuration={{ kind: "personal" }}
+        unreachable={false}
+        frozenNeedsOwnCredits={false}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /^More actions for/ }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Open terminal" }),
+    );
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      target: { kind: "existing", hostId: "host-build", verb: "resume" },
+      openTerminal: true,
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
   it.each([

@@ -993,6 +993,11 @@ export function NewConversationModalBody(props: {
     (): boolean => stagedSubmitRef.current(),
     [],
   );
+  // Folders picked on the old host are not the new one's: the draft takes the
+  // new host's workspace, which starts empty, before the resubmit.
+  const prepareSandboxHandoff = useCallback((): void => {
+    useNewConversationModalStore.getState().clearWorkspace(epicId);
+  }, [epicId]);
   const stagedSend = useStagedSandboxSend({
     surfaceKey: stagingSurfaceKey(sandboxStaging),
     resolvedHostId,
@@ -1005,7 +1010,7 @@ export function NewConversationModalBody(props: {
       providers: stagedProviders,
     }),
     submit: submitOnSandbox,
-    prepareHandoff: noopPrepareHandoff,
+    prepareHandoff: prepareSandboxHandoff,
     terminal: stagedTerminal,
     taskId: epicId,
     ownerId: null,
@@ -2230,5 +2235,3 @@ function useGlobalWorkspaceSnapshot(
     }),
   );
 }
-
-function noopPrepareHandoff(): void {}

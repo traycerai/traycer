@@ -100,6 +100,12 @@ export interface StagedSandbox {
    * stage, so a composer that remounts meanwhile still launches it.
    */
   readonly terminalLaunch: TerminalAgentLaunch | null;
+  /**
+   * The stage was picked to open a folderless terminal on the sandbox (a
+   * resting row's Open terminal): the landing panel opens it on the handoff,
+   * once the sandbox is awake.
+   */
+  readonly openTerminal: boolean;
 }
 
 interface StagedSandboxStoreState {
@@ -135,6 +141,7 @@ interface StagedSandboxStoreState {
         | "stepAt"
         | "failure"
         | "terminalLaunch"
+        | "openTerminal"
       >
     >,
   ) => void;
@@ -167,6 +174,7 @@ function freshStage(target: StagedSandboxTarget): StagedSandbox {
     stepAt: null,
     failure: null,
     terminalLaunch: null,
+    openTerminal: false,
   };
 }
 
