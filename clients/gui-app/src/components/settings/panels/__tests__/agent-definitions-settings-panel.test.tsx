@@ -2,7 +2,7 @@
 // addresses is mocked at the one hook that names it; the client is a REAL
 // `HostClient` over an in-memory messenger (`buildEnvironmentClient`), so a
 // save travels the request path the app uses and only the host is faked.
-const hostIdMock = vi.hoisted((): { readonly id: string } => ({
+const hostIdMock = vi.hoisted((): { id: string } => ({
   id: "host-a",
 }));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -41,6 +41,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -78,6 +79,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   hostMock.client = null;
   hostMock.binding = null;
+  hostIdMock.id = "host-a";
 });
 
 interface Rig {
@@ -464,6 +466,96 @@ describe("<AgentDefinitionsSettingsPanel />", () => {
     ).toBeNull();
     expect(screen.queryAllByTestId("agent-definition")).toEqual([]);
     expect(rig.lists()).toBe(0);
+  });
+
+  it("shows each computer's own text when the binding moves to another computer", async () => {
+    // Same name, same revision, different text: only the host tells them apart.
+    const onA: AgentDefinition = { ...REVIEWER, text: "Review on A." };
+    const onB: AgentDefinition = { ...REVIEWER, text: "Review on B." };
+    const putsOnB: PutRequest[] = [];
+    const a = buildEnvironmentClient({
+      hostId: "host-a",
+      handlers: {
+        "environment.status": () => environmentStatusFixture({}),
+        "environment.agentDefinitions.list": () =>
+          Promise.resolve({ definitions: [onA] }),
+      },
+    });
+    const b = buildEnvironmentClient({
+      hostId: "host-b",
+      handlers: {
+        "environment.status": () => environmentStatusFixture({}),
+        "environment.agentDefinitions.list": () =>
+          Promise.resolve({ definitions: [onB] }),
+        "environment.agentDefinitions.put": (request) => {
+          putsOnB.push(request);
+          return Promise.resolve({ outcome: "saved" as const, revision: 4 });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", METHODS);
+    recordNegotiatedHostMethods("host-b", METHODS);
+    hostMock.binding = {
+      auth: {
+        mintExecutableWriteGrant: () =>
+          Promise.resolve({
+            kind: "ok" as const,
+            grant: "grant-1",
+            expiresInSeconds: 600,
+          }),
+        getCredentialGeneration: () => 0,
+      },
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    // A fresh element each time: React skips re-rendering an identical one.
+    const page = (): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        <AgentDefinitionsSettingsPanel />
+      </QueryClientProvider>
+    );
+    hostIdMock.id = "host-a";
+    hostMock.client = a.client;
+    const view = render(page());
+    await waitFor(() => {
+      expect(editorFor("reviewer.md").value).toBe("Review on A.");
+    });
+
+    // The Environment dropdown re-provides the binding without remounting.
+    hostIdMock.id = "host-b";
+    hostMock.client = b.client;
+    view.rerender(page());
+    await waitFor(() => {
+      expect(editorFor("reviewer.md").value).toBe("Review on B.");
+    });
+
+    // A save there writes B's own edit, from B's revision.
+    fireEvent.change(editorFor("reviewer.md"), {
+      target: { value: "Review on B, then approve." },
+    });
+    fireEvent.click(
+      within(sectionFor("reviewer.md")).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => {
+      expect(putsOnB).toHaveLength(1);
+    });
+    expect(putsOnB[0]).toMatchObject({
+      text: "Review on B, then approve.",
+      expectedRevision: 3,
+    });
+
+    // Back to A, whose list is cached: no pending read unmounts the editor,
+    // so only its key can drop B's draft.
+    hostIdMock.id = "host-a";
+    hostMock.client = a.client;
+    view.rerender(page());
+    await waitFor(() => {
+      expect(editorFor("reviewer.md").value).toBe("Review on A.");
+    });
   });
 
   it("says the read failed instead of showing an empty list", async () => {

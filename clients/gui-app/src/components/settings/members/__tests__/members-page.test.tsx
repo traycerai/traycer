@@ -410,4 +410,62 @@ describe("MembersPage pending removal", () => {
       within(rowOf("u-priya")).queryByRole("button", { name: "Remove" }),
     ).toBeNull();
   });
+
+  it("shows a removed member who rejoins as a member again, once a read lists them after their removal committed", async () => {
+    let phase: "listed" | "committed" | "rejoined" = "listed";
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => {
+          if (phase === "listed") return membersPage([ADA, PRIYA]);
+          // Grace joining in the same read is what shows it has landed.
+          if (phase === "committed") return membersPage([ADA, GRACE]);
+          return membersPage([ADA, GRACE, PRIYA]);
+        },
+        "environment.members.removePreview": () => PREVIEW,
+        "environment.members.remove": () => ({
+          outcome: "pending",
+          receiptId: "removal:env-a:7",
+        }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    await screen.findByTestId("members-remove-preview-table");
+    await userEvent.click(screen.getByTestId("members-remove-confirm"));
+
+    // Before the removal commits the read still lists Priya, under the
+    // membership being removed: that is not a rejoin.
+    await vi.waitFor(() => {
+      expect(harness.paramsOf("environment.members").length).toBeGreaterThan(1);
+    });
+    await vi.waitFor(() => {
+      expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe(
+        "pending",
+      );
+    });
+    expect(screen.getByText("Acme · 1 person")).toBeTruthy();
+
+    phase = "committed";
+    await act(() => harness.queryClient.invalidateQueries());
+    expect(await screen.findByText("Grace")).toBeTruthy();
+    expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("pending");
+    expect(screen.getByText("Acme · 2 people")).toBeTruthy();
+
+    // Invited back and accepted: the next read lists a new membership.
+    phase = "rejoined";
+    await act(() => harness.queryClient.invalidateQueries());
+    expect(await screen.findByText("Acme · 3 people")).toBeTruthy();
+    expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("none");
+    expect(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    ).toBeTruthy();
+  });
 });

@@ -31,6 +31,12 @@ export interface MembersPageProps {
 interface PendingRemoval {
   readonly member: MembersListMember;
   readonly receiptId: string;
+  /**
+   * Whether a successful read has stopped listing the person since the
+   * removal was requested: the removal committed, so a read that lists them
+   * again lists a newer membership, and the removal no longer describes them.
+   */
+  readonly unlisted: boolean;
 }
 
 const FALLBACK_TEAM_NAME = "this team";
@@ -87,6 +93,27 @@ function overlayRemovals(
   return rows;
 }
 
+/**
+ * The removals as a successful read leaves them: one whose person the read
+ * no longer lists is marked unlisted, and one already unlisted whose person
+ * the read lists again retires. The same map when nothing moved.
+ */
+function settleRemovals(
+  pendingRemovals: ReadonlyMap<string, PendingRemoval>,
+  members: readonly EnvironmentMembersListMember[],
+): ReadonlyMap<string, PendingRemoval> {
+  const listed = new Set(members.map((member) => member.userId));
+  let next: Map<string, PendingRemoval> | null = null;
+  for (const [userId, removal] of pendingRemovals) {
+    const isListed = listed.has(userId);
+    if (isListed === !removal.unlisted) continue;
+    next ??= new Map(pendingRemovals);
+    if (isListed) next.delete(userId);
+    else next.set(userId, { ...removal, unlisted: true });
+  }
+  return next ?? pendingRemovals;
+}
+
 function membersReadState(
   served: boolean | null,
   failed: boolean,
@@ -129,14 +156,24 @@ export function MembersPage(props: MembersPageProps): ReactNode {
   const directory = useHostDirectory();
   const noticeSeenFor = useRef<string | null>(null);
 
-  const members = useMemo(
-    () => overlayRemovals(list.members, pendingRemovals, completedReceipts),
-    [list.members, pendingRemovals, completedReceipts],
-  );
   const membersRead = membersReadState(
     membersSupport,
     list.isError,
     client === null || membersSupport === null || list.isPending,
+  );
+  // Each successful read settles the removals once; a new removal clears this
+  // so the read already in hand settles it too.
+  const [settledRead, setSettledRead] = useState<
+    readonly EnvironmentMembersListMember[] | null
+  >(null);
+  if (membersRead === "ready" && settledRead !== list.members) {
+    setSettledRead(list.members);
+    setPendingRemovals((current) => settleRemovals(current, list.members));
+  }
+
+  const members = useMemo(
+    () => overlayRemovals(list.members, pendingRemovals, completedReceipts),
+    [list.members, pendingRemovals, completedReceipts],
   );
 
   const viewerFromList = members.find(
@@ -162,9 +199,11 @@ export function MembersPage(props: MembersPageProps): ReactNode {
             next.set(input.userId, {
               member: removed,
               receiptId: outcome.receiptId,
+              unlisted: false,
             });
             return next;
           });
+          setSettledRead(null);
         }
         return outcome;
       });

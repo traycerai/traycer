@@ -40,7 +40,7 @@ export function AgentDefinitionsSettingsPanel(): ReactNode {
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       {source.kind === "pool" || supported === true ? (
-        <AgentDefinitionsBody />
+        <AgentDefinitionsBody hostId={hostId} />
       ) : null}
       {source.kind === "host" && supported === false ? (
         <p className="text-ui-sm text-muted-foreground">
@@ -73,7 +73,9 @@ function useAgentDefinitionWrites() {
   return { put, remove };
 }
 
-function AgentDefinitionsBody(): ReactNode {
+function AgentDefinitionsBody(props: {
+  readonly hostId: string | null;
+}): ReactNode {
   const query = useEnvironmentAgentDefinitionsQuery(true);
   const canEdit = useCanEditConfiguration();
   const [conflict, setConflict] = useState<ConfigurationWriteIssue>(null);
@@ -104,10 +106,12 @@ function AgentDefinitionsBody(): ReactNode {
         </p>
       ) : (
         definitions.map((definition) => (
-          // Keyed by revision: a re-read after any save remounts the editor
-          // on the text it now has.
+          // Keyed by host and revision: a re-read after any save remounts the
+          // editor on the text it now has, and so does the binding moving to
+          // another computer, whose definition may share this name and
+          // revision but not this text.
           <AgentDefinitionEditor
-            key={`${definition.name}:${definition.revision}`}
+            key={`${props.hostId}:${definition.name}:${definition.revision}`}
             definition={definition}
             onOutcome={setConflict}
           />
