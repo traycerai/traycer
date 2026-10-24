@@ -12,7 +12,6 @@ import type {
   SharedInUseItem,
 } from "@/components/settings/move/retrospective-sheet";
 
-const MAIL_PASSWORD_KEY = "NOTIFICATION_SMTP_PASSWORD";
 const ROOM_KINDS = new Set(["skill", "agent_selection_guide"]);
 
 const KIND_PAGE: Readonly<Record<string, RetrospectivePageId>> = {
@@ -58,7 +57,6 @@ function looksLikeApiKey(key: string): boolean {
 }
 
 function pageForItem(item: EnvironmentItemStatus): RetrospectivePageId | null {
-  if (item.key === MAIL_PASSWORD_KEY) return "notifications";
   if (item.kind === "secret") {
     return looksLikeApiKey(item.key) ? "providers" : "secrets";
   }
@@ -69,7 +67,6 @@ function groupKey(
   item: EnvironmentItemStatus,
   page: RetrospectivePageId,
 ): string {
-  if (item.key === MAIL_PASSWORD_KEY) return "mail";
   if (item.kind === "secret" && looksLikeApiKey(item.key)) return "api-keys";
   return `${page}:${item.kind}`;
 }
@@ -78,9 +75,6 @@ function groupLabel(
   items: readonly EnvironmentItemStatus[],
   page: RetrospectivePageId,
 ): string {
-  if (items.some((item) => item.key === MAIL_PASSWORD_KEY)) {
-    return "notification settings";
-  }
   if (
     page === "providers" &&
     items.every((item) => looksLikeApiKey(item.key))
@@ -127,7 +121,6 @@ export function sharedInUseFromItems(
         label: "0 items",
         names: [],
         page: "providers",
-        includesMailPassword: false,
       };
     }
     return {
@@ -135,9 +128,6 @@ export function sharedInUseFromItems(
       label: groupLabel(group.items, group.page),
       names: group.items.map((item) => item.key),
       page: group.page,
-      includesMailPassword: group.items.some(
-        (item) => item.key === MAIL_PASSWORD_KEY,
-      ),
     };
   });
 }
