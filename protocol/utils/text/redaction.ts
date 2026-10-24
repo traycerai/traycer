@@ -408,23 +408,33 @@ export function reduceRequestTargetToPath(value: string): string {
 }
 
 /**
- * One path segment that can be a home folder's name: no separator, no
- * whitespace, and none of the characters that end a path quoted in a message
- * or a stack line (`'`, `"`, `` ` ``, `(`, `)`, `:`, `,`, `;`, `|`, `*`,
- * `?`). Leaving out `<` and `>` is also what makes the rule idempotent:
+ * One space-free word of a home folder's name that a separator closes: any
+ * character but a separator and those no folder name holds on any OS (`"`,
+ * `:`, `<`, `>`, `|`, `*`, `?`, and `` ` ``, which only quotes one), so a
+ * Windows name's apostrophe or parentheses (`Syn'thetic`, `Name (Work)`) stay
+ * inside it. Leaving out `<` and `>` is also what makes the rule idempotent:
  * `<redacted>` is not a name.
  */
-const HOME_FOLDER_NAME = String.raw`[^\s/\\:'"\x60<>|()*?,;]+`;
+const HOME_FOLDER_NAME_WORD = String.raw`[^\s/\\:"\x60<>|*?]+`;
+
+/**
+ * A name nothing closes (the path ends at it): also stops at the characters
+ * that end a path quoted in prose or a stack line (`'`, `(`, `)`, `,`, `;`),
+ * except an apostrophe between two name characters.
+ */
+const HOME_FOLDER_NAME_CHAR = String.raw`[^\s/\\:'"\x60<>|()*?,;]`;
+const HOME_FOLDER_NAME_BARE = `${HOME_FOLDER_NAME_CHAR}+(?:'${HOME_FOLDER_NAME_CHAR}+)*`;
 
 /**
  * The segment right after a `Users` (macOS, Windows) or `home` (Linux) path
  * segment, under either separator, and under doubled ones (a JSON-escaped
- * Windows path). A name with spaces, which a macOS full-name folder has
- * (`/Users/Mary Jane/...`), is taken whole only where a separator follows it,
- * so `/Users/name is missing` in prose loses the name and keeps the prose.
+ * Windows path). Where a separator follows, the whole segment goes, spaces
+ * included (a macOS full-name folder, `/Users/Mary Jane/...`); where none
+ * does, only the bare name, so `/Users/name is missing` and
+ * `'/home/name' failed, see /tmp/x` keep their prose.
  */
 const HOME_FOLDER_NAME_PATTERN = new RegExp(
-  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)(${HOME_FOLDER_NAME}(?: ${HOME_FOLDER_NAME})*(?=[/\\])|${HOME_FOLDER_NAME})`,
+  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)(${HOME_FOLDER_NAME_WORD}(?: ${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
   "gi",
 );
 

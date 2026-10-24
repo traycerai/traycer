@@ -192,6 +192,23 @@ describe("redactHomeDirectoryNames", () => {
     ["/opt/traycer/x", "/opt/traycer/x"],
     ["/Users", "/Users"],
     ["/Users/<redacted>/x", "/Users/<redacted>/x"],
+    // Windows folder names may carry an apostrophe or parentheses; a
+    // following separator ends the name, so all of it goes.
+    [
+      "C:\\Users\\Syn'thetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    [
+      "C:\\Users\\Synthetic (Work)\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    ["/Users/Syn'thetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/Syn'thetic", "/home/<redacted>"],
+    // Prose after a quoted home path is not taken for the name.
+    [
+      "open '/home/synthetic-user' failed, see /tmp/x",
+      "open '/home/<redacted>' failed, see /tmp/x",
+    ],
   ])("rewrites %j to %j", (input, expected) => {
     expect(redactHomeDirectoryNames(input)).toBe(expected);
     expect(redactHomeDirectoryNames(expected)).toBe(expected);
