@@ -19,6 +19,7 @@ import {
   type LinuxPackageType,
 } from "./linux-update-guidance";
 import { UPDATE_BLOCKED_LOCATION_REASON } from "./relocate-to-applications";
+import { isScoopInstall, SCOOP_UPDATE_BLOCKED_REASON } from "./scoop-install";
 import { showSimpleNotification } from "../notifications";
 import { compareHostVersions } from "../cli/cli-discovery";
 import {
@@ -219,9 +220,15 @@ let currentSnapshot: DesktopAppUpdateSnapshot = {
 // Resolver for the install-blocked reason, injected at `installAutoUpdater` and
 // evaluated fresh for each snapshot (so it tracks the live location).
 let resolveInstallBlockedReason: (() => string | null) | null = null;
+// Set once at `installAutoUpdater` time: a Scoop install never downloads or
+// applies an update itself (see `scoop-install.ts`).
+let scoopInstall = false;
 let updaterDeps: AppUpdaterDeps | null = null;
 
 function currentInstallBlockedReason(): string | null {
+  if (scoopInstall) {
+    return SCOOP_UPDATE_BLOCKED_REASON;
+  }
   return resolveInstallBlockedReason === null
     ? null
     : resolveInstallBlockedReason();
@@ -443,6 +450,7 @@ function installWindowsSignatureTolerance(): void {
 async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   updaterDeps = deps;
   resolveInstallBlockedReason = deps.installBlockedReason;
+  scoopInstall = isScoopInstall();
   currentSnapshot = {
     ...currentSnapshot,
     installBlockedReason: currentInstallBlockedReason(),

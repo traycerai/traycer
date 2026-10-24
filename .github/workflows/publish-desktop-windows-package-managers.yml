@@ -1,0 +1,266 @@
+name: publish-desktop-windows-package-managers
+
+# winget + Scoop publisher for Traycer Desktop (runs in the PUBLIC OSS repo).
+#
+# Auto-triggers when a stable desktop-v<version> GitHub Release is published
+# here (release: released never fires for prereleases, so RC tags are excluded).
+# Also dispatchable by tag for manual re-runs.
+#
+# Both channels ship the release's signed NSIS installer unchanged and publish
+# through a PULL REQUEST, never a direct push:
+#   - winget: `wingetcreate submit` opens a PR on microsoft/winget-pkgs from the
+#     fork of the account that owns TRAYCER_WINGET_TOKEN; Microsoft's
+#     validation and moderators merge it.
+#   - Scoop: a PR on the TRAYCER_SCOOP_BUCKET_REPO bucket; merging it is the
+#     human gate, as with the Homebrew cask.
+# A channel whose secrets are unset is skipped with a notice, so the workflow
+# renders and smoke-installs without publishing anything until provisioned.
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Desktop release tag to publish (e.g. desktop-v1.6.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Render and smoke-install only; open no winget or Scoop PR."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    name: Render winget + Scoop manifests
+    # Skip non-desktop release events (cli-v*/host-v* also fire `released`).
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'desktop-v') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      RELEASE_REPO: ${{ github.repository }}
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Parse tag into version
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$RELEASE_TAG"
+          fi
+          if [[ "$tag" != desktop-v* ]]; then
+            echo "::error::Tag '$tag' must be a desktop release tag of the form desktop-v<semver> (e.g. desktop-v1.6.0)."
+            exit 1
+          fi
+          version="${tag#desktop-v}"
+          # Stable versions only: winget and Scoop users get no release
+          # candidates, and both manifests key on a plain X.Y.Z.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version '$version' parsed from tag '$tag'. Expected a stable X.Y.Z (e.g. 1.6.0)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: "24.20.0"
+      - name: Download the Windows installer from the desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "desktop-v${VERSION}" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "::error::Release 'desktop-v${VERSION}' does not exist on ${RELEASE_REPO}."
+            exit 1
+          fi
+          mkdir -p desktop-artifacts
+          gh release download "desktop-v${VERSION}" \
+            --repo "$RELEASE_REPO" \
+            --pattern "traycer-desktop-windows-x64.exe" \
+            --dir desktop-artifacts \
+            --clobber
+          test -f desktop-artifacts/traycer-desktop-windows-x64.exe
+      - name: Render manifests
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="https://github.com/${RELEASE_REPO}/releases/download/desktop-v${VERSION}"
+          win_sha="$(sha256sum desktop-artifacts/traycer-desktop-windows-x64.exe | awk '{print $1}')"
+          node scripts/native-packaging/publish-cli-package-managers.cjs \
+            --desktop-winget \
+            --desktop-scoop \
+            --version "$VERSION" \
+            --release-repo "$RELEASE_REPO" \
+            --staging staging \
+            --win-x64-url "${base_url}/traycer-desktop-windows-x64.exe" \
+            --win-x64-sha256 "$win_sha"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows-manifests
+          path: |
+            staging/winget
+            staging/scoop
+
+  scoop-smoke:
+    name: Smoke-install the Scoop manifest
+    needs: render
+    # No `environment` and no secrets: this job runs Scoop's own installer.
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-windows-manifests
+          path: manifests
+      - name: Install Scoop
+        shell: pwsh
+        run: |
+          # The runner is elevated; Scoop's installer refuses that without
+          # -RunAsAdmin.
+          Invoke-Expression "& {$(Invoke-RestMethod https://get.scoop.sh)} -RunAsAdmin"
+          "$env:USERPROFILE\scoop\shims" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Install, check and uninstall traycer-desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          scoop install manifests/scoop/bucket/traycer-desktop.json
+          if ($LASTEXITCODE -ne 0) { throw "scoop install failed ($LASTEXITCODE)" }
+          $app = scoop prefix traycer-desktop
+          foreach ($required in @('Traycer.exe', 'resources\app-update.yml', 'resources\cli\win32-x64\traycer.exe')) {
+            if (-not (Test-Path (Join-Path $app $required))) { throw "Scoop install is missing $required" }
+          }
+          $marker = Get-Content -Raw (Join-Path $app 'resources\package-type')
+          if ($marker -ne 'scoop') { throw "resources\package-type is '$marker', expected 'scoop'" }
+          scoop uninstall traycer-desktop
+          if ($LASTEXITCODE -ne 0) { throw "scoop uninstall failed ($LASTEXITCODE)" }
+
+  publish-scoop:
+    name: PR traycer-desktop to the Scoop bucket
+    needs: [render, scoop-smoke]
+    if: ${{ inputs.dry_run != true }}
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+    concurrency:
+      group: scoop-bucket-publish
+      cancel-in-progress: false
+    steps:
+      - name: Check Scoop bucket secrets
+        id: gate
+        env:
+          SCOOP_BUCKET_REPO: ${{ secrets.TRAYCER_SCOOP_BUCKET_REPO }}
+          BUCKET_PUSH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$SCOOP_BUCKET_REPO" || -z "$BUCKET_PUSH_TOKEN" ]]; then
+            echo "::notice::TRAYCER_SCOOP_BUCKET_REPO or TRAYCER_TAP_PUSH_TOKEN is unset; skipping the Scoop bucket PR."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: ${{ steps.gate.outputs.enabled == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-windows-manifests
+          path: manifests
+      - name: Open the bucket PR
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.TRAYCER_TAP_PUSH_TOKEN }}
+          BUCKET_REPO: ${{ secrets.TRAYCER_SCOOP_BUCKET_REPO }}
+          VERSION: ${{ needs.render.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${BUCKET_REPO}.git" bucket
+          cd bucket
+          git config user.name "traycer-release-bot"
+          git config user.email "release@traycer.ai"
+          base="$(git symbolic-ref --short HEAD)"
+          branch="traycer-desktop-${VERSION}"
+          git checkout -B "$branch"
+          mkdir -p bucket
+          cp ../manifests/scoop/bucket/traycer-desktop.json bucket/traycer-desktop.json
+          git add bucket/traycer-desktop.json
+          if git diff --cached --quiet; then
+            echo "::notice::traycer-desktop.json is already up to date for ${VERSION}; nothing to PR."
+            exit 0
+          fi
+          git commit -m "traycer-desktop ${VERSION}"
+          git push --force origin "$branch"
+          existing="$(gh pr list --repo "$BUCKET_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            echo "::notice::PR #${existing} already open for ${branch}; updated its branch."
+          else
+            gh pr create --repo "$BUCKET_REPO" --base "$base" --head "$branch" \
+              --title "traycer-desktop ${VERSION}" \
+              --body "Automated Scoop manifest update for Traycer Desktop ${VERSION}, generated by publish-desktop-windows-package-managers.yml. Review and merge to publish."
+          fi
+
+  publish-winget:
+    name: Submit Traycer.Desktop to winget
+    needs: render
+    if: ${{ inputs.dry_run != true }}
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+    concurrency:
+      group: winget-publish
+      cancel-in-progress: false
+    steps:
+      - name: Check winget secret
+        id: gate
+        env:
+          WINGET_TOKEN: ${{ secrets.TRAYCER_WINGET_TOKEN }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINGET_TOKEN)) {
+            "::notice::TRAYCER_WINGET_TOKEN is unset; skipping the winget submission."
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+      - if: ${{ steps.gate.outputs.enabled == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-windows-manifests
+          path: manifests
+      - name: Submit the manifest
+        if: ${{ steps.gate.outputs.enabled == 'true' }}
+        env:
+          WINGET_TOKEN: ${{ secrets.TRAYCER_WINGET_TOKEN }}
+          VERSION: ${{ needs.render.outputs.version }}
+          WINGETCREATE_URL: https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe
+          WINGETCREATE_SHA256: 24042BD37915805615E6CF969AC57C6439124C3FE85823327F5F3FB24BD9FFEA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -Uri $env:WINGETCREATE_URL -OutFile wingetcreate.exe
+          $actual = (Get-FileHash -Algorithm SHA256 wingetcreate.exe).Hash
+          if ($actual -ne $env:WINGETCREATE_SHA256) { throw "wingetcreate.exe sha256 $actual does not match the pinned $env:WINGETCREATE_SHA256" }
+          .\wingetcreate.exe submit --token $env:WINGET_TOKEN "manifests/winget/manifests/t/Traycer/Desktop/$env:VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "wingetcreate submit failed ($LASTEXITCODE)" }

@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type {
@@ -874,6 +877,38 @@ describe("desktop app updater", () => {
 
     expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
     expect(updater.getAppUpdateSnapshot().status).toBe("available");
+  });
+
+  it("leaves a Scoop install to scoop update instead of downloading the installer", async () => {
+    setPlatform("win32");
+    const resources = mkdtempSync(join(tmpdir(), "traycer-scoop-resources-"));
+    writeFileSync(join(resources, "package-type"), "scoop\n");
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: resources,
+      writable: true,
+    });
+    try {
+      const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      autoUpdater.checkForUpdates.mockImplementation(() => {
+        autoUpdater.emit("update-available", { version: "2.0.0" });
+        return Promise.resolve(null);
+      });
+      await updater.installAutoUpdater(true, makeDeps(true));
+      await updater.checkForUpdatesNow(false, "automatic");
+      expect(updater.getAppUpdateSnapshot()).toMatchObject({
+        status: "available",
+        installBlockedReason:
+          "Run scoop update traycer-desktop to install updates.",
+      });
+
+      updater.startUpdateDownload();
+
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+      expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    } finally {
+      rmSync(resources, { recursive: true, force: true });
+    }
   });
 
   it("downloads only on user request and tracks whole-percent progress", async () => {
