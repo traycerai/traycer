@@ -195,6 +195,55 @@ describe("TeamVariablesAndShells", () => {
     ]);
   });
 
+  it("lists every operating system's variables under All, labels the ones scoped to one, and saves each under its own", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "variable",
+            key: "API_URL",
+            os: "macos",
+            value: { value: "mac-value" },
+            revision: 2,
+          }),
+        ],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 3,
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    const user = userEvent.setup();
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    const row = await screen.findByRole("region", { name: "API_URL · macOS" });
+    expect(within(row).getByText("macOS")).toBeTruthy();
+    expect(screen.queryByText("No variables yet.")).toBeNull();
+    const field = within(row).getByLabelText("API_URL · macOS value");
+    expect(field).toHaveProperty("value", "mac-value");
+
+    await user.type(field, "!");
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "variable",
+        key: "API_URL",
+        os: "macos",
+        value: { value: "mac-value!" },
+        revision: 2,
+      },
+    ]);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Operating system" }),
+    );
+    await user.click(await screen.findByRole("option", { name: "Linux" }));
+    expect(screen.queryByRole("region", { name: /API_URL/ })).toBeNull();
+    expect(screen.getByText("No variables yet.")).toBeTruthy();
+  });
+
   it("says live values need a host while the team has none", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items: [] }),

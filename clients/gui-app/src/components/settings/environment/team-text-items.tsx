@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -12,7 +13,19 @@ import {
   useConfigurationSource,
 } from "./configuration-source";
 
-/** Row addresses and revisions come from the pool, never from a live host. */
+const OS_LABELS: Readonly<Record<Exclude<EnvironmentOs, "any">, string>> = {
+  linux: "Linux",
+  macos: "macOS",
+  windows: "Windows",
+};
+
+/**
+ * Row addresses and revisions come from the pool, never from a live host.
+ *
+ * `os` is the scope a new item is written under. Under `any` every item of
+ * every scope is listed, each one scoped to a single OS labelled with it;
+ * under a single OS only that OS's items are.
+ */
 export function TeamTextItems(props: {
   readonly items: readonly ConfigurationItem[];
   readonly kind: "variable" | "env_override";
@@ -27,7 +40,7 @@ export function TeamTextItems(props: {
   const rows = props.items.filter(
     (item) =>
       item.kind === props.kind &&
-      item.os === props.os &&
+      (props.os === "any" || item.os === props.os) &&
       (props.providerId === null ||
         item.key.startsWith(`${props.providerId}:`)),
   );
@@ -41,6 +54,11 @@ export function TeamTextItems(props: {
           item={item}
           kind={props.kind}
           os={props.os}
+          osLabel={
+            props.os === "any" && item.os !== null && item.os !== "any"
+              ? OS_LABELS[item.os]
+              : null
+          }
           providerId={props.providerId}
           onOutcome={props.onOutcome}
           details={props.renderDetails(item)}
@@ -55,6 +73,7 @@ export function TeamTextItems(props: {
           item={null}
           kind={props.kind}
           os={props.os}
+          osLabel={null}
           providerId={props.providerId}
           onOutcome={props.onOutcome}
           details={null}
@@ -68,6 +87,8 @@ function TeamTextItemEditor(props: {
   readonly item: ConfigurationItem | null;
   readonly kind: "variable" | "env_override";
   readonly os: EnvironmentOs;
+  /** The single OS a row listed under `any` is scoped to, else `null`. */
+  readonly osLabel: string | null;
   readonly providerId: string | null;
   readonly onOutcome: (
     result: EnvironmentConfigurationItemWriteResponse,
@@ -83,7 +104,8 @@ function TeamTextItemEditor(props: {
       : configurationTextValueSchema.parse(props.item.value).value;
   const [name, setName] = useState("");
   const [value, setValue] = useState(saved);
-  const label = props.item?.key ?? "New variable";
+  const title = props.item?.key ?? "New variable";
+  const label = props.osLabel === null ? title : `${title} · ${props.osLabel}`;
   const validName = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
   const save = (): void => {
     if (source.kind !== "pool") return;
@@ -97,7 +119,8 @@ function TeamTextItemEditor(props: {
         environmentId: source.environmentId,
         kind: props.kind,
         key,
-        os: props.os,
+        // An item keeps its own scope; only a new one takes the picker's.
+        os: props.item?.os ?? props.os,
         value: { value },
         revision: props.item?.revision ?? null,
       },
@@ -118,7 +141,14 @@ function TeamTextItemEditor(props: {
       aria-label={label}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-ui-sm">{label}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate font-mono text-ui-sm">{title}</span>
+          {props.osLabel === null ? null : (
+            <Badge variant="secondary" size="xs">
+              {props.osLabel}
+            </Badge>
+          )}
+        </span>
         {props.details}
       </div>
       {props.item === null ? (
