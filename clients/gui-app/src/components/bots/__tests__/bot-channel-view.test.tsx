@@ -390,6 +390,7 @@ describe("<BotChannelView /> channel", () => {
       "conversation-channel",
     );
     expect(composer.getAttribute("data-thread-id")).toBe("none");
+    expect(composer.getAttribute("data-announcement-id")).toBe("none");
     expect(composer.getAttribute("data-placeholder")).toBe(
       "Message #Release Bot",
     );
@@ -616,16 +617,6 @@ describe("<BotChannelView /> channel", () => {
       failure,
       "Couldn't send your choice.",
     );
-  });
-
-  it("posts at the channel's top level, not under an announcement", () => {
-    mount({ paused: false, openThreadPostId: null });
-
-    expect(
-      screen
-        .getByTestId("stub-bot-channel-composer")
-        .getAttribute("data-announcement-id"),
-    ).toBe("none");
   });
 });
 
