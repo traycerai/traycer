@@ -501,13 +501,24 @@ export function LandingComposer(props: LandingComposerProps) {
   // host in phase 2, as the chat send resubmits there.
   const [stagedTerminalLaunch, setStagedTerminalLaunch] =
     useState<TerminalAgentLaunch | null>(null);
+  // Phase 2 resubmits once the new host's catalog has answered, so the
+  // selection holds its default model, or none when it offers no agent (the
+  // line then says the sandbox is awake but cannot run one).
+  const catalogSettled = useStore(
+    toolbarStore,
+    (s) =>
+      s.catalog.hostId === resolvedHostId &&
+      s.catalog.harnesses !== undefined &&
+      (s.catalog.harnesses.length === 0 || s.catalog.modelsLoaded),
+  );
   const stagedSend = useStagedSandboxSend({
     surfaceKey: composerSurfaceKey,
     resolvedHostId,
     canSubmit:
-      stagedTerminalLaunch === null
+      catalogSettled &&
+      (stagedTerminalLaunch === null
         ? canSubmit
-        : workspaceCanStart && !isSubmitting,
+        : workspaceCanStart && !isSubmitting),
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
     // No epic before the send: the landing panel's terminals follow the
@@ -677,10 +688,10 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const handleSubmit = useCallback((): boolean => {
     if (!canSubmit) return false;
-    const toolbar = toolbarStore.getState();
-    if (toolbar.selection.modelSlug.length === 0) return false;
     // A staged sandbox takes the first send: it is created or woken, and
-    // this submit runs again on it once it is ready. The draft stays.
+    // this submit runs again on it once it is ready. The draft stays. It
+    // needs no model yet: a person with no host has no catalog to pick one
+    // from, and the resubmit takes the new host's default.
     setStagedTerminalLaunch(null);
     if (
       stagedSend.intercept(
@@ -691,6 +702,8 @@ export function LandingComposer(props: LandingComposerProps) {
     ) {
       return false;
     }
+    const toolbar = toolbarStore.getState();
+    if (toolbar.selection.modelSlug.length === 0) return false;
     // Submit is "delete the draft here, create the chat". A draft this host
     // does not own is sent as it is: its retirement receipt keeps the row
     // from being ingested back here, and its cloud row is retracted on the

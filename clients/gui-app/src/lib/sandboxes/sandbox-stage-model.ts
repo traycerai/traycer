@@ -185,7 +185,10 @@ export interface StagePrice {
   readonly exact: boolean;
 }
 
-/** The region's smallest shape: its price, and whether `shape` is it. */
+/**
+ * The region's smallest shape: its price, and whether `shape` is it, by its
+ * cpus, memory and disk (an unset disk is the provider's default).
+ */
 export function stageSmallestShape(
   catalogue: SandboxCatalogue,
   shape: StageShape,
@@ -202,7 +205,9 @@ export function stageSmallestShape(
   );
   return {
     isStaged:
-      shape.cpus === bounds.cpuMin && shape.memoryMb === smallestMemoryMb,
+      shape.cpus === bounds.cpuMin &&
+      shape.memoryMb === smallestMemoryMb &&
+      (shape.diskMb ?? bounds.diskDefaultMb) === bounds.diskMinMb,
     awakeMcPerHour: region.fromPriceMcPerHour.awakeMc,
   };
 }

@@ -16,6 +16,7 @@ import {
   CHANGE_SHAPE_OR_REGION,
   CHOOSE_ANOTHER_HOST,
   CHOOSE_A_SMALLER_SHAPE,
+  DETAILS,
   COMPUTE_CHARGED_WHILE_AWAKE,
   COPY_SUPPORT_REFERENCE,
   COULDNT_VERIFY_BALANCE,
@@ -46,7 +47,7 @@ import {
   openProvidersLabel,
   settingsDidntApplyLine,
   shapeNotOfferedLine,
-  signInToACodingAgentLine,
+  awakeButNoCodingAgentLine,
   stepApplyingSettings,
   takingLongerDetail,
   teamAllowanceShortLine,
@@ -57,6 +58,7 @@ import type {
   StagedSandboxFailure,
   StagedSandboxStep,
 } from "@/stores/composer/staged-sandbox-store";
+import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 
 /** What the line's buttons do, wired by the surface that owns the stage. */
 export interface SandboxSetupLineActions {
@@ -115,6 +117,7 @@ export function SandboxSetupLine(props: {
     return (
       <SandboxRefusalLine
         stage={stage}
+        name={props.name}
         failure={failure}
         facts={props.facts}
         actions={props.actions}
@@ -159,6 +162,7 @@ function isRefusal(failure: StagedSandboxFailure): failure is RefusalFailure {
 
 function SandboxRefusalLine(props: {
   readonly stage: StagedSandbox;
+  readonly name: string;
   readonly failure: RefusalFailure;
   readonly facts: SandboxSetupLineFacts;
   readonly actions: SandboxSetupLineActions;
@@ -250,13 +254,16 @@ function SandboxRefusalLine(props: {
       remedies = chooseAnother;
       break;
     case "no-provider": {
-      const name = configurationLabel(stageConfigurationCopy(configuration));
-      sentence = signInToACodingAgentLine(name);
+      // Awake and kept: the draft waits for an agent to sign in there, or
+      // goes to another host.
+      const label = configurationLabel(stageConfigurationCopy(configuration));
+      const sandboxId = props.stage.createdSandboxId;
+      sentence = awakeButNoCodingAgentLine(props.name, label);
       remedies = (
         <>
           {actions.onOpenProviders === null ? null : (
             <LineButton
-              label={openProvidersLabel(name)}
+              label={openProvidersLabel(label)}
               testId="sandbox-refusal-open-providers"
               onClick={actions.onOpenProviders}
             />
@@ -266,6 +273,14 @@ function SandboxRefusalLine(props: {
               label={OPEN_TERMINAL_INSTEAD}
               testId="sandbox-refusal-open-terminal"
               onClick={actions.onOpenTerminal}
+            />
+          )}
+          {chooseAnother}
+          {sandboxId === null ? null : (
+            <LineButton
+              label={DETAILS}
+              testId="sandbox-refusal-details"
+              onClick={() => openSandboxDetails(sandboxId)}
             />
           )}
         </>

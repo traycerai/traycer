@@ -314,9 +314,15 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
-/** No usable provider on the configuration. */
-export function signInToACodingAgentLine(configuration: string): string {
-  return `Sign in to a coding agent to run agents on ${configuration}.`;
+/**
+ * The new sandbox is awake but its configuration has no usable provider:
+ * `review-box is awake, but no coding agent is signed in on Acme.`
+ */
+export function awakeButNoCodingAgentLine(
+  name: string,
+  configuration: string,
+): string {
+  return `${name} is awake, but no coding agent is signed in on ${configuration}.`;
 }
 export function openProvidersLabel(configuration: string): string {
   return `Open ${configuration}'s Providers`;

@@ -154,7 +154,15 @@ export function useStagedSandboxSend(input: {
     (messageText: string): boolean => {
       if (surfaceKey === null) return false;
       const current = readStagedSandbox(surfaceKey);
-      if (current === null || current.phase === "handoff") return false;
+      if (current === null) return false;
+      if (current.phase === "handoff") {
+        // The resubmit on the new host was refused: this send is the
+        // person's own, on the host the surface is already pinned to.
+        if (current.failure !== null) {
+          useStagedSandboxStore.getState().clear(surfaceKey);
+        }
+        return false;
+      }
       if (current.phase === "staged") {
         messageTextRef.current = messageText;
         setFallbackName(stagedSandboxFallbackName(messageText));
@@ -196,10 +204,15 @@ export function useStagedSandboxSend(input: {
     }
     if (handedOffRef.current === key || !canSubmit) return;
     handedOffRef.current = key;
-    // Accepted or refused, the stage is done: a refusal is the composer's own
-    // inline notice, and the draft stays for the next send on this host.
-    submit();
-    useStagedSandboxStore.getState().clear(surfaceKey);
+    if (submit()) {
+      useStagedSandboxStore.getState().clear(surfaceKey);
+      return;
+    }
+    // Refused on the new host (no agent it can run): the sandbox stays
+    // awake, the draft stays, and the line says why with what to do next.
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { failure: { kind: "no-provider" } });
   }, [
     canSubmit,
     handoffHostId,

@@ -37,6 +37,8 @@ const testState = vi.hoisted(() => ({
   runPendingImageJob: null as
     | ((job: (signal: AbortSignal) => Promise<void>) => void)
     | null,
+  /** The selected model; empty for a person whose host offers no catalog. */
+  modelSlug: "claude-sonnet",
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -122,8 +124,15 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
     selection: {
       harnessId: "claude",
-      modelSlug: "claude-sonnet",
+      get modelSlug() {
+        return testState.modelSlug;
+      },
       profileId: null,
+    },
+    catalog: {
+      hostId: null,
+      harnesses: undefined,
+      modelsLoaded: false,
     },
     permission: "supervised",
     reasoning: "medium",
@@ -355,6 +364,7 @@ afterEach(() => {
   testState.pasteDisabled = false;
   testState.resolvingPaths = false;
   testState.runPendingImageJob = null;
+  testState.modelSlug = "claude-sonnet";
 });
 
 describe("LandingComposer direct submit gate", () => {
@@ -398,6 +408,50 @@ describe("LandingComposer direct submit gate", () => {
 
     expect(started).toBe(false);
     expect(testState.selectTerminalAgent).not.toHaveBeenCalled();
+  });
+
+  it("lets a staged sandbox take the send of a person with no model to pick yet", () => {
+    testState.modelSlug = "";
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    const composer = (
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-test"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />
+    );
+    const view = render(composer);
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    view.rerender(composer);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+    // The intercept took the send: it recorded the sending draft.
+    expect(testState.submit).not.toHaveBeenCalled();
+    expect(
+      useStagedSandboxStore.getState().bySurface["landing:window-test"]
+        ?.ownerId,
+    ).toBe("pending-test");
   });
 
   it("locks editor input, paste ingestion, and workspace controls during a submission", () => {

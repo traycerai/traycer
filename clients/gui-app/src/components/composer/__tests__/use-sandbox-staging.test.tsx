@@ -10,6 +10,7 @@ import type {
 } from "@traycer/protocol/host/sandbox-control";
 import {
   useSandboxStaging,
+  type SandboxStagingTask,
   type SandboxStaging,
 } from "@/components/composer/use-sandbox-staging";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -367,6 +368,49 @@ describe("useSandboxStaging New rows", () => {
       audience: "shared",
       price: { awakeMcPerHour: 120, exact: false },
     });
+  });
+});
+
+describe("useSandboxStaging In this task", () => {
+  it("lists the task's hosts but never an agent's burst sandbox", () => {
+    const burst = sandboxHost(
+      "box-burst",
+      {
+        state: "awake",
+        summary: sandboxSummaryFixture({
+          id: "sbx-box-burst",
+          hostId: "box-burst",
+          burst: true,
+        }),
+      },
+      null,
+    );
+    const task: SandboxStagingTask = {
+      hosts: [AWAKE, burst].map((host) => ({
+        hostId: host.hostId,
+        label: host.name,
+        principal: { kind: "user", id: "u1" },
+        reach: "same_principal",
+      })),
+      groups: [],
+      collaborators: null,
+    };
+    function InTask() {
+      const result = useSandboxStaging({
+        surface: { surfaceKey: SURFACE, task },
+        memoryHostId: MEMORY_HOST,
+        hosts: [LAPTOP, AWAKE, burst],
+      });
+      useEffect(() => {
+        latest = result;
+      }, [result]);
+      return null;
+    }
+    render(<InTask />);
+
+    expect(staging().composer.inThisTask?.map((host) => host.hostId)).toEqual([
+      "box-awake",
+    ]);
   });
 });
 

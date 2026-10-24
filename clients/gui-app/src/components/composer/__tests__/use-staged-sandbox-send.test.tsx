@@ -297,6 +297,69 @@ describe("useStagedSandboxSend's handoff", () => {
   });
 });
 
+describe("useStagedSandboxSend's refused resubmit", () => {
+  it("keeps the stage, the sandbox and the draft when the new host refuses, and says why", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    const submit = vi.fn(() => false);
+    let send: StagedSandboxSend | null = null;
+    function Refusing() {
+      const result = useStagedSandboxSend({
+        surfaceKey: SURFACE,
+        resolvedHostId: NEW_HOST,
+        canSubmit: true,
+        submit,
+        prepareHandoff: () => undefined,
+        terminal: null,
+        taskId: null,
+        ownerId: null,
+      });
+      useEffect(() => {
+        send = result;
+      }, [result]);
+      return <>{result.line}</>;
+    }
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Refusing />
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      send?.intercept("fix the login bug");
+      useStagedSandboxStore.getState().report(SURFACE, {
+        createdSandboxId: "sbx-1",
+        createdHostId: NEW_HOST,
+        phase: "handoff",
+      });
+    });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toMatchObject({
+      phase: "handoff",
+      failure: { kind: "no-provider" },
+    });
+    expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
+      "api-refactor is awake, but",
+    );
+    expect(screen.getByTestId("sandbox-refusal-details")).toBeDefined();
+
+    // The person's next send is their own, on the host the surface is on.
+    let taken = true;
+    act(() => {
+      taken = send?.intercept("fix the login bug") ?? true;
+    });
+    expect(taken).toBe(false);
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
+  });
+});
+
 describe("stagedSandboxFallbackName", () => {
   it("keeps a name from a long first word within the create's 191 characters", () => {
     expect(stagedSandboxFallbackName(`${"a".repeat(300)} fix`)).toBe(

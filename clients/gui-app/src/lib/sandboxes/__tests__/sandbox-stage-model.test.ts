@@ -208,6 +208,17 @@ describe("stagePrice", () => {
     expect(price).toEqual({ awakeMcPerHour: 231, exact: true });
   });
 
+  it("quotes the smallest shape exactly without the rates, but a larger disk only as from", () => {
+    const smallest = { ...STAGED, cpus: 1, memoryMb: 1024, diskMb: 10240 };
+    expect(stagePrice(catalogue(null, "linux"), smallest)).toEqual({
+      awakeMcPerHour: 80,
+      exact: true,
+    });
+    expect(
+      stagePrice(catalogue(null, "linux"), { ...smallest, diskMb: 20480 }),
+    ).toEqual({ awakeMcPerHour: 80, exact: false });
+  });
+
   it("quotes the smallest shape's price as a from price without the rates", () => {
     expect(stagePrice(catalogue(null, "linux"), STAGED)).toEqual({
       awakeMcPerHour: 80,

@@ -302,11 +302,16 @@ export function useSandboxStaging(input: {
   );
 
   const composer = useMemo<HostSwitcherComposerMode>(() => {
+    // The picker's own rule for a sandbox: an agent's burst sandbox is never
+    // offered, and one whose row has not answered might be burst (fails closed).
     const inThisTask =
       task === null
         ? null
-        : input.hosts.filter((host) =>
-            (task.hosts ?? []).some((row) => row.hostId === host.hostId),
+        : input.hosts.filter(
+            (host) =>
+              (task.hosts ?? []).some((row) => row.hostId === host.hostId) &&
+              (host.sandbox === null ||
+                (host.sandbox.summary !== null && !host.sandbox.summary.burst)),
           );
     return {
       viewerUserId: viewerUserId.length === 0 ? null : viewerUserId,
