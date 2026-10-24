@@ -18,7 +18,7 @@ const createMutate = vi.hoisted(() =>
 );
 
 vi.mock("@tanstack/react-router", () => ({
-  useRouter: () => ({ navigate: vi.fn() }),
+  useNavigate: () => () => new Promise<void>(() => undefined),
 }));
 vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
   useComposerSurfaceHostKey: () => SURFACE,

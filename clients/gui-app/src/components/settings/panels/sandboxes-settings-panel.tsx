@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useRouter } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { Bot, Clock, ListFilter, Search, Server, Workflow } from "lucide-react";
 import type {
   SandboxCatalogue,
@@ -77,6 +79,7 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   KEPT_UNTIL_YOU_DESTROY_IT,
+  SANDBOXES_CANT_BE_CREATED,
   SANDBOX_LIST_FAILED,
   sandboxShapeLabel,
   shortPriceLabel,
@@ -205,13 +208,15 @@ function configurationForPick(
 /**
  * A New row's shape as the catalogue offers it, with its class's wake string
  * and its price (`from` unless it is the region's smallest, the one shape the
- * catalogue prices), or `null` before the catalogue answers.
+ * catalogue prices), or `null` before the catalogue answers. A catalogue that
+ * offers no shape says sandboxes can't be created.
  */
 function defaultShapeLine(
   catalogue: SandboxCatalogue | null,
   shape: StageShape | null,
 ): string | null {
-  if (catalogue === null || shape === null) return null;
+  if (catalogue === null) return null;
+  if (shape === null) return SANDBOXES_CANT_BE_CREATED;
   const provider = stageProviderFor(catalogue, shape.os);
   const price = stagePrice(catalogue, shape);
   const priceLabel =
@@ -597,7 +602,7 @@ function SandboxesEmpty(props: {
 }): ReactNode {
   const { configuration } = props;
   const { close } = useSystemTabModalActions();
-  const router = useRouter();
+  const navigate = useNavigate();
   const surfaceKey = useComposerSurfaceHostKey();
   const { catalogue, memoryHostId, shape } =
     useConfigurationStageShape(configuration);
@@ -639,7 +644,8 @@ function SandboxesEmpty(props: {
         onClick={() => {
           stageNewRow();
           close();
-          void router.navigate({ to: "/" });
+          // A new task's tab, not only its route: Settings may be a tab of its own.
+          activateTabIntent(navigate, openNewEpicIntent(), undefined);
         }}
       >
         New task

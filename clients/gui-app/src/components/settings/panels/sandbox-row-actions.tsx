@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
-import { useRouter } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -308,7 +310,7 @@ function useOpenSandboxOnLanding(): (
 ) => void {
   const surfaceKey = useComposerSurfaceHostKey();
   const { close } = useSystemTabModalActions();
-  const router = useRouter();
+  const navigate = useNavigate();
   return (summary, configuration) => {
     // Staged as the composer's picker stages it, so a dead lease's pin cannot
     // send to the fallback host; an awake one drops whatever was staged.
@@ -336,6 +338,7 @@ function useOpenSandboxOnLanding(): (
       .getState()
       .setSelection(surfaceKey, summary.hostId);
     close();
-    void router.navigate({ to: "/" });
+    // A new task's tab, not only its route: Settings may be a tab of its own.
+    activateTabIntent(navigate, openNewEpicIntent(), undefined);
   };
 }

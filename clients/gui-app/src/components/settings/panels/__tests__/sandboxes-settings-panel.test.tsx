@@ -18,7 +18,10 @@ import {
   sandboxRowActions,
   type SandboxPageConfiguration,
 } from "@/lib/sandboxes/sandbox-row-lines";
-import { KEPT_UNTIL_YOU_DESTROY_IT } from "@/lib/sandboxes/sandbox-strings";
+import {
+  KEPT_UNTIL_YOU_DESTROY_IT,
+  SANDBOXES_CANT_BE_CREATED,
+} from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
 
 const CATALOGUE: SandboxCatalogue = {
@@ -65,8 +68,13 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
 }));
 
+/** The router's commit boundary: every navigation the page asks for. */
+const navigations = vi.hoisted(() => [] as object[]);
 vi.mock("@tanstack/react-router", () => ({
-  useRouter: () => ({ navigate: vi.fn() }),
+  useNavigate: () => (options: object) => {
+    navigations.push(options);
+    return new Promise<void>(() => undefined);
+  },
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
@@ -158,12 +166,49 @@ vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
 import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
 } from "@/stores/composer/staged-sandbox-store";
+
+const SETTINGS_REF: TabRef = { kind: "settings", id: "settings" };
+
+/** A window whose tab strip holds Settings as its selected tab. */
+async function withSettingsTabSelected(): Promise<void> {
+  navigations.length = 0;
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  __resetTabSyncCoordinatorForTesting();
+  __resetTabNavigationControllerForTesting();
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(SETTINGS_REF), ref: SETTINGS_REF }],
+    activeItemId: tabItemId(SETTINGS_REF),
+    stripOrder: [SETTINGS_REF],
+    systemTabs: {
+      history: null,
+      settings: {
+        id: "settings",
+        kind: "settings",
+        name: "Settings",
+        lastPath: "/settings/sandboxes",
+      },
+    },
+  });
+  installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function row(id: string, overrides: Partial<SandboxSummary>): SandboxSummary {
   return sandboxSummaryFixture({
@@ -212,6 +257,21 @@ describe("<SandboxesSettingsPanel />", () => {
       byHost: {},
       lastConfigurationByHost: {},
     });
+  });
+
+  it("shows … for the default shape only while the catalogue has not answered", () => {
+    renderPanel([]);
+    expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+      "…",
+    );
+  });
+
+  it("says sandboxes can't be created once the catalogue answers with no shape", () => {
+    mocks.catalogue = { providers: [] };
+    renderPanel([]);
+    expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+      SANDBOXES_CANT_BE_CREATED,
+    );
   });
 
   it("shows the person's remembered pick in the defaults, else the spec's", () => {
@@ -414,12 +474,27 @@ describe("<SandboxesSettingsPanel />", () => {
     );
   });
 
-  it("stages this configuration's New sandbox row on the landing composer from New task, creating nothing", () => {
+  it("stages this configuration's New sandbox row on a new task's tab from New task, creating nothing", async () => {
     useStagedSandboxStore.setState({ bySurface: {} });
     mocks.catalogue = CATALOGUE;
+    // Settings is open as a tab of its own, the selected one.
+    await withSettingsTabSelected();
     renderPanel([]);
 
     fireEvent.click(screen.getByRole("button", { name: "New task" }));
+
+    // A new task's draft tab is selected, not only routed to.
+    const selected = useTabsStore.getState().activeItemId;
+    expect(selected).not.toBe(tabItemId(SETTINGS_REF));
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    if (draftId === null) throw new Error("expected a new task's draft");
+    expect(selected).toBe(tabItemId({ kind: "draft", id: draftId }));
+    expect(navigations).toContainEqual(
+      expect.objectContaining({
+        to: "/draft/$draftId",
+        params: { draftId },
+      }),
+    );
 
     const stage = readStagedSandbox("landing:window-test");
     expect(stage?.phase).toBe("staged");
