@@ -73,6 +73,18 @@ const botRequestKeySchema = lazySchema(() =>
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
 );
 
+/**
+ * How a bot answers a member's top-level post. `thread`: in a thread under
+ * the post, run by a session of its own. `direct`: the bot itself answers at
+ * the channel's top level, under the post; a member may still open a thread
+ * under the post. `direct` is for a bot of a personal environment
+ * only, and its default there; a team environment's bot is always `thread`.
+ */
+export const botReplyModeSchema = lazySchema(() =>
+  z.enum(["direct", "thread"]),
+);
+export type BotReplyMode = z.infer<typeof botReplyModeSchema>;
+
 /** The bot row as the cloud returns it. */
 export const botRecordSchema = lazySchema(() =>
   z.object({
@@ -103,6 +115,12 @@ export const botRecordSchema = lazySchema(() =>
     archivedAt: z.number().int().nullable(),
     /** The bot's standing directive; `null` for none. */
     directive: z.string().nullable(),
+    /**
+     * How the bot answers a top-level post, as it applies to this bot.
+     * Absent from a host that predates the field, which answers every post
+     * in a thread.
+     */
+    replyMode: botReplyModeSchema.default("thread"),
     /**
      * The app conversation `bot.create` made with the bot: the bot's
      * channel. Derived from the bot id, so no conversation filed under the
@@ -199,6 +217,7 @@ export const botReadResponseSchema = lazySchema(() =>
 export type BotReadResponse = z.infer<typeof botReadResponseSchema>;
 
 // ---- bot.updateTitle / bot.updateRunSettings / bot.updateDirective ------ //
+// ---- bot.updateReplyMode ----------------------------------------------- //
 
 /**
  * Narrow updates, one method per field group - the `epic.updateChatProfile`
@@ -232,6 +251,21 @@ export const botUpdateDirectiveRequestSchema = lazySchema(() =>
 );
 export type BotUpdateDirectiveRequest = z.infer<
   typeof botUpdateDirectiveRequestSchema
+>;
+
+/**
+ * The reply mode. `direct` on a bot of a team environment is refused with
+ * `E_BOT_REPLY_MODE_NOT_ALLOWED`. The change applies from the next post;
+ * threads already open stay threads.
+ */
+export const botUpdateReplyModeRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    replyMode: botReplyModeSchema,
+  }),
+);
+export type BotUpdateReplyModeRequest = z.infer<
+  typeof botUpdateReplyModeRequestSchema
 >;
 
 export const botUpdateResponseSchema = lazySchema(() =>

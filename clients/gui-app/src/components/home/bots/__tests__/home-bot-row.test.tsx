@@ -77,6 +77,7 @@ const BOT: BotRecord = {
   createdAt: 1_000,
   archivedAt: null,
   directive: null,
+  replyMode: "thread",
   appConversationChatId: null,
 };
 

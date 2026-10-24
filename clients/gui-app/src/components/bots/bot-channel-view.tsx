@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -32,6 +33,8 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import {
@@ -48,6 +51,7 @@ import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
+const NO_CHAT_IDS: ReadonlyArray<string> = [];
 
 /**
  * Whether the person is in this window: it is on screen and has focus, the
@@ -98,7 +102,11 @@ function channelConversation(
  */
 export type BotOpenThread = {
   readonly anchorMessageId: string;
-  /** The anchor is the bot's question or proposal, not a member's post. */
+  /**
+   * The thread opens with the first reply under its anchor, sent with the
+   * anchor's id: the bot's question or proposal, or a post the bot answered
+   * in the channel (reply mode `direct`). `false` for a post's own thread.
+   */
   readonly announcement: boolean;
 };
 
@@ -169,8 +177,34 @@ export function BotChannelView(props: {
     isUnread,
   } = useChannelThreads({ client, botId, hostId, paused });
 
-  // A question or proposal with no thread yet shows a box whose first reply
-  // opens it, rather than waiting for a thread nobody has started.
+  // A direct reply's option, clicked, is the person's next post: offered
+  // only while no earlier pick is still being sent.
+  const { mutate: send, isPending: sending } =
+    useBotConversationSendMutation(client);
+  const channelId = channel?.conversationId ?? null;
+  const chooseOption = useCallback(
+    (choice: string) => {
+      if (channelId === null) return;
+      send(
+        {
+          botId,
+          conversationId: channelId,
+          text: choice,
+          threadId: null,
+          announcementId: null,
+        },
+        {
+          onError: (error) =>
+            toastFromHostError(error, "Couldn't send your choice."),
+        },
+      );
+    },
+    [botId, channelId, send],
+  );
+
+  // A question, a proposal or a direct post with no thread yet shows a box
+  // whose first reply opens it, rather than waiting for a thread nobody has
+  // started.
   const openAnnouncementThread = useCallback(
     (announcementId: string) =>
       onOpenThread({ anchorMessageId: announcementId, announcement: true }),
@@ -200,11 +234,14 @@ export function BotChannelView(props: {
       openAnnouncementThread: threadListSupported
         ? openAnnouncementThread
         : null,
+      chooseOption: sending ? null : chooseOption,
     }),
     [
+      chooseOption,
       isUnread,
       onOpenThread,
       openAnnouncementThread,
+      sending,
       threadListSupported,
       threadsByPost,
     ],
@@ -217,7 +254,6 @@ export function BotChannelView(props: {
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { refetch: refetchThreads } = threadList;
-  const channelId = channel?.conversationId ?? null;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     if (openThread !== null) return { kind: "listed", thread: openThread };
     if (threadList.isError) {
@@ -238,6 +274,18 @@ export function BotChannelView(props: {
     thread: openThread,
     isUnread,
     shown: threadOpen,
+  });
+  const [channelSection, setChannelSection] = useState<HTMLElement | null>(
+    null,
+  );
+  useReadChannelWhilePresented({
+    client,
+    hostId,
+    botId,
+    channelId,
+    paused,
+    threadOpen,
+    section: channelSection,
   });
 
   const viewer = useAuthStore((s) => s.profile);
@@ -293,6 +341,7 @@ export function BotChannelView(props: {
     <div className="@container flex min-h-0 flex-1">
       <div className="flex min-h-0 w-full">
         <section
+          ref={setChannelSection}
           aria-label={`# ${botTitle}`}
           data-testid="bot-channel"
           data-conversation-id={channel.conversationId}
@@ -401,6 +450,85 @@ function useChannelThreads(args: {
 }
 
 /**
+ * Whether the person can see a surface that is `shown`: it is in the pane on
+ * screen, in a window they are in.
+ */
+function usePresented(shown: boolean): boolean {
+  const paneVisible = usePaneVisible();
+  const windowForeground = useSyncExternalStore(
+    subscribeWindowForeground,
+    readWindowForeground,
+  );
+  return shown && paneVisible && windowForeground;
+}
+
+/**
+ * Whether `element` takes up room in the layout, as its size reports;
+ * `false` until it has been measured, and where nothing can measure it.
+ */
+function useDisplayed(element: HTMLElement | null): boolean {
+  const [displayed, setDisplayed] = useState(false);
+  useEffect(() => {
+    if (element === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry !== undefined) setDisplayed(entry.contentRect.width > 0);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return element !== null && displayed;
+}
+
+/**
+ * Marks the channel read while the person can see it: a direct reply that
+ * answered their post lights the channel's unread mark, as a verdict lights
+ * its thread's (T52), and the channel transcript presented in the pane on
+ * screen, in a window they are in, has been read.
+ */
+function useReadChannelWhilePresented(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string;
+  readonly botId: string;
+  readonly channelId: string | null;
+  /** The paused placeholder stands in for the transcript. */
+  readonly paused: boolean;
+  readonly threadOpen: boolean;
+  /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
+  readonly section: HTMLElement | null;
+}): void {
+  const { client, hostId, botId, channelId, paused, threadOpen, section } =
+    args;
+  const displayed = useDisplayed(section);
+  const chatIds = useMemo(
+    () => (channelId === null ? NO_CHAT_IDS : [channelId]),
+    [channelId],
+  );
+  const chatEpicIds = useMemo(
+    () => (channelId === null ? {} : { [channelId]: botId }),
+    [botId, channelId],
+  );
+  const indicators = useNotificationIndicators({
+    hostId,
+    epicIds: NO_EPIC_IDS,
+    chatIds,
+    chatEpicIds,
+    enabled: channelId !== null,
+  });
+  const presented = usePresented(!paused && (!threadOpen || displayed));
+  const state =
+    channelId !== null && Object.hasOwn(indicators.chats, channelId)
+      ? indicators.chats[channelId]
+      : null;
+  const unread = state !== null && (state.unreadDone || state.unreadFailure);
+  const { mutate: markRead } = useNotificationMarkEntityRead(client);
+  useEffect(() => {
+    if (!presented || channelId === null || !unread) return;
+    markRead({ epicId: botId, chatId: channelId });
+  }, [botId, channelId, markRead, presented, unread]);
+}
+
+/**
  * Marks the open thread read while the person can see it: its panel is shown
  * in the pane on screen, in a window they are in. An unread thread kept open
  * elsewhere stays unread until they come back to it.
@@ -414,12 +542,7 @@ function useReadThreadWhilePresented(args: {
   readonly shown: boolean;
 }): void {
   const { client, botId, thread, isUnread, shown } = args;
-  const paneVisible = usePaneVisible();
-  const windowForeground = useSyncExternalStore(
-    subscribeWindowForeground,
-    readWindowForeground,
-  );
-  const presented = shown && paneVisible && windowForeground;
+  const presented = usePresented(shown);
   const threadId = thread?.threadId ?? null;
   const unread = threadId !== null && isUnread(threadId);
   const { mutate: markRead } = useNotificationMarkEntityRead(client);

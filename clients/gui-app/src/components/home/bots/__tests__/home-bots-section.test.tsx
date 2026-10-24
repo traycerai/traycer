@@ -195,6 +195,7 @@ function bot(botId: string, environmentId: string, title: string): BotRecord {
     createdAt: 1_000,
     archivedAt: null,
     directive: null,
+    replyMode: "thread",
     appConversationChatId: null,
   };
 }
