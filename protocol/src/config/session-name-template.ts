@@ -40,9 +40,9 @@ export const SESSION_NAME_TEMPLATE_MAX_LENGTH = 200;
 const SESSION_NAME_MAX_LENGTH = 100;
 
 const PLACEHOLDER_PATTERN = /\{([A-Za-z_]+)\}/g;
-const LEADING_SEPARATORS = /^[\s·\-_/]+/u;
-const TRAILING_SEPARATORS = /[\s·\-_/]+$/u;
-const EDGE_SEPARATORS = /^[\s·\-_/]+|[\s·\-_/]+$/gu;
+const LEADING_SEPARATORS = /^[\s\u00b7\-_/]+/u;
+const TRAILING_SEPARATORS = /[\s\u00b7\-_/]+$/u;
+const EDGE_SEPARATORS = /^[\s\u00b7\-_/]+|[\s\u00b7\-_/]+$/gu;
 
 function isPlaceholder(name: string): name is SessionNamePlaceholder {
   return (SESSION_NAME_PLACEHOLDERS as readonly string[]).includes(name);

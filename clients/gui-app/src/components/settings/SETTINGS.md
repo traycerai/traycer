@@ -2993,11 +2993,16 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     in `~/.traycer/cli/config.json` on that machine over
     `config.sessionNames.get` / `set` (optional methods; a host without them
     draws nothing). Default `Traycer · {project} · {date}`. The placeholders
-    listed and accepted are the ones the host's `get` reports; an unknown one
-    shows an inline error and is not saved. A live preview renders the draft
-    with `renderSessionName` (`@traycer/protocol/config/session-name-template`,
-    the same renderer the host uses) against sample values; Reset writes the
-    default.
+    listed and accepted are the ones the host's `get` reports; an unknown one,
+    or a template over 200 characters, shows an inline error and is not
+    saved. A live preview renders the draft with `renderSessionName`
+    (`@traycer/protocol/config/session-name-template`, the same renderer the
+    host uses) against sample values. Reset writes the default and discards
+    the draft (its mousedown keeps focus, so the field's blur never saves
+    it), and is disabled while a save is in flight. Saves share one mutation
+    scope per host (`sessionNamesWriteScope`) and compare against the last
+    value sent, so an edit back to the stored value during a save still
+    lands, after it.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared
