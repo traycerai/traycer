@@ -105,6 +105,14 @@ export function WorktreeDeleteProgressModal(
           />
         </div>
       ) : null}
+      {errorMessage !== null && run.errorTail !== undefined ? (
+        <pre
+          data-testid="worktree-delete-error-tail"
+          className="w-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-left font-mono text-code-xs whitespace-pre-wrap wrap-anywhere text-destructive"
+        >
+          {run.errorTail}
+        </pre>
+      ) : null}
     </output>
   );
 }

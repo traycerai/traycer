@@ -118,6 +118,7 @@ import {
   useWorktreeDeleteRun,
   worktreeDeleteProgressDetail,
   type WorktreeDeleteRunState,
+  type WorktreeDeleteRunRecord,
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
@@ -1729,6 +1730,7 @@ export function WorktreesList(props: {
         />
         <WorktreeDeleteProgressStrip
           summary={progressSummary}
+          runs={runs}
           onDismiss={dismissTerminalBackgrounded}
         />
         {shouldShowWorktreeFilterResolutionStatus(
@@ -1971,6 +1973,7 @@ function WorktreeDeleteForegroundSurface(props: {
 
 function WorktreeDeleteProgressStrip(props: {
   readonly summary: WorktreeDeleteProgressSummary;
+  readonly runs: readonly WorktreeDeleteRunRecord[];
   readonly onDismiss: () => void;
 }): ReactNode {
   if (props.summary.total === 0) return null;
@@ -1999,6 +2002,31 @@ function WorktreeDeleteProgressStrip(props: {
           </Button>
         ) : null}
       </div>
+      {props.runs
+        .filter(
+          (record) =>
+            record.backgrounded &&
+            (record.run.status === "failed" ||
+              (record.run.status === "complete" && !record.run.deleted)) &&
+            record.run.errorTail !== undefined,
+        )
+        .map((record) => (
+          <div
+            key={record.key}
+            data-testid="worktree-delete-batch-failure"
+            className="w-full min-w-0"
+          >
+            <p className="text-ui-xs wrap-anywhere text-muted-foreground">
+              {record.target.worktreePath}
+            </p>
+            <pre
+              data-testid="worktree-delete-error-tail"
+              className="w-full font-mono text-code-xs whitespace-pre-wrap wrap-anywhere text-destructive"
+            >
+              {record.run.errorTail}
+            </pre>
+          </div>
+        ))}
     </div>
   );
 }

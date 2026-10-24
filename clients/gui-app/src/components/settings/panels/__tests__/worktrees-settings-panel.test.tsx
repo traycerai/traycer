@@ -281,16 +281,20 @@ vi.mock(
             onOutput: (channel, chunk) =>
               options.callbacks.onTargetOutput(path, channel, chunk),
             onComplete: (deleted) => {
-              options.callbacks.onTargetComplete(path, deleted, undefined);
+              options.callbacks.onTargetComplete(
+                path,
+                deleted,
+                undefined,
+                undefined,
+              );
               settleTarget(path, deleted);
             },
             onFailed: (reason, holders, code) => {
-              options.callbacks.onTargetFailed(
-                path,
-                reason,
+              options.callbacks.onTargetFailed(path, reason, {
                 holders,
-                code === "WORKTREE_BUSY" ? code : undefined,
-              );
+                code: code === "WORKTREE_BUSY" ? code : undefined,
+                errorTail: undefined,
+              });
               settleTarget(path, false);
             },
             onConnectionStatus: (status, reason) =>
@@ -1856,11 +1860,13 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         false,
         "teardown_failed",
+        undefined,
       );
       streamMock.commandCallbacks?.onTargetComplete(
         "/wt/dirty",
         false,
         "teardown_failed",
+        undefined,
       );
     });
 
@@ -1869,6 +1875,72 @@ describe("WorktreesList delete flow", () => {
     screen.getByText(
       "0/2 deleted, 2 failed. The teardown script didn't finish successfully, so the worktrees were left in place - check the script and try again.",
     );
+  });
+
+  it("shows each backgrounded batch failure's own error tail beneath the progress strip, tied to its path", () => {
+    renderDefault();
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    act(() => {
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "removal_failed",
+        "fatal: cannot remove '/wt/clean': Directory not empty",
+      );
+      streamMock.commandCallbacks?.onTargetFailed(
+        "/wt/dirty",
+        "git worktree remove failed",
+        {
+          holders: undefined,
+          code: undefined,
+          errorTail: "error: unable to unlink '/wt/dirty/file'",
+        },
+      );
+    });
+
+    expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
+    const entries = screen.getAllByTestId("worktree-delete-batch-failure");
+    expect(entries).toHaveLength(2);
+    const byPath = (path: string): HTMLElement => {
+      const entry = entries.find((candidate) =>
+        candidate.textContent.includes(path),
+      );
+      if (entry === undefined) throw new Error(`no failure entry for ${path}`);
+      return entry;
+    };
+    const clean = byPath("/wt/clean");
+    expect(
+      within(clean).getByTestId("worktree-delete-error-tail").textContent,
+    ).toBe("fatal: cannot remove '/wt/clean': Directory not empty");
+    const dirty = byPath("/wt/dirty");
+    expect(
+      within(dirty).getByTestId("worktree-delete-error-tail").textContent,
+    ).toBe("error: unable to unlink '/wt/dirty/file'");
+    expect(within(clean).queryByText(/dirty/)).toBeNull();
+  });
+
+  it("lists no batch failure entry for a failed target that has no error tail", () => {
+    renderDefault();
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    act(() => {
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "removal_failed",
+        undefined,
+      );
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/dirty",
+        true,
+        undefined,
+        undefined,
+      );
+    });
+    expect(screen.queryByTestId("worktree-delete-error-tail")).toBeNull();
   });
 
   it("keeps the counts alone in the strip when a batch's failures have different reasons", () => {
@@ -1881,11 +1953,13 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         false,
         "teardown_failed",
+        undefined,
       );
       streamMock.commandCallbacks?.onTargetComplete(
         "/wt/dirty",
         false,
         "removal_failed",
+        undefined,
       );
     });
 
@@ -1902,11 +1976,13 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         false,
         "teardown_failed",
+        undefined,
       );
       // A host that did not name a reason for this one.
       streamMock.commandCallbacks?.onTargetComplete(
         "/wt/dirty",
         false,
+        undefined,
         undefined,
       );
     });
@@ -1925,11 +2001,13 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         true,
         undefined,
+        undefined,
       );
       streamMock.commandCallbacks?.onTargetComplete(
         "/wt/dirty",
         false,
         "removal_failed",
+        undefined,
       );
     });
 
@@ -2082,8 +2160,8 @@ describe("WorktreesList delete flow", () => {
     // batch method disappeared after it already received both target frames,
     // but before it receives the aggregate command frame.
     act(() => {
-      command?.onTargetComplete("/wt/clean", true, undefined);
-      command?.onTargetComplete("/wt/dirty", true, undefined);
+      command?.onTargetComplete("/wt/clean", true, undefined, undefined);
+      command?.onTargetComplete("/wt/dirty", true, undefined, undefined);
     });
     expect(invalidateSpy).not.toHaveBeenCalled();
 
@@ -2395,6 +2473,7 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         false,
         "not_managed",
+        undefined,
       );
     });
     const message = screen.getByTestId("worktree-delete-error").textContent;
@@ -2412,6 +2491,7 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         false,
         "teardown_failed",
+        undefined,
       );
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
@@ -2428,11 +2508,90 @@ describe("WorktreesList delete flow", () => {
         "/wt/clean",
         false,
         "removal_failed",
+        undefined,
       );
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
       "on disk",
     );
+  });
+
+  it("shows the error tail of a failed removal in a plain pre beside the decline sentence", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetStarted("/wt/clean", false);
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "removal_failed",
+        "fatal: cannot remove '/wt/clean': <b>Directory not empty</b>",
+      );
+    });
+    const tail = screen.getByTestId("worktree-delete-error-tail");
+    expect(tail.tagName).toBe("PRE");
+    // Plain text: markup in git output is shown, never interpreted.
+    expect(tail.textContent).toBe(
+      "fatal: cannot remove '/wt/clean': <b>Directory not empty</b>",
+    );
+    expect(tail.querySelector("b")).toBeNull();
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "on disk",
+    );
+  });
+
+  it("shows the error tail of a failed target frame in the modal", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetFailed(
+        "/wt/clean",
+        "git worktree remove failed",
+        {
+          holders: undefined,
+          code: undefined,
+          errorTail: "error: unable to unlink '/wt/clean/file'",
+        },
+      );
+    });
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "git worktree remove failed",
+    );
+    expect(screen.getByTestId("worktree-delete-error-tail").textContent).toBe(
+      "error: unable to unlink '/wt/clean/file'",
+    );
+  });
+
+  it("renders no error tail when the host sent none", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetStarted("/wt/clean", false);
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        false,
+        "removal_failed",
+        undefined,
+      );
+    });
+    screen.getByTestId("worktree-delete-error");
+    expect(screen.queryByTestId("worktree-delete-error-tail")).toBeNull();
+  });
+
+  it("does not render an error tail on a successful deletion", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.commandCallbacks?.onTargetStarted("/wt/clean", false);
+      streamMock.commandCallbacks?.onTargetComplete(
+        "/wt/clean",
+        true,
+        undefined,
+        "warning: stray stderr from a successful removal",
+      );
+    });
+    screen.getByText("Worktree deleted");
+    expect(screen.queryByTestId("worktree-delete-error-tail")).toBeNull();
   });
 
   it("shows the failure reason in the modal on a failed frame", () => {
