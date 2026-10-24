@@ -176,8 +176,15 @@ export function useStagedSandboxSend(input: {
    * several (landing): the handoff resubmits only the one that sent.
    */
   readonly ownerId: string | null;
+  /**
+   * Whether this composer holds the draft that sent, whichever owner sent
+   * it: the modal's draft is the epic's, shared by its tabs. A landing draft
+   * or the picker holds only its own, so a line action there takes over a
+   * gone draft's boot without its send.
+   */
+  readonly claimsSend: boolean;
 }): StagedSandboxSend {
-  const { surfaceKey, terminal, taskId, ownerId } = input;
+  const { surfaceKey, terminal, taskId, ownerId, claimsSend } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
@@ -198,8 +205,10 @@ export function useStagedSandboxSend(input: {
     [runner, surfaceKey, taskId],
   );
   // A line action on a stage whose sending draft is gone (its modal's tab or
-  // its start page closed) is this draft's: the handoff resubmits it. A stage
-  // carrying a terminal ask and no send keeps to the terminal.
+  // its start page closed) is this composer's. The handoff resubmits the send
+  // only where this composer holds the draft that sent (`claimsSend`); a
+  // stage carrying a terminal ask and no send keeps to the terminal, and one
+  // with nothing to resubmit ends on the awake sandbox, the surface pinned.
   const runFromLine = useCallback(
     (fresh: boolean): void => {
       if (surfaceKey === null) return;
@@ -207,12 +216,12 @@ export function useStagedSandboxSend(input: {
       if (current !== null && !handoffOwnerLive(surfaceKey, current.ownerId)) {
         useStagedSandboxStore.getState().report(surfaceKey, {
           ownerId,
-          sendTaken: current.sendTaken || !current.openTerminal,
+          sendTaken: current.sendTaken || (claimsSend && !current.openTerminal),
         });
       }
       run(fresh);
     },
-    [ownerId, run, surfaceKey],
+    [claimsSend, ownerId, run, surfaceKey],
   );
   const newHost = useNewHostActions(
     surfaceKey,

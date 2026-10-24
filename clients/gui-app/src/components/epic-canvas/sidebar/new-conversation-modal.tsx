@@ -515,13 +515,13 @@ export function NewConversationModalHost(props: {
     () => ({ pickerStore: transientSession.pickerStore }),
     [transientSession.pickerStore],
   );
-  // Closes the request the send was made from, never one filed after it was
-  // handed off.
   // Hidden, the body's own overlays (a toolbar popover left open, a menu)
   // un-present with it, and re-present intact when it is shown again: a tab
   // can be activated from outside the page, with no input that would have
   // dismissed them.
   const concealed = usePortalConcealed() || !isOpen;
+  // Closes the request the send was made from, never one filed after it was
+  // handed off.
   const onSubmitted = useCallback(() => {
     const store = useNewConversationModalOpenStore.getState();
     if (bodyRequest !== null && store.request === bodyRequest) store.close();
@@ -1138,6 +1138,8 @@ export function NewConversationModalBody(props: {
     terminal: stagedTerminal,
     taskId: epicId,
     ownerId: tabId,
+    // The draft is the epic's, so any tab's body holds the one that sent.
+    claimsSend: true,
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??

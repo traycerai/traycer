@@ -341,6 +341,7 @@ function useTerminalStagedLaunch(input: {
     terminal: stagedTerminal,
     taskId: input.epicId,
     ownerId: null,
+    claimsSend: false,
   });
   return {
     staging,

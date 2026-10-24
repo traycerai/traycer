@@ -21,7 +21,11 @@ import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   type SandboxCreateRequest,
 } from "@traycer/protocol/host/sandbox-control";
-import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type {
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   stagedSandboxFallbackName,
@@ -43,6 +47,8 @@ import type {
   StagedSandboxRunDeps,
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
 
 const mocks = vi.hoisted(() => ({
@@ -59,6 +65,10 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
     >(),
+  /** The control plane's sandbox list, read while a create settles. */
+  listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
+  /** The account's host directory, which names the new host once it dials. */
+  findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   repairHostIds: [] as string[],
   repairMutate: vi.fn(
     (_variables: object, options: { readonly onSuccess: () => void }) => {
@@ -92,8 +102,11 @@ vi.mock(
 );
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({
-    auth: { createSandbox: mocks.createSandbox },
-    directory: { refresh: () => Promise.resolve() },
+    auth: {
+      createSandbox: mocks.createSandbox,
+      listSandboxes: mocks.listSandboxes,
+    },
+    directory: { refresh: () => Promise.resolve(), findById: mocks.findById },
   }),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
@@ -156,6 +169,7 @@ function Harness(props: {
     terminal: { epicId: "epic-1", open: props.openTerminal },
     taskId: "epic-1",
     ownerId: null,
+    claimsSend: false,
   });
   useEffect(() => {
     latestSend = send;
@@ -176,9 +190,12 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
 beforeEach(() => {
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
+  useSurfaceHostSelectionStore.setState({ selections: {} });
   mocks.runStagedSandbox.mockReset();
   mocks.runStagedSandbox.mockImplementation(() => Promise.resolve());
   mocks.createSandbox.mockReset();
+  mocks.listSandboxes.mockReset();
+  mocks.findById.mockReset();
   mocks.repairMutate.mockClear();
   mocks.repairHostIds.length = 0;
 });
@@ -357,6 +374,7 @@ function DraftComposer(props: {
     terminal: null,
     taskId: null,
     ownerId: props.draftId,
+    claimsSend: false,
   });
   useStagedSandboxHandoff({
     surfaceKey: SURFACE,
@@ -370,7 +388,7 @@ function DraftComposer(props: {
   useEffect(() => {
     onSend(send);
   }, [onSend, send]);
-  return null;
+  return <>{send.line}</>;
 }
 
 /** A draft's phase 2 still waiting on its new host's catalog. */
@@ -665,6 +683,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
         terminal: null,
         taskId: null,
         ownerId: null,
+        claimsSend: false,
       });
       useStagedSandboxHandoff({
         surfaceKey: SURFACE,
@@ -944,6 +963,7 @@ function TabComposer(props: {
     terminal: null,
     taskId: null,
     ownerId: props.tabId,
+    claimsSend: true,
   });
   useStagedSandboxHandoff({
     surfaceKey: SURFACE,
@@ -1008,6 +1028,112 @@ describe("useStagedSandboxSend after the sending tab is gone", () => {
     });
     expect(submitB).toHaveBeenCalledTimes(1);
     expect(submitA).not.toHaveBeenCalled();
+  });
+});
+
+describe("useStagedSandboxSend after the start page draft that sent is closed", () => {
+  it("brings the sandbox up on another draft's Retry and leaves that draft's text to it", async () => {
+    const actual = await vi.importActual<
+      typeof import("@/lib/sandboxes/staged-sandbox-run")
+    >("@/lib/sandboxes/staged-sandbox-run");
+    mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+    const sandbox = sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST });
+    mocks.createSandbox
+      .mockResolvedValueOnce(
+        refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+      )
+      .mockResolvedValue({
+        kind: "ok",
+        accepted: {
+          sandboxId: "sbx-1",
+          hostId: NEW_HOST,
+          sandbox: { ...sandbox, state: "creating" },
+        },
+      });
+    mocks.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: {
+        sandboxes: [{ ...sandbox, state: "awake", guestConfigured: true }],
+      },
+    });
+    mocks.findById.mockImplementation((hostId) => ({
+      hostId,
+      label: "api-refactor",
+      kind: "remote",
+      websocketUrl: "ws://sbx-host.test",
+      version: null,
+      transportDialability: "dialable",
+    }));
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "api-refactor",
+      wakeString: null,
+    });
+    const submitA = vi.fn(() => true);
+    const submitB = vi.fn(() => true);
+    const sends: { a: StagedSandboxSend | null; b: StagedSandboxSend | null } =
+      { a: null, b: null };
+    const client = new QueryClient();
+    const draftB = (submit: () => boolean) => (
+      <QueryClientProvider client={client}>
+        <DraftComposer
+          draftId="draft-b"
+          submit={submit}
+          onSend={(send) => {
+            sends.b = send;
+          }}
+        />
+      </QueryClientProvider>
+    );
+    const view = render(
+      <QueryClientProvider client={client}>
+        <DraftComposer
+          draftId="draft-a"
+          submit={submitA}
+          onSend={(send) => {
+            sends.a = send;
+          }}
+        />
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      sends.a?.intercept("fix the login bug", null);
+    });
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe("credits");
+    });
+    // A closes; a fresh draft B opens on the start page.
+    view.rerender(draftB(submitB));
+    await afterCommit();
+
+    // After a top-up, B presses Retry and the sandbox comes up.
+    fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+    });
+
+    expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
+      NEW_HOST,
+    );
+    // B types on: its text is its own to send, on the pinned sandbox.
+    const typing = vi.fn(() => true);
+    view.rerender(draftB(typing));
+    await afterCommit();
+    expect(sends.b?.intercept("half a thought", null)).toBe(false);
+    expect(submitA).not.toHaveBeenCalled();
+    expect(submitB).not.toHaveBeenCalled();
+    expect(typing).not.toHaveBeenCalled();
   });
 });
 

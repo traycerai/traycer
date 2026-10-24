@@ -590,6 +590,8 @@ export function LandingComposer(props: LandingComposerProps) {
     terminal: null,
     taskId: null,
     ownerId: stagedOwnerId,
+    // Each draft is its own: a line action here never sends another's.
+    claimsSend: false,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
