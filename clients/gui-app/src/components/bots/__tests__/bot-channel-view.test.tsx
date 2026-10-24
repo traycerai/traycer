@@ -303,6 +303,8 @@ function mount(options: MountOptions): {
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
+  /** Renders the view again with the channel paused or resumed. */
+  readonly setPaused: (paused: boolean) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
@@ -316,7 +318,7 @@ function mount(options: MountOptions): {
             hostId={HOST_ID}
             botTitle="Release Bot"
             appConversationChatId={mocks.state.appConversationChatId}
-            paused={options.paused}
+            paused={currentPaused}
             resolveMember={resolveMember}
             openThread={openThread}
             onOpenThread={onOpenThread}
@@ -326,6 +328,7 @@ function mount(options: MountOptions): {
       </TooltipProvider>
     </QueryClientProvider>
   );
+  let currentPaused = options.paused;
   let current: BotOpenThread | null =
     options.openThreadPostId === null
       ? null
@@ -337,6 +340,10 @@ function mount(options: MountOptions): {
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
+      result.rerender(tree(current));
+    },
+    setPaused: (paused) => {
+      currentPaused = paused;
       result.rerender(tree(current));
     },
   };
@@ -671,6 +678,105 @@ describe("<BotChannelView /> channel read mark", () => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the channel unread while it is paused behind its placeholder, and reads it once it resumes", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    const { setPaused } = mount({ paused: true, openThreadPostId: null });
+    expect(screen.getByTestId("bot-transcript-paused")).toBeTruthy();
+    expect(screen.queryByTestId("stub-transcript-channel")).toBeNull();
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    setPaused(false);
+    expect(screen.queryByTestId("bot-transcript-paused")).toBeNull();
+    expect(screen.getByTestId("stub-transcript-channel")).toBeTruthy();
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+  });
+});
+
+describe("<BotChannelView /> channel read mark beside an open thread", () => {
+  /** The `ResizeObserver`s the view made, to report a size for the channel's section. */
+  const observers: FakeResizeObserver[] = [];
+
+  class FakeResizeObserver implements ResizeObserver {
+    readonly observed: Element[] = [];
+
+    constructor(private readonly callback: ResizeObserverCallback) {
+      observers.push(this);
+    }
+
+    observe(element: Element): void {
+      this.observed.push(element);
+    }
+
+    unobserve(): void {}
+
+    disconnect(): void {
+      this.observed.length = 0;
+    }
+
+    report(width: number): void {
+      const entry = { contentRect: { width } } as ResizeObserverEntry;
+      this.callback([entry], this);
+    }
+  }
+
+  /** Reports `width` for the channel section, the way the browser does once it lays out. */
+  function reportChannelWidth(width: number): void {
+    const section = screen.getByTestId("bot-channel");
+    const observer = observers.find((candidate) =>
+      candidate.observed.includes(section),
+    );
+    if (observer === undefined) {
+      throw new Error("the channel section is not observed");
+    }
+    act(() => {
+      observer.report(width);
+    });
+  }
+
+  beforeEach(() => {
+    observers.length = 0;
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 7_000 }),
+    ];
+    mocks.postIds = ["post-a"];
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("leaves the channel unread while it is hidden beside the thread, and reads it when the pane is wide enough to show it", () => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    mount({ paused: false, openThreadPostId: "post-a" });
+    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
+    // Not measured yet: the channel is taken as hidden.
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    // A narrow pane hides the channel section, so it has no width.
+    reportChannelWidth(0);
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    // A wide pane shows the channel beside the thread.
+    reportChannelWidth(480);
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+  });
+
+  it("leaves the channel unread beside an open thread where nothing can measure it", () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    mount({ paused: false, openThreadPostId: "post-a" });
+    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
+    expect(mocks.markRead).not.toHaveBeenCalled();
   });
 });
 
