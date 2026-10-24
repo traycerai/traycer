@@ -33,9 +33,12 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   >()),
   useCloudChatViewerId: () => "u-admin",
 }));
-// The host's handshake is the external boundary: it serves every Members method.
+// The host's handshake is the external boundary: it serves every Members
+// method unless a test says `environment.members` is not served.
+const handshake = vi.hoisted(() => ({ servesMembers: true }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    method === "environment.members" ? handshake.servesMembers : true,
   useHostSupportsMethod: () => true,
 }));
 
@@ -43,6 +46,7 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   useHostNotificationsStore.setState({ byId: {} });
+  handshake.servesMembers = true;
 });
 
 const TEAM: EnvironmentDescriptorV11 = {
@@ -195,6 +199,29 @@ describe("MembersPage members read", () => {
     );
     expect(await screen.findByText("Acme · 2 people")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Invite" })).toBeTruthy();
+  });
+
+  it("shows a host that does not serve the members read as needing an update, not an empty team", async () => {
+    handshake.servesMembers = false;
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA]),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText(/^Who is in Acme/);
+    expect(screen.queryByText(/Acme · 0 people/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByTestId("members-needs-update").textContent).toBe(
+      "These members need an updated host.",
+    );
+    expect(harness.paramsOf("environment.members")).toHaveLength(0);
   });
 
   it("shows an empty successful read as the empty team", async () => {

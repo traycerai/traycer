@@ -39,6 +39,8 @@ export const DONE_REMOVAL_LABEL = "done";
 
 export const RETRY_LABEL = "Retry";
 
+export const MEMBERS_NEED_UPDATED_HOST = "These members need an updated host.";
+
 export function membersReadFailed(teamName: string): string {
   return `Couldn't load ${teamName}'s members.`;
 }

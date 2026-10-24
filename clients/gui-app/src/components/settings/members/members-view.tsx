@@ -13,6 +13,7 @@ import {
   INVITE_LABEL,
   LAST_ADMIN_REFUSAL,
   MANAGE_SEATS_LABEL,
+  MEMBERS_NEED_UPDATED_HOST,
   RETRY_LABEL,
   ROLE_LABELS,
   acceptedPeopleCount,
@@ -94,7 +95,10 @@ function refusalFromSetRole(
   return null;
 }
 
-/** The members read while it is not ready: loading, or the failure with Retry. */
+/**
+ * The members read while it is not ready: loading, the failure with Retry, or
+ * a host that does not serve it, which only an update fixes.
+ */
 function MembersReadFallback(props: {
   readonly membersRead: MembersReadState;
   readonly teamName: string;
@@ -108,6 +112,17 @@ function MembersReadFallback(props: {
         variant={undefined}
         tone="muted"
       />
+    );
+  }
+  if (props.membersRead === "unsupported") {
+    return (
+      <p
+        role="status"
+        className="text-ui-sm text-muted-foreground"
+        data-testid="members-needs-update"
+      >
+        {MEMBERS_NEED_UPDATED_HOST}
+      </p>
     );
   }
   if (props.membersRead === "failed") {

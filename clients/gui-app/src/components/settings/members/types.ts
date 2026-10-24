@@ -73,8 +73,11 @@ export type PreviewState<Preview> =
   | { readonly status: "ready"; readonly preview: Preview }
   | { readonly status: "failed" };
 
-/** The members read: a failed read is never shown as an empty team. */
-export type MembersReadState = "loading" | "failed" | "ready";
+/**
+ * The members read: a failed read, or a host that does not serve it
+ * (`unsupported`), is never shown as an empty team.
+ */
+export type MembersReadState = "loading" | "failed" | "unsupported" | "ready";
 
 /**
  * P3's drawer subject. Members rows use kind `member` and key = userId;

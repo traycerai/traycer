@@ -87,7 +87,12 @@ function overlayRemovals(
   return rows;
 }
 
-function membersReadState(failed: boolean, waiting: boolean): MembersReadState {
+function membersReadState(
+  served: boolean | null,
+  failed: boolean,
+  waiting: boolean,
+): MembersReadState {
+  if (served === false) return "unsupported";
   if (failed) return "failed";
   return waiting ? "loading" : "ready";
 }
@@ -129,6 +134,7 @@ export function MembersPage(props: MembersPageProps): ReactNode {
     [list.members, pendingRemovals, completedReceipts],
   );
   const membersRead = membersReadState(
+    membersSupport,
     list.isError,
     client === null || membersSupport === null || list.isPending,
   );
