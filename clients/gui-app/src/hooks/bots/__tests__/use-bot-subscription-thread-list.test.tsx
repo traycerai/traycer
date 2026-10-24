@@ -262,9 +262,21 @@ describe("the bot's thread listing follows its subscription", () => {
     act(() => world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 }));
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
 
-    // The open-request count moved; the rows did not.
+    // The open-request count moved; the rows did not. The revision check runs
+    // inside the frame handler, so an unwanted cancel-and-invalidate would
+    // have started by the time `emit` returns.
+    const cancel = vi.spyOn(world.queryClient, "cancelQueries");
+    const invalidate = vi.spyOn(world.queryClient, "invalidateQueries");
     act(() => world.session.emit(snapshot(3, 1)));
+    expect(cancel).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(world.listReads.value).toBe(1);
+
+    // A moved revision runs the real cancel, then the real invalidation.
     act(() => world.session.emit(snapshot(4, 1)));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await cancel.mock.results[0]?.value;
+    expect(invalidate).toHaveBeenCalledTimes(1);
 
     await waitFor(() => expect(world.listReads.value).toBe(2));
     act(() => world.pendingReads[1]?.({ threads: [], trunkCostUsd: 0 }));

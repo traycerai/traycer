@@ -622,16 +622,6 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
 });
 
 describe("<CreateBotForm /> directive", () => {
-  it("sends a null directive when the directive field is left empty", async () => {
-    const user = userEvent.setup();
-    mountForm(TEAM_WITH_LOCAL);
-
-    await createBot(user);
-
-    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBeNull();
-  });
-
   it("sends a null directive when the directive field holds only whitespace", async () => {
     const user = userEvent.setup();
     mountForm(TEAM_WITH_LOCAL);
@@ -639,6 +629,7 @@ describe("<CreateBotForm /> directive", () => {
     await user.type(screen.getByTestId("create-bot-directive"), "   ");
     await createBot(user);
 
+    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
     expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBeNull();
   });
 

@@ -2376,7 +2376,7 @@ interface AssistantTurnAccumulator {
   costUsd: number | null;
   /** The bot announcement a channel's bot row is; `null` on every other turn. */
   announcement: BotAnnouncement | null;
-  /** The choices a bot's thread reply offers; `null` on every other turn. */
+  /** The choices a bot reply offers; `null` on every other turn. */
   options: ReadonlyArray<string> | null;
   /** The member's post a bot's direct reply answers; `null` on every other turn. */
   repliesTo: string | null;
@@ -3809,7 +3809,7 @@ function renderAssistantTurnSlice(
     ...(input.acc.announcement === null
       ? {}
       : { announcement: input.acc.announcement }),
-    // Only a bot's thread reply that asks carries them; absent everywhere else.
+    // Only a bot reply that asks carries them; absent everywhere else.
     ...(input.acc.options === null ? {} : { options: input.acc.options }),
     // Only a bot's direct reply in its channel carries it; absent everywhere else.
     ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),

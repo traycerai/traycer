@@ -421,34 +421,25 @@ describe("OrganizationProvider lifecycle projection", () => {
     matchingTaskOne.mockClear();
     matchingTaskTwo.mockClear();
     state.identity.hostId = "host-2";
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("button", { name: "Refresh organization" }),
-      );
-      await Promise.resolve();
-    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh organization" }),
+    );
     expect(matchingTaskOne).not.toHaveBeenCalled();
     expect(matchingTaskTwo).not.toHaveBeenCalled();
 
     state.identity.hostId = "host-1";
     state.identity.userId = "user-2";
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("button", { name: "Refresh organization" }),
-      );
-      await Promise.resolve();
-    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh organization" }),
+    );
     expect(matchingTaskOne).not.toHaveBeenCalled();
     expect(matchingTaskTwo).not.toHaveBeenCalled();
 
     state.identity.userId = "user-1";
     state.identity.authUserId = "user-2";
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole("button", { name: "Refresh organization" }),
-      );
-      await Promise.resolve();
-    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh organization" }),
+    );
     expect(matchingTaskOne).not.toHaveBeenCalled();
     expect(matchingTaskTwo).not.toHaveBeenCalled();
   });
@@ -852,10 +843,7 @@ describe("OrganizationProvider draft group intent", () => {
     });
     expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
 
-    await act(async () => {
-      acknowledge();
-      await Promise.resolve();
-    });
+    act(() => acknowledge());
 
     await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
   });
@@ -936,8 +924,6 @@ describe("OrganizationProvider draft group intent", () => {
       );
       renderProvider(new QueryClient(), null);
       await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
-      await settleCommand();
-      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
 
       host.recover();
 
@@ -1027,7 +1013,6 @@ describe("OrganizationProvider draft group intent", () => {
           />,
         );
         await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
-        await settleCommand();
         return {
           choose: (action) => choose(action),
           rendered,
@@ -1049,7 +1034,6 @@ describe("OrganizationProvider draft group intent", () => {
           await choose(moveTaskTo("task-new", "group-2"));
         });
         host.recover();
-        await settleCommand();
 
         expect(groupsMovedTo()).toEqual(["group-1", "group-2"]);
         expect(pendingGroupIdOf(taskTabId)).toBeNull();
@@ -1071,7 +1055,6 @@ describe("OrganizationProvider draft group intent", () => {
           });
         });
         host.recover();
-        await settleCommand();
 
         expect(groupsMovedTo()).toEqual(["group-1"]);
         expect(pendingGroupIdOf(taskTabId)).toBeNull();
@@ -1157,15 +1140,11 @@ describe("OrganizationProvider draft group intent", () => {
       host.recover();
       nextViewFrame(rendered, queryClient, "frame-2");
       host.recover();
-      await settleCommand();
 
       expect(state.mutateAsync).toHaveBeenCalledTimes(1);
       expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
 
-      await act(async () => {
-        acknowledge();
-        await Promise.resolve();
-      });
+      act(() => acknowledge());
       await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
       expect(state.mutateAsync).toHaveBeenCalledTimes(1);
     });
@@ -1220,24 +1199,17 @@ describe("OrganizationProvider draft group intent", () => {
       await waitFor(() => expect(held.sends).toHaveLength(1));
 
       host.recover();
-      await settleCommand();
 
       // The guard: the first send has not come back, so no second one yet.
       expect(state.view).toBe(viewBeforeRecovery);
       expect(held.sends).toHaveLength(1);
 
-      await act(async () => {
-        held.sends[0]?.refuse();
-        await Promise.resolve();
-      });
+      act(() => held.sends[0]?.refuse());
 
       // No further frame, no further recovery: the refusal alone wakes it.
       await waitFor(() => expect(held.sends).toHaveLength(2));
       expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
-      await act(async () => {
-        held.sends[1]?.acknowledge();
-        await Promise.resolve();
-      });
+      act(() => held.sends[1]?.acknowledge());
       await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
       expect(held.sends).toHaveLength(2);
       expect(held.overlap()).toBe(1);

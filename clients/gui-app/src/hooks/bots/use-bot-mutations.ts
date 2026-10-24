@@ -179,14 +179,14 @@ interface BotConversationSendContext {
 }
 
 /**
- * One member's message: a post on the channel (`threadId: null`), which
- * opens a thread, or a reply in a thread. Accepted whether or not the bound
+ * One member's message: a post on the channel (`threadId: null`) or a reply
+ * in a thread. Accepted whether or not the bound
  * host is reachable: `delivery: "queued"` means the message waits in the
  * cross-host mailbox and the row appears when the bound host drains it. No
  * toast on error - the composer states the refusal inline, under the field.
  *
- * A send adds a thread or a reply, so the channel's thread list is read
- * again on the host the send went through.
+ * A send may change a thread, so the channel's thread list is read again on
+ * the host the send went through.
  */
 export function useBotConversationSendMutation(
   client: HostClient<HostRpcRegistry> | null,

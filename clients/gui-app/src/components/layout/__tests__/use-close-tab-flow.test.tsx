@@ -117,6 +117,50 @@ vi.mock("@/hooks/organization/organization-context", () => ({
   useOrganization: () => organizationState.context,
 }));
 
+/**
+ * A promise that records itself and every promise derived from it by `then`
+ * or `catch`. The close flow hangs its commit and its rejection handler on
+ * the promise the organization command returns, so awaiting the recorded set
+ * is awaiting the end of that chain, not guessing how many turns it takes.
+ */
+class TrackedPromise<T> extends Promise<T> {
+  static readonly created: Array<Promise<unknown>> = [];
+
+  constructor(executor: ConstructorParameters<typeof Promise<T>>[0]) {
+    super(executor);
+    TrackedPromise.created.push(this);
+  }
+}
+
+/** Resolves once every tracked command promise and its derived chain settled. */
+async function commandChainSettled(): Promise<void> {
+  await act(async () => {
+    await Promise.allSettled([...TrackedPromise.created]);
+  });
+}
+
+function rejectedCommand(message: string): void {
+  organizationState.command.mockImplementation(() =>
+    TrackedPromise.reject(new Error(message)),
+  );
+}
+
+/** The command stays out until the returned function answers it. */
+function holdCommand(): () => void {
+  let accept: (() => void) | undefined;
+  organizationState.command.mockImplementation(
+    () =>
+      new TrackedPromise<void>((resolve) => {
+        accept = resolve;
+      }),
+  );
+  return () => {
+    if (accept === undefined)
+      throw new Error("Expected a pending organization command");
+    accept();
+  };
+}
+
 function organizationView(
   memberships: OrganizationView["groups"]["memberships"],
 ): OrganizationView {
@@ -140,6 +184,7 @@ function organizationView(
 
 function resetOrganization(): void {
   organizationState.context.supported = true;
+  TrackedPromise.created.length = 0;
   organizationState.command.mockReset();
   organizationState.command.mockImplementation(() => Promise.resolve());
   organizationState.setView(organizationView([]));
@@ -665,11 +710,10 @@ describe("useCloseTabFlow", () => {
       throw new Error("Expected a pending organization command");
     }
     const resolve = resolveCommand;
-    await act(async () => {
-      resolve();
-      await Promise.resolve();
-    });
-    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    act(() => resolve());
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId),
+    );
   });
 
   it("keeps cloud membership when another tab for the same task remains open", async () => {
@@ -721,9 +765,7 @@ describe("useCloseTabFlow", () => {
         { taskId: "epic-rejected", groupId: "group-a", position: 0 },
       ]),
     );
-    organizationState.command.mockImplementation(() =>
-      Promise.reject(new Error("membership rejected")),
-    );
+    rejectedCommand("membership rejected");
 
     const { result } = renderHook(() => useCloseTabFlow());
     act(() => {
@@ -731,14 +773,13 @@ describe("useCloseTabFlow", () => {
         epicHeaderTab("epic-rejected", tabId, "Rejected task"),
       );
     });
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await commandChainSettled();
 
+    expect(organizationState.command).toHaveBeenCalledOnce();
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
   });
 
-  it("holds a grouped task's tab open and says why when the account's organization cannot take the removal", async () => {
+  it("holds a grouped task's tab open and says why when the account's organization cannot take the removal", () => {
     const tabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-unreachable", "Unreachable task");
@@ -757,10 +798,8 @@ describe("useCloseTabFlow", () => {
           epicHeaderTab("epic-unreachable", tabId, "Unreachable task"),
         );
       });
-      await act(async () => {
-        await Promise.resolve();
-      });
 
+      // The refusal and its toast are synchronous in the gesture.
       // Closing anyway would leave the account believing the task is still
       // grouped, so the tab stays and the removal is never attempted.
       expect(organizationState.command).not.toHaveBeenCalled();
@@ -881,30 +920,6 @@ describe("useCloseTabFlow", () => {
     });
 
     describe("until the account has accepted the ungroup", () => {
-      /** The macrotask turn in which a rejected command has been handled. */
-      async function settleCommand(): Promise<void> {
-        await act(async () => {
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        });
-      }
-
-      function holdCommand(): { readonly accept: () => void } {
-        let accept: (() => void) | undefined;
-        organizationState.command.mockImplementation(
-          () =>
-            new Promise<void>((resolve) => {
-              accept = resolve;
-            }),
-        );
-        return {
-          accept: () => {
-            if (accept === undefined)
-              throw new Error("Expected a pending organization command");
-            accept();
-          },
-        };
-      }
-
       function groupedMemberships(): void {
         organizationState.setView(
           organizationView([
@@ -917,22 +932,19 @@ describe("useCloseTabFlow", () => {
       it("Close group closes no tab while the command is pending, then closes them", async () => {
         const { refA, refB, refC } = seedGroupedTabs();
         groupedMemberships();
-        const held = holdCommand();
+        const answerUngroup = holdCommand();
 
         const { result } = renderHook(() => useCloseTabFlow());
         act(() => {
           result.current.closeGroup("group-a");
         });
-        await settleCommand();
 
         expect(organizationState.command).toHaveBeenCalledOnce();
         expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
         expect(useTabRecoveryHistory.getState().entries).toEqual([]);
 
-        await act(async () => {
-          held.accept();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
         await waitFor(() =>
           expect(useTabsStore.getState().stripOrder).toEqual([refC]),
         );
@@ -941,15 +953,13 @@ describe("useCloseTabFlow", () => {
       it("Close group closes nothing when the command is rejected", async () => {
         const { a, b, c, refA, refB, refC } = seedGroupedTabs();
         groupedMemberships();
-        organizationState.command.mockImplementation(() =>
-          Promise.reject(new Error("ungroup rejected")),
-        );
+        rejectedCommand("ungroup rejected");
 
         const { result } = renderHook(() => useCloseTabFlow());
         act(() => {
           result.current.closeGroup("group-a");
         });
-        await settleCommand();
+        await commandChainSettled();
 
         expect(organizationState.command).toHaveBeenCalledOnce();
         expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
@@ -960,21 +970,18 @@ describe("useCloseTabFlow", () => {
       it("Close other tabs closes no tab while the command is pending, then closes them", async () => {
         const { a, b, c } = seedGroupedTabs();
         groupedMemberships();
-        const held = holdCommand();
+        const answerUngroup = holdCommand();
 
         const { result } = renderHook(() => useCloseTabFlow());
         act(() => {
           result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
         });
-        await settleCommand();
 
         expect(organizationState.command).toHaveBeenCalledOnce();
         expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b, c]);
 
-        await act(async () => {
-          held.accept();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
         await waitFor(() =>
           expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a]),
         );
@@ -983,15 +990,13 @@ describe("useCloseTabFlow", () => {
       it("Close other tabs closes nothing when the command is rejected", async () => {
         const { a, b, c, refA, refB, refC } = seedGroupedTabs();
         groupedMemberships();
-        organizationState.command.mockImplementation(() =>
-          Promise.reject(new Error("ungroup rejected")),
-        );
+        rejectedCommand("ungroup rejected");
 
         const { result } = renderHook(() => useCloseTabFlow());
         act(() => {
           result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
         });
-        await settleCommand();
+        await commandChainSettled();
 
         expect(organizationState.command).toHaveBeenCalledOnce();
         expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
@@ -1001,28 +1006,6 @@ describe("useCloseTabFlow", () => {
     });
 
     describe("a tab that gains unsynced edits while the ungroup is in flight", () => {
-      async function settleCommand(): Promise<void> {
-        await act(async () => {
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        });
-      }
-
-      /** The ungroup stays out until the returned function answers it. */
-      function holdCommand(): () => void {
-        let accept: (() => void) | undefined;
-        organizationState.command.mockImplementation(
-          () =>
-            new Promise<void>((resolve) => {
-              accept = resolve;
-            }),
-        );
-        return () => {
-          if (accept === undefined)
-            throw new Error("Expected a pending organization command");
-          accept();
-        };
-      }
-
       function groupedMemberships(): void {
         organizationState.setView(
           organizationView([
@@ -1042,13 +1025,10 @@ describe("useCloseTabFlow", () => {
         act(() => {
           result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
         });
-        await settleCommand();
         // The user types into Beta while the request is out.
         mockUnsynced.epicIds.add("epic-b");
-        await act(async () => {
-          answerUngroup();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
 
         await waitFor(() =>
           expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b]),
@@ -1068,12 +1048,9 @@ describe("useCloseTabFlow", () => {
         act(() => {
           result.current.closeGroup("group-a");
         });
-        await settleCommand();
         mockUnsynced.epicIds.add("epic-b");
-        await act(async () => {
-          answerUngroup();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
 
         // Alpha (the active tab) closes with the group; Beta stays.
         await waitFor(() =>
@@ -1095,15 +1072,12 @@ describe("useCloseTabFlow", () => {
         act(() => {
           result.current.closeGroup("group-a");
         });
-        await settleCommand();
         expect(organizationState.command).toHaveBeenCalledOnce();
 
         // The user types into the active tab, which nobody asked about.
         mockUnsynced.epicIds.add("epic-a");
-        await act(async () => {
-          answerUngroup();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
 
         // Beta closes; Alpha stays, along with the tab outside the group.
         await waitFor(() =>
@@ -1125,17 +1099,14 @@ describe("useCloseTabFlow", () => {
         act(() => {
           result.current.requestCloseTab(epicHeaderTab("epic-a", a, "Alpha"));
         });
-        await settleCommand();
         expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
           removeTask("epic-a"),
         );
 
         // The user types into the tab nobody asked about.
         mockUnsynced.epicIds.add("epic-a");
-        await act(async () => {
-          answerUngroup();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
 
         // Waited for the toast first: the tab was open before the close, so
         // "still open" alone would hold for a close that never happened.
@@ -1157,7 +1128,9 @@ describe("useCloseTabFlow", () => {
         render(<CloseTabHarness tab={epicHeaderTab("epic-a", a, "Alpha")} />);
         fireEvent.click(screen.getByTestId("close-tab"));
         fireEvent.click(screen.getByTestId("epic-tab-unsynced-discard"));
-        await settleCommand();
+        await waitFor(() =>
+          expect(organizationState.command).toHaveBeenCalledOnce(),
+        );
         expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
           removeTask("epic-a"),
         );
@@ -1165,10 +1138,8 @@ describe("useCloseTabFlow", () => {
         // is out, so the close below is the commit and not an early one.
         expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b, c]);
 
-        await act(async () => {
-          answerUngroup();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
 
         // Still dirty at commit, and closed: the user confirmed that.
         await waitFor(() =>
@@ -1189,14 +1160,13 @@ describe("useCloseTabFlow", () => {
         render(<CloseGroupHarness groupId="group-a" unrelatedTab={null} />);
         fireEvent.click(screen.getByTestId("close-group"));
         fireEvent.click(screen.getByTestId("epic-tab-unsynced-discard"));
-        await settleCommand();
-        expect(organizationState.command).toHaveBeenCalledOnce();
+        await waitFor(() =>
+          expect(organizationState.command).toHaveBeenCalledOnce(),
+        );
 
         mockUnsynced.epicIds.add("epic-b");
-        await act(async () => {
-          answerUngroup();
-          await Promise.resolve();
-        });
+        answerUngroup();
+        await commandChainSettled();
 
         // Alpha is still dirty, and still closes: the user confirmed that.
         await waitFor(() =>

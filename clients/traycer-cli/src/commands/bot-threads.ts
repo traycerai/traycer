@@ -46,7 +46,7 @@ export function buildBotThreadsCommand(opts: {
   };
 }
 
-export function renderThreads(
+function renderThreads(
   title: string,
   threads: readonly BotThreadSummary[],
 ): string {
