@@ -4081,6 +4081,141 @@ describe("<ChatTile />", () => {
     expect(frame.newSettings?.permissionMode).toBe("auto_accept_edits");
   });
 
+  it("asks before a queued steer the host would restart the turn for, and sends it confirmed", async () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+    });
+    harnessCatalogTestState.harnesses = [
+      harnessCatalogRow({
+        id: "claude",
+        supportedPermissionModes: [
+          "supervised",
+          "auto_accept_edits",
+          "full_access",
+        ],
+      }),
+    ];
+    chatHarness.teardown();
+    chatHarness.installWithSettings(
+      "owner",
+      [
+        {
+          kind: "prompt" as const,
+          queueItemId: "queue-next-turn",
+          messageId: "message-next-turn",
+          message: {
+            kind: "user",
+            content: QUEUED_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: { type: "user", userId: "owner-1" },
+          settings: AUTO_SESSION_SETTINGS,
+          accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
+          delivery: "next_turn",
+          status: "fallback",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: "This input cannot be safely steered.",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      AUTO_SESSION_SETTINGS,
+    );
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    // Matches `AUTO_SESSION_SETTINGS` on every field `decideSteerSettings`
+    // compares, so the decision is `silent_inject` and the send fires on one
+    // click - `permissionMode` is deliberately excluded from that comparison
+    // (it applies live, no restart needed), which is exactly why an
+    // unclamped `"auto"` on this frame would be the queue-steer regression.
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: AUTO_SESSION_SETTINGS.harnessId,
+          model: AUTO_SESSION_SETTINGS.model,
+          profileId: AUTO_SESSION_SETTINGS.profileId,
+          userMessageId: "message-active",
+          startedAt: 4,
+          updatedAt: 4,
+          reasoningEffort: AUTO_SESSION_SETTINGS.reasoningEffort,
+          serviceTier: AUTO_SESSION_SETTINGS.serviceTier,
+        },
+      });
+    });
+
+    const row = screen.getAllByTestId("queued-message-row").at(0);
+    if (row === undefined) throw new Error("Expected a queued row");
+    const steerButton = row.querySelector(
+      'button[aria-label="Steer queued message now"]',
+    );
+    if (!(steerButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected steer action to render as a button");
+    }
+    expect(steerButton.disabled).toBe(false);
+
+    fireEvent.click(steerButton);
+
+    // Sent unconfirmed: nothing here says the turn must end.
+    const first = chatHarness.sent.at(-1);
+    if (first === undefined || first.kind !== "queueSteerNow") {
+      throw new Error("expected queueSteerNow frame");
+    }
+    expect(first.restartConfirmed).toBe(false);
+    expect(screen.queryByTestId("steer-settings-conflict-dialog")).toBeNull();
+
+    // The host refuses it: steering would end the turn, for the images.
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: first.clientActionId,
+        action: "queueSteerNow",
+        status: "rejected",
+        reason: "Steering this message now would end the current turn.",
+        code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+        backgroundStopTaskIds: [],
+        token: null,
+        steerRestartReasons: ["images"],
+      });
+    });
+
+    const dialog = await screen.findByTestId("steer-settings-conflict-dialog");
+    expect(dialog.textContent).toContain(
+      "This agent can't take images while its turn is running.",
+    );
+    expect(chatHarness.sent.at(-1)).toBe(first);
+
+    fireEvent.click(screen.getByTestId("steer-settings-conflict-confirm"));
+
+    const confirmed = chatHarness.sent.at(-1);
+    if (confirmed === undefined || confirmed.kind !== "queueSteerNow") {
+      throw new Error("expected a confirmed queueSteerNow frame");
+    }
+    expect(confirmed.clientActionId).not.toBe(first.clientActionId);
+    expect(confirmed.queueItemId).toBe(first.queueItemId);
+    expect(confirmed.newSettings).toEqual(first.newSettings);
+    expect(confirmed.restartConfirmed).toBe(true);
+    await waitFor(() => {
+      expect(screen.queryByTestId("steer-settings-conflict-dialog")).toBeNull();
+    });
+  });
+
   it("passes auto through a queued steer-now send when the harness row lists it", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
       "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,

@@ -8567,7 +8567,7 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", null);
+      .queueSteerNow("queue-1", null, false);
 
     expect(clientActionId).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
@@ -8582,6 +8582,68 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "queueSteerNow",
     });
+  });
+
+  it("holds a steer refused unconfirmed for the confirm dialog, without its notice", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const settings = SETTINGS;
+
+    const clientActionId = harness.handle.store
+      .getState()
+      .queueSteerNow("queue-1", settings, false);
+    if (clientActionId === null) throw new Error("Expected a steer");
+    const frame = harness.sent.at(-1);
+    if (frame?.kind !== "queueSteerNow") {
+      throw new Error("Expected queueSteerNow frame");
+    }
+    expect(frame.restartConfirmed).toBe(false);
+
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "Steering this message now would end the current turn.",
+      code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+      backgroundStopTaskIds: [],
+      token: null,
+      steerRestartReasons: ["images", "skills"],
+    });
+    harness.callbacks().onErrorNotice({
+      kind: "errorNotice",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      notice: {
+        code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+        message: "Steering this message now would end the current turn.",
+        severity: "warning",
+        clientActionId,
+      },
+    });
+
+    expect(harness.handle.store.getState().errorNotices).toEqual([]);
+    expect(harness.handle.store.getState().steerRestartRefusal).toEqual({
+      clientActionId,
+      queueItemId: "queue-1",
+      newSettings: settings,
+      reasons: ["images", "skills"],
+    });
+    expect(
+      harness.handle.store.getState().takeSteerRestartRefusal("other-action"),
+    ).toBeNull();
+    expect(
+      harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
+    ).toMatchObject({ queueItemId: "queue-1" });
+    // Taken once: a second tile on the chat finds nothing to ask.
+    expect(harness.handle.store.getState().steerRestartRefusal).toBeNull();
+    expect(
+      harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
+    ).toBeNull();
   });
 
   it("reconciles file-edit approval snapshots and sends decisions", () => {

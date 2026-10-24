@@ -117,6 +117,10 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 
 import { FirstTaskChatGuide } from "@/components/onboarding/first-task-guide";
 
+// The composer's Cmd/Ctrl+Enter steer confirms only a settings change; the
+// host turns every other cause into a labeled next-turn send.
+const SETTINGS_RESTART_REASONS = ["settings"] as const;
+
 // Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
 // handlers imports them from one place.
 export type { ChatComposerSideChatInput };
@@ -994,6 +998,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         open={steerConflict.open}
         onOpenChange={steerConflict.onOpenChange}
         onRestart={steerConflict.onRestart}
+        reasons={SETTINGS_RESTART_REASONS}
         changed={steerConflict.changed}
       />
     </>

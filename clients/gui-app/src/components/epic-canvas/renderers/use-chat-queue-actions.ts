@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   OpenChatQueuedItem,
   OpenChatQueuedPromptItem,
+  ChatQueueSteerRestartReason,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -9,10 +10,7 @@ import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import {
-  decideSteerSettings,
-  type SteerSettingsDecision,
-} from "@/lib/chats/decide-steer-settings";
+import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   EMPTY_COMPOSER_DRAFT,
@@ -69,7 +67,8 @@ export interface ChatQueueActionsInput {
    * Safe to substitute here because `decideSteerSettings` compares harness,
    * model, reasoning effort, service tier and profile - never `permissionMode`
    * - so the clamp cannot move its verdict, and `newSettings` is the tuple it
-   * was handed, which is how `confirmSteerRestart` inherits the clamp too.
+   * was handed, which is how `confirmSteerRestart` inherits the clamp too: it
+   * sends again the tuple the steer was first sent or decided with.
    */
   readonly nextStepSettings: ChatRunSettings;
   readonly currentEpicId: string;
@@ -104,6 +103,7 @@ export interface ChatQueueActionsResult {
   readonly handleComposerSettingsChange: (settings: ChatRunSettings) => void;
   readonly steerRestart: {
     readonly open: boolean;
+    readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
     readonly changed: ReadonlyArray<string>;
     readonly onOpenChange: (open: boolean) => void;
     readonly onRestart: () => void;
@@ -139,15 +139,38 @@ export function useChatQueueActions(
     persistChatRunSettings,
   } = input;
 
-  // Set when steering a queued prompt requires ending the running turn (a
-  // turn-start-baked setting differs); drives the confirm dialog.
+  // Set when steering a queued prompt requires ending the running turn - a
+  // turn-start-baked setting differs, or the host refused the steer
+  // unconfirmed for any of its reasons; drives the confirm dialog.
   const [pendingSteerRestart, setPendingSteerRestart] = useState<{
-    readonly item: OpenChatQueuedItem;
-    readonly decision: Extract<
-      SteerSettingsDecision,
-      { readonly kind: "interrupt_restart" }
-    >;
+    readonly queueItemId: string;
+    readonly newSettings: ChatRunSettings | null;
+    readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
+    readonly changed: ReadonlyArray<string>;
   } | null>(null);
+  // A steer sent unconfirmed - the row's Steer button, or a queue edit's
+  // Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.37` refused because it
+  // would end the running turn. Taken from the store rather than read, so of
+  // two tiles on one chat only the first opens the dialog. An older host
+  // never refuses: it restarts the turn as it always did.
+  useEffect(
+    () =>
+      handle.store.subscribe((state, previous) => {
+        const refusal = state.steerRestartRefusal;
+        if (refusal === null || refusal === previous.steerRestartRefusal) {
+          return;
+        }
+        const taken = state.takeSteerRestartRefusal(refusal.clientActionId);
+        if (taken === null) return;
+        setPendingSteerRestart({
+          queueItemId: taken.queueItemId,
+          newSettings: taken.newSettings,
+          reasons: taken.reasons,
+          changed: [],
+        });
+      }),
+    [handle.store],
+  );
   const queuedEditRestoreDraftRef = useRef<QueuedEditDraftSnapshot | null>(
     null,
   );
@@ -350,22 +373,28 @@ export function useChatQueueActions(
         // direction this whole gate is built to fail in: a steer the host
         // refuses outright kills the button for the session, while a demoted
         // one still lands and costs the judge on a turn the user can re-run.
-        chatActions.queueSteerNow(item.queueItemId, nextStepSettings);
+        //
+        // Sent unconfirmed: if the host would still have to end the turn
+        // (images, a slash command, skills, a harness that cannot steer), it
+        // refuses and names why, and the dialog asks.
+        chatActions.queueSteerNow(item.queueItemId, nextStepSettings, false);
         return;
       }
       // A change the running turn can't absorb: confirm ending the turn first.
-      setPendingSteerRestart({ item, decision });
+      setPendingSteerRestart({
+        queueItemId: item.queueItemId,
+        newSettings: decision.newSettings,
+        reasons: ["settings"],
+        changed: decision.changed,
+      });
     },
     [chatActions, nextStepSettings, handle.store],
   );
 
   const confirmSteerRestart = useCallback((): void => {
     if (pendingSteerRestart === null) return;
-    const { decision, item } = pendingSteerRestart;
-    const actionId = chatActions.queueSteerNow(
-      item.queueItemId,
-      decision.newSettings,
-    );
+    const { queueItemId, newSettings } = pendingSteerRestart;
+    const actionId = chatActions.queueSteerNow(queueItemId, newSettings, true);
     if (actionId === null) return;
     setPendingSteerRestart(null);
   }, [chatActions, pendingSteerRestart]);
@@ -441,7 +470,8 @@ export function useChatQueueActions(
     handleComposerSettingsChange,
     steerRestart: {
       open: pendingSteerRestart !== null,
-      changed: pendingSteerRestart?.decision.changed ?? [],
+      reasons: pendingSteerRestart?.reasons ?? [],
+      changed: pendingSteerRestart?.changed ?? [],
       onOpenChange: handleSteerRestartOpenChange,
       onRestart: confirmSteerRestart,
     },

@@ -171,7 +171,7 @@ function withBit(
 
 describe("chat.subscribe@1.34 registration", () => {
   it("binds chatSubscribeV134 above the frozen 1.33, the head has since moved to 1.36", () => {
-    expect(line.latestMinor).toBe(36);
+    expect(line.latestMinor).toBe(37);
     expect(line.versions[34].contract).toBe(chatSubscribeV134);
     expect(line.versions[33].contract).toBe(chatSubscribeV133);
     expect(chatSubscribeV134.schemaVersion).toEqual({ major: 1, minor: 34 });

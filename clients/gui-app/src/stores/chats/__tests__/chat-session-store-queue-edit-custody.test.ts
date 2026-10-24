@@ -248,6 +248,7 @@ function submitEdit(
     restore: { content: EDITED, browserAnnotations },
     settings,
     intent,
+    steerRestartConfirmed: false,
   });
   if (editActionId === null) throw new Error("expected the edit to dispatch");
   const edit = harness.sent.at(-2);
@@ -652,7 +653,9 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     harness = openWithQueuedRow();
     const store = harness.handle.store;
 
-    const steerId = store.getState().queueSteerNow(QUEUE_ITEM_ID, SETTINGS);
+    const steerId = store
+      .getState()
+      .queueSteerNow(QUEUE_ITEM_ID, SETTINGS, false);
     if (steerId === null) throw new Error("expected a steer frame");
     expect(store.getState().pendingActions[steerId].queueItemId).toBe(
       QUEUE_ITEM_ID,
@@ -710,6 +713,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
       intent: "save",
+      steerRestartConfirmed: false,
     });
 
     expect(result).toBeNull();
@@ -1247,6 +1251,7 @@ describe("a refused queue edit retracts this host's blob acks (finding 8)", () =
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
       intent: "save",
+      steerRestartConfirmed: false,
     });
     if (editActionId === null) throw new Error("expected the edit to dispatch");
     // Nothing is forgotten by submitting.

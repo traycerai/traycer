@@ -196,6 +196,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   pendingCancelRestorations: true,
   failedSendRestoration: true,
   queueEditRecords: true,
+  steerRestartRefusal: true,
   unconfirmedSendActionIds: true,
   hashOnlyRecoveries: true,
   currentComposerSettings: true,

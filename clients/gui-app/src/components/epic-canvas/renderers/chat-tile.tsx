@@ -75,6 +75,7 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import {
   accumulatedChangeRows,
   hostAccumulatedChangeRows,
@@ -1841,6 +1842,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 open={view.steerRestart.open}
                 onOpenChange={view.steerRestart.onOpenChange}
                 onRestart={view.steerRestart.onRestart}
+                reasons={view.steerRestart.reasons}
                 changed={view.steerRestart.changed}
               />
               <TeardownCommitDialog
@@ -3095,6 +3097,15 @@ function useChatTileSessionViewModel(
           settings: input.settings,
           intent:
             input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
+          // A settings change reaches here only through the composer's
+          // confirm dialog; any other cause to end the turn is asked by the
+          // queue's dialog when the host refuses the steer.
+          steerRestartConfirmed:
+            input.deliveryPolicy === "after_safe_point" &&
+            decideSteerSettings(
+              handle.store.getState().activeTurn,
+              input.settings,
+            ).kind === "interrupt_restart",
         });
         if (actionId === null) return false;
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
@@ -3112,6 +3123,7 @@ function useChatTileSessionViewModel(
       chatActions,
       dispatchUi,
       dispatchUserSend,
+      handle.store,
       profile,
       submitThroughRebindGate,
     ],

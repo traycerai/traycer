@@ -425,6 +425,7 @@ export function publishedChatSessionState(
     // No wire here either: no queue edit is ever submitted, and no send can
     // go unanswered.
     queueEditRecords: {},
+    steerRestartRefusal: null,
     unconfirmedSendActionIds: new Set<string>(),
     hashOnlyRecoveries: {},
     currentComposerSettings: null,
@@ -479,6 +480,7 @@ export function publishedChatSessionState(
     queueReorder: () => null,
     queueSteerNow: () => null,
     queueAbortSteer: () => null,
+    takeSteerRestartRefusal: () => null,
     queueSettingsUpdate: () => null,
     updateActivePermissionMode: () => null,
     updateActiveProfile: () => null,

@@ -29,6 +29,7 @@ import {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -63,7 +64,7 @@ function approvalRequestedFrame(
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
   it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.36", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(36);
+    expect(line.latestMinor).toBe(37);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
     expect(line.versions[34].contract).toBe(chatSubscribeV134);
@@ -78,7 +79,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(line.versions[15].contract).toBe(chatSubscribeV115);
   });
 
-  it("1.35's and 1.36's server frames are the open windowed schema; older lines are frozen", () => {
+  it("1.37's server frames are the open windowed schema; older lines are frozen", () => {
     expect(chatSubscribeV124.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -123,11 +124,15 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(chatSubscribeV134.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV135.serverFrameSchema).toBe(
+    // 1.35 and 1.36 froze when 1.37 added the steer restart reasons to
+    // `actionAck` above them; 1.37 binds the live windowed schema.
+    expect(chatSubscribeV135.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    // 1.36 carries 1.35's frames unchanged and binds the same live schema.
     expect(chatSubscribeV136.serverFrameSchema).toBe(
+      chatSubscribeV135.serverFrameSchema,
+    );
+    expect(chatSubscribeV137.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV123.serverFrameSchema).not.toBe(

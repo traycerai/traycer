@@ -216,6 +216,7 @@ function submitEdit(
     restore: { content: EDITED, browserAnnotations: [ANNOTATION] },
     settings,
     intent: "save",
+    steerRestartConfirmed: false,
   });
   if (editActionId === null) throw new Error("expected the edit to dispatch");
   const followUp = harness.sent.at(-1);

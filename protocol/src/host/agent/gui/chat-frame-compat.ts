@@ -44,20 +44,36 @@ import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/
  */
 const CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR = 12;
 
+/**
+ * The minor that added the typed `steerRestartReasons` to a rejected
+ * `QUEUE_STEER_RESTART_UNCONFIRMED` acknowledgement. A host refuses an
+ * unconfirmed restart only for a peer on this line, so a lower peer never
+ * receives that code; the reasons are stripped for it all the same.
+ */
+export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 37;
+
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   if (frame.kind !== "actionAck") return frame;
+  const minor =
+    negotiated !== null && negotiated.major === 1 ? negotiated.minor : null;
+  let projected = frame;
   if (
-    negotiated !== null &&
-    negotiated.major === 1 &&
-    negotiated.minor >= CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR
+    (minor === null || minor < CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR) &&
+    "steerRestartReasons" in projected
   ) {
-    return frame;
+    const { steerRestartReasons: _reasons, ...rest } = projected;
+    projected = rest;
   }
-  if (!("cause" in frame)) return frame;
-  const { cause: _cause, ...projected } = frame;
+  if (
+    (minor === null || minor < CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR) &&
+    "cause" in projected
+  ) {
+    const { cause: _cause, ...rest } = projected;
+    projected = rest;
+  }
   return projected;
 }
 
@@ -426,6 +442,17 @@ export function projectChatClientFrameForVersion(
     throw new Error(
       "Message delivery acknowledgements require chat.subscribe@1.15 or newer",
     );
+  }
+  if (
+    frame.kind === "queueSteerNow" &&
+    (negotiated === null ||
+      negotiated.major !== 1 ||
+      negotiated.minor < CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR)
+  ) {
+    // A lower line restarts the turn whenever it must, so the confirmation
+    // has nothing to answer there.
+    const { restartConfirmed: _restartConfirmed, ...rest } = frame;
+    return rest;
   }
   if (supportsV17(negotiated)) {
     if (frame.kind !== "send" || supportsCanvasAnnotations(negotiated))

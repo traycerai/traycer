@@ -78,6 +78,7 @@ import {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -1507,4 +1508,5 @@ export {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
 };
