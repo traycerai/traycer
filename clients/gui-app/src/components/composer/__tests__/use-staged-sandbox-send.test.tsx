@@ -7,7 +7,13 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
+import {
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  type SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   stagedSandboxFallbackName,
@@ -15,13 +21,31 @@ import {
   type StagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
+  readStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxFailure,
   type StagedSandboxStep,
 } from "@/stores/composer/staged-sandbox-store";
+import type {
+  StagedRunRequest,
+  StagedSandboxRunDeps,
+} from "@/lib/sandboxes/staged-sandbox-run";
+import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 
 const mocks = vi.hoisted(() => ({
-  runStagedSandbox: vi.fn(() => Promise.resolve()),
+  runStagedSandbox: vi.fn<
+    (
+      surfaceKey: string,
+      fresh: boolean,
+      request: StagedRunRequest,
+      deps: StagedSandboxRunDeps,
+    ) => Promise<void>
+  >(() => Promise.resolve()),
+  /** The control plane's create, for the cases that run phase 1 for real. */
+  createSandbox:
+    vi.fn<
+      (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
+    >(),
   repairHostIds: [] as string[],
   repairMutate: vi.fn(
     (_variables: object, options: { readonly onSuccess: () => void }) => {
@@ -54,7 +78,10 @@ vi.mock(
   }),
 );
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ auth: {}, directory: {} }),
+  useHostBinding: () => ({
+    auth: { createSandbox: mocks.createSandbox },
+    directory: { refresh: () => Promise.resolve() },
+  }),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
@@ -137,7 +164,9 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
 beforeEach(() => {
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
-  mocks.runStagedSandbox.mockClear();
+  mocks.runStagedSandbox.mockReset();
+  mocks.runStagedSandbox.mockImplementation(() => Promise.resolve());
+  mocks.createSandbox.mockReset();
   mocks.repairMutate.mockClear();
   mocks.repairHostIds.length = 0;
 });
@@ -357,6 +386,57 @@ describe("useStagedSandboxSend's refused resubmit", () => {
     });
     expect(taken).toBe(false);
     expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
+  });
+});
+
+describe("useStagedSandboxSend's send after a refused create", () => {
+  it("runs phase 1 again with a new request after a refusal for credits", async () => {
+    const actual = await vi.importActual<
+      typeof import("@/lib/sandboxes/staged-sandbox-run")
+    >("@/lib/sandboxes/staged-sandbox-run");
+    mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+    mocks.createSandbox.mockResolvedValue(
+      refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+    );
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "api-refactor",
+      wakeString: null,
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("first");
+    });
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe("credits");
+    });
+    // The line offers Retry beside Add credits.
+    expect(screen.getByTestId("sandbox-refusal-retry")).toBeDefined();
+
+    let intercepted = false;
+    act(() => {
+      intercepted = latestSend?.intercept("second") ?? false;
+    });
+    await waitFor(() => {
+      expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
+    });
+
+    expect(intercepted).toBe(true);
+    const [first, second] = mocks.createSandbox.mock.calls.map(
+      ([request]) => request.clientRequestId,
+    );
+    expect(second).not.toBe(first);
   });
 });
 

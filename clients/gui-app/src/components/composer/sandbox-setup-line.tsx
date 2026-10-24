@@ -196,6 +196,11 @@ function SandboxRefusalLine(props: {
             testId="sandbox-refusal-add-credits"
             onClick={() => void openLink(billingUrl, "account", null)}
           />
+          <LineButton
+            label={RETRY}
+            testId="sandbox-refusal-retry"
+            onClick={actions.onRetry}
+          />
           {chooseAnother}
           {props.facts.smallerShapeAffordable ? (
             <LineButton

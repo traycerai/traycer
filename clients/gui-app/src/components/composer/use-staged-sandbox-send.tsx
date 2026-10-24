@@ -163,7 +163,9 @@ export function useStagedSandboxSend(input: {
         }
         return false;
       }
-      if (current.phase === "staged") {
+      // A first action that stopped short leaves a stage like any other: the
+      // send runs it again.
+      if (current.phase === "staged" || current.failure !== null) {
         messageTextRef.current = messageText;
         setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore.getState().report(surfaceKey, { ownerId });
