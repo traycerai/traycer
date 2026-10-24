@@ -356,6 +356,29 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSame.result[0]).toBe(withPicture);
     expect(afterSame).toBe(afterPicture);
   });
+
+  // A bot reply's choices are drawn from the row, so a row that gains them
+  // must re-render and one that keeps the same ones must not.
+  it("treats a bot reply's options arriving as a real change, and unchanged ones as no change at all", () => {
+    const withoutOptions: ChatMessage = makeMessage(0, "assistant");
+    const state = computeStableChatTimelineRows(
+      [withoutOptions],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    const options: ReadonlyArray<string> = ["Ship it", "Hold"];
+    const withOptions: ChatMessage = { ...withoutOptions, options };
+    const afterOptions = computeStableChatTimelineRows([withOptions], state);
+    expect(afterOptions.result[0]).toBe(withOptions);
+
+    const sameOptionsNewObject: ChatMessage = { ...withOptions };
+    const afterSame = computeStableChatTimelineRows(
+      [sameOptionsNewObject],
+      afterOptions,
+    );
+    expect(afterSame.result[0]).toBe(withOptions);
+    expect(afterSame).toBe(afterOptions);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {

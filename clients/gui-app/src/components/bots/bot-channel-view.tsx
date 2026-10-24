@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -129,6 +130,24 @@ export function BotChannelView(props: {
     isUnread,
   } = useChannelThreads({ client, botId, hostId, paused });
 
+  // The questions and proposals opened from this view: one with no thread
+  // yet shows a box whose first reply opens it, rather than waiting for a
+  // thread nobody has started.
+  const [announcementAnchors, setAnnouncementAnchors] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const openAnnouncementThread = useCallback(
+    (announcementId: string) => {
+      setAnnouncementAnchors((current) =>
+        current.has(announcementId)
+          ? current
+          : new Set([...current, announcementId]),
+      );
+      onOpenThread(announcementId);
+    },
+    [onOpenThread],
+  );
+
   const surface = useMemo<BotTranscriptSurface>(
     () => ({
       kind: "channel",
@@ -145,8 +164,17 @@ export function BotChannelView(props: {
       openThread: threadListSupported
         ? (postMessageId) => onOpenThread(postMessageId)
         : null,
+      openAnnouncementThread: threadListSupported
+        ? openAnnouncementThread
+        : null,
     }),
-    [isUnread, onOpenThread, threadListSupported, threadsByPost],
+    [
+      isUnread,
+      onOpenThread,
+      openAnnouncementThread,
+      threadListSupported,
+      threadsByPost,
+    ],
   );
 
   const threadOpen =
@@ -156,13 +184,32 @@ export function BotChannelView(props: {
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { refetch: refetchThreads } = threadList;
+  const channelId = channel?.conversationId ?? null;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     if (openThread !== null) return { kind: "listed", thread: openThread };
     if (threadList.isError) {
       return { kind: "failed", retry: () => void refetchThreads() };
     }
+    if (
+      openThreadPostId !== null &&
+      channelId !== null &&
+      announcementAnchors.has(openThreadPostId)
+    ) {
+      return {
+        kind: "unopened",
+        conversationId: channelId,
+        announcementId: openThreadPostId,
+      };
+    }
     return { kind: "pending" };
-  }, [openThread, refetchThreads, threadList.isError]);
+  }, [
+    announcementAnchors,
+    channelId,
+    openThread,
+    openThreadPostId,
+    refetchThreads,
+    threadList.isError,
+  ]);
   useReadThreadWhilePresented({
     client,
     botId,
@@ -249,6 +296,7 @@ export function BotChannelView(props: {
             botId={botId}
             conversationId={channel.conversationId}
             threadId={null}
+            announcementId={null}
             placeholder={`Message #${botTitle}`}
             label={`Message #${botTitle}`}
             testId="bot-channel-composer"
