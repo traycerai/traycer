@@ -3,6 +3,7 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   SANDBOX_ROW_FILTER_NONE,
+  sandboxClockLine,
   sandboxDestroyAllIdleOffered,
   sandboxFilterCount,
   sandboxIdleRefusal,
@@ -249,6 +250,26 @@ describe("sandboxSessionsLine and sandboxIdleRefusal", () => {
     expect(sandboxIdleRefusal(1)).toBe("At least 2 minutes.");
     expect(sandboxIdleRefusal(2)).toBeNull();
     expect(sandboxIdleRefusal(Number.NaN)).toBe("Enter a whole number.");
+  });
+});
+
+describe("sandboxClockLine", () => {
+  it("states the idle stop for an awake Automations row on its own period", () => {
+    expect(
+      sandboxClockLine({
+        summary: sandboxSummaryFixture({
+          state: "awake",
+          kind: "automation",
+          idleMinutes: 45,
+        }),
+        configuration: { kind: "personal" },
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        reachability: { unreachable: false, lastContactAt: null },
+        now: NOW,
+      }),
+    ).toBe("stops after 45 idle min · files kept · the next shell starts it");
   });
 });
 
