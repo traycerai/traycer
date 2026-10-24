@@ -20,7 +20,10 @@ import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-b
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { MessageSegment } from "@/stores/composer/chat-store";
+import type {
+  ChatMessageStoppedInfo,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 
 function render(ui: ReactNode) {
   // A fenced code block's renderer reads the query client.
@@ -45,14 +48,15 @@ function textSegment(id: string, markdown: string): MessageSegment {
   return { id, kind: "text", markdown, isStreaming: false };
 }
 
-function FinishedReply(props: {
+function ReplyBody(props: {
   readonly messageId: string;
-  readonly markdown: string;
+  readonly segments: ReadonlyArray<MessageSegment>;
+  readonly stopped: ChatMessageStoppedInfo | null;
 }): ReactNode {
   return (
     <AssistantMessageBody
       turnId={null}
-      segments={[textSegment(`${props.messageId}-seg`, props.markdown)]}
+      segments={props.segments}
       backgroundToolBlockIds={new Set<string>()}
       runState={null}
       messageId={props.messageId}
@@ -63,7 +67,7 @@ function FinishedReply(props: {
       pausedDurationMs={0}
       pausedSinceMs={null}
       completedAt={5_000}
-      stopped={null}
+      stopped={props.stopped}
       meta={null}
       manualRungAnchorId={null}
       nextStepActions={null}
@@ -73,6 +77,49 @@ function FinishedReply(props: {
     />
   );
 }
+
+/** A row that draws its reply, and reads it from its own render. */
+function FinishedReply(props: {
+  readonly messageId: string;
+  readonly markdown: string;
+}): ReactNode {
+  return (
+    <ReplyBody
+      messageId={props.messageId}
+      segments={[textSegment(`${props.messageId}-seg`, props.markdown)]}
+      stopped={null}
+    />
+  );
+}
+
+/**
+ * The stopped-boundary row: its reply sits on earlier rows of the turn, which
+ * a virtualized transcript may not mount, so it projects the reply's parts.
+ */
+function StoppedBoundaryReply(props: {
+  readonly messageId: string;
+  readonly markdown: string;
+}): ReactNode {
+  return (
+    <ReplyBody
+      messageId={props.messageId}
+      segments={[]}
+      stopped={{
+        stoppedAt: 1_700_000_000_000,
+        reason: "Stop requested by owner.",
+        turnHadOutput: true,
+        turnReplySegments: [
+          textSegment(`${props.messageId}-seg`, props.markdown),
+        ],
+      }}
+    />
+  );
+}
+
+const READ_PATHS = [
+  ["a row that draws its reply", FinishedReply],
+  ["the stopped-boundary row", StoppedBoundaryReply],
+] as const;
 
 function readAloudButtons(): HTMLElement[] {
   return screen.queryAllByTestId("assistant-reply-read-aloud");
@@ -245,192 +292,255 @@ describe("reply read-aloud button", () => {
     expect(spokenText(synth)).not.toContain("Three.");
     expect(button.getAttribute("aria-label")).toBe("Read reply aloud");
   });
-
-  it("reads the prose and skips code blocks and link targets", () => {
-    const synth = createSynth([LOCAL_VOICE]);
-    installSpeech(synth);
-    render(
-      <FinishedReply
-        messageId="assistant:a"
-        markdown={[
-          "## Result",
-          "",
-          "Run **this** with `bun` and see [the docs](https://example.com/docs).",
-          "",
-          "```ts",
-          "const secret = 1;",
-          "```",
-          "",
-          "- Done.",
-        ].join("\n")}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    act(() => synth.finishAll());
-
-    expect(spokenText(synth)).toBe(
-      "Result Run this with bun and see the docs. Done.",
-    );
-  });
-
-  it("reads a reference link's label, never its definition", () => {
-    const synth = createSynth([LOCAL_VOICE]);
-    installSpeech(synth);
-    render(
-      <FinishedReply
-        messageId="assistant:a"
-        markdown={[
-          "See [docs][ref] for more.",
-          "",
-          "[ref]: https://example.com/private",
-        ].join("\n")}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    act(() => synth.finishAll());
-
-    expect(spokenText(synth)).toBe("See docs for more.");
-  });
-
-  it("keeps angle brackets that are text, not markup", () => {
-    const synth = createSynth([LOCAL_VOICE]);
-    installSpeech(synth);
-    render(
-      <FinishedReply
-        messageId="assistant:a"
-        markdown="It returns `Promise<void>` when x < 5 and y > 3."
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    act(() => synth.finishAll());
-
-    expect(spokenText(synth)).toBe(
-      "It returns Promise<void> when x < 5 and y > 3.",
-    );
-  });
-
-  it.each([
-    [
-      "inline script and style between visible prose",
-      "Visible <script>secret()</script> after, <style>.x { color: red; }</style>done.",
-      "Visible after, done.",
-    ],
-    [
-      "an element inside emphasis",
-      "**Bold <span>hidden</span> text** stays.",
-      "Bold text stays.",
-    ],
-    [
-      "an unclosed inline script",
-      "Before <script>secret() and the rest.",
-      "Before",
-    ],
-    [
-      "a block element whose body is split by blank lines",
-      "<div>\n\nHidden inside.\n\n</div>\n\nShown after.",
-      "Shown after.",
-    ],
-    [
-      "a self-closed script, which HTML still opens",
-      "Visible <script/>secret() after.",
-      "Visible",
-    ],
-    [
-      "a self-closed style, which HTML still opens",
-      "Visible <style/>.x { color: red; } after.",
-      "Visible",
-    ],
-    [
-      "a self-closed ordinary element, closed later",
-      "Text <span/>hidden</span> shown.",
-      "Text shown.",
-    ],
-    [
-      "a script tag inside a script, which is script text",
-      "Before <script>one <script>two</script> visible after.",
-      "Before visible after.",
-    ],
-    [
-      "an element opened in a blockquote and closed after it",
-      "> <div>\n>\n> Hidden inside.\n\n</div>\n\nShown after.",
-      "Shown after.",
-    ],
-    [
-      "an element opened in a list item and closed after the list",
-      "- <div>\n\n  Hidden item.\n\n</div>\n\nShown after.",
-      "Shown after.",
-    ],
-    [
-      "an element whose quoted attribute holds a > and a tag",
-      'Before <span title="> <script>">hidden</span> after.',
-      "Before after.",
-    ],
-    [
-      "a script whose close tag is written as inline code",
-      "Before <script>secret `</script>` visible after.",
-      "Before visible after.",
-    ],
-    [
-      "a CDATA section, which HTML reads as a comment ending at the first >",
-      "Before <![CDATA[<script>]]> visible after.",
-      "Before ]]> visible after.",
-    ],
-    [
-      "an unclosed tag the reply shows as text",
-      "Returns a Vec<String> of names.",
-      "Returns a Vec of names.",
-    ],
-  ])("skips raw HTML with its contents: %s", (_label, markdown, said) => {
-    const synth = createSynth([LOCAL_VOICE]);
-    installSpeech(synth);
-    render(<FinishedReply messageId="assistant:a" markdown={markdown} />);
-
-    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    act(() => synth.finishAll());
-
-    expect(spokenText(synth)).toBe(said);
-  });
-
-  it("reads a long reply full of stray close tags to the end", () => {
-    // Its size is the bound: work that grows with the square of the reply's
-    // tags does not finish within the test timeout at this length.
-    const repeats = 20_000;
-    const synth = createSynth([LOCAL_VOICE]);
-    installSpeech(synth);
-    render(
-      <FinishedReply
-        messageId="assistant:a"
-        markdown={"word </span> ".repeat(repeats)}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    act(() => synth.finishAll());
-
-    expect(spokenText(synth)).toBe("word ".repeat(repeats).trim());
-  });
-
-  it("skips a fenced code block inside a blockquote", () => {
-    const synth = createSynth([LOCAL_VOICE]);
-    installSpeech(synth);
-    render(
-      <FinishedReply
-        messageId="assistant:a"
-        markdown={["> Run this:", ">", "> ```sh", "> echo hello", "> ```"].join(
-          "\n",
-        )}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    act(() => synth.finishAll());
-
-    expect(spokenText(synth)).toBe("Run this:");
-  });
 });
+
+describe.each(READ_PATHS)(
+  "reply read-aloud on %s reads what the reply shows",
+  (_where, Reply) => {
+    it("reads the prose and skips code blocks and link targets", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown={[
+            "## Result",
+            "",
+            "Run **this** with `bun` and see [the docs](https://example.com/docs).",
+            "",
+            "```ts",
+            "const secret = 1;",
+            "```",
+            "",
+            "- Done.",
+          ].join("\n")}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe(
+        "Result Run this with bun and see the docs. Done.",
+      );
+    });
+
+    it("reads a reference link as the reply shows it, never its definition", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown={[
+            "See [docs][ref] for more.",
+            "",
+            "[ref]: https://example.com/private",
+          ].join("\n")}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe("See [docs][ref] for more.");
+    });
+
+    it("keeps angle brackets that are text, not markup", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown="It returns `Promise<void>` when x < 5 and y > 3."
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe(
+        "It returns Promise<void> when x < 5 and y > 3.",
+      );
+    });
+
+    it.each([
+      [
+        "inline script and style between visible prose",
+        "Visible <script>secret()</script> after, <style>.x { color: red; }</style>done.",
+        "Visible after, .x { color: red; }done.",
+      ],
+      [
+        "an element inside emphasis",
+        "**Bold <span>hidden</span> text** stays.",
+        "Bold hidden text stays.",
+      ],
+      [
+        "an unclosed inline script",
+        "Before <script>secret() and the rest.",
+        "Before",
+      ],
+      [
+        "a block element whose body is split by blank lines",
+        "<div>\n\nHidden inside.\n\n</div>\n\nShown after.",
+        "Hidden inside. Shown after.",
+      ],
+      [
+        "a self-closed script, which HTML still opens",
+        "Visible <script/>secret() after.",
+        "Visible",
+      ],
+      [
+        "a self-closed style, which HTML still opens",
+        "Visible <style/>.x { color: red; } after.",
+        "Visible .x { color: red; } after.",
+      ],
+      [
+        "a self-closed ordinary element, closed later",
+        "Text <span/>hidden</span> shown.",
+        "Text hidden shown.",
+      ],
+      [
+        "a script tag inside a script, which is script text",
+        "Before <script>one <script>two</script> visible after.",
+        "Before visible after.",
+      ],
+      [
+        "an element opened in a blockquote and closed after it",
+        "> <div>\n>\n> Hidden inside.\n\n</div>\n\nShown after.",
+        "Hidden inside. Shown after.",
+      ],
+      [
+        "an element opened in a list item and closed after the list",
+        "- <div>\n\n  Hidden item.\n\n</div>\n\nShown after.",
+        "Hidden item. Shown after.",
+      ],
+      [
+        "an element whose quoted attribute holds a > and a tag",
+        'Before <span title="> <script>">hidden</span> after.',
+        "Before hidden after.",
+      ],
+      [
+        "a script whose close tag is written as inline code",
+        "Before <script>secret `</script>` visible after.",
+        "Before visible after.",
+      ],
+      [
+        "a CDATA section, which HTML reads as a comment ending at the first >",
+        "Before <![CDATA[<script>]]> visible after.",
+        "Before ]]> visible after.",
+      ],
+      [
+        "an unclosed tag the reply shows as text",
+        "Returns a Vec<String> of names.",
+        "Returns a Vec of names.",
+      ],
+    ])("reads raw HTML as the reply shows it: %s", (_label, markdown, said) => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(<Reply messageId="assistant:a" markdown={markdown} />);
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe(said);
+    });
+
+    it("reads a long reply full of stray close tags to the end", () => {
+      // Its size is the bound: work that grows with the square of the reply's
+      // tags does not finish within the test timeout at this length.
+      const repeats = 20_000;
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown={"word </span> ".repeat(repeats)}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe("word ".repeat(repeats).trim());
+    });
+
+    it("skips a fenced code block inside a blockquote", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown={[
+            "> Run this:",
+            ">",
+            "> ```sh",
+            "> echo hello",
+            "> ```",
+          ].join("\n")}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe("Run this:");
+    });
+
+    it("skips a diagram", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown={[
+            "Here is the flow:",
+            "",
+            "```mermaid",
+            "graph TD; Secret-->Hidden",
+            "```",
+            "",
+            "That is all.",
+          ].join("\n")}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe("Here is the flow: That is all.");
+    });
+
+    it("reads next steps as shown: their prose and option labels, never the wrapper", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(
+        <Reply
+          messageId="assistant:a"
+          markdown={[
+            "The work is done.",
+            "",
+            "<TRAYCER_NEXT_STEPS>",
+            "Pick what comes next.",
+            "",
+            "- [] Run **the checks**",
+            "- [ ] Review the changed files",
+            "</TRAYCER_NEXT_STEPS>",
+          ].join("\n")}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(synth.spoken.map((utterance) => utterance.text)).toEqual([
+        "The work is done.",
+        "Pick what comes next.",
+        "Run **the checks**",
+        "Review the changed files",
+      ]);
+    });
+  },
+);
 
 describe("reply read-aloud: no audio or text leaves the device", () => {
   it("speaks every part of the reply with an on-device voice, even when a network voice is the default", () => {

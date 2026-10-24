@@ -7,7 +7,6 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
-import { markdownToSpokenParagraphs } from "@/markdown/spoken-paragraphs";
 import {
   deviceSpeechSynthesis,
   pickOnDeviceVoice,
@@ -39,7 +38,10 @@ function hasOnDeviceVoice(): boolean {
  * chat mounted under `display:none`, which would leave speech running with
  * its Stop control out of sight.
  */
-export function useReadAloud(markdown: string): {
+export function useReadAloud(
+  /** The reply's paragraphs, read once Play is pressed. */
+  readParagraphs: () => ReadonlyArray<string>,
+): {
   readonly available: boolean;
   readonly reading: boolean;
   readonly toggle: () => void;
@@ -75,18 +77,18 @@ export function useReadAloud(markdown: string): {
       stopReadingAloud(ownerId);
       return;
     }
-    // Parsed on Play, not per render: a reply re-renders often and can be
+    // Read on Play, not per render: a reply re-renders often and can be
     // long, and its spoken text is needed only once it is played.
     startReadingAloud({
       ownerId,
       conversation,
-      paragraphs: markdownToSpokenParagraphs(markdown),
+      paragraphs: readParagraphs(),
       preferredLanguage: preferredLanguage(),
     });
-  }, [conversation, markdown, ownerId]);
+  }, [conversation, ownerId, readParagraphs]);
 
   return {
-    available: voiceReady && markdown.trim().length > 0,
+    available: voiceReady,
     reading,
     toggle,
   };

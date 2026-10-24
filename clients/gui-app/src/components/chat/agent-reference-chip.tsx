@@ -1,6 +1,10 @@
 import { Bot } from "lucide-react";
 import { useCallback, type MouseEvent } from "react";
-import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import {
+  resolveAgentReference,
+  type AgentReferenceResolution,
+  type AgentTreeRecord,
+} from "@/components/chat/agent-reference-resolution";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useEpicAgentOpenRef } from "@/hooks/epic/use-epic-agent-open-ref";
@@ -12,15 +16,10 @@ import {
   useEpicChatHarnessId,
   useMaybeEpicTuiAgentHarnessId,
   useOpenEpicId,
-  type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
-
-type AgentTreeRecord = EpicTreeRecord & {
-  readonly type: "chat" | "terminal-agent";
-};
 
 interface AgentReferenceChipProps {
   readonly agentId: string;
@@ -69,70 +68,6 @@ function ResolvedAgentReferenceChip(props: AgentReferenceChipProps) {
       />
     </TooltipWrapper>
   );
-}
-
-type AgentReferenceCandidate =
-  | {
-      readonly kind: "agent";
-      readonly agent: AgentTreeRecord;
-      readonly referenceId: string;
-    }
-  | {
-      readonly kind: "role";
-      readonly agent: AgentTreeRecord;
-      readonly referenceId: string;
-      readonly roleClaim: RoleClaim;
-    };
-
-interface AgentReferenceResolution {
-  readonly agent: AgentTreeRecord;
-  readonly label: string;
-  readonly roleClaim: RoleClaim | null;
-}
-
-function resolveAgentReference(args: {
-  readonly referenceId: string;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
-  readonly roleClaimsByAgentId: Readonly<Record<string, readonly RoleClaim[]>>;
-}): AgentReferenceResolution | null {
-  const agents = args.records.filter(
-    (record): record is AgentTreeRecord =>
-      record.type === "chat" || record.type === "terminal-agent",
-  );
-  const candidates: AgentReferenceCandidate[] = agents.flatMap((agent) => [
-    { kind: "agent", agent, referenceId: agent.id },
-    ...(Object.hasOwn(args.roleClaimsByAgentId, agent.id)
-      ? args.roleClaimsByAgentId[agent.id].map(
-          (roleClaim): AgentReferenceCandidate => ({
-            kind: "role",
-            agent,
-            referenceId: roleClaim.claimId,
-            roleClaim,
-          }),
-        )
-      : []),
-  ]);
-  const normalizedReferenceId = args.referenceId.toLowerCase();
-  const exact = candidates.filter(
-    (candidate) =>
-      candidate.referenceId.toLowerCase() === normalizedReferenceId,
-  );
-  const matches =
-    exact.length > 0
-      ? exact
-      : candidates.filter((candidate) =>
-          candidate.referenceId.toLowerCase().startsWith(normalizedReferenceId),
-        );
-  if (matches.length !== 1) return null;
-  const match = matches[0];
-  if (match.kind === "agent") {
-    return { agent: match.agent, label: match.agent.name, roleClaim: null };
-  }
-  return {
-    agent: match.agent,
-    label: match.roleClaim.role,
-    roleClaim: match.roleClaim,
-  };
 }
 
 function referenceTooltip(resolution: AgentReferenceResolution): string {
