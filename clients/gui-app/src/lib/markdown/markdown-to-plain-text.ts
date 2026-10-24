@@ -172,9 +172,9 @@ function blockText(token: unknown): string {
   switch (readString(token, "type")) {
     case "heading":
     case "paragraph":
-      return inlineText(readList(token, "tokens"), "alt");
+      return inlineText(readList(token, "tokens"), "preview");
     case "text":
-      return textOrChildren(token, "alt");
+      return textOrChildren(token, "preview");
     case "code":
       return codeLabel(token);
     case "blockquote":
@@ -182,7 +182,7 @@ function blockText(token: unknown): string {
     case "list":
       return listText(token);
     case "table":
-      return tableText(token, "alt");
+      return tableText(token, "preview");
     // Structural or invisible: a rule, a blank line, a link-reference
     // definition, and raw HTML all contribute no prose.
     case "hr":
@@ -191,7 +191,7 @@ function blockText(token: unknown): string {
     case "html":
       return "";
     default:
-      return inlineText(readList(token, "tokens"), "alt");
+      return inlineText(readList(token, "tokens"), "preview");
   }
 }
 
@@ -214,32 +214,39 @@ function listText(token: unknown): string {
   return joinParts(items, BLOCK_SEPARATOR);
 }
 
-function tableText(token: unknown, images: ImageText): string {
+function tableText(token: unknown, projection: Projection): string {
   const rows = readList(token, "rows").flatMap((row) => toList(row));
   const cells = [...readList(token, "header"), ...rows].map((cell) =>
-    inlineText(readList(cell, "tokens"), images),
+    inlineText(readList(cell, "tokens"), projection),
   );
   return joinParts(cells, " ");
 }
 
-/** Whether an image reads as its alt text (a preview) or not at all (speech). */
-type ImageText = "alt" | "skip";
+/**
+ * Who reads the projection. A preview shows an image's alt text and the text
+ * between raw HTML tags; speech reads neither (see `withoutHtmlElements`).
+ */
+type Projection = "preview" | "speech";
 
-function inlineText(tokens: ReadonlyArray<unknown>, images: ImageText): string {
-  return tokens.map((token) => inlineTokenText(token, images)).join("");
+function inlineText(
+  tokens: ReadonlyArray<unknown>,
+  projection: Projection,
+): string {
+  const shown = projection === "speech" ? withoutHtmlElements(tokens) : tokens;
+  return shown.map((token) => inlineTokenText(token, projection)).join("");
 }
 
-function inlineTokenText(token: unknown, images: ImageText): string {
+function inlineTokenText(token: unknown, projection: Projection): string {
   switch (readString(token, "type")) {
     case "text":
-      return textOrChildren(token, images);
+      return textOrChildren(token, projection);
     // The LABEL, never the target: a preview's whole budget can otherwise go to
     // one URL the reader cannot click anyway.
     case "link":
     case "strong":
     case "em":
     case "del":
-      return inlineText(readList(token, "tokens"), images);
+      return inlineText(readList(token, "tokens"), projection);
     // LITERAL, both of them. CommonMark treats a character reference inside a
     // code span as text, so `` `&amp;` `` really does read `&amp;` - and an
     // `escape` token's text is already the resolved character.
@@ -248,7 +255,7 @@ function inlineTokenText(token: unknown, images: ImageText): string {
       return readString(token, "text");
     // Alt text is the only part of an image that is prose.
     case "image":
-      return images === "alt"
+      return projection === "preview"
         ? decodeCharacterReferences(readString(token, "text"))
         : "";
     case "br":
@@ -256,7 +263,7 @@ function inlineTokenText(token: unknown, images: ImageText): string {
     case "html":
       return "";
     default:
-      return inlineText(readList(token, "tokens"), images);
+      return inlineText(readList(token, "tokens"), projection);
   }
 }
 
@@ -264,9 +271,9 @@ function inlineTokenText(token: unknown, images: ImageText): string {
  * A `text` token carries children only when it contains inline markup; when it
  * does, they are the authority, because `text` itself is the unparsed source.
  */
-function textOrChildren(token: unknown, images: ImageText): string {
+function textOrChildren(token: unknown, projection: Projection): string {
   const children = readList(token, "tokens");
-  if (children.length > 0) return inlineText(children, images);
+  if (children.length > 0) return inlineText(children, projection);
   // The leaf: this is where prose actually lands, so this is where character
   // references get resolved. Code spans reach their own branch and stay literal.
   return decodeCharacterReferences(readString(token, "text"));
@@ -276,8 +283,8 @@ function textOrChildren(token: unknown, images: ImageText): string {
  * The same parse, read aloud: one entry per paragraph, heading, list item or
  * table, in order. Unlike a preview, nothing that is not prose is spoken - no
  * code (not even a "Code" label), no link targets or definitions, no images,
- * no raw HTML - wherever it sits, a fence inside a blockquote or a list item
- * included.
+ * no raw HTML and no text inside an HTML element - wherever it sits, a fence
+ * inside a blockquote or a list item included.
  */
 export function markdownToSpokenParagraphs(markdown: string): string[] {
   return spokenBlocks(marked.lexer(markdown))
@@ -286,7 +293,7 @@ export function markdownToSpokenParagraphs(markdown: string): string[] {
 }
 
 function spokenBlocks(tokens: ReadonlyArray<unknown>): string[] {
-  return tokens.flatMap((token): string[] => {
+  return withoutHtmlElements(tokens).flatMap((token): string[] => {
     switch (readString(token, "type")) {
       case "code":
       case "hr":
@@ -301,11 +308,118 @@ function spokenBlocks(tokens: ReadonlyArray<unknown>): string[] {
           spokenBlocks(readList(item, "tokens")),
         );
       case "table":
-        return [tableText(token, "skip")];
+        return [tableText(token, "speech")];
       case "text":
-        return [textOrChildren(token, "skip")];
+        return [textOrChildren(token, "speech")];
       default:
-        return [inlineText(readList(token, "tokens"), "skip")];
+        return [inlineText(readList(token, "tokens"), "speech")];
     }
   });
+}
+
+/**
+ * Elements whose contents are never prose and, left open, run to the end: a
+ * browser reads everything after an unclosed `<script>` as script.
+ */
+const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "script",
+  "style",
+  "template",
+  "textarea",
+  "title",
+  "xmp",
+]);
+
+const VOID_ELEMENTS: ReadonlySet<string> = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr",
+]);
+
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+const HTML_TAG = /<(\/?)([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/?)>/g;
+
+interface HtmlTagEvent {
+  readonly token: number;
+  readonly name: string;
+  readonly closing: boolean;
+}
+
+/** The element-opening and -closing tags of a run's `html` tokens, in order. */
+function htmlTagEvents(tokens: ReadonlyArray<unknown>): HtmlTagEvent[] {
+  return tokens.flatMap((token, index): HtmlTagEvent[] => {
+    if (readString(token, "type") !== "html") return [];
+    const raw = readString(token, "raw").replace(HTML_COMMENT, "");
+    return [...raw.matchAll(HTML_TAG)].flatMap((match): HtmlTagEvent[] => {
+      // Every group of HTML_TAG takes part in a match (the slashes as "").
+      const [, closingSlash, tagName, selfClosingSlash] = match;
+      const name = tagName.toLowerCase();
+      const closing = closingSlash === "/";
+      if (!closing && (selfClosingSlash === "/" || VOID_ELEMENTS.has(name))) {
+        return [];
+      }
+      return [{ token: index, name, closing }];
+    });
+  });
+}
+
+/**
+ * A run of sibling tokens without its raw HTML, for speech. `marked` lexes an
+ * element as separate tokens - its opening tag, the text between, its closing
+ * tag (inline, and at block level when blank lines split the element) - so
+ * dropping the `html` tokens alone would still read `<script>`'s contents.
+ * Here an element is dropped with everything up to its matching closing tag.
+ * An element left open drops only its tag, as the renderer then shows the text
+ * after it, except a raw-text element, which drops the rest of the run.
+ */
+function withoutHtmlElements(
+  tokens: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> {
+  const events = htmlTagEvents(tokens);
+  const hidden = new Set<number>();
+  events.forEach((event, at) => {
+    if (event.closing) return;
+    const end = matchingCloseToken(events.slice(at + 1), event.name);
+    const last =
+      end ?? (RAW_TEXT_ELEMENTS.has(event.name) ? tokens.length : event.token);
+    for (let index = event.token + 1; index < last; index += 1) {
+      hidden.add(index);
+    }
+  });
+  return tokens.filter(
+    (token, index) =>
+      !hidden.has(index) && readString(token, "type") !== "html",
+  );
+}
+
+/** The token holding the tag that closes `name`, among the events after it. */
+function matchingCloseToken(
+  later: ReadonlyArray<HtmlTagEvent>,
+  name: string,
+): number | null {
+  let depth = 0;
+  for (const event of later) {
+    if (event.name !== name) continue;
+    if (!event.closing) {
+      depth += 1;
+      continue;
+    }
+    if (depth === 0) return event.token;
+    depth -= 1;
+  }
+  return null;
 }

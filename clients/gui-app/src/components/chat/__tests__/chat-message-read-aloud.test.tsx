@@ -312,6 +312,43 @@ describe("reply read-aloud button", () => {
     );
   });
 
+  it.each([
+    [
+      "inline script and style between visible prose",
+      "Visible <script>secret()</script> after, <style>.x { color: red; }</style>done.",
+      "Visible after, done.",
+    ],
+    [
+      "an element inside emphasis",
+      "**Bold <span>hidden</span> text** stays.",
+      "Bold text stays.",
+    ],
+    [
+      "an unclosed inline script",
+      "Before <script>secret() and the rest.",
+      "Before",
+    ],
+    [
+      "a block element whose body is split by blank lines",
+      "<div>\n\nHidden inside.\n\n</div>\n\nShown after.",
+      "Shown after.",
+    ],
+    [
+      "an unclosed tag the reply shows as text",
+      "Returns a Vec<String> of names.",
+      "Returns a Vec of names.",
+    ],
+  ])("skips raw HTML with its contents: %s", (_label, markdown, said) => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(<FinishedReply messageId="assistant:a" markdown={markdown} />);
+
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
+
+    expect(spokenText(synth)).toBe(said);
+  });
+
   it("skips a fenced code block inside a blockquote", () => {
     const synth = createSynth([LOCAL_VOICE]);
     installSpeech(synth);
