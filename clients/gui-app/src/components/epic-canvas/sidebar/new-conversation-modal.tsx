@@ -999,6 +999,7 @@ export function NewConversationModalBody(props: {
     canSubmit: stagedResubmitReady({
       catalogSettled,
       launch: stagedTerminalLaunch,
+      harnessId,
       canSubmit,
       canStart: [canMutate, workspaceCanStart, !isSubmitting],
       providers: stagedProviders,

@@ -51,10 +51,36 @@ const testState = vi.hoisted(() => ({
   packBlocked: false,
   /** The resolved host's `providers.list`, `undefined` until it answers. */
   providers: undefined as
-    | ReadonlyArray<{ readonly providerId: string; readonly profiles: [] }>
+    | ReadonlyArray<{
+        readonly providerId: string;
+        readonly profiles: [];
+        readonly managedInstallState: {
+          readonly status: "downloading";
+          readonly percent: number;
+        } | null;
+        readonly availabilityPending: boolean;
+        readonly candidates: [];
+      }>
     | undefined,
+  providerListeners: new Set<() => void>(),
   toolbarStore: null as { readonly setState: (patch: object) => void } | null,
 }));
+
+/** The new host's Claude Code row: no profiles, no binary but its pack. */
+function claudeCodeProvider(
+  managedInstallState: {
+    readonly status: "downloading";
+    readonly percent: number;
+  } | null,
+): NonNullable<(typeof testState)["providers"]>[number] {
+  return {
+    providerId: "claude-code",
+    profiles: [],
+    managedInstallState,
+    availabilityPending: false,
+    candidates: [],
+  };
+}
 
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
@@ -164,19 +190,39 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
 
 vi.mock(
   "@/hooks/providers/use-providers-list-query",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/hooks/providers/use-providers-list-query")
-    >()),
-    useProvidersListForClient: () => ({
-      data:
-        testState.providers === undefined
-          ? undefined
-          : { providers: testState.providers },
-      isError: false,
-    }),
-  }),
+  async (importOriginal) => {
+    const React = await import("react");
+    return {
+      ...(await importOriginal<
+        typeof import("@/hooks/providers/use-providers-list-query")
+      >()),
+      // Subscribed, as the query is: `answerProviders` re-renders its readers.
+      useProvidersListForClient: () => {
+        const providers = React.useSyncExternalStore(
+          (listener) => {
+            testState.providerListeners.add(listener);
+            return () => {
+              testState.providerListeners.delete(listener);
+            };
+          },
+          () => testState.providers,
+        );
+        return {
+          data: providers === undefined ? undefined : { providers },
+          isError: false,
+        };
+      },
+    };
+  },
 );
+
+/** The new host's `providers.list` answers again. */
+function answerProviders(
+  providers: NonNullable<(typeof testState)["providers"]>,
+): void {
+  testState.providers = providers;
+  for (const listener of testState.providerListeners) listener();
+}
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
@@ -498,7 +544,7 @@ describe("LandingComposer direct submit gate", () => {
     // The sandbox is up; its catalog and providers answer, without that profile.
     act(() => {
       testState.catalogHostId = "host-test";
-      testState.providers = [{ providerId: "claude-code", profiles: [] }];
+      testState.providers = [claudeCodeProvider(null)];
       testState.toolbarStore?.setState({
         catalog: {
           hostId: "host-test",
@@ -520,6 +566,80 @@ describe("LandingComposer direct submit gate", () => {
       terminalAgentArgs: "--resume",
       profileId: null,
     });
+  });
+
+  it("waits for the new sandbox's agent pack before launching a staged Start there", () => {
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const start = testState.startTerminal;
+    if (start === null) throw new Error("expected ComposerBody seam");
+    act(() => {
+      start(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        },
+        "host-test",
+      );
+    });
+
+    // The sandbox is up, but the agent it would run is still downloading.
+    act(() => {
+      testState.catalogHostId = "host-test";
+      testState.providers = [
+        claudeCodeProvider({ status: "downloading", percent: 40 }),
+      ];
+      testState.toolbarStore?.setState({
+        catalog: {
+          hostId: "host-test",
+          harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsLoaded: true,
+        },
+      });
+      useStagedSandboxStore.getState().report("landing:window-test", {
+        phase: "handoff",
+        createdHostId: "host-test",
+      });
+    });
+    expect(testState.selectTerminalAgent).not.toHaveBeenCalled();
+    expect(
+      useStagedSandboxStore.getState().bySurface["landing:window-test"]
+        ?.failure,
+    ).toBeNull();
+
+    // The pack lands.
+    act(() => {
+      answerProviders([claudeCodeProvider(null)]);
+    });
+
+    expect(testState.selectTerminalAgent).toHaveBeenCalledTimes(1);
+    expect(
+      useStagedSandboxStore.getState().bySurface["landing:window-test"],
+    ).toBeUndefined();
   });
 
   it.each([
@@ -568,7 +688,7 @@ describe("LandingComposer direct submit gate", () => {
 
       act(() => {
         testState.catalogHostId = "host-test";
-        testState.providers = [{ providerId: "claude-code", profiles: [] }];
+        testState.providers = [claudeCodeProvider(null)];
         // Set outright: an earlier `setState` copied the catalog getter's
         // value into the store, so it no longer reads `testState`.
         testState.toolbarStore?.setState({

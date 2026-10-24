@@ -528,6 +528,7 @@ export function LandingComposer(props: LandingComposerProps) {
     canSubmit: stagedResubmitReady({
       catalogSettled,
       launch: stagedTerminalLaunch,
+      harnessId,
       canSubmit,
       canStart: [workspaceCanStart, !isSubmitting],
       providers: stagedProviders,
