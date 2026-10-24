@@ -144,7 +144,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          scoop install manifests/scoop/bucket/traycer-desktop.json
+          # Scoop reads a relative `x/rest.json` as app `rest.json` in a bucket
+          # named `x`; an absolute path is read as a local manifest.
+          $manifest = (Resolve-Path 'manifests\scoop\bucket\traycer-desktop.json').Path
+          scoop install $manifest
           if ($LASTEXITCODE -ne 0) { throw "scoop install failed ($LASTEXITCODE)" }
           $app = scoop prefix traycer-desktop
           foreach ($required in @('Traycer.exe', 'resources\app-update.yml', 'resources\cli\win32-x64\traycer.exe')) {
