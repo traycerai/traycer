@@ -49,25 +49,17 @@ function useSettledSandboxRows(): {
 }
 
 /**
- * Opens Settings › Sandboxes with one row revealed despite any filter: on the
- * configuration the row belongs to, read from the sandbox list (a push
- * carries only its entry key), or on Personal once the row has left the list.
- * Before the list and the teams settle, the reveal is held for the page to
- * place ({@link useSettlePendingSandboxReveal}).
+ * Opens Settings › Sandboxes with one row revealed despite any filter. A push
+ * carries only its entry key, so the reveal is held and the page places it on
+ * the configuration the row belongs to once its own list and teams settle
+ * ({@link useSettlePendingSandboxReveal}): the caller (the notification
+ * center) reads no sandbox data and needs no host.
  */
 export function useOpenSandboxesPage(): (sandboxId: string) => void {
-  const { rows, configurations } = useSettledSandboxRows();
   const { openSettings } = useSystemTabModalActions();
   return useCallback(
     (sandboxId: string) => {
-      if (rows === null) {
-        holdSandboxReveal(sandboxId);
-      } else {
-        revealSandboxOnPage(
-          revealTarget(rows, sandboxId, configurations),
-          sandboxId,
-        );
-      }
+      holdSandboxReveal(sandboxId);
       openSettings({
         section: "sandboxes",
         resetToGeneral: false,
@@ -76,7 +68,7 @@ export function useOpenSandboxesPage(): (sandboxId: string) => void {
         hostId: null,
       });
     },
-    [rows, configurations, openSettings],
+    [openSettings],
   );
 }
 

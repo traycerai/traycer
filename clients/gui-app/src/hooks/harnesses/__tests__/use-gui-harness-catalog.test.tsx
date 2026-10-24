@@ -2456,6 +2456,29 @@ describe("catalog hooks inside a ChatOpencodeLineContext", () => {
     expect(fixture.commandParams[0]?.opencodeLine).toBe(2);
   });
 
+  it.each(["traycer", "openrouter", "huggingface"] as const)(
+    "sends the chat's line on listModels and listCommands for %s",
+    async (harnessId) => {
+      const fixture = lineFixture();
+      renderHook(
+        () => {
+          useGuiHarnessModelsQuery(harnessId, null, ACTIVE);
+          useGuiHarnessCommandsQuery(fixture.client, harnessId, [], {
+            ...ACTIVE,
+            profileId: null,
+          });
+        },
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(fixture.modelParams).toHaveLength(1);
+        expect(fixture.commandParams).toHaveLength(1);
+      });
+      expect(fixture.modelParams[0]?.opencodeLine).toBe(2);
+      expect(fixture.commandParams[0]?.opencodeLine).toBe(2);
+    },
+  );
+
   it("sends no line for any other harness", async () => {
     const fixture = lineFixture();
     renderHook(

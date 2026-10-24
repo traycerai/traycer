@@ -41,6 +41,10 @@ import {
   TASK_HOST_UNREACHABLE_LINE,
 } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import {
+  reachSentence,
+  REACH_UNNAMED_HOSTS,
+} from "@/lib/sandboxes/sandbox-strings";
+import {
   AgentReachHoverLine,
   AgentReachMark,
 } from "@/components/epic-canvas/sidebar/agent-reach-mark";
@@ -244,7 +248,7 @@ describe("AgentReachHoverLine", () => {
   it("renders the line, verbatim, under its own test id", () => {
     render(<AgentReachHoverLine />);
     expect(screen.getByTestId("agent-hover-reach-line").textContent).toBe(
-      AGENT_REACH_LINE,
+      reachSentence(REACH_UNNAMED_HOSTS),
     );
   });
 });
@@ -297,7 +301,7 @@ describe("AgentReachMark", () => {
     const texts = screen
       .queryAllByRole("tooltip")
       .map((element) => element.textContent);
-    expect(texts).toContain(AGENT_REACH_LINE);
+    expect(texts).toContain(reachSentence(REACH_UNNAMED_HOSTS));
   });
 });
 
@@ -326,8 +330,6 @@ const CLOUD_CHAT_ID = CLOUD_CHAT.identity.chatId;
 const CLOUD_ROW_TESTID = `epic-sidebar-cloud-item-${CLOUD_CHAT_ID}`;
 const CLOUD_REACH_TESTID = `epic-sidebar-cloud-reach-${CLOUD_CHAT_ID}`;
 const CLOUD_LOCK_TESTID = `epic-sidebar-cloud-lock-${CLOUD_CHAT_ID}`;
-const AGENT_REACH_LINE =
-  "Agents here cannot work with the agents on your hosts; the task still shares its files and chats.";
 
 function makeMeta(): SnapshotMetaEpic {
   return {
@@ -556,7 +558,7 @@ describe("the Agents tree's local rows: the reach mark comes from reach alone", 
       within(localHoverExtra("chat-foreign")).getByTestId(
         "agent-hover-reach-line",
       ).textContent,
-    ).toBe(AGENT_REACH_LINE);
+    ).toBe(reachSentence(REACH_UNNAMED_HOSTS));
   });
 
   it("leaves a row on the viewer's own principal unmarked, with no hover line", () => {

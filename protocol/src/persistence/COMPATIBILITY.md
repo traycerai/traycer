@@ -112,6 +112,39 @@ traycer#2421 did, and trimming the member would make every current reader
 reject their frames. The fixtures and the 1.29–1.32 frame digests move with
 it; every released line reproduces its value.
 
+### Logged change: compaction not applied
+
+`compaction.notApplied` distinguishes an unsuccessful attempt that did not apply
+from an execution failure. It is optional on `compaction.errored` runtime events
+and defaults to `false` on the live persisted block. Missing input remains a
+failure; no reader infers the flag from an error message, and old rows are not
+rewritten. Started and completed events reset the live flag to `false`.
+
+The flag opens `chat.subscribe` 1.37 and chat-sync 1.11. The selected main's
+1.36 is the OpenCode client-line capability marker and aliases 1.35's frames;
+both retain their unchanged contracts. Every older stream through 1.36 binds
+the pre-notApplied event and block leaves through its complete message,
+snapshot-tail and range paths, retaining that minor's settings, queue,
+accumulated-change vocabulary and other capability semantics.
+
+Both persistence contracts were considered. Registered epic 4.0 still reaches
+the pre-HTML message/block chain, whose compaction leaf stays frozen without
+this key; its generated storage and domain surfaces must remain identical.
+Chat-sync's live interpreted block gains the defaulted boolean, and both
+chat-head and chat-shard move together to 1.11. Neither a new major nor a new
+minimum-reader floor is needed: old input is accepted, while an older reader
+still interprets the errored status conservatively as failed.
+
+Preservation comes from the message/block's raw envelope, not the old reader's
+interpreted value. The canonical writer re-emits that raw subtree, so an older
+reader can lack the flag in its view while retaining it for publication and a
+later live read. Byte identity applies to already canonical input. Current
+cloud/doc fork paths likewise carry raw message bodies into target-store seed
+ops; streaming-boundary finalization overlays changed fields instead of
+rebuilding a block from its known fields. A historical fork that rebuilt a
+block may already have lost the key in that copy, and this change does not
+repair that copy or change an older published renderer's label.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the

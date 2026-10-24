@@ -43,6 +43,7 @@ import {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2304,7 +2305,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 36 as chatSubscribeV136", () => {
+  it("registers chat.subscribe major 1 latestMinor 37 as chatSubscribeV137", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2386,8 +2387,9 @@ describe("chat.subscribe registry membership", () => {
     // `sendWouldQueue` bit, which every `<=1.33` peer drops as unknown. `35`
     // adds the `memory-curation` queue item, omitted for every `<=1.34` peer.
     // `36` has `35`'s frames and marks a client with both Managed OpenCode
-    // rows.
-    expect(entry[1].latestMinor).toBe(36);
+    // rows. `37` adds the errored-compaction `notApplied` flag, stripped for
+    // every `<=1.36` peer.
+    expect(entry[1].latestMinor).toBe(37);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2419,6 +2421,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[34].contract).toBe(chatSubscribeV134);
     expect(entry[1].versions[35].contract).toBe(chatSubscribeV135);
     expect(entry[1].versions[36].contract).toBe(chatSubscribeV136);
+    expect(entry[1].versions[37].contract).toBe(chatSubscribeV137);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2529,6 +2532,10 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV136.schemaVersion).toEqual({
       major: 1,
       minor: 36,
+    });
+    expect(chatSubscribeV137.schemaVersion).toEqual({
+      major: 1,
+      minor: 37,
     });
   });
 

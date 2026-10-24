@@ -1436,6 +1436,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           status: "streaming" as const,
+          notApplied: false,
           trigger: event.trigger ?? existing.trigger,
           preTokens: event.preTokens ?? existing.preTokens,
           summary: event.summary ?? existing.summary,
@@ -1456,6 +1457,7 @@ export function accumulateEvent(
           durationMs: null,
           summary: nullableString(event.summary),
           error: null,
+          notApplied: false,
         },
       ];
     }
@@ -1466,6 +1468,7 @@ export function accumulateEvent(
         const updated = {
           ...existing,
           status: "completed" as const,
+          notApplied: false,
           trigger: event.trigger ?? existing.trigger,
           preTokens: event.preTokens ?? existing.preTokens,
           postTokens: event.postTokens ?? existing.postTokens,
@@ -1488,6 +1491,7 @@ export function accumulateEvent(
           durationMs: nullableNumber(event.durationMs),
           summary: nullableString(event.summary),
           error: null,
+          notApplied: false,
         },
       ];
     }
@@ -1501,6 +1505,7 @@ export function accumulateEvent(
           trigger: event.trigger ?? existing.trigger,
           preTokens: event.preTokens ?? existing.preTokens,
           error: event.error,
+          notApplied: event.notApplied ?? false,
           timestamp: event.timestamp,
         };
         return replaceBlock(blocks, event.blockId, updated);
@@ -1518,6 +1523,7 @@ export function accumulateEvent(
           durationMs: null,
           summary: null,
           error: event.error,
+          notApplied: event.notApplied ?? false,
         },
       ];
     }

@@ -392,6 +392,7 @@ import {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -15170,7 +15171,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 36,
+      latestMinor: 37,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15372,6 +15373,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.36 keeps @1.35's frames and marks a client with both Managed
         // OpenCode rows, whose plain Managed selection defaults to line 2.
         36: { contract: chatSubscribeV136 },
+        37: { contract: chatSubscribeV137 },
       },
     },
   },
