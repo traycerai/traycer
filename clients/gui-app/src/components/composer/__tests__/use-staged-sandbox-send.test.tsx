@@ -389,54 +389,71 @@ describe("useStagedSandboxSend's refused resubmit", () => {
   });
 });
 
-describe("useStagedSandboxSend's send after a refused create", () => {
-  it("runs phase 1 again with a new request after a refusal for credits", async () => {
-    const actual = await vi.importActual<
-      typeof import("@/lib/sandboxes/staged-sandbox-run")
-    >("@/lib/sandboxes/staged-sandbox-run");
-    mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+/**
+ * Stages a New sandbox, sends, waits for the create to fail as `failure`,
+ * then sends again: the two creates' idempotency keys.
+ */
+async function sendAgainAfter(
+  failure: StagedSandboxFailure["kind"],
+): Promise<ReadonlyArray<string | null>> {
+  const actual = await vi.importActual<
+    typeof import("@/lib/sandboxes/staged-sandbox-run")
+  >("@/lib/sandboxes/staged-sandbox-run");
+  mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+  useStagedSandboxStore.getState().stage(SURFACE, {
+    kind: "new",
+    configuration: { kind: "personal" },
+    shape: {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    },
+    name: "api-refactor",
+    wakeString: null,
+  });
+  mount(vi.fn());
+
+  act(() => {
+    latestSend?.intercept("first");
+  });
+  await waitFor(() => {
+    expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe(failure);
+  });
+  let intercepted = false;
+  act(() => {
+    intercepted = latestSend?.intercept("second") ?? false;
+  });
+  await waitFor(() => {
+    expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
+  });
+  expect(intercepted).toBe(true);
+  return mocks.createSandbox.mock.calls.map(
+    ([request]) => request.clientRequestId,
+  );
+}
+
+describe("useStagedSandboxSend's send after a failed create", () => {
+  it("makes a new create after a refusal for credits, and offers Retry beside Add credits", async () => {
     mocks.createSandbox.mockResolvedValue(
       refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
     );
-    useStagedSandboxStore.getState().stage(SURFACE, {
-      kind: "new",
-      configuration: { kind: "personal" },
-      shape: {
-        os: "linux",
-        cpus: 2,
-        memoryMb: 4096,
-        diskMb: null,
-        region: "us-east",
-        idleMinutes: 30,
-        destroyAfterRestingMinutes: 10_080,
-      },
-      name: "api-refactor",
-      wakeString: null,
-    });
-    mount(vi.fn());
 
-    act(() => {
-      latestSend?.intercept("first");
-    });
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe("credits");
-    });
-    // The line offers Retry beside Add credits.
-    expect(screen.getByTestId("sandbox-refusal-retry")).toBeDefined();
+    const [first, second] = await sendAgainAfter("credits");
 
-    let intercepted = false;
-    act(() => {
-      intercepted = latestSend?.intercept("second") ?? false;
-    });
-    await waitFor(() => {
-      expect(mocks.createSandbox).toHaveBeenCalledTimes(2);
-    });
-
-    expect(intercepted).toBe(true);
-    const [first, second] = mocks.createSandbox.mock.calls.map(
-      ([request]) => request.clientRequestId,
-    );
     expect(second).not.toBe(first);
+    expect(screen.getByTestId("sandbox-refusal-retry")).toBeDefined();
+  });
+
+  it("repeats the same create after one whose answer never came, since it may have been accepted", async () => {
+    mocks.createSandbox.mockRejectedValue(new Error("bridge refused"));
+
+    const [first, second] = await sendAgainAfter("unverified");
+
+    expect(second).toBe(first);
   });
 });
 

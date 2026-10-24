@@ -123,7 +123,9 @@ export function SandboxRowActions(props: {
           createdByHostId: null,
           createdByAgentId: null,
           environmentId: summary.environmentId,
-          destroyAfterRestingMinutes: null,
+          // The row's `null` is never; on a create `null` is the
+          // configuration's default and `0` is never.
+          destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
           createdByTaskId: null,
           clientRequestId: uuidv4(),
         },

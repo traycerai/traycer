@@ -447,6 +447,25 @@ describe("useSandboxStaging host picks", () => {
     expect(staging().composer.stagedLabel).toContain("stopped");
   });
 
+  it.each([
+    { state: "suspending", verb: "resume" },
+    { state: "stopping", verb: "start" },
+  ] as const)(
+    "stages a sandbox still $state to $verb, so the first send wakes it",
+    ({ state, verb }) => {
+      const moving = sandboxHost("box-moving", { state }, null);
+      const { composer } = mount([LAPTOP, moving]);
+
+      act(() => composer.onPickHost(moving));
+
+      expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+        kind: "existing",
+        hostId: "box-moving",
+        verb,
+      });
+    },
+  );
+
   it("stages a team's sandbox under its team", () => {
     const { composer } = mount([LAPTOP, TEAM_SUSPENDED]);
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
@@ -12,6 +13,9 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 const SURFACE = "landing:window-test";
 
 const mutation = () => ({ mutate: vi.fn(), isPending: false });
+const createMutate = vi.hoisted(() =>
+  vi.fn<(variables: { readonly request: SandboxCreateRequest }) => void>(),
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({ navigate: vi.fn() }),
@@ -26,7 +30,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-patch-mutation", () => ({
   useSandboxPatch: () => mutation(),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-create-mutation", () => ({
-  useSandboxCreate: () => mutation(),
+  useSandboxCreate: () => ({ mutate: createMutate, isPending: false }),
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
@@ -50,6 +54,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 }));
 
 beforeEach(() => {
+  createMutate.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
 });
@@ -137,4 +142,31 @@ describe("<SandboxRowActions />", () => {
       "host-build",
     );
   });
+
+  it.each([
+    { period: null, sent: 0 },
+    { period: 4_320, sent: 4_320 },
+  ])(
+    "retries a failed create with its resting period ($period rests for $sent)",
+    async ({ period, sent }) => {
+      render(
+        <SandboxRowActions
+          summary={sandboxSummaryFixture({
+            state: "failed",
+            destroyAfterRestingMinutes: period,
+          })}
+          configuration={{ kind: "personal" }}
+          unreachable={false}
+          frozenNeedsOwnCredits={false}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(createMutate).toHaveBeenCalledTimes(1);
+      expect(
+        createMutate.mock.calls[0]?.[0].request.destroyAfterRestingMinutes,
+      ).toBe(sent);
+    },
+  );
 });

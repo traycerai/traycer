@@ -32,7 +32,29 @@ import {
   readStagedSandbox,
   useStagedSandbox,
   useStagedSandboxStore,
+  type StagedSandboxFailure,
 } from "@/stores/composer/staged-sandbox-store";
+
+/**
+ * A refusal the server answered before anything was created. Any other
+ * failure may follow an accepted, billed create (an answer that never came,
+ * a sandbox that failed on its way up), so a send repeats that create.
+ */
+function refusedBeforeCreate(failure: StagedSandboxFailure): boolean {
+  switch (failure.kind) {
+    case "credits":
+    case "shape":
+    case "unavailable":
+    case "refused":
+      return true;
+    case "unverified":
+    case "failed":
+    case "settings":
+    case "timed-out":
+    case "no-provider":
+      return false;
+  }
+}
 
 /** A sandbox's name when the shape sheet set none: the message's first words. */
 const FALLBACK_NAME_WORDS = 4;
@@ -169,8 +191,10 @@ export function useStagedSandboxSend(input: {
         messageTextRef.current = messageText;
         setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore.getState().report(surfaceKey, { ownerId });
-        // A send is a new create: its own idempotency key.
-        run(true);
+        // A send is a new create, with its own idempotency key, unless the
+        // last one may have been accepted: then it repeats that one, as Retry
+        // does.
+        run(current.failure === null || refusedBeforeCreate(current.failure));
       }
       return true;
     },

@@ -529,12 +529,16 @@ function newRowPrice(price: StagePrice, needsCredits: boolean): string {
   return price.exact ? label : `from ${label}`;
 }
 
-/** The verb a resting sandbox's first action runs, or `null` when awake. */
+/**
+ * The verb a resting sandbox's first action runs, or `null` when awake. One
+ * still on its way to rest takes the same verb; a wake the server answers
+ * with a conflict ends on the setup line's failure, with Retry.
+ */
 export function restingVerb(
   state: HostScopeSandbox["state"],
 ): "resume" | "start" | null {
-  if (state === "suspended") return "resume";
-  if (state === "stopped") return "start";
+  if (state === "suspended" || state === "suspending") return "resume";
+  if (state === "stopped" || state === "stopping") return "start";
   return null;
 }
 
