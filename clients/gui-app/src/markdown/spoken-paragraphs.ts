@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { unified } from "unified";
+import { SPOKEN_BLOCK_TAGS } from "@/lib/speech/spoken-block-tags";
 import {
   TRAYCER_AGENT_TAG,
   TRAYCER_MERMAID_TAG,
@@ -67,41 +68,7 @@ const SKIPPED_ELEMENTS: ReadonlySet<string> = new Set([
   TRAYCER_WIREFRAME_TAG,
 ]);
 
-/** Elements that start and end a spoken paragraph. */
-const BLOCK_ELEMENTS: ReadonlySet<string> = new Set([
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "dd",
-  "details",
-  "div",
-  "dl",
-  "dt",
-  "figcaption",
-  "figure",
-  "footer",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "hr",
-  "li",
-  "main",
-  "nav",
-  "ol",
-  "p",
-  "section",
-  "summary",
-  "table",
-  "td",
-  "th",
-  "tr",
-  "ul",
-]);
+const BLOCK_ELEMENTS: ReadonlySet<string> = new Set(SPOKEN_BLOCK_TAGS);
 
 // `StreamingMarkdown`'s per-block parse as `TraycerMarkdown` configures it.
 const BLOCK_PROCESSOR = unified()

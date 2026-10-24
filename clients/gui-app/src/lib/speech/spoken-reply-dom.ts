@@ -1,4 +1,5 @@
 import { FIND_BLOCK_ATTR } from "@/lib/find-engine/find-blocks";
+import { SPOKEN_BLOCK_TAGS } from "./spoken-block-tags";
 
 /**
  * Marks the root of a reply's rendered text (a `TextSegment`), the only part
@@ -37,40 +38,7 @@ const READ_CONTROL_SELECTOR = [
   `[${SPOKEN_CONTROL_ATTR}]`,
 ].join(",");
 
-const BLOCK_SELECTOR = [
-  "address",
-  "article",
-  "aside",
-  "blockquote",
-  "dd",
-  "details",
-  "div",
-  "dl",
-  "dt",
-  "figcaption",
-  "figure",
-  "footer",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "hr",
-  "li",
-  "main",
-  "nav",
-  "ol",
-  "p",
-  "section",
-  "summary",
-  "table",
-  "td",
-  "th",
-  "tr",
-  "ul",
-].join(",");
+const BLOCK_SELECTOR = SPOKEN_BLOCK_TAGS.join(",");
 
 /**
  * A reply's paragraphs as the reader sees them, read from the reply's own
