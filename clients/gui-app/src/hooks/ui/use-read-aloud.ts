@@ -2,13 +2,12 @@ import {
   useCallback,
   useEffect,
   useId,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
-import { markdownToSpokenParagraphs } from "@/lib/markdown/markdown-to-plain-text";
+import { markdownToSpokenParagraphs } from "@/markdown/spoken-paragraphs";
 import {
   deviceSpeechSynthesis,
   pickOnDeviceVoice,
@@ -48,10 +47,6 @@ export function useReadAloud(markdown: string): {
   const ownerId = useId();
   const conversation = useChatOpenStoreScope();
   const shown = useTileBodyVisible();
-  const paragraphs = useMemo(
-    () => markdownToSpokenParagraphs(markdown),
-    [markdown],
-  );
   const [voiceReady, setVoiceReady] = useState(hasOnDeviceVoice);
 
   useEffect(() => {
@@ -80,16 +75,18 @@ export function useReadAloud(markdown: string): {
       stopReadingAloud(ownerId);
       return;
     }
+    // Parsed on Play, not per render: a reply re-renders often and can be
+    // long, and its spoken text is needed only once it is played.
     startReadingAloud({
       ownerId,
       conversation,
-      paragraphs,
+      paragraphs: markdownToSpokenParagraphs(markdown),
       preferredLanguage: preferredLanguage(),
     });
-  }, [conversation, ownerId, paragraphs]);
+  }, [conversation, markdown, ownerId]);
 
   return {
-    available: voiceReady && paragraphs.length > 0,
+    available: voiceReady && markdown.trim().length > 0,
     reading,
     toggle,
   };

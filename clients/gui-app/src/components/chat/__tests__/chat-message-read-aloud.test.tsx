@@ -364,6 +364,21 @@ describe("reply read-aloud button", () => {
       "Shown after.",
     ],
     [
+      "an element whose quoted attribute holds a > and a tag",
+      'Before <span title="> <script>">hidden</span> after.',
+      "Before after.",
+    ],
+    [
+      "a script whose close tag is written as inline code",
+      "Before <script>secret `</script>` visible after.",
+      "Before visible after.",
+    ],
+    [
+      "a CDATA section, which HTML reads as a comment ending at the first >",
+      "Before <![CDATA[<script>]]> visible after.",
+      "Before ]]> visible after.",
+    ],
+    [
       "an unclosed tag the reply shows as text",
       "Returns a Vec<String> of names.",
       "Returns a Vec of names.",
@@ -377,6 +392,25 @@ describe("reply read-aloud button", () => {
     act(() => synth.finishAll());
 
     expect(spokenText(synth)).toBe(said);
+  });
+
+  it("reads a long reply full of stray close tags to the end", () => {
+    // Its size is the bound: work that grows with the square of the reply's
+    // tags does not finish within the test timeout at this length.
+    const repeats = 20_000;
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown={"word </span> ".repeat(repeats)}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
+
+    expect(spokenText(synth)).toBe("word ".repeat(repeats).trim());
   });
 
   it("skips a fenced code block inside a blockquote", () => {
