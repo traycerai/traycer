@@ -9,15 +9,14 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 /**
  * The threads of a bot's channel (`bot.thread.list`): each post's thread
  * with its reply count, last reply, open requests and cost. Only the bot's
- * bound host answers, so it is read only by a tab bound there.
- *
- * `poll` is the channel on screen asking for the table's on-screen cadence,
- * so a reply count moves while the person watches; nothing else polls it.
+ * bound host answers, so it is read only by a tab bound there. It is read
+ * again when the bot's subscription says its conversations moved
+ * (`use-bot-subscription.ts`), never on a timer.
  */
 export function useBotThreadListQuery(
   client: HostClient<HostRpcRegistry> | null,
   botId: string,
-  args: { readonly enabled: boolean; readonly poll: boolean },
+  args: { readonly enabled: boolean },
 ): UseQueryResult<BotThreadListResponse, HostRpcError> {
   const params = useMemo(() => ({ botId }), [botId]);
   return useHostQuery<HostRpcRegistry, "bot.thread.list">({
@@ -28,7 +27,6 @@ export function useBotThreadListQuery(
     options: {
       enabled: args.enabled,
       refetchOnWindowFocus: false,
-      poll: args.poll,
     },
   });
 }

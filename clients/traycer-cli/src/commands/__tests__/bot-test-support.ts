@@ -56,6 +56,7 @@ export function botRecord(overrides: Partial<BotRecord>): BotRecord {
     createdAt: 1_000,
     archivedAt: null,
     directive: null,
+    appConversationChatId: null,
     ...overrides,
   };
 }
@@ -228,6 +229,7 @@ export function botSnapshotFrame(
     bot,
     tasks,
     openRequestCount,
+    conversationsRevision: null,
     boundHost: {
       hostId: bot.boundHostId,
       epoch: bot.hostEpoch,

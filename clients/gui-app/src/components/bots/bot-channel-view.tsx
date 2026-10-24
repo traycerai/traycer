@@ -7,6 +7,7 @@ import {
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
+  BotConversationRecord,
   BotThreadListResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -68,6 +69,28 @@ function subscribeWindowForeground(listener: () => void): () => void {
 }
 
 /**
+ * The bot's channel among its conversations: the one the bot record names.
+ * A host can file other conversations under the bot with any timestamp, so
+ * none of their order says which is the channel. Only a host that names none
+ * (it predates the field) leaves the earliest conversation as the channel.
+ */
+function channelConversation(
+  rows: readonly BotConversationRecord[],
+  appConversationChatId: string | null,
+): BotConversationRecord | null {
+  if (appConversationChatId !== null) {
+    return (
+      rows.find((row) => row.conversationId === appConversationChatId) ?? null
+    );
+  }
+  let first: BotConversationRecord | null = null;
+  for (const row of rows) {
+    if (first === null || row.createdAt < first.createdAt) first = row;
+  }
+  return first;
+}
+
+/**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
  * the top level, a line under each post that opens its thread, and the
@@ -87,6 +110,11 @@ export function BotChannelView(props: {
   readonly hostId: string;
   readonly botTitle: string;
   /**
+   * The bot's channel: the app conversation `bot.create` made, as the bot
+   * record names it. `null` from a host that predates the field.
+   */
+  readonly appConversationChatId: string | null;
+  /**
    * The tab is not on the host that runs the bot and cannot reach it: the
    * channel's transcript and threads are that host's to serve, so a
    * placeholder stands in, while the box keeps posting through this tab's
@@ -103,6 +131,7 @@ export function BotChannelView(props: {
     botId,
     hostId,
     botTitle,
+    appConversationChatId,
     paused,
     resolveMember,
     openThreadPostId,
@@ -111,16 +140,14 @@ export function BotChannelView(props: {
   } = props;
   const client = useTabHostClient();
   const conversations = useBotConversationListQuery(client, botId, true);
-  // The channel is the bot's first conversation; later ones (A2A, other
-  // surfaces) are listed after it by creation time.
-  const channel = useMemo(() => {
-    const rows = conversations.data?.conversations ?? [];
-    let first = null;
-    for (const row of rows) {
-      if (first === null || row.createdAt < first.createdAt) first = row;
-    }
-    return first;
-  }, [conversations.data]);
+  const channel = useMemo(
+    () =>
+      channelConversation(
+        conversations.data?.conversations ?? [],
+        appConversationChatId,
+      ),
+    [appConversationChatId, conversations.data],
+  );
 
   const {
     supported: threadListSupported,
@@ -293,11 +320,8 @@ function useChannelThreads(args: {
 } {
   const { client, botId, hostId, paused } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
-  // Polled only while the channel is on screen.
-  const paneVisible = usePaneVisible();
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: !paused && supported,
-    poll: paneVisible,
   });
   const threads = threadList.data?.threads ?? EMPTY_THREADS;
   const threadsByPost = useMemo(() => {
