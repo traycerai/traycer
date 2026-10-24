@@ -50,6 +50,7 @@ import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
+const NO_CHAT_IDS: ReadonlyArray<string> = [];
 
 /**
  * Whether the person is in this window: it is on screen and has focus, the
@@ -273,6 +274,7 @@ export function BotChannelView(props: {
     isUnread,
     shown: threadOpen,
   });
+  useReadChannelWhilePresented({ client, hostId, botId, channelId });
 
   const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(
@@ -432,6 +434,53 @@ function useChannelThreads(args: {
     [indicators.chats],
   );
   return { supported, threadList, threadsByPost, isUnread };
+}
+
+/**
+ * Marks the channel read while the person can see it: a direct reply that
+ * answered their post lights the channel's unread mark, as a verdict lights
+ * its thread's (T52), and the channel on screen in a window they are in has
+ * been read.
+ */
+function useReadChannelWhilePresented(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string;
+  readonly botId: string;
+  readonly channelId: string | null;
+}): void {
+  const { client, hostId, botId, channelId } = args;
+  const chatIds = useMemo(
+    () => (channelId === null ? NO_CHAT_IDS : [channelId]),
+    [channelId],
+  );
+  const chatEpicIds = useMemo(
+    () => (channelId === null ? {} : { [channelId]: botId }),
+    [botId, channelId],
+  );
+  const indicators = useNotificationIndicators({
+    hostId,
+    epicIds: NO_EPIC_IDS,
+    chatIds,
+    chatEpicIds,
+    enabled: channelId !== null,
+  });
+  const paneVisible = usePaneVisible();
+  const windowForeground = useSyncExternalStore(
+    subscribeWindowForeground,
+    readWindowForeground,
+  );
+  const state =
+    channelId !== null && Object.hasOwn(indicators.chats, channelId)
+      ? indicators.chats[channelId]
+      : null;
+  const unread = state !== null && (state.unreadDone || state.unreadFailure);
+  const { mutate: markRead } = useNotificationMarkEntityRead(client);
+  useEffect(() => {
+    if (!paneVisible || !windowForeground || channelId === null || !unread) {
+      return;
+    }
+    markRead({ epicId: botId, chatId: channelId });
+  }, [botId, channelId, markRead, paneVisible, unread, windowForeground]);
 }
 
 /**

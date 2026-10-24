@@ -622,6 +622,58 @@ describe("<BotChannelView /> channel", () => {
   });
 });
 
+describe("<BotChannelView /> channel read mark", () => {
+  it("marks the channel read when it is shown unread, and leaves a read one alone", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+    cleanup();
+    mocks.markRead.mockClear();
+
+    mocks.state.chats = { "conversation-channel": indicator(false, false) };
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+  });
+
+  it("marks the channel read for a failure as well as a done mark", () => {
+    mocks.state.chats = { "conversation-channel": indicator(false, true) };
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the channel unread while its tab is not on screen, and reads it when the person comes back", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    mocks.state.paneVisible = false;
+    const { rerender } = mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    mocks.state.paneVisible = true;
+    rerender();
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+  });
+
+  it("leaves the channel unread while the window is in the background, and reads it when the window returns", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    hasFocus.mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("<BotChannelView /> open thread", () => {
   beforeEach(() => {
     mocks.state.threads = [
