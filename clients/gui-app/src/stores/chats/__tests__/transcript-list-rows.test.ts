@@ -298,6 +298,7 @@ function windowOf(input: {
     records: { messages: messageLedger, events: eventLedger, revision: 0 },
     spans,
     staleSpans,
+    carriedSkeleton: [],
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
     snapshotProvisionalMessageIds: [],

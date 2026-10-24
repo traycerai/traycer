@@ -203,6 +203,7 @@ describe("chatTurnMinimapItems caching", () => {
         },
       ],
       staleSpans: [],
+      carriedSkeleton: [],
       liveMessages: [],
       liveEvents: [],
       snapshotProvisionalMessageIds: [],

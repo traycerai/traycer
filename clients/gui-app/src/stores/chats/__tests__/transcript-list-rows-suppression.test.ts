@@ -100,6 +100,7 @@ function windowOf(
     records: { messages: new Map(), events: new Map(), revision: 0 },
     spans,
     staleSpans: [],
+    carriedSkeleton: [],
     liveMessages: [],
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
