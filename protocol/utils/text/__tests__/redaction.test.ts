@@ -210,6 +210,19 @@ describe("redactHomeDirectoryNames", () => {
     ],
     ["/Users/Syn'thetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
     ["/home/Syn'thetic", "/home/<redacted>"],
+    // Leading whitespace is part of a separator-closed name.
+    ["/Users/ Synthetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/\tSynthetic/.traycer/x", "/home/<redacted>/.traycer/x"],
+    [
+      "C:\\Users\\ Synthetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    [
+      "C:\\Users\\\tSynthetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    // A home root in prose with no name after it is left alone.
+    ["under /Users/ and /home/ only", "under /Users/ and /home/ only"],
     // Prose after a quoted home path is not taken for the name.
     [
       "open '/home/synthetic-user' failed, see /tmp/x",

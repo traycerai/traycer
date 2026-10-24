@@ -23,30 +23,55 @@ const STACK =
 const DEBUG_ID = "11111111-1111-4111-8111-111111111111";
 const REDACTED = "/Users/<redacted>/.traycer/cli/main.js";
 
+/**
+ * A real client running the CLI's `beforeSend`, whose envelopes land in
+ * `sent` instead of a transport: nothing leaves the process.
+ */
+function captureClient(sent: unknown[]): NodeClient {
+  return new NodeClient({
+    dsn: "https://public@sentry.invalid/1",
+    stackParser: defaultStackParser,
+    integrations: [],
+    transport: () => ({
+      send: async (envelope) => {
+        sent.push(envelope);
+        return { statusCode: 200 };
+      },
+      flush: async () => true,
+    }),
+    beforeSend: (event) => {
+      scrubSentryEventInPlace(event);
+      return event;
+    },
+  });
+}
+
 describe("home-folder names in a real Sentry debug_meta", () => {
   afterEach(() => {
     Reflect.deleteProperty(globalThis, "_sentryDebugIds");
   });
 
+  it("redacts a Windows home name that begins with a space, in the value and the frame", async () => {
+    const sent: unknown[] = [];
+    const client = captureClient(sent);
+    try {
+      const path = "C:\\Users\\ Synthetic\\.traycer\\cli\\main.js";
+      const error = new Error(`Cannot find module ${path}`);
+      error.stack = `Error\n    at synthetic (${path}:1:1)`;
+      client.captureException(error);
+      await client.flush(2000);
+
+      expect(sent.length).toBeGreaterThan(0);
+      expect(JSON.stringify(sent)).not.toContain(" Synthetic");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("redacts the sourcemap image code_file and keeps its debug_id", async () => {
     const sent: unknown[] = [];
     Reflect.set(globalThis, "_sentryDebugIds", { [STACK]: DEBUG_ID });
-    const client = new NodeClient({
-      dsn: "https://public@sentry.invalid/1",
-      stackParser: defaultStackParser,
-      integrations: [],
-      transport: () => ({
-        send: async (envelope) => {
-          sent.push(envelope);
-          return { statusCode: 200 };
-        },
-        flush: async () => true,
-      }),
-      beforeSend: (event) => {
-        scrubSentryEventInPlace(event);
-        return event;
-      },
-    });
+    const client = captureClient(sent);
     try {
       const error = new Error("synthetic");
       error.stack = STACK;
