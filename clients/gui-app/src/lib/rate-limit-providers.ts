@@ -23,7 +23,7 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
  *   plain HTTP call (openrouter, kilocode, huggingface, opencode, cursor,
- *   antigravity).
+ *   antigravity, kimi).
  *   Cheap, so their observers opt into the table-owned fixed cadence and fetch
  *   for themselves.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
@@ -86,6 +86,7 @@ export function rateLimitFetchLane(
     case "opencode":
     case "cursor":
     case "antigravity":
+    case "kimi":
       return "httpFetch";
     case "codex":
     case "claude-code":

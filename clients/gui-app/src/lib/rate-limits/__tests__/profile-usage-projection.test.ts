@@ -194,6 +194,14 @@ function antigravity(
   };
 }
 
+function kimi(
+  fiveHour: ProviderRateLimitWindow | null,
+  weekly: ProviderRateLimitWindow | null,
+  monthly: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "kimi"; available: true }> {
+  return { provider: "kimi", available: true, fiveHour, weekly, monthly };
+}
+
 function envelope(
   data: Extract<ProviderRateLimits, { available: true }>,
   lastGoodAt: number,
@@ -741,5 +749,43 @@ describe("projectProfileUsage", () => {
       windows: [],
       checkedAt: null,
     });
+  });
+
+  it("names Kimi's three windows 5-hour/Weekly/Monthly, the monthly one an extra shown because it is the constraining window", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        kimi(
+          window(10, 300, NOW + 1),
+          window(20, 10_080, NOW + 1),
+          window(60, 43_200, NOW + 1),
+        ),
+        NOW,
+      ),
+      false,
+    );
+    expect(
+      projection.windows.map((entry) => [entry.id, entry.role, entry.name]),
+    ).toEqual([
+      ["five-hour", "primary", "5-hour"],
+      ["weekly", "secondary", "Weekly"],
+      ["monthly", "extra", "Monthly"],
+    ]);
+    expect(projection.compactWindow?.id).toBe("monthly");
+  });
+
+  it("drops a Kimi window that has expired or that the backend left out", () => {
+    const projection = project(
+      "ok",
+      NOW - 1_000,
+      envelope(
+        kimi(window(40, 300, NOW + 1), window(90, 10_080, NOW - 1), null),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.id)).toEqual(["five-hour"]);
+    expect(projection.compactWindow?.id).toBe("five-hour");
   });
 });

@@ -128,6 +128,7 @@ type OpenRouterRateLimits = Extract<
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
 type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
+type KimiRateLimits = Extract<ProviderRateLimits, { provider: "kimi" }>;
 type AntigravityRateLimits = Extract<
   ProviderRateLimits,
   { provider: "antigravity" }
@@ -1278,6 +1279,24 @@ export function OpenCodeRateLimitView({
 }
 
 /**
+ * Kimi's three windows, the rows its own `/usage` command shows. A window the
+ * backend left out is null and renders no row.
+ */
+function KimiRateLimitView({
+  data,
+}: {
+  readonly data: KimiRateLimits;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-3">
+      <RateLimitWindowRow label="5-hour" window={data.fiveHour} />
+      <RateLimitWindowRow label="Weekly" window={data.weekly} />
+      <RateLimitWindowRow label="Monthly" window={data.monthly} />
+    </div>
+  );
+}
+
+/**
  * Compact calendar date ("Jul 22, 2026") for a billing-period bound. Shared by
  * grok's billing period and Cursor's billing cycle - both render a plain epoch
  * range, so neither provider owns this formatter.
@@ -1783,5 +1802,7 @@ export function ProviderRateLimitDetail({
     // own 5h and weekly windows, so it renders Codex-style limit groups.
     case "antigravity":
       return <AntigravityRateLimitView data={data} variant={variant} />;
+    case "kimi":
+      return <KimiRateLimitView data={data} />;
   }
 }

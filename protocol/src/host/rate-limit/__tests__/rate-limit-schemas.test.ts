@@ -13,19 +13,33 @@ import {
   hostGetRateLimitUsageDowngradeV5ToV2,
   hostGetRateLimitUsageDowngradeV5ToV3,
   hostGetRateLimitUsageDowngradeV5ToV4,
+  hostGetRateLimitUsageDowngradeV6ToV1,
+  hostGetRateLimitUsageDowngradeV6ToV2,
+  hostGetRateLimitUsageDowngradeV6ToV3,
+  hostGetRateLimitUsageDowngradeV6ToV4,
+  hostGetRateLimitUsageDowngradeV6ToV5,
   hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageUpgradeV30ToV40,
   hostGetRateLimitUsageUpgradeV40ToV50,
+  hostGetRateLimitUsageUpgradeV50ToV60,
   hostGetRateLimitUsageV12,
   hostGetRateLimitUsageV20,
   hostGetRateLimitUsageV21,
   hostGetRateLimitUsageV30,
+  providersRefreshProfileStatusUpgradeV30ToV40,
 } from "@traycer/protocol/host/rate-limit/contracts";
+import {
+  agentGetProviderProfileRateLimitsResponseSchemaV7,
+  agentGetProviderProfileRateLimitsResponseSchemaV8,
+  agentGetProviderProfileRateLimitsUpgradeV70ToV80,
+} from "@traycer/protocol/host/agent/profiles";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providerRateLimitsSchema,
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
+  providersRefreshProfileStatusResponseSchema,
+  providersRefreshProfileStatusResponseSchemaV30,
   rateLimitUnavailableReasonSchemaV1,
   rateLimitUnavailableReasonSchemaV2,
   rateLimitUsageRequestSchemaV12,
@@ -36,6 +50,8 @@ import {
   rateLimitUsageResponseSchemaV30,
   rateLimitUsageResponseSchemaV40,
   rateLimitUsageResponseSchemaV50,
+  rateLimitUsageResponseSchemaV60,
+  type ProviderRateLimits,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -1784,5 +1800,399 @@ describe("host.getRateLimitUsage v5.0 antigravity arm + downgrade bridges", () =
         hostGetRateLimitUsageDowngradeV5ToV1.downgradeResponse(response),
       ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
     });
+  });
+});
+
+// `host.getRateLimitUsage` major 6.0 - adds the Kimi available arm. 5.0 is
+// FROZEN on `providerRateLimitsSchemaV151`, but `"kimi"` is already a provider
+// id on every older line, so each 6 -> N bridge degrades a Kimi-available
+// reading to the `unsupported_provider` row a pre-Kimi host returns, then does
+// what the 5 -> N bridge to that major does. The sibling methods that carry the
+// same union (`providers.refreshProfileStatus` 4.0 and
+// `agent.getProviderProfileRateLimits` 8.0) cannot name a provider the request
+// did not ask for, so their bridges refuse a Kimi reading instead.
+describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
+  const WINDOW_5H = {
+    usedPercent: 12,
+    resetsAt: 1_735_689_600_000,
+    durationMinutes: 300,
+  };
+  const WINDOW_WEEKLY = {
+    usedPercent: 40,
+    resetsAt: 1_736_294_400_000,
+    durationMinutes: 10_080,
+  };
+  const WINDOW_MONTHLY = {
+    usedPercent: 4,
+    resetsAt: 1_738_368_000_000,
+    durationMinutes: 43_200,
+  };
+
+  const kimiAvailable = {
+    provider: "kimi" as const,
+    available: true as const,
+    fiveHour: WINDOW_5H,
+    weekly: WINDOW_WEEKLY,
+    monthly: WINDOW_MONTHLY,
+  };
+
+  const kimiUnsupported = {
+    provider: "kimi" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const cursorAvailable = {
+    provider: "cursor" as const,
+    available: true as const,
+    cycleStart: 1_786_921_855_000,
+    cycleEnd: 1_789_600_255_000,
+    cursorModels: null,
+    otherModels: null,
+    includedLimitUsd: null,
+    usedUsd: 12.5,
+    remainingUsd: null,
+    bonusUsedUsd: null,
+    onDemandLimitType: null,
+    onDemandLimitUsd: null,
+    onDemandUsedUsd: null,
+    onDemandRemainingUsd: null,
+    displayMessage: null,
+  };
+
+  const grokAvailable = {
+    provider: "grok" as const,
+    available: true as const,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: 1753142400000,
+    periodEnd: 1753747200000,
+    period: null,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+
+  const antigravityAvailable = {
+    provider: "antigravity" as const,
+    available: true as const,
+    planName: "Google AI Pro",
+    groups: [],
+  };
+
+  const codexUnavailable = {
+    provider: "codex" as const,
+    available: false as const,
+    reason: "cli_not_found" as const,
+  };
+
+  const DOWNGRADE_UNSUPPORTED_ERROR = {
+    code: "DOWNGRADE_UNSUPPORTED" as const,
+    message:
+      "Reading this provider's rate limits requires a newer Traycer client.",
+  };
+
+  const usage = (providerRateLimits: ProviderRateLimits | null) =>
+    rateLimitUsageResponseSchemaV60.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits,
+    });
+
+  const registry = hostRpcRegistry["host.getRateLimitUsage"];
+
+  it("parses a kimi-available snapshot on the live 6.0 line, with every window or with the null ones, and rejects it on the frozen 5.0 line", () => {
+    expect(usage(kimiAvailable).providerRateLimits).toEqual(kimiAvailable);
+    const partial = {
+      ...kimiAvailable,
+      fiveHour: null,
+      weekly: WINDOW_WEEKLY,
+      monthly: null,
+    };
+    expect(usage(partial).providerRateLimits).toEqual(partial);
+    const empty = {
+      ...kimiAvailable,
+      fiveHour: null,
+      weekly: null,
+      monthly: null,
+    };
+    expect(usage(empty).providerRateLimits).toEqual(empty);
+
+    for (const providerRateLimits of [kimiAvailable, partial, empty]) {
+      expect(
+        rateLimitUsageResponseSchemaV50.safeParse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("upgrades a v5.0 response to v6.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV50.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: antigravityAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV50ToV60.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV60.parse(upgraded)).toEqual(response);
+  });
+
+  it("registers host.getRateLimitUsage major 6.0 with a direct bridge to every older major", () => {
+    expect(registry[6].versions[0].contract.schemaVersion).toEqual({
+      major: 6,
+      minor: 0,
+    });
+    expect(Object.keys(registry[6].downgradePathsFromLatest).sort()).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+    ]);
+  });
+
+  // Every target, through the registry's own lookup, so a bridge that is
+  // written but not registered (or registered under the wrong major) fails.
+  it.each([5, 4, 3, 2, 1] as const)(
+    "degrades a kimi-available reading to the unsupported_provider row through the registry 6 -> %i",
+    (toMajor) => {
+      expect(
+        downgradeResponseAcrossMajors(
+          registry,
+          6,
+          toMajor,
+          usage(kimiAvailable),
+        ),
+      ).toEqual({
+        ok: true,
+        value: {
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: kimiUnsupported,
+        },
+      });
+    },
+  );
+
+  it("passes an already-unavailable kimi row and a null snapshot through the 6.0 -> 1.2 bridge unchanged", () => {
+    for (const providerRateLimits of [kimiUnsupported, null]) {
+      const response = usage(providerRateLimits);
+      expect(
+        hostGetRateLimitUsageDowngradeV6ToV1.downgradeResponse(response),
+      ).toEqual({ ok: true, value: response });
+    }
+  });
+
+  it("keeps antigravity on 6.0 -> 5.0 but refuses it on every older bridge", () => {
+    const response = usage(antigravityAvailable);
+    expect(
+      hostGetRateLimitUsageDowngradeV6ToV5.downgradeResponse(response),
+    ).toEqual({ ok: true, value: response });
+    for (const toMajor of [4, 3, 2, 1] as const) {
+      expect(
+        downgradeResponseAcrossMajors(registry, 6, toMajor, response),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    }
+  });
+
+  it("still degrades a cursor-available reading on 6.0 -> 3.0 / 2.1 / 1.2", () => {
+    const response = usage(cursorAvailable);
+    for (const toMajor of [3, 2, 1] as const) {
+      expect(
+        downgradeResponseAcrossMajors(registry, 6, toMajor, response),
+      ).toEqual({
+        ok: true,
+        value: {
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: {
+            provider: "cursor",
+            available: false,
+            reason: "unsupported_provider",
+          },
+        },
+      });
+    }
+  });
+
+  it("still degrades a grok-available reading on 6.0 -> 2.1 / 1.2 but keeps it on 6.0 -> 3.0", () => {
+    const response = usage(grokAvailable);
+    for (const toMajor of [2, 1] as const) {
+      expect(
+        downgradeResponseAcrossMajors(registry, 6, toMajor, response),
+      ).toEqual({
+        ok: true,
+        value: {
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: {
+            provider: "grok",
+            available: false,
+            reason: "unsupported_provider",
+          },
+        },
+      });
+    }
+    expect(
+      hostGetRateLimitUsageDowngradeV6ToV3.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokAvailable,
+      },
+    });
+  });
+
+  it("maps usage_fetch_failed to rate_limits_not_available on 6.0 -> 1.2 only", () => {
+    const response = usage({
+      provider: "claude-code",
+      available: false,
+      reason: "usage_fetch_failed",
+    });
+    expect(downgradeResponseAcrossMajors(registry, 6, 1, response)).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: {
+          provider: "claude-code",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+    expect(downgradeResponseAcrossMajors(registry, 6, 2, response)).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: response.providerRateLimits,
+      },
+    });
+  });
+
+  it("keeps force on the 6.0 -> 5.0 / 4.0 requests and drops it on 6.0 -> 3.0 / 2.1 / 1.2", () => {
+    const request = rateLimitUsageRequestSchemaV40.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      force: true,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV6ToV5,
+      hostGetRateLimitUsageDowngradeV6ToV4,
+    ]) {
+      expect(bridge.downgradeRequest(request)).toEqual({
+        ok: true,
+        value: request,
+      });
+    }
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV6ToV3,
+      hostGetRateLimitUsageDowngradeV6ToV2,
+      hostGetRateLimitUsageDowngradeV6ToV1,
+    ]) {
+      const result = bridge.downgradeRequest(request);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect("force" in result.value).toBe(false);
+    }
+  });
+
+  it("upgrades a v3.0 refresh response and a v7.0 profile rate-limits response as the identity", () => {
+    const refresh = providersRefreshProfileStatusResponseSchemaV30.parse({
+      providerRateLimits: codexUnavailable,
+    });
+    expect(
+      providersRefreshProfileStatusUpgradeV30ToV40.upgradeResponse(refresh),
+    ).toEqual(refresh);
+
+    const profile = agentGetProviderProfileRateLimitsResponseSchemaV7.parse({
+      rateLimits: codexUnavailable,
+      usageUpdatedAt: null,
+    });
+    expect(
+      agentGetProviderProfileRateLimitsUpgradeV70ToV80.upgradeResponse(profile),
+    ).toEqual(profile);
+  });
+
+  describe("providers.refreshProfileStatus 4.0 -> N", () => {
+    const refreshRegistry = hostRpcRegistry["providers.refreshProfileStatus"];
+
+    it.each([3, 2, 1] as const)(
+      "refuses a kimi-available snapshot through the registry 4 -> %i",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            refreshRegistry,
+            4,
+            toMajor,
+            providersRefreshProfileStatusResponseSchema.parse({
+              providerRateLimits: kimiAvailable,
+            }),
+          ),
+        ).toEqual({
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Refreshing this provider's profile status requires a newer Traycer client.",
+          },
+        });
+      },
+    );
+
+    it.each([3, 2, 1] as const)(
+      "passes a codex unavailable snapshot through the registry 4 -> %i",
+      (toMajor) => {
+        const response = providersRefreshProfileStatusResponseSchema.parse({
+          providerRateLimits: codexUnavailable,
+        });
+        expect(
+          downgradeResponseAcrossMajors(refreshRegistry, 4, toMajor, response),
+        ).toEqual({ ok: true, value: response });
+      },
+    );
+  });
+
+  describe("agent.getProviderProfileRateLimits 8.0 -> N", () => {
+    const profileRegistry =
+      hostRpcRegistry["agent.getProviderProfileRateLimits"];
+
+    it.each([7, 6, 5, 4, 3, 2, 1] as const)(
+      "refuses a kimi-available snapshot through the registry 8 -> %i",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            profileRegistry,
+            8,
+            toMajor,
+            agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+              rateLimits: kimiAvailable,
+              usageUpdatedAt: null,
+            }),
+          ),
+        ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+      },
+    );
+
+    it.each([7, 6, 5, 4, 3, 2, 1] as const)(
+      "passes a codex unavailable snapshot through the registry 8 -> %i",
+      (toMajor) => {
+        const response =
+          agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+            rateLimits: codexUnavailable,
+            usageUpdatedAt: null,
+          });
+        expect(
+          downgradeResponseAcrossMajors(profileRegistry, 8, toMajor, response),
+        ).toEqual({ ok: true, value: response });
+      },
+    );
   });
 });

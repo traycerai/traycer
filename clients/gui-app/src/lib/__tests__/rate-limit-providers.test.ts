@@ -79,6 +79,11 @@ describe("rateLimitFetchLane", () => {
     // cadence like the other httpFetch providers.
     expect(rateLimitFetchLane("antigravity")).toBe("httpFetch");
   });
+
+  it("maps kimi to the httpFetch lane", () => {
+    // One credential-and-fetch read of the usage endpoint, no subprocess.
+    expect(rateLimitFetchLane("kimi")).toBe("httpFetch");
+  });
 });
 
 describe("isRateLimitCapableProvider", () => {
@@ -89,6 +94,7 @@ describe("isRateLimitCapableProvider", () => {
     // used to be this test's negative example.
     expect(isRateLimitCapableProvider("cursor")).toBe(true);
     expect(isRateLimitCapableProvider("antigravity")).toBe(true);
+    expect(isRateLimitCapableProvider("kimi")).toBe(true);
     expect(isRateLimitCapableProvider("traycer")).toBe(false);
     expect(isRateLimitCapableProvider("copilot")).toBe(false);
   });
