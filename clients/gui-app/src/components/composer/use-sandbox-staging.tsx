@@ -530,7 +530,7 @@ function newRowPrice(price: StagePrice, needsCredits: boolean): string {
 }
 
 /** The verb a resting sandbox's first action runs, or `null` when awake. */
-function restingVerb(
+export function restingVerb(
   state: HostScopeSandbox["state"],
 ): "resume" | "start" | null {
   if (state === "suspended") return "resume";

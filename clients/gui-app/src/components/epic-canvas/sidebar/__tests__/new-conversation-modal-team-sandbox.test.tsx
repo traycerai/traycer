@@ -23,6 +23,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
+import type { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
@@ -74,7 +75,20 @@ function usablePlacement(): PlacementTargetShape {
   };
 }
 
+type StagedSendInput = Parameters<typeof useStagedSandboxSend>[0];
+
 const testState = vi.hoisted(() => ({
+  /** Whether a sandbox is staged: the staged send then takes the Start. */
+  staged: false,
+  /** What the modal hands the staged send on its latest render. */
+  stagedSendInput: null as StagedSendInput | null,
+  /** The resolved host's catalog: `null` until it answers. */
+  catalogHostId: null as string | null,
+  /** The resolved host's `providers.list`, `undefined` until it answers. */
+  providers: undefined as
+    | ReadonlyArray<{ readonly providerId: string; readonly profiles: [] }>
+    | undefined,
+  toolbarStore: null as { readonly setState: (patch: object) => void } | null,
   createChat: vi.fn<
     (request: { readonly hostId: string }) => Promise<{
       readonly initialTurnStarted: boolean;
@@ -201,10 +215,35 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     reasoning: "medium",
     serviceTier: "",
     agentMode: "regular",
-    catalog: { harnesses: [] },
+    get catalog() {
+      return testState.catalogHostId === null
+        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
+        : {
+            hostId: testState.catalogHostId,
+            harnesses: [],
+            modelsLoaded: true,
+          };
+    },
   }));
+  testState.toolbarStore = store;
   return { useComposerToolbarStore: () => store };
 });
+
+vi.mock(
+  "@/hooks/providers/use-providers-list-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/providers/use-providers-list-query")
+    >()),
+    useProvidersListForClient: () => ({
+      data:
+        testState.providers === undefined
+          ? undefined
+          : { providers: testState.providers },
+      isError: false,
+    }),
+  }),
+);
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => "owner",
@@ -219,9 +258,13 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
-// Nothing is staged in this suite: the staged send takes no submit.
+// The staged send itself has its own suite: here it takes a send or a Start
+// only while `testState.staged` says a sandbox is staged.
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
-  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxSend: (input: StagedSendInput) => {
+    testState.stagedSendInput = input;
+    return { intercept: () => testState.staged, line: null };
+  },
 }));
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
@@ -394,6 +437,10 @@ afterEach(() => {
   testState.onSubmitted.mockClear();
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
+  testState.staged = false;
+  testState.stagedSendInput = null;
+  testState.catalogHostId = null;
+  testState.providers = undefined;
   gateState.blockedIds.clear();
   useNewConversationModalStore.getState().resetForTests();
 });
@@ -455,5 +502,59 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
     expectUnavailableNotice();
     expect(draftSurvived()).toBe(true);
     expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+});
+
+describe("new-conversation modal's terminal Start on a staged sandbox", () => {
+  it("creates no terminal agent here, then launches it on the new host with what that host offers", () => {
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode("epic-1", "terminal");
+    testState.staged = true;
+    renderModal();
+    act(() => {
+      testState.bodyStartTerminal?.(
+        {
+          harnessId: "claude",
+          model: "old-host-model",
+          reasoningEffort: "high",
+          terminalAgentArgs: "--resume",
+          profileId: "old-host-profile",
+        },
+        "host-a",
+      );
+    });
+    expect(testState.createTerminalAgent).not.toHaveBeenCalled();
+    const staged = () => {
+      const input = testState.stagedSendInput;
+      if (input === null) throw new Error("expected the staged send");
+      return input;
+    };
+    // The new host's catalog has not answered: no launch yet.
+    expect(staged().canSubmit).toBe(false);
+
+    // It answers, and its providers hold no managed profile for the harness.
+    act(() => {
+      testState.catalogHostId = "host-a";
+      testState.providers = [{ providerId: "claude-code", profiles: [] }];
+      testState.toolbarStore?.setState({});
+    });
+    expect(staged().canSubmit).toBe(true);
+    let launched = false;
+    act(() => {
+      launched = staged().submit();
+    });
+
+    expect(launched).toBe(true);
+    expect(testState.createTerminalAgent).toHaveBeenCalledTimes(1);
+    expect(testState.createTerminalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harnessId: "claude",
+        model: "sonnet",
+        reasoningEffort: "medium",
+        terminalAgentArgs: "--resume",
+        profileId: null,
+      }),
+    );
   });
 });

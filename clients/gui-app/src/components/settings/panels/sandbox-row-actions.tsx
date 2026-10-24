@@ -24,6 +24,7 @@ import {
   SandboxStopDialog,
   SandboxSuspendDialog,
 } from "@/components/hosts/sandbox-confirm-dialogs";
+import { restingVerb } from "@/components/composer/use-sandbox-staging";
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
@@ -141,8 +142,8 @@ export function SandboxRowActions(props: {
           },
         },
       ),
-    "open-tab": () => openOnLanding(summary.hostId),
-    "open-terminal": () => openOnLanding(summary.hostId),
+    "open-tab": () => openOnLanding(summary, configuration),
+    "open-terminal": () => openOnLanding(summary, configuration),
   };
 
   const run = (action: SandboxRowAction): void => {
@@ -295,17 +296,43 @@ export function SandboxRowActions(props: {
  * `Open a tab` and `Open terminal`: points the landing composer (and the
  * terminal panel beside it, which follows the composer's host) at this
  * sandbox and leaves Settings for a new task. A resting sandbox wakes on the
- * first action there, never on this. A pick of a host is the composer's
- * choice, so a sandbox staged there before is dropped: the next send must
- * not create it instead.
+ * first action there, never on this: it is staged to resume or start, which
+ * replaces a New sandbox staged there before, so the next send never creates
+ * one instead.
  */
-function useOpenSandboxOnLanding(): (hostId: string) => void {
+function useOpenSandboxOnLanding(): (
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+) => void {
   const surfaceKey = useComposerSurfaceHostKey();
   const { close } = useSystemTabModalActions();
   const router = useRouter();
-  return (hostId: string) => {
-    useStagedSandboxStore.getState().clear(surfaceKey);
-    useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, hostId);
+  return (summary, configuration) => {
+    // Staged as the composer's picker stages it, so a dead lease's pin cannot
+    // send to the fallback host; an awake one drops whatever was staged.
+    const verb = summary.frozen ? null : restingVerb(summary.state);
+    if (verb === null) {
+      useStagedSandboxStore.getState().clear(surfaceKey);
+    } else {
+      useStagedSandboxStore.getState().stage(surfaceKey, {
+        kind: "existing",
+        hostId: summary.hostId,
+        sandboxId: summary.id,
+        name: summary.displayName,
+        configuration:
+          configuration.kind === "team"
+            ? {
+                kind: "team",
+                teamId: configuration.teamId,
+                teamName: configuration.teamName,
+              }
+            : { kind: "personal" },
+        verb,
+      });
+    }
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, summary.hostId);
     close();
     void router.navigate({ to: "/" });
   };

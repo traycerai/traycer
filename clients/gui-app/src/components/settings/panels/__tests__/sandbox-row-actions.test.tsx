@@ -100,4 +100,41 @@ describe("<SandboxRowActions />", () => {
       "host-build",
     );
   });
+
+  it("stages a suspended sandbox to resume when a row opens it there, so the first send wakes it", async () => {
+    render(
+      <SandboxRowActions
+        summary={sandboxSummaryFixture({
+          id: "sbx-build",
+          hostId: "host-build",
+          displayName: "build-box",
+          state: "suspended",
+          burst: false,
+          frozen: false,
+        })}
+        configuration={{ kind: "personal" }}
+        unreachable={false}
+        frozenNeedsOwnCredits={false}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /^More actions for/ }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Open a tab" }),
+    );
+
+    expect(readStagedSandbox(SURFACE)?.target).toEqual({
+      kind: "existing",
+      hostId: "host-build",
+      sandboxId: "sbx-build",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
+      "host-build",
+    );
+  });
 });

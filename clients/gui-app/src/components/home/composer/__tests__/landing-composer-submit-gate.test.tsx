@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render as renderComponent,
@@ -12,6 +13,7 @@ import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
@@ -24,7 +26,7 @@ const DIRTY_CONTENT: JsonContent = {
 
 const testState = vi.hoisted(() => ({
   submit: vi.fn(),
-  selectTerminalAgent: vi.fn(() => null),
+  selectTerminalAgent: vi.fn<(launch: TerminalAgentLaunch) => null>(() => null),
   bodySubmit: null as (() => void) | null,
   startTerminal: null as ComposerBodyProps["onStartTerminal"] | null,
   installEditor: null as (() => void) | null,
@@ -39,6 +41,13 @@ const testState = vi.hoisted(() => ({
     | null,
   /** The selected model; empty for a person whose host offers no catalog. */
   modelSlug: "claude-sonnet",
+  /** The resolved host's catalog: `null` until it answers. */
+  catalogHostId: null as string | null,
+  /** The resolved host's `providers.list`, `undefined` until it answers. */
+  providers: undefined as
+    | ReadonlyArray<{ readonly providerId: string; readonly profiles: [] }>
+    | undefined,
+  toolbarStore: null as { readonly setState: (patch: object) => void } | null,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -129,18 +138,39 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
       },
       profileId: null,
     },
-    catalog: {
-      hostId: null,
-      harnesses: undefined,
-      modelsLoaded: false,
+    get catalog() {
+      return testState.catalogHostId === null
+        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
+        : {
+            hostId: testState.catalogHostId,
+            harnesses: [],
+            modelsLoaded: true,
+          };
     },
     permission: "supervised",
     reasoning: "medium",
     serviceTier: "",
     agentMode: "regular",
   }));
+  testState.toolbarStore = toolbarStore;
   return { useComposerToolbarStore: () => toolbarStore };
 });
+
+vi.mock(
+  "@/hooks/providers/use-providers-list-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/providers/use-providers-list-query")
+    >()),
+    useProvidersListForClient: () => ({
+      data:
+        testState.providers === undefined
+          ? undefined
+          : { providers: testState.providers },
+      isError: false,
+    }),
+  }),
+);
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
@@ -365,6 +395,8 @@ afterEach(() => {
   testState.resolvingPaths = false;
   testState.runPendingImageJob = null;
   testState.modelSlug = "claude-sonnet";
+  testState.catalogHostId = null;
+  testState.providers = undefined;
 });
 
 describe("LandingComposer direct submit gate", () => {
@@ -408,6 +440,67 @@ describe("LandingComposer direct submit gate", () => {
 
     expect(started).toBe(false);
     expect(testState.selectTerminalAgent).not.toHaveBeenCalled();
+  });
+
+  it("launches a staged Start on the new sandbox with what that host offers", () => {
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const start = testState.startTerminal;
+    if (start === null) throw new Error("expected ComposerBody seam");
+    // Put together on the old host: a model and a managed profile of its own.
+    act(() => {
+      start(
+        {
+          harnessId: "claude",
+          model: "old-host-model",
+          reasoningEffort: "high",
+          terminalAgentArgs: "--resume",
+          profileId: "old-host-profile",
+        },
+        "host-test",
+      );
+    });
+
+    // The sandbox is up; its catalog and providers answer, without that profile.
+    act(() => {
+      testState.catalogHostId = "host-test";
+      testState.providers = [{ providerId: "claude-code", profiles: [] }];
+      testState.toolbarStore?.setState({});
+      useStagedSandboxStore.getState().report("landing:window-test", {
+        phase: "handoff",
+        createdHostId: "host-test",
+      });
+    });
+
+    expect(testState.selectTerminalAgent).toHaveBeenCalledTimes(1);
+    expect(testState.selectTerminalAgent.mock.calls[0][0]).toEqual({
+      harnessId: "claude",
+      model: "claude-sonnet",
+      reasoningEffort: "medium",
+      terminalAgentArgs: "--resume",
+      profileId: null,
+    });
   });
 
   it("lets a staged sandbox take the send of a person with no model to pick yet", () => {

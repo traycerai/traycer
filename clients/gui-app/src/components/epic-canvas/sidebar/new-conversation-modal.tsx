@@ -146,6 +146,11 @@ import {
   useInTaskSandboxStagingSurface,
 } from "@/components/composer/use-sandbox-staging";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import {
+  stagedResubmitReady,
+  stagedTerminalLaunchOnHost,
+} from "@/components/composer/staged-terminal-launch";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
@@ -960,24 +965,39 @@ export function NewConversationModalBody(props: {
     }),
     [epicId, openTile, tabId],
   );
-  const stagedSubmitRef = useRef<() => void>(() => undefined);
+  // The latest resubmit, set below once `handleSubmit` and the terminal
+  // dispatch are declared.
+  const stagedSubmitRef = useRef<() => boolean>(() => false);
+  // A terminal agent's Start that a staged sandbox took: launched on the new
+  // host in phase 2, as the chat send resubmits there.
+  const [stagedTerminalLaunch, setStagedTerminalLaunch] =
+    useState<TerminalAgentLaunch | null>(null);
+  const stagedProviders = useProvidersListForClient(hostClient, {
+    enabled: stagedTerminalLaunch !== null,
+    subscribed: stagedTerminalLaunch !== null,
+  });
   // Phase 2 resubmits once the new host's catalog has answered, so the
   // selection holds its default model, or none when it offers no agent: that
   // resubmit is refused, and the line says the sandbox is awake but cannot
-  // run one.
-  const stagedCanSubmit = useStore(
-    toolbarStore,
-    (s) => canSubmit && catalogSettledFor(s, resolvedHostId),
+  // run one. A Start also waits for its providers, which say whether the
+  // profile is offered there.
+  const catalogSettled = useStore(toolbarStore, (s) =>
+    catalogSettledFor(s, resolvedHostId),
   );
-  const submitOnSandbox = useCallback((): boolean => {
-    if (toolbarStore.getState().selection.modelSlug.length === 0) return false;
-    stagedSubmitRef.current();
-    return true;
-  }, [toolbarStore]);
+  const submitOnSandbox = useCallback(
+    (): boolean => stagedSubmitRef.current(),
+    [],
+  );
   const stagedSend = useStagedSandboxSend({
     surfaceKey: stagingSurfaceKey(sandboxStaging),
     resolvedHostId,
-    canSubmit: stagedCanSubmit,
+    canSubmit: stagedResubmitReady({
+      catalogSettled,
+      launch: stagedTerminalLaunch,
+      canSubmit,
+      canStart: [canMutate, workspaceCanStart, !isSubmitting],
+      providers: stagedProviders,
+    }),
     submit: submitOnSandbox,
     prepareHandoff: noopPrepareHandoff,
     terminal: stagedTerminal,
@@ -1499,6 +1519,7 @@ export function NewConversationModalBody(props: {
     const captured = editor.getJSON();
     // A staged sandbox takes the first send: it is created or woken, and
     // this submit runs again on it once it is ready. The draft stays.
+    setStagedTerminalLaunch(null);
     if (stagedSend.intercept(composerDisplayPlainText(captured))) return;
     // The draft this submit is FOR. The editor stays editable across the reads
     // below and the create ends in `cleanupAfterSubmit`, which clears the draft
@@ -1792,16 +1813,13 @@ export function NewConversationModalBody(props: {
     // the machine the chip stopped showing are bytes the create's host never
     // received.
     submitTarget,
+    setStagedTerminalLaunch,
+    setSubmitReentryTick,
     stagedSend,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
     toolbarStore,
   ]);
-  // A layout effect, so the staged handoff's effect (a passive one, declared
-  // earlier) reads this render's submit, not the last one's.
-  useLayoutEffect(() => {
-    stagedSubmitRef.current = handleSubmit;
-  }, [handleSubmit]);
   // The re-entry itself. Declared AFTER `handleSubmit` so it can name it
   // directly - that is the whole point of routing through state instead of a
   // ref.
@@ -1824,15 +1842,16 @@ export function NewConversationModalBody(props: {
     submitReentryQueued.current = false;
     handleSubmit();
   }, [submitReentryTick, handleSubmit]);
-  const handleStartTerminal = useCallback(
-    (launch: TerminalAgentLaunch) => {
-      if (!canMutate || !workspaceCanStart) return;
+  // Whether the create was sent: false on a refusal, which says why inline.
+  const dispatchStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch): boolean => {
+      if (!canMutate || !workspaceCanStart) return false;
       if (teamSandboxHarnessBlocked(launch.harnessId)) {
         raiseHostNotice({
           kind: "refused",
           message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
         });
-        return;
+        return false;
       }
       // Same §54 gate as `handleSubmit`, and for the same ordering reason:
       // `cleanupAfterSubmit` runs before the async create, so a placement that
@@ -1841,7 +1860,7 @@ export function NewConversationModalBody(props: {
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
         raiseHostNotice({ kind: "refused", message: placementVerdict.message });
-        return;
+        return false;
       }
       // The staged key and this create both derive from the same captured
       // submitTarget (see `handleSubmit`), so no render-vs-live drift check.
@@ -1876,6 +1895,7 @@ export function NewConversationModalBody(props: {
           profileId: launch.profileId,
         })
         .catch(() => undefined);
+      return true;
     },
     [
       canMutate,
@@ -1895,6 +1915,55 @@ export function NewConversationModalBody(props: {
       workspaceCanStart,
     ],
   );
+  const handleStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch) => {
+      if (!canMutate || !workspaceCanStart) return;
+      // A staged sandbox takes the Start as it takes a send.
+      if (stagedSend.intercept("terminal")) {
+        setStagedTerminalLaunch(launch);
+        return;
+      }
+      dispatchStartTerminal(launch);
+    },
+    [
+      canMutate,
+      dispatchStartTerminal,
+      setStagedTerminalLaunch,
+      stagedSend,
+      workspaceCanStart,
+    ],
+  );
+  // A layout effect, so the staged handoff's effect (a passive one, declared
+  // earlier) reads this render's resubmit, not the last one's. A chat send is
+  // refused when no model resolved on the new host; a Start is assembled
+  // again for it.
+  useLayoutEffect(() => {
+    const providers = stagedProviders.data?.providers;
+    stagedSubmitRef.current =
+      stagedTerminalLaunch === null
+        ? () => {
+            if (toolbarStore.getState().selection.modelSlug.length === 0) {
+              return false;
+            }
+            handleSubmit();
+            return true;
+          }
+        : () => {
+            setStagedTerminalLaunch(null);
+            const launch = stagedTerminalLaunchOnHost(
+              stagedTerminalLaunch,
+              toolbarStore.getState(),
+              providers,
+            );
+            return launch !== null && dispatchStartTerminal(launch);
+          };
+  }, [
+    dispatchStartTerminal,
+    handleSubmit,
+    stagedProviders.data,
+    stagedTerminalLaunch,
+    toolbarStore,
+  ]);
   usePrimaryActionShortcut(chatComposerActive, handleSubmit);
   const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {

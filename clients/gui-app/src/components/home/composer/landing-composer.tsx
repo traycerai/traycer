@@ -87,6 +87,11 @@ import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-s
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import {
+  stagedResubmitReady,
+  stagedTerminalLaunchOnHost,
+} from "@/components/composer/staged-terminal-launch";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
@@ -504,18 +509,25 @@ export function LandingComposer(props: LandingComposerProps) {
     useState<TerminalAgentLaunch | null>(null);
   // Phase 2 resubmits once the new host's catalog has answered, so the
   // selection holds its default model, or none when it offers no agent (the
-  // line then says the sandbox is awake but cannot run one).
+  // line then says the sandbox is awake but cannot run one). A Start also
+  // waits for its providers, which say whether the profile is offered there.
   const catalogSettled = useStore(toolbarStore, (s) =>
     catalogSettledFor(s, resolvedHostId),
   );
+  const stagedProviders = useProvidersListForClient(hostClient, {
+    enabled: stagedTerminalLaunch !== null,
+    subscribed: stagedTerminalLaunch !== null,
+  });
   const stagedSend = useStagedSandboxSend({
     surfaceKey: composerSurfaceKey,
     resolvedHostId,
-    canSubmit:
-      catalogSettled &&
-      (stagedTerminalLaunch === null
-        ? canSubmit
-        : workspaceCanStart && !isSubmitting),
+    canSubmit: stagedResubmitReady({
+      catalogSettled,
+      launch: stagedTerminalLaunch,
+      canSubmit,
+      canStart: [workspaceCanStart, !isSubmitting],
+      providers: stagedProviders,
+    }),
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
     // No epic before the send: the landing panel's terminals follow the
@@ -741,6 +753,7 @@ export function LandingComposer(props: LandingComposerProps) {
     pickerStore,
     raiseHostNotice,
     setComposerExpanded,
+    setStagedTerminalLaunch,
     stagedSend,
     teamSandboxHarnessBlockedFor,
     toolbarStore,
@@ -783,6 +796,7 @@ export function LandingComposer(props: LandingComposerProps) {
       dispatchStartTerminal,
       isSubmitting,
       resolvedHostId,
+      setStagedTerminalLaunch,
       stagedSend,
       workspaceCanStart,
     ],
@@ -790,14 +804,26 @@ export function LandingComposer(props: LandingComposerProps) {
   // A layout effect, so the staged handoff's effect (a passive one, declared
   // earlier) reads this render's submit, not the last one's.
   useLayoutEffect(() => {
+    const providers = stagedProviders.data?.providers;
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
         ? handleSubmit
         : () => {
             setStagedTerminalLaunch(null);
-            return dispatchStartTerminal(stagedTerminalLaunch);
+            const launch = stagedTerminalLaunchOnHost(
+              stagedTerminalLaunch,
+              toolbarStore.getState(),
+              providers,
+            );
+            return launch !== null && dispatchStartTerminal(launch);
           };
-  }, [dispatchStartTerminal, handleSubmit, stagedTerminalLaunch]);
+  }, [
+    dispatchStartTerminal,
+    handleSubmit,
+    stagedProviders.data,
+    stagedTerminalLaunch,
+    toolbarStore,
+  ]);
 
   const handleRemoveImage = useCallback(
     (id: string) => {
