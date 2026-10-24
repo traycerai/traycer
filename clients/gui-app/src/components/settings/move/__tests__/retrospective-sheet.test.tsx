@@ -6,6 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import {
   APPROVE,
   DISCARD,
@@ -74,8 +75,9 @@ const STILL_LOCAL: readonly StillLocalRow[] = [
   { id: "records", summary: "settings have not moved" },
 ];
 
-function renderSheet(overrides: {
+interface SheetOverrides {
   readonly open: boolean;
+  readonly inventoryReady: boolean;
   readonly shownAt: number | null;
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
@@ -86,10 +88,13 @@ function renderSheet(overrides: {
   readonly evidenceVersion: string | null;
   readonly evidenceAt: number | null;
   readonly heldPendingId: string | null;
-}): void {
-  render(
+}
+
+function sheetElement(overrides: SheetOverrides): ReactNode {
+  return (
     <RetrospectiveSheet
       open={overrides.open}
+      inventoryReady={overrides.inventoryReady}
       hostName="MacBook Pro"
       evidence={{
         version: overrides.evidenceVersion,
@@ -107,8 +112,12 @@ function renderSheet(overrides: {
       onHeldApply={overrides.onHeldApply}
       onMoveToPersonal={overrides.onMoveToPersonal}
       onStopSharing={overrides.onStopSharing}
-    />,
+    />
   );
+}
+
+function renderSheet(overrides: SheetOverrides): void {
+  render(sheetElement(overrides));
 }
 
 function openSheet() {
@@ -120,6 +129,7 @@ function openSheet() {
   const onStopSharing = vi.fn();
   renderSheet({
     open: true,
+    inventoryReady: true,
     shownAt: null,
     onShown,
     onAcknowledged,
@@ -167,10 +177,34 @@ describe("RetrospectiveSheet", () => {
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
   });
 
+  it("records shown only once the inventory it shows has loaded", () => {
+    const onShown = vi.fn();
+    const overrides: SheetOverrides = {
+      open: true,
+      inventoryReady: false,
+      shownAt: null,
+      onShown,
+      onAcknowledged: vi.fn(),
+      onHeldApply: vi.fn(),
+      onOpenChange: vi.fn(),
+      onMoveToPersonal: vi.fn(),
+      onStopSharing: vi.fn(),
+      evidenceVersion: null,
+      evidenceAt: null,
+      heldPendingId: null,
+    };
+    const { rerender } = render(sheetElement(overrides));
+    expect(onShown).not.toHaveBeenCalled();
+
+    rerender(sheetElement({ ...overrides, inventoryReady: true }));
+    expect(onShown).toHaveBeenCalledTimes(1);
+  });
+
   it("does not render while closed, so it is shown once", () => {
     const onShown = vi.fn();
     renderSheet({
       open: false,
+      inventoryReady: true,
       shownAt: null,
       onShown,
       onAcknowledged: vi.fn(),
@@ -196,6 +230,7 @@ describe("RetrospectiveSheet", () => {
     cleanup();
     renderSheet({
       open: true,
+      inventoryReady: true,
       shownAt: null,
       onShown: vi.fn(),
       onAcknowledged: vi.fn(),

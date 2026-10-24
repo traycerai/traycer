@@ -23,6 +23,7 @@ import { useEnvironmentReviewRecordMutation } from "@/hooks/environment/use-envi
 import {
   useEnvironmentReviewRead,
   useEnvironmentStatusRead,
+  type EnvironmentRead,
 } from "@/hooks/environment/use-environment-reads";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -93,6 +94,7 @@ export function RetrospectiveSession(props: {
     <>
       <RetrospectiveSheet
         open={props.open}
+        inventoryReady={inventoryReady(review, status, props.stopHostId)}
         hostName={props.hostName}
         evidence={evidence}
         sharedInUse={sharedInUse}
@@ -138,6 +140,25 @@ export function RetrospectiveSession(props: {
         }}
       />
     </>
+  );
+}
+
+/**
+ * Whether the inventory the sheet shows has loaded: the review has answered,
+ * and the status read has answered or will not be asked (no host to read it
+ * from, or a host that does not serve it).
+ */
+function inventoryReady(
+  review: EnvironmentRead<unknown>,
+  status: EnvironmentRead<unknown>,
+  stopHostId: string | null,
+): boolean {
+  if (review.data === null) return false;
+  return (
+    stopHostId === null ||
+    status.supported === false ||
+    status.data !== null ||
+    status.isError
   );
 }
 

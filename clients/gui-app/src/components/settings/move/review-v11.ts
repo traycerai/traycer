@@ -15,12 +15,6 @@ export function isReviewV11(
   return "shownAt" in review && "evidence" in review;
 }
 
-export function reviewShownAt(
-  review: EnvironmentReviewResponse,
-): number | null {
-  return isReviewV11(review) ? review.shownAt : null;
-}
-
 export function reviewEvidence(
   review: EnvironmentReviewResponse,
 ): ReviewEvidence {

@@ -34,6 +34,17 @@ export function stopSharingDescription(hostName: string): string {
   return `Returns ${hostName} to its own settings: it stops receiving Personal and reporting to it. Shows what Personal manages here first. Nothing in Personal is deleted.`;
 }
 
+/**
+ * The host refused the stop because what it touches changed after the sheet
+ * read it; `labels` are the rows that need a choice now.
+ */
+export function stopPreviewChangedLine(labels: readonly string[]): string {
+  const changed = "What stopping sharing touches changed since you opened it.";
+  return labels.length === 0
+    ? changed
+    : `${changed} Now needs a choice: ${labels.join(", ")}.`;
+}
+
 export function stopChoiceReasonLine(reason: StopChoiceReason): string {
   switch (reason) {
     case "edited_here":

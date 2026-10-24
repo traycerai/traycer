@@ -64,7 +64,7 @@ export const UPDATE_HOST_TEXT =
   "Update this host to use your settings. Until then this page is read-only.";
 
 /** Why an item did not apply, in words, for the codes a person can act on. */
-const FAILURE_REASONS: Readonly<Partial<Record<string, string>>> = {
+export const FAILURE_REASONS: Readonly<Partial<Record<string, string>>> = {
   permission_denied: "permission denied",
   not_installed: "not installed on this host",
   invalid_value: "the value isn't valid",

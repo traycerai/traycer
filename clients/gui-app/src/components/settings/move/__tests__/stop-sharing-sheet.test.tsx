@@ -52,6 +52,7 @@ function renderSheet(
         },
       ]}
       needsChoice={NEEDS}
+      changedRows={null}
       previewStatus="ready"
       confirmPending={false}
       onOpenChange={vi.fn()}
@@ -142,6 +143,7 @@ describe("StopSharingSheet", () => {
         hostName="MacBook Pro"
         managed={[]}
         needsChoice={needsChoice}
+        changedRows={null}
         previewStatus="ready"
         confirmPending={false}
         onOpenChange={vi.fn()}

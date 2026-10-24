@@ -717,6 +717,7 @@ describe("merged notifications feed", () => {
       originHostId: "host-a",
       providerPackAttribution: null,
       category: "system",
+      environmentDetail: null,
     });
   });
 

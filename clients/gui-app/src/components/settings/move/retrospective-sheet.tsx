@@ -2,7 +2,8 @@
  * Past-tense inventory of what an earlier version already shared. Closing
  * records no consent; `Got it` records acknowledgement. Shown and
  * acknowledged are two timestamps, written by the parent through
- * `environment.review.record`.
+ * `environment.review.record`; shown is recorded once the inventory it shows
+ * has loaded, never for a sheet still loading.
  */
 import { useEffect, useRef, type ReactNode } from "react";
 import {
@@ -79,6 +80,7 @@ export interface StillLocalRow {
 
 export function RetrospectiveSheet(props: {
   readonly open: boolean;
+  readonly inventoryReady: boolean;
   readonly hostName: string;
   readonly evidence: ReviewEvidence;
   readonly sharedInUse: readonly SharedInUseItem[];
@@ -94,17 +96,17 @@ export function RetrospectiveSheet(props: {
   readonly onMoveToPersonal: () => void;
   readonly onStopSharing: () => void;
 }): ReactNode {
-  const { open, onShown } = props;
+  const { open, inventoryReady, onShown } = props;
   const shownForOpen = useRef(false);
   useEffect(() => {
     if (!open) {
       shownForOpen.current = false;
       return;
     }
-    if (shownForOpen.current) return;
+    if (!inventoryReady || shownForOpen.current) return;
     shownForOpen.current = true;
     onShown();
-  }, [open, onShown]);
+  }, [open, inventoryReady, onShown]);
 
   const valueHeld = props.held.filter((row) => row.kind === "value");
   const hookHeld = props.held.filter((row) => row.kind === "hook");

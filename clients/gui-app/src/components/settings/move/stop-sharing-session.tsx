@@ -1,10 +1,13 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   stopManagedFromPreview,
   stopNeedsChoiceFromPreview,
 } from "@/components/settings/move/stop-preview-rows";
-import { type StopChoiceEntry } from "@/components/settings/move/stop-sharing-choices";
+import {
+  stopRowAddress,
+  type StopChoiceEntry,
+} from "@/components/settings/move/stop-sharing-choices";
 import {
   StopSharingSheet,
   type StopPreviewStatus,
@@ -37,13 +40,33 @@ export function StopSharingSession(props: {
     },
   );
   const stop = useEnvironmentMoveStopMutation(props.client);
-  const previewStatus = stopPreviewStatus(supported, preview);
+  // The needs-choice rows the person answered when the host refused the stop
+  // as `choices_missing`; null until it does. The preview is read again, and
+  // shows the loading state until the new one arrives.
+  const [answeredBeforeChange, setAnsweredBeforeChange] =
+    useState<ReadonlySet<string> | null>(null);
+  const refreshing = answeredBeforeChange !== null && preview.isFetching;
+  const previewStatus = refreshing
+    ? "loading"
+    : stopPreviewStatus(supported, preview);
   const managed =
     preview.data === undefined ? [] : stopManagedFromPreview(preview.data);
   const needsChoice =
     preview.data === undefined ? [] : stopNeedsChoiceFromPreview(preview.data);
+  const changedRows =
+    answeredBeforeChange === null
+      ? null
+      : needsChoice.filter(
+          (row) => !answeredBeforeChange.has(stopRowAddress(row)),
+        );
+
+  const onOpenChange = (open: boolean): void => {
+    if (!open) setAnsweredBeforeChange(null);
+    props.onOpenChange(open);
+  };
 
   const onStop = (choices: readonly StopChoiceEntry[]): void => {
+    const answered = new Set(needsChoice.map(stopRowAddress));
     stop.mutate(
       {
         choices: choices.map((entry) => ({
@@ -54,8 +77,12 @@ export function StopSharingSession(props: {
       },
       {
         onSuccess: (data) => {
-          if (data.outcome === "choices_missing") return;
-          props.onOpenChange(false);
+          if (data.outcome === "choices_missing") {
+            setAnsweredBeforeChange(answered);
+            void preview.refetch();
+            return;
+          }
+          onOpenChange(false);
         },
       },
     );
@@ -67,9 +94,10 @@ export function StopSharingSession(props: {
       hostName={props.hostName}
       managed={managed}
       needsChoice={needsChoice}
+      changedRows={changedRows}
       previewStatus={previewStatus}
       confirmPending={stop.isPending}
-      onOpenChange={props.onOpenChange}
+      onOpenChange={onOpenChange}
       onStop={onStop}
     />
   );

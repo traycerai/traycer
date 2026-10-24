@@ -2,7 +2,8 @@
  * Preview of what Personal manages on this computer and what needs a choice
  * before Stop sharing can complete. Confirm stays disabled until every
  * needs-choice row has `Keep locally`, `Remove from this computer` or
- * `Resolve`.
+ * `Resolve`. `changedRows` is non-null after the host refused a stop because
+ * the preview changed: the rows that appeared since, which need a choice.
  */
 import { useState, type ReactNode } from "react";
 import {
@@ -23,6 +24,7 @@ import {
   STOP_SHARING_NEEDS_CHOICE,
   STOP_SHARING_TITLE,
   stopChoiceReasonLine,
+  stopPreviewChangedLine,
   stopSharingDescription,
   type StopChoice,
 } from "@/components/settings/move/stop-sharing-copy";
@@ -46,6 +48,7 @@ export function StopSharingSheet(props: {
   readonly hostName: string;
   readonly managed: readonly StopManagedRow[];
   readonly needsChoice: readonly StopNeedsChoiceRow[];
+  readonly changedRows: readonly StopNeedsChoiceRow[] | null;
   readonly previewStatus: StopPreviewStatus;
   readonly confirmPending: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -58,6 +61,7 @@ export function StopSharingSheet(props: {
           hostName={props.hostName}
           managed={props.managed}
           needsChoice={props.needsChoice}
+          changedRows={props.changedRows}
           previewStatus={props.previewStatus}
           confirmPending={props.confirmPending}
           onOpenChange={props.onOpenChange}
@@ -72,6 +76,7 @@ function StopSharingBody(props: {
   readonly hostName: string;
   readonly managed: readonly StopManagedRow[];
   readonly needsChoice: readonly StopNeedsChoiceRow[];
+  readonly changedRows: readonly StopNeedsChoiceRow[] | null;
   readonly previewStatus: StopPreviewStatus;
   readonly confirmPending: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -119,6 +124,16 @@ function StopSharingBody(props: {
         ) : null}
         {previewReady ? (
           <>
+            {props.changedRows !== null ? (
+              <p
+                className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+                data-testid="stop-sharing-preview-changed"
+              >
+                {stopPreviewChangedLine(
+                  props.changedRows.map((row) => row.label),
+                )}
+              </p>
+            ) : null}
             <section data-testid="stop-sharing-managed">
               <h3 className="mb-2 text-ui-sm font-medium text-foreground">
                 {STOP_SHARING_MANAGED}

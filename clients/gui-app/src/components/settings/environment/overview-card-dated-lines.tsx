@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import type { EnvironmentReviewResponse } from "@traycer/protocol/host/environment-schemas";
 import type { OverviewCardLineProps } from "@/components/settings/environment/overview-card-line-props";
 import {
   overviewDatedCopy,
@@ -6,7 +7,7 @@ import {
   SHARED_BY_EARLIER_VERSION_LINE,
 } from "@/components/settings/move/overview-dated-lines";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
-import { reviewShownAt } from "@/components/settings/move/review-v11";
+import { isReviewV11 } from "@/components/settings/move/review-v11";
 import { statusPlanesSupported } from "@/components/settings/move/status-planes-supported";
 import {
   planesFromStatus,
@@ -15,18 +16,25 @@ import {
   returnedFromTeamAt,
   stoppedSharingAt,
 } from "@/components/settings/move/status-planes";
+import {
+  stopCleanup,
+  type StopCleanup,
+} from "@/components/settings/move/stop-cleanup";
 import { STOP_SHARING_TITLE } from "@/components/settings/move/stop-sharing-copy";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import { Button } from "@/components/ui/button";
-import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
+import {
+  useEnvironmentReviewRead,
+  type EnvironmentRead,
+} from "@/hooks/environment/use-environment-reads";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 
 /**
  * Overview settings-card dated lines P5 owns (shared by an earlier version,
- * stopped sharing, returned from a team) and `Stop sharing from this
- * computer`. `Moved to Personal on …` is E4's; P3's `Details` line is a
- * separate stub. The `Details` verb on the earlier-version line opens the
- * retrospective sheet.
+ * stopped sharing with the cleanup it still owes, returned from a team) and
+ * `Stop sharing from this computer`. `Moved to Personal on …` is E4's; P3's
+ * `Details` line is a separate stub. The `Details` verb on the
+ * earlier-version line opens the retrospective sheet.
  */
 export function OverviewCardDatedLines(
   props: OverviewCardLineProps,
@@ -43,8 +51,8 @@ export function OverviewCardDatedLines(
   const planes = planesFromStatus(props.status);
   const sharedUnrecorded =
     planes !== null && planesHaveSharedUnrecorded(planes);
-  const shownAt = review.data === null ? null : reviewShownAt(review.data);
-  const shouldAutoOpen = sharedUnrecorded && shownAt === null && !autoConsumed;
+  const shouldAutoOpen =
+    sharedUnrecorded && reviewNeverShown(review) && !autoConsumed;
   if (shouldAutoOpen && !sheetOpen) {
     setSheetOpen(true);
     setAutoConsumed(true);
@@ -54,6 +62,7 @@ export function OverviewCardDatedLines(
     sharedUnrecorded,
     stoppedAt: stoppedSharingAt(props.status),
   });
+  const cleanup = stopCleanup(props.status);
   const offerStop = planes !== null && planesOfferStopSharing(planes);
   if (lines.length === 0 && !offerStop && !sheetOpen) return null;
   return (
@@ -86,6 +95,7 @@ export function OverviewCardDatedLines(
           </p>
         ),
       )}
+      {cleanup === null ? null : <StopCleanupLines cleanup={cleanup} />}
       {offerStop ? (
         <Button
           type="button"
@@ -115,5 +125,44 @@ export function OverviewCardDatedLines(
         onOpenChange={setSheetOpen}
       />
     </div>
+  );
+}
+
+/**
+ * Only an answered `@1.1` review knows the sheet was never shown; a review
+ * still loading, refused or unsupported is not "never shown".
+ */
+function reviewNeverShown(
+  review: EnvironmentRead<EnvironmentReviewResponse>,
+): boolean {
+  return (
+    review.supported === true &&
+    review.data !== null &&
+    isReviewV11(review.data) &&
+    review.data.shownAt === null
+  );
+}
+
+function StopCleanupLines(props: { readonly cleanup: StopCleanup }): ReactNode {
+  return (
+    <>
+      {props.cleanup.pendingLine === null ? null : (
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="overview-stop-cleanup-pending"
+        >
+          {props.cleanup.pendingLine}
+        </p>
+      )}
+      {props.cleanup.failedLines.map((line) => (
+        <p
+          key={line.id}
+          className="text-ui-sm text-destructive"
+          data-testid="overview-stop-cleanup-failed"
+        >
+          {line.text}
+        </p>
+      ))}
+    </>
   );
 }
