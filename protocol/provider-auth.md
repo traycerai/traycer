@@ -120,8 +120,8 @@ current ambient result onto an enabled ambient profile row; it does not
 persist an indefinite poison there. The cache-only harness-catalog reader
 also ignores expired poison and expired cache entries.
 
-During those 30 seconds, a non-definitive probe (`configured`, `unknown` or
-`unavailable`) cannot overwrite the poison in the auth cache. It can clear
+During those 30 seconds, a non-definitive probe result (`configured`, `unknown`
+or `unavailable`) is not cached while the poison is live. The poison can clear
 earlier through:
 
 - Explicit scoped or all-scope cache eviction around login, key or
@@ -154,7 +154,8 @@ failure modes and whether it mutates credentials.
   is checked. An explicitly selected provider takes precedence over fallback
   credentials for other providers.
 - OAuth state in `auth.json` provider singletons and credential-pool entries.
-  The pool and Anthropic OAuth coverage shipped in host 1.3.0.
+  Status- and expiry-aware credential-pool coverage and Anthropic OAuth
+  shipped in host 1.3.0.
 - The Qwen CLI's OAuth store for `qwen-oauth`.
 - Provider API keys resolved from Hermes's `.env` before the provider spawn
   environment. With no configured provider, the probe considers
