@@ -334,6 +334,36 @@ describe("reply read-aloud button", () => {
       "Shown after.",
     ],
     [
+      "a self-closed script, which HTML still opens",
+      "Visible <script/>secret() after.",
+      "Visible",
+    ],
+    [
+      "a self-closed style, which HTML still opens",
+      "Visible <style/>.x { color: red; } after.",
+      "Visible",
+    ],
+    [
+      "a self-closed ordinary element, closed later",
+      "Text <span/>hidden</span> shown.",
+      "Text shown.",
+    ],
+    [
+      "a script tag inside a script, which is script text",
+      "Before <script>one <script>two</script> visible after.",
+      "Before visible after.",
+    ],
+    [
+      "an element opened in a blockquote and closed after it",
+      "> <div>\n>\n> Hidden inside.\n\n</div>\n\nShown after.",
+      "Shown after.",
+    ],
+    [
+      "an element opened in a list item and closed after the list",
+      "- <div>\n\n  Hidden item.\n\n</div>\n\nShown after.",
+      "Shown after.",
+    ],
+    [
       "an unclosed tag the reply shows as text",
       "Returns a Vec<String> of names.",
       "Returns a Vec of names.",

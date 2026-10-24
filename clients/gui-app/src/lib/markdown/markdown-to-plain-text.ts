@@ -172,9 +172,9 @@ function blockText(token: unknown): string {
   switch (readString(token, "type")) {
     case "heading":
     case "paragraph":
-      return inlineText(readList(token, "tokens"), "preview");
+      return inlineText(readList(token, "tokens"), PREVIEW);
     case "text":
-      return textOrChildren(token, "preview");
+      return textOrChildren(token, PREVIEW);
     case "code":
       return codeLabel(token);
     case "blockquote":
@@ -182,7 +182,7 @@ function blockText(token: unknown): string {
     case "list":
       return listText(token);
     case "table":
-      return tableText(token, "preview");
+      return tableText(token, PREVIEW);
     // Structural or invisible: a rule, a blank line, a link-reference
     // definition, and raw HTML all contribute no prose.
     case "hr":
@@ -191,7 +191,7 @@ function blockText(token: unknown): string {
     case "html":
       return "";
     default:
-      return inlineText(readList(token, "tokens"), "preview");
+      return inlineText(readList(token, "tokens"), PREVIEW);
   }
 }
 
@@ -224,16 +224,27 @@ function tableText(token: unknown, projection: Projection): string {
 
 /**
  * Who reads the projection. A preview shows an image's alt text and the text
- * between raw HTML tags; speech reads neither (see `withoutHtmlElements`).
+ * between raw HTML tags; speech reads neither (see `spokenRun`). Speech also
+ * carries the elements an enclosing run closes after the current token.
  */
-type Projection = "preview" | "speech";
+type Projection =
+  | { readonly kind: "preview" }
+  | { readonly kind: "speech"; readonly closedLater: ReadonlySet<string> };
+
+const PREVIEW: Projection = { kind: "preview" };
 
 function inlineText(
   tokens: ReadonlyArray<unknown>,
   projection: Projection,
 ): string {
-  const shown = projection === "speech" ? withoutHtmlElements(tokens) : tokens;
-  return shown.map((token) => inlineTokenText(token, projection)).join("");
+  if (projection.kind === "preview") {
+    return tokens.map((token) => inlineTokenText(token, projection)).join("");
+  }
+  return spokenRun(tokens, projection.closedLater)
+    .map(({ token, closedLater }) =>
+      inlineTokenText(token, { kind: "speech", closedLater }),
+    )
+    .join("");
 }
 
 function inlineTokenText(token: unknown, projection: Projection): string {
@@ -255,7 +266,7 @@ function inlineTokenText(token: unknown, projection: Projection): string {
       return readString(token, "text");
     // Alt text is the only part of an image that is prose.
     case "image":
-      return projection === "preview"
+      return projection.kind === "preview"
         ? decodeCharacterReferences(readString(token, "text"))
         : "";
     case "br":
@@ -287,53 +298,61 @@ function textOrChildren(token: unknown, projection: Projection): string {
  * inside a blockquote or a list item included.
  */
 export function markdownToSpokenParagraphs(markdown: string): string[] {
-  return spokenBlocks(marked.lexer(markdown))
+  return spokenBlocks(marked.lexer(markdown), new Set())
     .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
     .filter((paragraph) => paragraph.length > 0);
 }
 
-function spokenBlocks(tokens: ReadonlyArray<unknown>): string[] {
-  return withoutHtmlElements(tokens).flatMap((token): string[] => {
-    switch (readString(token, "type")) {
-      case "code":
-      case "hr":
-      case "space":
-      case "def":
-      case "html":
-        return [];
-      case "blockquote":
-        return spokenBlocks(readList(token, "tokens"));
-      case "list":
-        return readList(token, "items").flatMap((item) =>
-          spokenBlocks(readList(item, "tokens")),
-        );
-      case "table":
-        return [tableText(token, "speech")];
-      case "text":
-        return [textOrChildren(token, "speech")];
-      default:
-        return [inlineText(readList(token, "tokens"), "speech")];
-    }
-  });
+function spokenBlocks(
+  tokens: ReadonlyArray<unknown>,
+  closedLaterOutside: ReadonlySet<string>,
+): string[] {
+  return spokenRun(tokens, closedLaterOutside).flatMap(
+    ({ token, closedLater }): string[] => {
+      const projection: Projection = { kind: "speech", closedLater };
+      switch (readString(token, "type")) {
+        case "code":
+        case "hr":
+        case "space":
+        case "def":
+        case "html":
+          return [];
+        case "blockquote":
+          return spokenBlocks(readList(token, "tokens"), closedLater);
+        case "list":
+          return readList(token, "items").flatMap((item) =>
+            spokenBlocks(readList(item, "tokens"), closedLater),
+          );
+        case "table":
+          return [tableText(token, projection)];
+        case "text":
+          return [textOrChildren(token, projection)];
+        default:
+          return [inlineText(readList(token, "tokens"), projection)];
+      }
+    },
+  );
 }
 
 /**
- * Elements whose contents are never prose and, left open, run to the end: a
- * browser reads everything after an unclosed `<script>` as script.
+ * Elements whose contents are never prose. The HTML parser reads them as raw
+ * text: nothing inside is markup, the element ends at its first matching close
+ * tag, and left open it runs to the end.
  */
 const RAW_TEXT_ELEMENTS: ReadonlySet<string> = new Set([
   "iframe",
   "noembed",
   "noframes",
   "noscript",
+  "plaintext",
   "script",
   "style",
-  "template",
   "textarea",
   "title",
   "xmp",
 ]);
 
+/** The only elements with no contents. A `/>` on any other tag is ignored. */
 const VOID_ELEMENTS: ReadonlySet<string> = new Set([
   "area",
   "base",
@@ -350,8 +369,8 @@ const VOID_ELEMENTS: ReadonlySet<string> = new Set([
   "wbr",
 ]);
 
-const HTML_COMMENT = /<!--[\s\S]*?-->/g;
-const HTML_TAG = /<(\/?)([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/?)>/g;
+const HTML_COMMENT_OR_TAG =
+  /<!--[\s\S]*?-->|<(\/?)([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])[^>]*>/g;
 
 interface HtmlTagEvent {
   readonly token: number;
@@ -359,22 +378,69 @@ interface HtmlTagEvent {
   readonly closing: boolean;
 }
 
-/** The element-opening and -closing tags of a run's `html` tokens, in order. */
-function htmlTagEvents(tokens: ReadonlyArray<unknown>): HtmlTagEvent[] {
-  return tokens.flatMap((token, index): HtmlTagEvent[] => {
-    if (readString(token, "type") !== "html") return [];
-    const raw = readString(token, "raw").replace(HTML_COMMENT, "");
-    return [...raw.matchAll(HTML_TAG)].flatMap((match): HtmlTagEvent[] => {
-      // Every group of HTML_TAG takes part in a match (the slashes as "").
-      const [, closingSlash, tagName, selfClosingSlash] = match;
-      const name = tagName.toLowerCase();
-      const closing = closingSlash === "/";
-      if (!closing && (selfClosingSlash === "/" || VOID_ELEMENTS.has(name))) {
-        return [];
+interface HtmlRun {
+  /** Opening and closing tags of ordinary elements, in order. */
+  readonly events: ReadonlyArray<HtmlTagEvent>;
+  /** Token ranges `[open, close)` a raw-text element covers. */
+  readonly rawText: ReadonlyArray<readonly [number, number]>;
+}
+
+/**
+ * Reads the tags in a run's `html` tokens the way the HTML parser does: a raw
+ * text element swallows everything up to its first matching close tag, which
+ * may sit several tokens later, and the tags inside it are not tags.
+ */
+function scanHtmlRun(tokens: ReadonlyArray<unknown>): HtmlRun {
+  const events: HtmlTagEvent[] = [];
+  const rawText: Array<readonly [number, number]> = [];
+  // A field, not a `let`: the callback below reassigns it, and narrowing of a
+  // local `let` does not see assignments made inside a callback.
+  const scan: {
+    openRawText: { readonly name: string; readonly token: number } | null;
+  } = { openRawText: null };
+  tokens.forEach((token, index) => {
+    if (readString(token, "type") !== "html") return;
+    const raw = readString(token, "raw");
+    let position = 0;
+    while (position < raw.length) {
+      const open = scan.openRawText;
+      if (open !== null) {
+        const close = new RegExp(`</${open.name}(?=[\\s/>])`, "gi");
+        close.lastIndex = position;
+        const closing = close.exec(raw);
+        if (closing === null) return;
+        rawText.push([open.token, index]);
+        scan.openRawText = null;
+        const end = raw.indexOf(">", closing.index);
+        position = end === -1 ? raw.length : end + 1;
+        continue;
       }
-      return [{ token: index, name, closing }];
-    });
+      HTML_COMMENT_OR_TAG.lastIndex = position;
+      const match = HTML_COMMENT_OR_TAG.exec(raw);
+      if (match === null) return;
+      position = match.index + match[0].length;
+      if (match[0].startsWith("<!--")) continue;
+      const [, closingSlash, tagName] = match;
+      const name = tagName.toLowerCase();
+      if (closingSlash === "/") {
+        events.push({ token: index, name, closing: true });
+      } else if (RAW_TEXT_ELEMENTS.has(name)) {
+        scan.openRawText = { name, token: index };
+      } else if (!VOID_ELEMENTS.has(name)) {
+        events.push({ token: index, name, closing: false });
+      }
+    }
   });
+  if (scan.openRawText !== null) {
+    rawText.push([scan.openRawText.token, tokens.length]);
+  }
+  return { events, rawText };
+}
+
+interface SpokenToken {
+  readonly token: unknown;
+  /** Elements this run, or one enclosing it, closes after this token. */
+  readonly closedLater: ReadonlySet<string>;
 }
 
 /**
@@ -383,27 +449,43 @@ function htmlTagEvents(tokens: ReadonlyArray<unknown>): HtmlTagEvent[] {
  * tag (inline, and at block level when blank lines split the element) - so
  * dropping the `html` tokens alone would still read `<script>`'s contents.
  * Here an element is dropped with everything up to its matching closing tag.
- * An element left open drops only its tag, as the renderer then shows the text
- * after it, except a raw-text element, which drops the rest of the run.
+ *
+ * An element left open in this run is closed by the end of the run's
+ * container, as HTML closes it, when its closing tag comes later in an
+ * enclosing run (`closedLaterOutside`): it covers the rest of this run. One
+ * closed nowhere drops only its tag, as the renderer then shows the text after
+ * it. A raw-text element left open drops the rest of the run.
  */
-function withoutHtmlElements(
+function spokenRun(
   tokens: ReadonlyArray<unknown>,
-): ReadonlyArray<unknown> {
-  const events = htmlTagEvents(tokens);
+  closedLaterOutside: ReadonlySet<string>,
+): SpokenToken[] {
+  const { events, rawText } = scanHtmlRun(tokens);
   const hidden = new Set<number>();
+  const hide = (open: number, close: number): void => {
+    for (let index = open + 1; index < close; index += 1) hidden.add(index);
+  };
+  for (const [open, close] of rawText) hide(open, close);
   events.forEach((event, at) => {
     if (event.closing) return;
-    const end = matchingCloseToken(events.slice(at + 1), event.name);
-    const last =
-      end ?? (RAW_TEXT_ELEMENTS.has(event.name) ? tokens.length : event.token);
-    for (let index = event.token + 1; index < last; index += 1) {
-      hidden.add(index);
+    const close = matchingCloseToken(events.slice(at + 1), event.name);
+    if (close !== null) {
+      hide(event.token, close);
+    } else if (closedLaterOutside.has(event.name)) {
+      hide(event.token, tokens.length);
     }
   });
-  return tokens.filter(
-    (token, index) =>
-      !hidden.has(index) && readString(token, "type") !== "html",
-  );
+  return tokens.flatMap((token, index): SpokenToken[] => {
+    if (hidden.has(index) || readString(token, "type") === "html") return [];
+    const closedHere = events
+      .filter((event) => event.closing && event.token > index)
+      .map((event) => event.name);
+    const closedLater =
+      closedHere.length === 0
+        ? closedLaterOutside
+        : new Set([...closedLaterOutside, ...closedHere]);
+    return [{ token, closedLater }];
+  });
 }
 
 /** The token holding the tag that closes `name`, among the events after it. */
