@@ -83,6 +83,7 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     nextAt: null,
     state: "tracking",
     endedReason: null,
+    createdByUserId: null,
     ...overrides,
   };
 }

@@ -665,6 +665,16 @@ export const botTaskEntrySchema = lazySchema(() =>
       endedReason: z
         .enum(["by-bot", "deleted", "archived", "completed"])
         .nullable(),
+      /**
+       * The member who set the task up, read off the open request of the
+       * bot thread that created it (T46b); the cloud keeps it only for a
+       * member of the bot's environment. A mention target and a provenance
+       * mark, never an authorization input: nothing reads it to decide who
+       * may act on the bot or the task. `null` for a task the trunk created,
+       * and when the thread had no open request. Defaulted so a host that
+       * predates the field serves an entry without it.
+       */
+      createdByUserId: z.string().min(1).max(36).nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
