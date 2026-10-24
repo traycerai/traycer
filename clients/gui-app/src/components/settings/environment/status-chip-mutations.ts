@@ -7,6 +7,22 @@ function stringField(value: unknown, field: string): string | null {
   return typeof member === "string" ? member : null;
 }
 
+const SETTINGS_PREFIXES = [
+  "environment.configuration.",
+  "environment.agentDefinitions.",
+  "config.env.",
+  "config.shell.",
+  "providers.set",
+  "providers.deleteEnvOverride",
+] as const;
+
+function isSettingsMethod(method: string): boolean {
+  return (
+    method === "providers.skillsMutate" ||
+    SETTINGS_PREFIXES.some((prefix) => method.startsWith(prefix))
+  );
+}
+
 /** Queued settings are scoped to their configuration, never a neighbouring team. */
 export function useConfigurationSavingOffline(
   environmentId: string | null,
@@ -24,14 +40,7 @@ export function useConfigurationSavingOffline(
         method.includes("ApiKey")
       )
         return false;
-      const settings =
-        method.startsWith("environment.configuration.") ||
-        method.startsWith("environment.agentDefinitions.") ||
-        method.startsWith("config.env.") ||
-        method.startsWith("config.shell.") ||
-        method.startsWith("providers.set") ||
-        method.startsWith("providers.deleteEnvOverride");
-      if (!settings) return false;
+      if (!isSettingsMethod(method)) return false;
       const configurationId =
         stringField(mutation.state.variables, "environmentId") ??
         stringField(mutation.options.meta, "configurationId");
