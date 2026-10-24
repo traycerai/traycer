@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import { upgradeResponseToVersion } from "@traycer/protocol/framework/index";
 import {
   FALLBACK_ACTION_OUTCOMES,
@@ -12,6 +11,7 @@ import {
   fallbackRungRefusalKindSchema,
 } from "@traycer/protocol/host/chat-fallback";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * `chat.fallback.runManualRung@1.1`: the response gains `detail`, a refusal
@@ -105,10 +105,13 @@ describe("runManualRung@1.0 response is a frozen pre-image", () => {
     expect(chatFallbackRunManualRungV10.responseSchema).not.toBe(
       chatFallbackRunManualRungV11.responseSchema,
     );
-    const json = z.toJSONSchema(chatFallbackRunManualRungResponseSchemaV10, {
-      io: "output",
-      unrepresentable: "any",
-    });
+    const json = toCanonicalJsonSchema(
+      chatFallbackRunManualRungResponseSchemaV10,
+      {
+        io: "output",
+        unrepresentable: "any",
+      },
+    );
     expect(Object.keys(json.properties ?? {})).toEqual(["outcome"]);
   });
 });

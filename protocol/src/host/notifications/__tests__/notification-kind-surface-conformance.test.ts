@@ -10,6 +10,7 @@ import {
   type HostNotificationKind,
   type HostNotificationsSurface,
 } from "@traycer/protocol/host/notifications/contracts";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Cross-surface conformance: for EVERY registered serving path and EVERY
@@ -403,7 +404,7 @@ function carriesNotificationEntries(contract: unknown): boolean {
   );
   return schemas.some(([, schema]) => {
     const dump = JSON.stringify(
-      z.toJSONSchema(schema as z.ZodType, { unrepresentable: "any" }),
+      toCanonicalJsonSchema(schema as z.ZodType, { unrepresentable: "any" }),
     );
     return ALL_HOST_NOTIFICATION_KINDS.some((kind) =>
       dump.includes(`"${kind}"`),

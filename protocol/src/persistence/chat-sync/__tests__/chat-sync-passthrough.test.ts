@@ -27,6 +27,7 @@ import {
 } from "@traycer/protocol/persistence/registry";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Round-trip behavior of the shard's passthrough carrier and residual bags.
@@ -559,7 +560,7 @@ describe("chat-sync known-variant vocabulary", () => {
   // variant silently degrades to "unknown" - preserved, but never rendered.
   // Cross-check against the schema so that fails loudly instead.
   function unionDiscriminants(schema: z.ZodType, key: string): string[] {
-    const jsonSchema = z.toJSONSchema(schema, { io: "input" });
+    const jsonSchema = toCanonicalJsonSchema(schema, { io: "input" });
     const variants = z.parse(
       z.object({
         anyOf: z

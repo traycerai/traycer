@@ -10,6 +10,7 @@ import {
   providerLoginResponseRecordV100,
   userRecordV100,
 } from "@traycer/protocol/auth/registry";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Nothing else in this repo guards the auth records: an in-place edit of
@@ -59,7 +60,7 @@ const FROZEN_MAJOR_1_CONTRACTS = [
 function findProviderTypeEnumValues(
   schema: z.ZodType,
 ): readonly (readonly unknown[])[] {
-  const raw = z.toJSONSchema(schema, { unrepresentable: "any" });
+  const raw = toCanonicalJsonSchema(schema, { unrepresentable: "any" });
   const found: unknown[][] = [];
 
   function walk(node: unknown): void {

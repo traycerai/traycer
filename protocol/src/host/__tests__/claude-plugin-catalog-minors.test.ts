@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import { agentGuiListCommandsUpgradeV10ToV11 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   listGuiAgentCommandsRequestSchema,
@@ -22,6 +21,7 @@ import {
   providersListResponseSchemaV104Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 // A complete capability object as an old host sends it: the plugin block has
 // no `openChatsApplyNextMessage`. `satisfies` is the compile-time half of the
@@ -93,7 +93,7 @@ describe("Claude plugin and command catalog minors", () => {
     ).toBe(providersListResponseSchema);
     expect(
       JSON.stringify(
-        z.toJSONSchema(providersListResponseSchemaV103Preimage, {
+        toCanonicalJsonSchema(providersListResponseSchemaV103Preimage, {
           unrepresentable: "any",
         }),
       ),
@@ -161,7 +161,9 @@ describe("Claude plugin and command catalog minors", () => {
       providersListResponseSchemaV92,
     ]) {
       expect(
-        JSON.stringify(z.toJSONSchema(schema, { unrepresentable: "any" })),
+        JSON.stringify(
+          toCanonicalJsonSchema(schema, { unrepresentable: "any" }),
+        ),
       ).not.toContain("openChatsApplyNextMessage");
     }
   });

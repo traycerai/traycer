@@ -40,6 +40,7 @@ import {
   chatSubscribeV131,
   chatSubscribeV132,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -58,7 +59,7 @@ function canonical(value: unknown): unknown {
 
 function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
   return createHash("sha256")
-    .update(JSON.stringify(canonical(z.toJSONSchema(schema, { io }))))
+    .update(JSON.stringify(canonical(toCanonicalJsonSchema(schema, { io }))))
     .digest("hex");
 }
 
@@ -670,14 +671,14 @@ describe("chat.subscribe placement freeze", () => {
     ]);
     expect(
       JSON.stringify(
-        z.toJSONSchema(autonomousResumeBlockSchemaV18, {
+        toCanonicalJsonSchema(autonomousResumeBlockSchemaV18, {
           io: "input",
         }),
       ),
     ).not.toContain("deliveryPlacement");
     expect(
       JSON.stringify(
-        z.toJSONSchema(autonomousResumeBlockSchemaV18, {
+        toCanonicalJsonSchema(autonomousResumeBlockSchemaV18, {
           io: "output",
         }),
       ),

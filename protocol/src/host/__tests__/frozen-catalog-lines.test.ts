@@ -64,6 +64,7 @@ import {
   getChatRunSettingsBatchResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Defense-in-depth for the freeze discipline: frozen catalog response schemas
@@ -78,7 +79,7 @@ import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lin
  */
 
 function dump(schema: z.ZodType): unknown {
-  return z.toJSONSchema(schema, { unrepresentable: "any" });
+  return toCanonicalJsonSchema(schema, { unrepresentable: "any" });
 }
 
 const LIVE_FROZEN_EXPORTS = {

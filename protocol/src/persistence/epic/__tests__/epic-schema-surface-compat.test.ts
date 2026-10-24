@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
 import { epicSchemaSurfaceBaseline } from "./__fixtures__/epic-schema-surface";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Frozen surface of the registered epic persistence contract.
@@ -36,12 +36,12 @@ describe("registered epicSchema persistence surface is frozen", () => {
   );
 
   it("storage (io:'input') JSON Schema matches the baseline", () => {
-    const current = z.toJSONSchema(epicSchema, { io: "input" });
+    const current = toCanonicalJsonSchema(epicSchema, { io: "input" });
     expect(current).toEqual(epicSchemaSurfaceBaseline.storage);
   });
 
   it("domain (default/output) JSON Schema matches the baseline", () => {
-    const current = z.toJSONSchema(epicSchema);
+    const current = toCanonicalJsonSchema(epicSchema, {});
     expect(current).toEqual(epicSchemaSurfaceBaseline.domain);
   });
 });

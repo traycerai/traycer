@@ -1,8 +1,14 @@
 import { z } from "zod";
 import type {
   $ZodDiscriminatedUnionDef,
+  JSONSchema,
   ToJSONSchemaContext,
+  ToJSONSchemaParams,
 } from "zod/v4/core";
+import {
+  removeCanonicalJsonSchemaStamp,
+  withCanonicalJsonSchemaOverride,
+} from "./surface-build";
 
 /**
  * Normalized JSON-Schema fingerprint shared by the versioned-record
@@ -88,6 +94,24 @@ export type JsonSchemaFingerprint =
   | ArrayJsonSchema;
 
 /**
+ * `z.toJSONSchema(schema, params)` in the form the protocol's fingerprints,
+ * snapshots and released surfaces are written in, zod 4.4.3's (see
+ * `withCanonicalJsonSchemaOverride`). Every protocol reader of a schema's JSON
+ * Schema goes through this.
+ */
+export function toCanonicalJsonSchema(
+  schema: z.ZodType,
+  params: ToJSONSchemaParams,
+): JSONSchema.BaseSchema {
+  const converted = z.toJSONSchema(
+    schema,
+    withCanonicalJsonSchemaOverride(params),
+  );
+  removeCanonicalJsonSchemaStamp(converted);
+  return converted;
+}
+
+/**
  * Converts a Zod schema to its normalized fingerprint. Throws when
  * the schema is none of object / enum / anyOf / array.
  *
@@ -102,7 +126,7 @@ export function toJsonSchemaFingerprint(
   context: string,
 ): JsonSchemaFingerprint {
   return convertJsonSchemaShape(
-    z.toJSONSchema(schema, {
+    toCanonicalJsonSchema(schema, {
       unrepresentable: "any",
       // The ONE thing JSON Schema drops that arm identity needs. `oneOf`
       // tells us the union was declared discriminated; it does not say on
@@ -192,7 +216,7 @@ function declaredDiscriminator(node: {
  * lockstep keeps the answer per-arm.
  */
 export function toUnknownKeyTree(schema: z.ZodType): unknown {
-  return z.toJSONSchema(schema, { unrepresentable: "any", io: "input" });
+  return toCanonicalJsonSchema(schema, { unrepresentable: "any", io: "input" });
 }
 
 /**
@@ -203,7 +227,7 @@ export function toUnknownKeyTree(schema: z.ZodType): unknown {
  * so that walk goes through the same seam as the others.
  */
 export function toStreamFieldJsonSchemaText(schema: z.ZodType): string {
-  return JSON.stringify(z.toJSONSchema(schema));
+  return JSON.stringify(toCanonicalJsonSchema(schema, {}));
 }
 
 type UnknownKeySchemaNode = {

@@ -36,6 +36,7 @@ import {
 } from "@traycer/protocol/persistence/registry";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Harness ids in this contract are open strings.
@@ -484,7 +485,9 @@ describe("chat-sync harness-id leaf sweep", () => {
   const surfaces: readonly JsonValue[] = [chatHeadSchema, chatShardSchema].map(
     (schema) =>
       jsonValueSchema.parse(
-        JSON.parse(JSON.stringify(z.toJSONSchema(schema, { io: "output" }))),
+        JSON.parse(
+          JSON.stringify(toCanonicalJsonSchema(schema, { io: "output" })),
+        ),
       ),
   );
 
@@ -715,7 +718,7 @@ describe("chat-sync content-block union parity", () => {
           )
           .optional(),
       }),
-      z.toJSONSchema(schema, { io: "input" }),
+      toCanonicalJsonSchema(schema, { io: "input" }),
     );
     const options = jsonSchema.anyOf ?? jsonSchema.oneOf ?? [];
     return options.map((option) => option.properties[key].const).sort();

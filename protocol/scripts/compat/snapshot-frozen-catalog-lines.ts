@@ -76,9 +76,10 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
 } from "../../src/host/provider-schemas";
+import { toCanonicalJsonSchema } from "../../src/framework/json-schema-fingerprint";
 
 function dump(schema: z.ZodType): unknown {
-  return z.toJSONSchema(schema, { unrepresentable: "any" });
+  return toCanonicalJsonSchema(schema, { unrepresentable: "any" });
 }
 
 // Every released line of the three id-carrying catalog methods. The v5.0 row
