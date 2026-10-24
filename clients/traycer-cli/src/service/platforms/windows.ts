@@ -3330,7 +3330,20 @@ async function writeHiddenHostLauncher(
   await mkdir(dirname(launcherPath), { recursive: true });
   const body = buildHiddenHostLauncher(options.cli, options.label);
   await verifyServiceMutationAuthority();
-  await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+  try {
+    await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+  } catch (cause) {
+    if (
+      isErrnoException(cause) &&
+      (cause.code === "EPERM" || cause.code === "EACCES")
+    ) {
+      throw new Error(
+        "Windows denied permission to create Traycer's start script. Security software may be blocking it. Allow Traycer's data folder (normally %USERPROFILE%\\.traycer) in your security software, then restart Traycer.",
+        { cause },
+      );
+    }
+    throw cause;
+  }
 }
 
 function windowsSystemExecutable(filename: string): string {
