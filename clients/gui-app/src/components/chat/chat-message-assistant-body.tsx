@@ -22,9 +22,10 @@ import type {
   ChatMessageStoppedInfo,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { Check, Copy, Sparkles, Split, Square } from "lucide-react";
+import { Check, Copy, Sparkles, Split, Square, Volume2 } from "lucide-react";
 import { use, useCallback, useMemo } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { useReadAloud } from "@/hooks/ui/use-read-aloud";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { knownHarnessId } from "@/lib/chat/sender-display";
@@ -701,6 +702,9 @@ function AssistantElapsedFooter({
       {replyText.length > 0 ? (
         <AssistantReplyCopyButton text={replyText} />
       ) : null}
+      {replyText.length > 0 ? (
+        <AssistantReplyReadAloudButton text={replyText} />
+      ) : null}
       {forkAction !== null ? <AssistantForkButton action={forkAction} /> : null}
     </div>
   );
@@ -736,6 +740,37 @@ function AssistantReplyCopyButton({ text }: { text: string }) {
         <Check className="size-3.5" aria-hidden />
       ) : (
         <Copy className="size-3.5" aria-hidden />
+      )}
+    </button>
+  );
+}
+
+/**
+ * Play/Stop for reading the reply aloud with the device's own voices. Absent
+ * where the device has no speech engine or no on-device voice.
+ */
+function AssistantReplyReadAloudButton({ text }: { text: string }) {
+  const { available, reading, toggle } = useReadAloud(text);
+  if (!available) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={reading ? "Stop reading" : "Read reply aloud"}
+      aria-pressed={reading}
+      data-testid="assistant-reply-read-aloud"
+      className={cn(
+        "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
+        "text-muted-foreground/60 transition-colors",
+        "hover:bg-accent hover:text-foreground",
+        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+      )}
+    >
+      {reading ? (
+        <Square className="size-3" aria-hidden />
+      ) : (
+        <Volume2 className="size-3.5" aria-hidden />
       )}
     </button>
   );
