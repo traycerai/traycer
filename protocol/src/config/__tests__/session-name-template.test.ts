@@ -60,10 +60,23 @@ describe("renderSessionName", () => {
     expect(renderSessionName("{project} {nope}", VALUES)).toBe("my-app {nope}");
   });
 
-  it("turns control characters into spaces", () => {
+  it("turns control characters into spaces, C1 included, in values and in the template", () => {
     expect(
       renderSessionName("{task}", withValues({ task: "line one\nline two" })),
     ).toBe("line one line two");
+    // U+0085 (next line) and U+009B (control sequence introducer) are C1.
+    expect(
+      renderSessionName("{task}", withValues({ task: "line one\u0085two" })),
+    ).toBe("line one two");
+    expect(renderSessionName("{project}\u009bnext", VALUES)).toBe(
+      "my-app next",
+    );
+  });
+
+  it("drops format characters, so no bidi override reorders the name", () => {
+    expect(
+      renderSessionName("{task}", withValues({ task: "abc\u202edef\u200b" })),
+    ).toBe("abcdef");
   });
 
   it("caps the name at 100 code points without a trailing separator", () => {

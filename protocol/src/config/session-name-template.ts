@@ -43,6 +43,8 @@ const PLACEHOLDER_PATTERN = /\{([A-Za-z_]+)\}/g;
 const LEADING_SEPARATORS = /^[\s\u00b7\-_/]+/u;
 const TRAILING_SEPARATORS = /[\s\u00b7\-_/]+$/u;
 const EDGE_SEPARATORS = /^[\s\u00b7\-_/]+|[\s\u00b7\-_/]+$/gu;
+const CONTROL_CHARACTERS = /\p{Cc}/gu;
+const FORMAT_CHARACTERS = /\p{Cf}/gu;
 
 function isPlaceholder(name: string): name is SessionNamePlaceholder {
   return (SESSION_NAME_PLACEHOLDERS as readonly string[]).includes(name);
@@ -130,12 +132,11 @@ function renderOnce(template: string, values: SessionNameValues): string {
   return capped.replace(EDGE_SEPARATORS, "");
 }
 
-/** Control characters (a newline in a title, say) become spaces. */
+/**
+ * A control character (C0, DEL or C1: a newline in a title, say) becomes a
+ * space. A format character (a bidi override, a zero-width space) goes: it
+ * shows nothing, and a bidi control would reorder the rest of the name.
+ */
 function sanitize(text: string): string {
-  let out = "";
-  for (const character of text) {
-    const code = character.codePointAt(0) ?? 0;
-    out += code < 0x20 || code === 0x7f ? " " : character;
-  }
-  return out;
+  return text.replace(CONTROL_CHARACTERS, " ").replace(FORMAT_CHARACTERS, "");
 }

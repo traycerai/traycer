@@ -136,9 +136,9 @@ function ClaudeSessionNameRows(props: {
         <ClaudeSessionNameField
           state={state}
           saving={setTemplate.isPending}
-          onSave={(claudeTemplate) => {
+          onSave={(claudeTemplate, onFailed) => {
             trackSettingChanged("providers", "claudeSessionName");
-            setTemplate.mutate({ claudeTemplate });
+            setTemplate.mutate({ claudeTemplate }, { onError: onFailed });
           }}
         />
       )}
@@ -149,7 +149,7 @@ function ClaudeSessionNameRows(props: {
 function ClaudeSessionNameField(props: {
   readonly state: ConfigSessionNamesResponse;
   readonly saving: boolean;
-  readonly onSave: (claudeTemplate: string) => void;
+  readonly onSave: (claudeTemplate: string, onFailed: () => void) => void;
 }): ReactNode {
   const { state, saving, onSave } = props;
   const saved = state.claudeTemplate;
@@ -158,8 +158,9 @@ function ClaudeSessionNameField(props: {
   const [draft, setDraft] = useState(saved);
   // What this field last asked the host to hold. A write still in flight has
   // not reached `saved` yet, so an edit back to the stored value must be
-  // compared against the write, not the read.
-  const lastSent = useRef(saved);
+  // compared against the write, not the read. `null` after a refused write:
+  // the host still holds its old value, so any draft may be sent.
+  const lastSent = useRef<string | null>(saved);
   // The host's value can change from outside this field (another window, a
   // hand edit); follow it unless the user is mid-edit.
   useEffect(() => {
@@ -179,7 +180,11 @@ function ClaudeSessionNameField(props: {
     if (templateProblem(trimmed, state.placeholders) !== null) return;
     if (trimmed === lastSent.current) return;
     lastSent.current = trimmed;
-    onSave(trimmed);
+    onSave(trimmed, () => {
+      // A save queued after this one owns `lastSent` now; its own outcome
+      // decides what may be sent next.
+      if (lastSent.current === trimmed) lastSent.current = null;
+    });
   };
 
   return (

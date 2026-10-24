@@ -3002,7 +3002,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     it), and is disabled while a save is in flight. Saves share one mutation
     scope per host (`sessionNamesWriteScope`) and compare against the last
     value sent, so an edit back to the stored value during a save still
-    lands, after it.
+    lands, after it. A refused save clears that value unless a later save
+    was queued since, so committing the same draft again retries it.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared

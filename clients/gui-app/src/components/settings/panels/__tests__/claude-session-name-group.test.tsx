@@ -43,9 +43,12 @@ const state = vi.hoisted(
   }),
 );
 const tracked = vi.hoisted(() => vi.fn());
+const toasted = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/host-error-toast", () => ({
-  toastFromHostError: () => undefined,
+  toastFromHostError: (...args: ReadonlyArray<unknown>) => {
+    toasted(...args);
+  },
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
@@ -99,15 +102,28 @@ interface Harness {
   readonly queryClient: QueryClient;
 }
 
-/**
- * `holdFirstSet` keeps the first write unanswered until `releaseFirstSet`, while
- * later writes answer at once: a test can act while a save is in flight, and a
- * later save that is not queued behind it lands first.
- */
+/** How the mock host answers. */
+interface HostBehaviour {
+  /**
+   * Keeps the first write unanswered until `releaseFirstSet`, while later
+   * writes answer at once: a test can act while a save is in flight, and a
+   * later save that is not queued behind it lands first.
+   */
+  readonly holdFirstSet: boolean;
+  /** Refuses the first write; later writes succeed. */
+  readonly failFirstSet: boolean;
+  readonly failReads: boolean;
+}
+
+const ANSWERS_EVERYTHING: HostBehaviour = {
+  holdFirstSet: false,
+  failFirstSet: false,
+  failReads: false,
+};
+
 function mountHarness(
   initialTemplate: string,
-  holdFirstSet: boolean,
-  failReads: boolean,
+  behaviour: HostBehaviour,
 ): Harness {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -115,7 +131,7 @@ function mountHarness(
   let stored = initialTemplate;
   const sets: ConfigSessionNamesSetRequest[] = [];
   let release: () => void = () => undefined;
-  const firstHeld = holdFirstSet
+  const firstHeld = behaviour.holdFirstSet
     ? new Promise<void>((settle) => {
         release = settle;
       })
@@ -131,12 +147,15 @@ function mountHarness(
       requestId: () => `req-${Math.random().toString(36).slice(2)}`,
       handlers: {
         "config.sessionNames.get": () =>
-          failReads
+          behaviour.failReads
             ? Promise.reject(new Error("config.json is garbage"))
             : Promise.resolve(read()),
         "config.sessionNames.set": async (params) => {
           sets.push(params);
           if (sets.length === 1) await firstHeld;
+          if (sets.length === 1 && behaviour.failFirstSet) {
+            throw new Error("config.json could not be written");
+          }
           stored = params.claudeTemplate;
           return read();
         },
@@ -178,9 +197,9 @@ function renderGroup(queryClient: QueryClient): RenderResult {
 /** Mounts against a stored template and waits for the field to load. */
 async function renderReady(
   initialTemplate: string,
-  holdFirstSet: boolean,
+  behaviour: HostBehaviour,
 ): Promise<Harness> {
-  const harness = mountHarness(initialTemplate, holdFirstSet, false);
+  const harness = mountHarness(initialTemplate, behaviour);
   renderGroup(harness.queryClient);
   await screen.findByTestId("claude-session-name-input");
   return harness;
@@ -200,6 +219,7 @@ beforeEach(() => {
   state.supportedSet = true;
   state.client = null;
   tracked.mockClear();
+  toasted.mockClear();
 });
 
 afterEach(() => {
@@ -210,14 +230,14 @@ afterEach(() => {
 describe("ClaudeSessionNameGroup", () => {
   it("renders nothing when the host does not advertise config.sessionNames.set", () => {
     state.supportedSet = false;
-    const { queryClient } = mountHarness("{project}-x", false, false);
+    const { queryClient } = mountHarness("{project}-x", ANSWERS_EVERYTHING);
     const { container } = renderGroup(queryClient);
 
     expect(container.childElementCount).toBe(0);
   });
 
   it("shows the stored template and a preview rendered against the sample project", async () => {
-    await renderReady("{project}-x", false);
+    await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
     expect(templateInput().value).toBe("{project}-x");
     expect(
@@ -226,7 +246,7 @@ describe("ClaudeSessionNameGroup", () => {
   });
 
   it("sends exactly one set with the edited template when the field is blurred", async () => {
-    const harness = await renderReady("{project}-x", false);
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
     fireEvent.change(templateInput(), {
       target: { value: "{project}-{branch}" },
@@ -241,7 +261,7 @@ describe("ClaudeSessionNameGroup", () => {
   });
 
   it("flags an unknown placeholder and does not send it on blur", async () => {
-    const harness = await renderReady("{project}-x", false);
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
     fireEvent.change(templateInput(), { target: { value: "{nope}" } });
 
@@ -254,7 +274,7 @@ describe("ClaudeSessionNameGroup", () => {
   });
 
   it("discards an unsaved draft on Reset instead of saving it on the way out", async () => {
-    const harness = await renderReady(DEFAULT_TEMPLATE, false);
+    const harness = await renderReady(DEFAULT_TEMPLATE, ANSWERS_EVERYTHING);
 
     fireEvent.change(templateInput(), { target: { value: "{project}-x" } });
     const reset = screen.getByTestId("claude-session-name-reset");
@@ -271,7 +291,10 @@ describe("ClaudeSessionNameGroup", () => {
   });
 
   it("saves an edit back to the old template while the first save is in flight", async () => {
-    const harness = await renderReady("{project}-x", true);
+    const harness = await renderReady("{project}-x", {
+      ...ANSWERS_EVERYTHING,
+      holdFirstSet: true,
+    });
 
     fireEvent.change(templateInput(), { target: { value: "{project}-y" } });
     fireEvent.blur(templateInput());
@@ -293,8 +316,41 @@ describe("ClaudeSessionNameGroup", () => {
     expect(harness.stored()).toBe("{project}-x");
   });
 
+  it("retries a save that failed when the same draft is committed again", async () => {
+    const harness = await renderReady("{project}-x", {
+      ...ANSWERS_EVERYTHING,
+      failFirstSet: true,
+    });
+
+    fireEvent.change(templateInput(), { target: { value: "{project}-y" } });
+    fireEvent.blur(templateInput());
+    await waitFor(() => {
+      expect(harness.sets).toHaveLength(1);
+    });
+    // The refused write is reported, and leaves the host on the old template.
+    await waitFor(() => {
+      expect(toasted).toHaveBeenCalledTimes(1);
+    });
+    expect(harness.stored()).toBe("{project}-x");
+
+    // The user commits the same draft again (focus out of the field), as
+    // often as it takes: a field that counts the refused write as sent never
+    // sends it again.
+    await waitFor(() => {
+      fireEvent.blur(templateInput());
+      expect(harness.sets).toHaveLength(2);
+    });
+    expect(harness.sets).toEqual([
+      { claudeTemplate: "{project}-y" },
+      { claudeTemplate: "{project}-y" },
+    ]);
+    await waitFor(() => {
+      expect(harness.stored()).toBe("{project}-y");
+    });
+  });
+
   it("refuses a template over 200 characters inline instead of sending it", async () => {
-    const harness = await renderReady("{project}-x", false);
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
     fireEvent.change(templateInput(), { target: { value: "x".repeat(201) } });
     fireEvent.blur(templateInput());
@@ -305,7 +361,10 @@ describe("ClaudeSessionNameGroup", () => {
   });
 
   it("stops showing progress once the read has failed", async () => {
-    const { queryClient } = mountHarness("{project}-x", false, true);
+    const { queryClient } = mountHarness("{project}-x", {
+      ...ANSWERS_EVERYTHING,
+      failReads: true,
+    });
     renderGroup(queryClient);
 
     await screen.findByRole("alert");
@@ -315,7 +374,7 @@ describe("ClaudeSessionNameGroup", () => {
   });
 
   it("resets a customised template by sending the default", async () => {
-    const harness = await renderReady("{project}-x", false);
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
     fireEvent.click(screen.getByTestId("claude-session-name-reset"));
 
