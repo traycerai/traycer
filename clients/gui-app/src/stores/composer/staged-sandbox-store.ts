@@ -143,16 +143,16 @@ export function refusedBeforeCreate(
 
 /**
  * Whether the stage's next action takes a new create key: it never started
- * one, or the server refused that one before creating anything. Every other
- * stage may have an accepted, billed create behind it, which the next action
- * names again so the server answers with the same row.
+ * one, the server refused that one before creating anything, or the sandbox
+ * that key created failed (naming it again answers with the same failed row).
+ * Every other stage may have an accepted, billed create behind it on its way,
+ * which the next action names again so the server answers with the same row.
  */
 export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
   if (stage.clientRequestId === null) return true;
-  return (
-    stage.failure !== null &&
-    refusedBeforeCreate(stage.failure, stage.createdSandboxId)
-  );
+  if (stage.failure === null) return false;
+  if (stage.failure.kind === "failed") return stage.target.kind === "new";
+  return refusedBeforeCreate(stage.failure, stage.createdSandboxId);
 }
 
 interface StagedSandboxStoreState {
@@ -175,6 +175,11 @@ interface StagedSandboxStoreState {
     fresh: boolean,
     now: number,
   ) => string | null;
+  /**
+   * Takes up the run still driving the stage's key after a Cancel: back to
+   * `creating` with its step and times as that run left them.
+   */
+  readonly rejoin: (surfaceKey: string) => void;
   readonly report: (
     surfaceKey: string,
     patch: Partial<
@@ -270,6 +275,13 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
       }));
       return clientRequestId;
     },
+    rejoin: (surfaceKey) =>
+      set((state) => ({
+        bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
+          ...stage,
+          phase: "creating",
+        })),
+      })),
     report: (surfaceKey, patch) =>
       set((state) => ({
         bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
@@ -279,22 +291,113 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
       })),
     cancel: (surfaceKey) =>
       set((state) => ({
-        bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
-          ...stage,
-          phase: "staged",
+        bySurface: withStage(state.bySurface, surfaceKey, (stage) => {
           // The key stays while a create may have been accepted, so the next
-          // send names it again rather than billing a second sandbox.
-          clientRequestId: stagedCreateNeedsFreshKey(stage)
-            ? null
-            : stage.clientRequestId,
-          startedAt: null,
-          stepAt: null,
-          failure: null,
-        })),
+          // send names it again rather than billing a second sandbox; so do
+          // its times, for a send that takes up the run still on its way.
+          if (!stagedCreateNeedsFreshKey(stage)) {
+            return { ...stage, phase: "staged", failure: null };
+          }
+          return {
+            ...stage,
+            phase: "staged",
+            clientRequestId: null,
+            startedAt: null,
+            stepAt: null,
+            failure: null,
+          };
+        }),
       })),
     clearAll: () => set({ bySurface: {} }),
   }),
 );
+
+/**
+ * Says when a draft that owns a handoff is gone for good, once its phase 2 is
+ * no longer mounted: `onGone` runs then (at once when it already is), and the
+ * returned function stops watching. A modal's or a picker's owner is gone as
+ * it unmounts ({@link ownerGoneOnUnmount}); a start page's draft is gone when
+ * it closes, not when its composer unmounts for a draft switch or eviction.
+ */
+export type HandoffOwnerWatch = (onGone: () => void) => () => void;
+
+export const ownerGoneOnUnmount: HandoffOwnerWatch = (onGone) => {
+  onGone();
+  return () => undefined;
+};
+
+interface HandoffOwner {
+  /** Its mounted phase 2s; a remount holds it again before the release acts. */
+  mounted: number;
+  /** Set while it is unmounted but not gone. */
+  stopWatching: (() => void) | null;
+}
+
+const handoffOwners = new Map<string, HandoffOwner>();
+
+function handoffOwnerKey(surfaceKey: string, ownerId: string | null): string {
+  return `${surfaceKey}\u0000${ownerId ?? ""}`;
+}
+
+/**
+ * Whether the draft that sent on a surface is still there to resubmit: its
+ * phase 2 mounted, or unmounted but not gone.
+ */
+export function handoffOwnerLive(
+  surfaceKey: string,
+  ownerId: string | null,
+): boolean {
+  return handoffOwners.has(handoffOwnerKey(surfaceKey, ownerId));
+}
+
+/**
+ * Holds a draft's phase 2 mounted for a surface. Once none is mounted and the
+ * draft is gone (`watch`), a handoff still waiting on it is cleared: the
+ * sandbox stays awake and the draft stays, so only the automatic send is
+ * abandoned.
+ */
+export function holdHandoffOwner(
+  surfaceKey: string,
+  ownerId: string | null,
+  watch: HandoffOwnerWatch,
+): () => void {
+  const key = handoffOwnerKey(surfaceKey, ownerId);
+  const owner = handoffOwners.get(key) ?? { mounted: 0, stopWatching: null };
+  handoffOwners.set(key, owner);
+  owner.mounted += 1;
+  owner.stopWatching?.();
+  owner.stopWatching = null;
+  const gone = (): void => {
+    if (handoffOwners.get(key) !== owner || owner.mounted > 0) return;
+    handoffOwners.delete(key);
+    owner.stopWatching?.();
+    owner.stopWatching = null;
+    const stage = readStagedSandbox(surfaceKey);
+    if (
+      stage !== null &&
+      stage.phase === "handoff" &&
+      stage.failure === null &&
+      stage.sendTaken &&
+      stage.ownerId === ownerId
+    ) {
+      useStagedSandboxStore.getState().clear(surfaceKey);
+    }
+  };
+  return () => {
+    owner.mounted -= 1;
+    if (owner.mounted > 0) return;
+    // After the commit: a remount holds it again before this runs.
+    queueMicrotask(() => {
+      if (handoffOwners.get(key) !== owner || owner.mounted > 0) return;
+      const stop = watch(gone);
+      if (handoffOwners.get(key) === owner && owner.mounted === 0) {
+        owner.stopWatching = stop;
+      } else {
+        stop();
+      }
+    });
+  };
+}
 
 /** The stage a surface holds, or `null`. */
 export function useStagedSandbox(surfaceKey: string): StagedSandbox | null {

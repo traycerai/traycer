@@ -153,6 +153,7 @@ import {
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
+  ownerGoneOnUnmount,
   useStagedSandboxStore,
   useStagedTerminalLaunch,
   type StagedSandbox,
@@ -470,7 +471,8 @@ export function NewConversationModalHost(props: {
   );
   // The request the body was opened with, kept while its send is handed off,
   // hidden or reopened from another trigger: the send still lands where it
-  // was asked to.
+  // was asked to. A request filed meanwhile is held, and becomes the body's
+  // once the handoff settles.
   const [bodyRequest, setBodyRequest] = useState(isOpen ? ownedRequest : null);
   if (isOpen && !handingOff && ownedRequest !== bodyRequest) {
     setBodyRequest(ownedRequest);
@@ -509,10 +511,12 @@ export function NewConversationModalHost(props: {
     () => ({ pickerStore: transientSession.pickerStore }),
     [transientSession.pickerStore],
   );
-  const onSubmitted = useCallback(
-    () => closeRequestOwnedBy(epicId, tabId),
-    [epicId, tabId],
-  );
+  // Closes the request the send was made from, never one filed after it was
+  // handed off.
+  const onSubmitted = useCallback(() => {
+    const store = useNewConversationModalOpenStore.getState();
+    if (bodyRequest !== null && store.request === bodyRequest) store.close();
+  }, [bodyRequest]);
   return (
     <>
       <NewConversationModalDialog
@@ -686,12 +690,15 @@ export function NewConversationModalBody(props: {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   // Shown again after finishing a staged send hidden (`NewConversationModalHost`):
   // the editor took focus once, when it mounted, so it takes it back here.
+  // Hidden, it closes its @/slash menu, which portals to the page and holds a
+  // scroll lock rather than leaving with the dialog.
   const ownsKeyboard = use(KeyboardOwnerContext);
   const ownedKeyboardRef = useRef(ownsKeyboard);
   useEffect(() => {
     const owned = ownedKeyboardRef.current;
     ownedKeyboardRef.current = ownsKeyboard;
     if (ownsKeyboard && !owned) editorRef.current?.focusAtEnd();
+    if (!ownsKeyboard && owned) editorRef.current?.dismissActiveSuggestion();
   }, [ownsKeyboard]);
   // A ref, not state: a re-render would change the send button's disabled look
   // for a wait that no document produces today, and the guard only has to stop
@@ -1110,8 +1117,10 @@ export function NewConversationModalBody(props: {
     }),
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
-    // The epic's tabs share its stage; the handoff is the sending tab's.
+    // The epic's tabs share its stage; the handoff is the sending tab's,
+    // gone with its host (the tab closed).
     ownerId: tabId,
+    watchOwner: ownerGoneOnUnmount,
   });
   const stagedSend = useStagedSandboxSend({
     surfaceKey: stagingSurfaceKey(sandboxStaging),

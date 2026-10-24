@@ -25,13 +25,16 @@ import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-clie
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   stagedSandboxFallbackName,
+  startStagedTerminal,
   useStagedSandboxHandoff,
   useStagedSandboxSend,
   type StagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
+  ownerGoneOnUnmount,
   readStagedSandbox,
   useStagedSandboxStore,
+  type HandoffOwnerWatch,
   type StagedSandboxFailure,
   type StagedSandboxStep,
 } from "@/stores/composer/staged-sandbox-store";
@@ -362,6 +365,7 @@ function DraftComposer(props: {
     submit: props.submit,
     prepareHandoff: noPrepare,
     ownerId: props.draftId,
+    watchOwner: ownerGoneOnUnmount,
   });
   useEffect(() => {
     onSend(send);
@@ -369,7 +373,119 @@ function DraftComposer(props: {
   return null;
 }
 
+/** A draft's phase 2 still waiting on its new host's catalog. */
+function WaitingHandoff(props: {
+  readonly draftId: string;
+  readonly watchOwner: HandoffOwnerWatch;
+}) {
+  useStagedSandboxHandoff({
+    surfaceKey: SURFACE,
+    resolvedHostId: NEW_HOST,
+    canSubmit: false,
+    submit: () => true,
+    prepareHandoff: noPrepare,
+    ownerId: props.draftId,
+    watchOwner: props.watchOwner,
+  });
+  return null;
+}
+
+function handoffWaitingOn(draftId: string): void {
+  useStagedSandboxStore.getState().stage(SURFACE, {
+    kind: "existing",
+    hostId: NEW_HOST,
+    sandboxId: "sbx-1",
+    name: "api-refactor",
+    configuration: { kind: "personal" },
+    verb: "resume",
+  });
+  useStagedSandboxStore.getState().report(SURFACE, {
+    phase: "handoff",
+    createdHostId: NEW_HOST,
+    ownerId: draftId,
+    sendTaken: true,
+  });
+}
+
+async function afterCommit(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 describe("useStagedSandboxSend's handoff", () => {
+  it("drops a handoff whose sending draft is gone as it unmounts, and keeps one across a remount", async () => {
+    handoffWaitingOn("draft-a");
+    const view = render(
+      <>
+        <WaitingHandoff
+          key="mount-1"
+          draftId="draft-a"
+          watchOwner={ownerGoneOnUnmount}
+        />
+        <WaitingHandoff
+          key="other"
+          draftId="draft-b"
+          watchOwner={ownerGoneOnUnmount}
+        />
+      </>,
+    );
+
+    view.rerender(
+      <>
+        <WaitingHandoff
+          key="mount-2"
+          draftId="draft-a"
+          watchOwner={ownerGoneOnUnmount}
+        />
+        <WaitingHandoff
+          key="other"
+          draftId="draft-b"
+          watchOwner={ownerGoneOnUnmount}
+        />
+      </>,
+    );
+    await afterCommit();
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
+
+    // Its tab closed; another draft's is still open.
+    view.rerender(
+      <WaitingHandoff
+        key="other"
+        draftId="draft-b"
+        watchOwner={ownerGoneOnUnmount}
+      />,
+    );
+    await afterCommit();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("keeps a handoff whose draft is unmounted but still open, until the draft closes", async () => {
+    handoffWaitingOn("draft-a");
+    const draftA: { close: (() => void) | null } = { close: null };
+    const watchDraftA: HandoffOwnerWatch = (onGone) => {
+      draftA.close = onGone;
+      return () => {
+        draftA.close = null;
+      };
+    };
+    const view = render(
+      <WaitingHandoff draftId="draft-a" watchOwner={watchDraftA} />,
+    );
+
+    // Another draft took the start page.
+    view.rerender(
+      <WaitingHandoff draftId="draft-b" watchOwner={ownerGoneOnUnmount} />,
+    );
+    await afterCommit();
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
+
+    act(() => {
+      draftA.close?.();
+    });
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
   it("resubmits only the draft that sent, though every draft shares the stage", () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
       kind: "existing",
@@ -557,6 +673,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
         submit,
         prepareHandoff: noPrepare,
         ownerId: null,
+        watchOwner: ownerGoneOnUnmount,
       });
       useEffect(() => {
         send = result;
@@ -665,6 +782,31 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     expect(second).toBe(first);
   });
 
+  it("makes a new create after the sandbox the last one made failed", () => {
+    stageCreated("booting", {
+      kind: "failed",
+      code: "PROVIDER_CREATE_FAILED",
+      step: "booting",
+    });
+    const failed = readStagedSandbox(SURFACE)?.clientRequestId;
+    const keys: (string | null)[] = [];
+    mocks.runStagedSandbox.mockImplementation((surfaceKey, fresh) => {
+      keys.push(
+        useStagedSandboxStore.getState().begin(surfaceKey, fresh, Date.now()),
+      );
+      return Promise.resolve();
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("second", null);
+    });
+
+    expect(failed).toBeDefined();
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toBe(failed);
+  });
+
   it("repeats the same create after an accepted sandbox froze for credits while it settled", () => {
     // Accepted, then frozen on its way up: the same failure a refusal
     // reports, after a billed create.
@@ -685,6 +827,88 @@ describe("useStagedSandboxSend's send after a failed create", () => {
 
     expect(accepted).toBeDefined();
     expect(keys).toEqual([accepted]);
+  });
+});
+
+describe("startStagedTerminal", () => {
+  const FAILED: StagedSandboxFailure = {
+    kind: "failed",
+    code: "PROVIDER_CREATE_FAILED",
+    step: "booting",
+  };
+  it.each([
+    { stage: "on its way", failure: null, kind: "taken", starts: null },
+    { stage: "failed", failure: FAILED, kind: "taken", starts: true },
+    {
+      stage: "refused for credits",
+      failure: { kind: "credits", shortfallMc: 100 } as const,
+      kind: "taken",
+      starts: true,
+    },
+    {
+      stage: "timed out",
+      failure: { kind: "timed-out", step: "booting" } as const,
+      kind: "not-taken",
+      starts: null,
+    },
+    {
+      stage: "unverified",
+      failure: { kind: "unverified" } as const,
+      kind: "not-taken",
+      starts: null,
+    },
+  ])(
+    "on a create $stage: $kind, starting a run: $starts",
+    ({ failure, kind, starts }) => {
+      stageCreated("booting", failure);
+      if (failure?.kind === "credits") {
+        // Refused before anything was created.
+        useStagedSandboxStore.getState().report(SURFACE, {
+          createdSandboxId: null,
+          createdHostId: null,
+        });
+      }
+      const start = vi.fn();
+
+      expect(startStagedTerminal(SURFACE, start).kind).toBe(kind);
+
+      expect(start.mock.calls).toEqual(starts === null ? [] : [[starts]]);
+      expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(kind === "taken");
+    },
+  );
+
+  it("takes the ask on a stage nothing ran for yet, starting its first run", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    const start = vi.fn();
+
+    expect(startStagedTerminal(SURFACE, start).kind).toBe("taken");
+    expect(start.mock.calls).toEqual([[true]]);
+  });
+
+  it("opens the terminal on a sandbox that is up with settings that did not apply", () => {
+    stageCreated("applying", { kind: "settings", code: "settings" });
+    const start = vi.fn();
+
+    expect(startStagedTerminal(SURFACE, start)).toEqual({
+      kind: "awake",
+      hostId: NEW_HOST,
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(false);
+  });
+
+  it("leaves the ask to the caller while the stage hands off", () => {
+    stageCreated("delivering", null);
+    useStagedSandboxStore.getState().report(SURFACE, { phase: "handoff" });
+
+    expect(startStagedTerminal(SURFACE, vi.fn()).kind).toBe("not-taken");
   });
 });
 

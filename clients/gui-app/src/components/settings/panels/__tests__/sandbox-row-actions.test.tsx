@@ -259,6 +259,49 @@ describe("<SandboxRowActions />", () => {
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
+  it("asks a send's wake of this sandbox on its way for the terminal too, keeping the send and starting no second wake", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, {
+      kind: "existing",
+      hostId: "host-build",
+      sandboxId: "sbx-build",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.begin(SURFACE, false, 1_000);
+    store.report(SURFACE, { ownerId: "draft-1", sendTaken: true });
+    renderRow(
+      <SandboxRowActions
+        summary={sandboxSummaryFixture({
+          id: "sbx-build",
+          hostId: "host-build",
+          state: "suspended",
+          burst: false,
+          frozen: false,
+        })}
+        configuration={{ kind: "personal" }}
+        unreachable={false}
+        frozenNeedsOwnCredits={false}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /^More actions for/ }),
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Open terminal" }),
+    );
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "creating",
+      ownerId: "draft-1",
+      sendTaken: true,
+      openTerminal: true,
+    });
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+  });
+
   it.each([
     { period: null, sent: 0 },
     { period: 4_320, sent: 4_320 },

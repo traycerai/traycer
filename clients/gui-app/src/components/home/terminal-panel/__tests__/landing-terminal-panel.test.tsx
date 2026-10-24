@@ -2009,6 +2009,43 @@ describe("<LandingTerminalPanel />", () => {
     expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
   });
 
+  it("asks for the terminal on a staged sandbox that is up with settings that did not apply, starting nothing", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    const staged = useStagedSandboxStore.getState();
+    staged.stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    staged.begin(COMPOSER_SURFACE, false, 1_000);
+    staged.report(COMPOSER_SURFACE, {
+      createdSandboxId: "sbx-1",
+      createdHostId: "host-sbx",
+      failure: { kind: "settings", code: "settings" },
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await pickTerminalFromChooser();
+
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[COMPOSER_SURFACE],
+    ).toBe("host-sbx");
+    expect(useLandingPanelStore.getState().terminalRequest).toMatchObject({
+      surfaceKey: COMPOSER_SURFACE,
+      hostId: "host-sbx",
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
   it("drops a requested terminal unserved when its host has no home to start one in", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2024,7 +2061,7 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
   });
 
-  it("drops a requested terminal unserved when its host's terminal list cannot be fetched", async () => {
+  it("holds a requested terminal through a terminal list that could not be read, and opens it once the host answers", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = null;
@@ -2036,9 +2073,31 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
 
     await waitFor(() => {
-      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
     });
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).not.toBeNull();
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+
+    mocks.queryClient.fetchQuery.mockImplementation(() =>
+      Promise.resolve(mocks.probeData),
+    );
+    act(() => {
+      for (const listener of mocks.onChangeListeners) {
+        listener({
+          previousHostId: "host-a",
+          currentHostId: "host-a",
+          reason: "availability-recovered",
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
   it("adopts a sign-in session another window started, from terminal.list, on a capable host whose projection cannot carry it", async () => {

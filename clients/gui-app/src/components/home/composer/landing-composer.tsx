@@ -53,6 +53,7 @@ import {
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
 import {
+  isOpenLandingDraft,
   landingRowIsForeign,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -92,6 +93,7 @@ import {
   readStagedSandbox,
   useStagedSandboxStore,
   useStagedTerminalLaunch,
+  type HandoffOwnerWatch,
 } from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -543,8 +545,28 @@ export function LandingComposer(props: LandingComposerProps) {
     subscribed: stagedTerminalLaunch !== null,
   });
   // The window's drafts share its pin and so its stage: the handoff is the
-  // sending draft's alone.
+  // sending draft's alone. It is gone when the draft closes, not when this
+  // composer unmounts for another draft or an evicted page: that draft's
+  // composer resubmits when it is back.
   const stagedOwnerId = draftId ?? props.pendingCreateId;
+  const watchStagedOwner = useCallback<HandoffOwnerWatch>(
+    (onGone) => {
+      const open = (): boolean => {
+        const draft = useLandingDraftStore
+          .getState()
+          .drafts.find((entry) => entry.id === stagedOwnerId);
+        return draft !== undefined && isOpenLandingDraft(draft);
+      };
+      if (!open()) {
+        onGone();
+        return () => undefined;
+      }
+      return useLandingDraftStore.subscribe(() => {
+        if (!open()) onGone();
+      });
+    },
+    [stagedOwnerId],
+  );
   useStagedSandboxHandoff({
     surfaceKey: composerSurfaceKey,
     resolvedHostId,
@@ -559,6 +581,7 @@ export function LandingComposer(props: LandingComposerProps) {
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
     ownerId: stagedOwnerId,
+    watchOwner: watchStagedOwner,
   });
   const stagedSend = useStagedSandboxSend({
     surfaceKey: composerSurfaceKey,

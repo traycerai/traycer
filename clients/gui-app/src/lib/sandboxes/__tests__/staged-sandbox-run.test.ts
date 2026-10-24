@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import type {
   SandboxCreateRequest,
@@ -27,6 +35,8 @@ import {
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
+  holdHandoffOwner,
+  ownerGoneOnUnmount,
   readStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxTarget,
@@ -479,15 +489,20 @@ describe("runStagedSandbox settling", () => {
   });
 
   it.each([
-    { sendTaken: false, request: NEW_HOST_ID, phase: null },
-    { sendTaken: true, request: null, phase: "handoff" },
+    { sendTaken: false, owner: false, request: NEW_HOST_ID, phase: null },
+    { sendTaken: true, owner: true, request: null, phase: "handoff" },
+    // The sending draft's page closed while it booted: nothing resubmits it.
+    { sendTaken: true, owner: false, request: NEW_HOST_ID, phase: null },
   ])(
-    "on a terminal ask, hands the terminal to the landing panel, sending nothing unless a send was taken ($sendTaken)",
-    async ({ sendTaken, request, phase }) => {
+    "on a terminal ask, hands the terminal to the landing panel, sending nothing unless a send was taken ($sendTaken) by a draft still mounted ($owner)",
+    async ({ sendTaken, owner, request, phase }) => {
       useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
       useStagedSandboxStore
         .getState()
         .report(surfaceKey, { openTerminal: true, sendTaken });
+      if (owner) {
+        onTestFinished(holdHandoffOwner(surfaceKey, null, ownerGoneOnUnmount));
+      }
       const { deps } = harness({}, true);
 
       await run(false, deps);
@@ -697,7 +712,7 @@ describe("runStagedSandbox guards", () => {
 
   it("takes up a cancelled send's create still in flight on the next send, instead of racing it with a second run", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
-    const { auth, deps } = harness({}, true);
+    const { auth, deps, clock } = harness({}, true);
     let release = (): void => undefined;
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -713,12 +728,18 @@ describe("runStagedSandbox guards", () => {
     await vi.waitFor(() => {
       expect(auth.requests).toHaveLength(1);
     });
+    const { startedAt, step, stepAt } = stageOf();
     useStagedSandboxStore.getState().cancel(surfaceKey);
+    clock.now += 30_000;
     // The send's key rule: the create may have been accepted.
     await run(false, deps);
+    // The line goes on from where the run is, not from a new start.
     expect(stageOf()).toMatchObject({
       phase: "creating",
       clientRequestId: auth.requests[0].clientRequestId,
+      startedAt,
+      step,
+      stepAt,
     });
 
     release();

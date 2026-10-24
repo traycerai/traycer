@@ -50,7 +50,10 @@ import {
 import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
@@ -350,22 +353,35 @@ function useOpenSandboxOnLanding(): (
           .requestTerminal(surfaceKey, summary.hostId);
       }
     } else {
-      useStagedSandboxStore.getState().stage(surfaceKey, {
-        kind: "existing",
-        hostId: summary.hostId,
-        sandboxId: summary.id,
-        name: summary.displayName,
-        configuration:
-          configuration.kind === "team"
-            ? {
-                kind: "team",
-                teamId: configuration.teamId,
-                teamName: configuration.teamName,
-              }
-            : { kind: "personal" },
-        verb,
-      });
+      // A stage of this sandbox still on its way (a send waking it) is kept,
+      // with the send it hands off; one that stopped short starts over.
+      const current = readStagedSandbox(surfaceKey);
+      const live =
+        current !== null &&
+        current.target.kind === "existing" &&
+        current.target.sandboxId === summary.id &&
+        (current.phase === "staged" ||
+          (current.phase === "creating" && current.failure === null));
+      if (!live) {
+        useStagedSandboxStore.getState().stage(surfaceKey, {
+          kind: "existing",
+          hostId: summary.hostId,
+          sandboxId: summary.id,
+          name: summary.displayName,
+          configuration:
+            configuration.kind === "team"
+              ? {
+                  kind: "team",
+                  teamId: configuration.teamId,
+                  teamName: configuration.teamName,
+                }
+              : { kind: "personal" },
+          verb,
+        });
+      }
       if (intent.terminal) {
+        // A live or fresh stage takes the ask (`startStagedTerminal`): it
+        // starts the wake unless one is on its way.
         startStagedTerminal(surfaceKey, (fresh) =>
           runStaged(surfaceKey, fresh, {
             fallbackName: summary.displayName,

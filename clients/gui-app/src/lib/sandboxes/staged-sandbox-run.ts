@@ -33,6 +33,7 @@ import {
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
+  handoffOwnerLive,
   readStagedSandbox,
   refusedBeforeCreate,
   useStagedSandboxStore,
@@ -106,9 +107,10 @@ export async function runStagedSandbox(
   ) {
     // The run this key drives is still on its way: a repeat joins it, and a
     // send after Cancel takes it up again (it is current once more), rather
-    // than a second run racing it on the same key.
+    // than a second run racing it on the same key. Its step and times stay
+    // as that run left them.
     if (stage.phase !== "creating") {
-      useStagedSandboxStore.getState().begin(surfaceKey, false, deps.now());
+      useStagedSandboxStore.getState().rejoin(surfaceKey);
     }
     return;
   }
@@ -467,14 +469,23 @@ export function settleVerdict(
 /**
  * Phase 2's start: the surface is pinned to the new host and the stage moves
  * to `handoff`; the surface resubmits once its placement resolves there. A
- * stage only an explicit terminal ask started has nothing to resubmit: its
- * terminal is asked of the landing panel and the stage ends here.
+ * stage with nothing to resubmit ends here, its terminal asked of the landing
+ * panel if one was: one only an explicit terminal ask started, or one whose
+ * sending draft is gone (its modal's tab or its start page closed meanwhile),
+ * whose automatic send is abandoned.
  */
 function handOff(surfaceKey: string, hostId: string): void {
   useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, hostId);
   const stage = readStagedSandbox(surfaceKey);
-  if (stage !== null && stage.openTerminal && !stage.sendTaken) {
-    useLandingPanelStore.getState().requestTerminal(surfaceKey, hostId);
+  if (
+    stage !== null &&
+    (stage.sendTaken
+      ? !handoffOwnerLive(surfaceKey, stage.ownerId)
+      : stage.openTerminal)
+  ) {
+    if (stage.openTerminal) {
+      useLandingPanelStore.getState().requestTerminal(surfaceKey, hostId);
+    }
     useStagedSandboxStore.getState().clear(surfaceKey);
     return;
   }

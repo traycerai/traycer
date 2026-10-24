@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactNode } from "react";
 import {
   act,
@@ -17,6 +25,7 @@ import type {
 } from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
 import { NewTerminalStagedHandoff } from "../new-terminal-staged-handoff";
+import { subscribeStagedTerminalLaunch } from "../new-terminal-staged-launch";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -337,6 +346,39 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(launched.map(launchedTerminalCwd)).toEqual(["/home/sandbox"]);
     expect(readStagedSandbox(surfaceKey)).toBeNull();
+  });
+
+  it("closes the tab's open picker, popover and phone dialog alike, when the staged sandbox's terminal launches", () => {
+    const tabId = openPicker();
+    expect(screen.getByTestId("new-terminal-picker-popover")).toBeDefined();
+    const dialogClosed = vi.fn();
+    const unsubscribe = subscribeStagedTerminalLaunch(tabId, dialogClosed);
+    onTestFinished(unsubscribe);
+    const surfaceKey = tabSurfaceKey("new-terminal", tabId);
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, {
+      kind: "existing",
+      hostId: SANDBOX_HOST,
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.report(surfaceKey, {
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      sendTaken: true,
+    });
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, SANDBOX_HOST);
+
+    renderWithClient(
+      <NewTerminalStagedHandoff epicId="epic-1" tabId={tabId} />,
+    );
+
+    expect(screen.queryByTestId("new-terminal-picker-popover")).toBeNull();
+    expect(dialogClosed).toHaveBeenCalledTimes(1);
   });
 
   it("opens a popover with the host section and workspace rows", () => {

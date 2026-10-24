@@ -113,6 +113,8 @@ const testState = vi.hoisted(() => ({
   >(() => Promise.resolve({ initialTurnStarted: false })),
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
+  /** The editor's @/slash menu dismissal. */
+  dismissSuggestion: vi.fn(() => false),
   bodySubmit: null as (() => void) | null,
   bodyStartTerminal: null as
     | ((launch: TerminalAgentLaunch, assembledFor: string | null) => void)
@@ -181,7 +183,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
-    dismissActiveSuggestion: () => false,
+    dismissActiveSuggestion: () => testState.dismissSuggestion(),
     draftGeneration: () => 0,
   };
 }
@@ -500,6 +502,7 @@ afterEach(() => {
   testState.createChat.mockClear();
   testState.createTerminalAgent.mockClear();
   testState.onSubmitted.mockClear();
+  testState.dismissSuggestion.mockClear();
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
   testState.staged = false;
@@ -740,14 +743,14 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     return render(host(true), { wrapper: QueryWrapper });
   }
 
-  function setOpen(open: boolean): void {
+  function setOpen(open: boolean, parentId: string | null): void {
     act(() => {
       if (open) {
         useNewConversationModalOpenStore.getState().open({
           epicId: "epic-1",
           tabId: "tab-1",
           placement: null,
-          parentId: null,
+          parentId,
           hostId: null,
         });
       } else {
@@ -758,7 +761,7 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
 
   /** Opens the modal, stages a sandbox and sends: the boot begins. */
   function sendOnStagedSandbox(): void {
-    setOpen(true);
+    setOpen(true, null);
     act(() => {
       testState.installEditor?.();
     });
@@ -789,7 +792,7 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     renderHost();
     sendOnStagedSandbox();
 
-    setOpen(false);
+    setOpen(false, null);
     expect(
       screen.queryByTestId("epic-sidebar-new-conversation-modal"),
     ).toBeNull();
@@ -814,20 +817,20 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     expect(testState.createChat).toHaveBeenCalledTimes(1);
     expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
     // Reopening now is a fresh body: the old one was released with the stage.
-    setOpen(true);
+    setOpen(true, null);
     expect(testState.bodyMounts).toBe(2);
   });
 
   it("shows the same body again when reopened while the sandbox boots, and owns no shortcut while hidden", () => {
     renderHost();
     sendOnStagedSandbox();
-    setOpen(false);
+    setOpen(false, null);
 
     // Cmd+Enter while hidden reaches no send.
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
     expect(testState.intercepts).toBe(1);
 
-    setOpen(true);
+    setOpen(true, null);
     expect(testState.bodyMounts).toBe(1);
     const shown = bodies();
     expect(shown).toHaveLength(1);
@@ -847,22 +850,91 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
     expect(testState.bodyMounts).toBe(1);
     view.rerender(host(true));
-    setOpen(true);
+    setOpen(true, null);
     expect(testState.bodyMounts).toBe(1);
 
     // An account switch clears every stage: nothing is left to send.
-    setOpen(false);
+    setOpen(false, null);
     act(() => {
       useStagedSandboxStore.getState().clearAll();
     });
-    setOpen(true);
+    setOpen(true, null);
     expect(testState.bodyMounts).toBe(2);
     expect(testState.createChat).not.toHaveBeenCalled();
   });
 
+  /** The stage hands off; the new host's catalog answers when `answer`. */
+  function handOff(answer: boolean): void {
+    if (!answer) {
+      // An earlier case's answer stays on the shared toolbar store.
+      testState.toolbarStore?.setState({
+        catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
+      });
+    }
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        createdHostId: "host-a",
+        phase: "handoff",
+      });
+    });
+    if (!answer) return;
+    act(() => {
+      testState.catalogHostId = "host-a";
+      testState.toolbarStore?.setState({
+        catalog: { hostId: "host-a", harnesses: [], modelsLoaded: true },
+      });
+    });
+  }
+
+  it("closes its @/slash menu when it hides with the send still booting", () => {
+    renderHost();
+    sendOnStagedSandbox();
+    expect(testState.dismissSuggestion).not.toHaveBeenCalled();
+
+    setOpen(false, null);
+
+    expect(testState.dismissSuggestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a request filed while the send is handed off, and keeps it open after the send", () => {
+    renderHost();
+    sendOnStagedSandbox();
+    setOpen(false, null);
+    // Another trigger (a row's new child) while the sandbox boots.
+    setOpen(true, "chat-parent");
+    const filed = useNewConversationModalOpenStore.getState().request;
+
+    handOff(true);
+
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    expect(useNewConversationModalOpenStore.getState().request).toBe(filed);
+    expect(
+      screen.getByTestId("epic-sidebar-new-conversation-modal"),
+    ).toBeDefined();
+  });
+
+  it("drops the automatic send when its tab closes before the resubmit, keeping the draft", async () => {
+    const view = renderHost();
+    sendOnStagedSandbox();
+    setOpen(false, null);
+    handOff(false);
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]?.phase).toBe(
+      "handoff",
+    );
+
+    view.unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(draftSurvived()).toBe(true);
+  });
+
   it("shows a request filed for a background tab once the tab comes to the front", () => {
     // Filed before the tab's session mounts in the background.
-    setOpen(true);
+    setOpen(true, null);
     const view = render(host(false), { wrapper: QueryWrapper });
     expect(
       screen.queryByTestId("epic-sidebar-new-conversation-modal"),

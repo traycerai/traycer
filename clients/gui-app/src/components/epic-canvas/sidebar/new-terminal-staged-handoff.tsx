@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useStagedSandboxHandoff } from "@/components/composer/use-staged-sandbox-send";
+import { notifyStagedTerminalLaunch } from "@/components/epic-canvas/sidebar/new-terminal-staged-launch";
 import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -8,7 +9,11 @@ import {
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
-import { useStagedSandbox } from "@/stores/composer/staged-sandbox-store";
+import {
+  ownerGoneOnUnmount,
+  useStagedSandbox,
+} from "@/stores/composer/staged-sandbox-store";
+import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
 function noopPrepareHandoff(): void {}
 
@@ -17,7 +22,8 @@ function noopPrepareHandoff(): void {}
  * rather than by the picker: the popover, or the phone's dialog, may close
  * while the sandbox boots, and the terminal still opens once it is ready. It
  * opens in the sandbox's own folderless directory, whatever workspace rows
- * the task binds on other hosts.
+ * the task binds on other hosts. The launch closes the tab's picker, popover
+ * or dialog, as its own Launch does, so a second Launch cannot open another.
  */
 export function NewTerminalStagedHandoff(props: {
   readonly epicId: string;
@@ -42,6 +48,10 @@ export function NewTerminalStagedHandoff(props: {
         "direct_ui",
       ),
     );
+    usePanelHeaderMenuStore
+      .getState()
+      .setMenuOpen(tabId, "terminals", "create", false);
+    notifyStagedTerminalLaunch(tabId);
     return true;
   }, [epicId, openTile, tabId, target]);
   useStagedSandboxHandoff({
@@ -51,6 +61,7 @@ export function NewTerminalStagedHandoff(props: {
     submit: launch,
     prepareHandoff: noopPrepareHandoff,
     ownerId: null,
+    watchOwner: ownerGoneOnUnmount,
   });
   return null;
 }

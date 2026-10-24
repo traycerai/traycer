@@ -134,6 +134,7 @@ import {
   useStagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
   useLandingTerminalGesture,
@@ -1003,15 +1004,23 @@ export function LandingTerminalPanel(): ReactNode {
     // A sandbox staged on the composer is where this terminal is wanted, and
     // asking for one there is its first action: it is created or woken, and
     // the terminal opens on the handoff. Never on the host the composer falls
-    // back to meanwhile, and no new-tab chooser is left waiting for it.
-    if (
-      startStagedTerminal(composerSurfaceKey, (fresh) =>
-        runStaged(composerSurfaceKey, fresh, {
-          fallbackName: stagedSandboxFallbackName(""),
-          taskId: null,
-        }),
-      )
-    ) {
+    // back to meanwhile, and no new-tab chooser is left waiting for it. A
+    // staged sandbox that is up already opens it there now.
+    const ask = startStagedTerminal(composerSurfaceKey, (fresh) =>
+      runStaged(composerSurfaceKey, fresh, {
+        fallbackName: stagedSandboxFallbackName(""),
+        taskId: null,
+      }),
+    );
+    if (ask.kind === "awake") {
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(composerSurfaceKey, ask.hostId);
+      useLandingPanelStore
+        .getState()
+        .requestTerminal(composerSurfaceKey, ask.hostId);
+    }
+    if (ask.kind !== "not-taken") {
       dismissPlaceholder();
       return;
     }
@@ -1122,14 +1131,7 @@ export function LandingTerminalPanel(): ReactNode {
     [replaceDirectoryRequest, requestDirectoryPickerFocus, selectWorkspacePath],
   );
 
-  const targetHostId = target.hostId;
   const handleReconciliationError = useCallback(() => {
-    // The host's terminal list could not be fetched: it cannot be reached, so
-    // a terminal asked for on it from outside the panel is dropped unserved.
-    const terminalRequest = useLandingPanelStore.getState().terminalRequest;
-    if (terminalRequest !== null && terminalRequest.hostId === targetHostId) {
-      useLandingPanelStore.getState().clearTerminalRequest();
-    }
     const request = directoryRequestRef.current;
     if (request === null || request.selectedTarget === null) return;
     const ownsFocus = hasPrimaryFocusIntent(
@@ -1145,7 +1147,7 @@ export function LandingTerminalPanel(): ReactNode {
     if (ownsFocus) {
       requestDirectoryPickerFocus(request.key);
     }
-  }, [requestDirectoryPickerFocus, targetHostId, writeDirectoryRequest]);
+  }, [requestDirectoryPickerFocus, writeDirectoryRequest]);
 
   const activatePanelTab = useCallback(
     (instanceId: string) => {
@@ -1404,7 +1406,8 @@ export function LandingTerminalPanel(): ReactNode {
   // it was filed for. It waits while the panel targets another host: the ask
   // pinned the composer to its host, and a pin moved elsewhere drops it
   // (`setSelection`). A host that cannot start one (an old host, no home
-  // directory, unreachable) never will, so that drops it too. It is bound to
+  // directory) never will, so that drops it too; a list that could not be
+  // read says nothing permanent, so the request waits through it. It is bound to
   // the start page in front of the person, which drops it when it unmounts
   // unserved (`LandingTerminalPaneAnchor`), and it is served there once the
   // host can start one - its authority ready, its home reconciled, which the

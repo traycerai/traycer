@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -124,9 +124,16 @@ vi.mock("@/stores/settings/settings-store", () => {
   };
 });
 
+const landingDrafts = vi.hoisted(() => ({
+  drafts: [] as Array<{ readonly id: string; closed: boolean }>,
+  listeners: new Set<() => void>(),
+}));
+
 vi.mock("@/stores/home/landing-draft-store", () => {
   const state = {
-    drafts: [],
+    get drafts() {
+      return landingDrafts.drafts;
+    },
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
     createDraft: vi.fn(() => "draft-for-test"),
@@ -139,10 +146,19 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   };
   const useLandingDraftStore = Object.assign(
     (selector: (value: typeof state) => unknown) => selector(state),
-    { getState: () => state },
+    {
+      getState: () => state,
+      subscribe: (listener: () => void) => {
+        landingDrafts.listeners.add(listener);
+        return () => {
+          landingDrafts.listeners.delete(listener);
+        };
+      },
+    },
   );
   return {
     useLandingDraftStore,
+    isOpenLandingDraft: (draft: { readonly closed: boolean }) => !draft.closed,
   };
 });
 
@@ -634,6 +650,50 @@ describe("LandingComposer direct submit gate", () => {
       />,
     );
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+  });
+
+  it("keeps a send's handoff while its draft's page is away, and drops the send when the draft closes", async () => {
+    landingDrafts.drafts = [{ id: "draft-open", closed: false }];
+    onTestFinished(() => {
+      landingDrafts.drafts = [];
+    });
+    const store = useStagedSandboxStore.getState();
+    store.stage("landing:window-test", {
+      kind: "existing",
+      hostId: "host-test",
+      sandboxId: "sbx-build",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    // Sent from the draft; the new host's catalog has not answered yet.
+    store.report("landing:window-test", {
+      phase: "handoff",
+      createdHostId: "host-test",
+      ownerId: "draft-open",
+      sendTaken: true,
+    });
+    const view = render(
+      <LandingComposer
+        draftId="draft-open"
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    // Another draft took the page, or the page was evicted.
+    view.unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readStagedSandbox("landing:window-test")?.phase).toBe("handoff");
+
+    act(() => {
+      landingDrafts.drafts = [{ id: "draft-open", closed: true }];
+      for (const listener of landingDrafts.listeners) listener();
+    });
+    expect(readStagedSandbox("landing:window-test")).toBeNull();
   });
 
   it("waits for the new sandbox's agent pack before launching a staged Start there", () => {

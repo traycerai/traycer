@@ -130,7 +130,7 @@ describe("staged sandbox store", () => {
     expect(stageOf(SURFACE)).toMatchObject({
       phase: "staged",
       clientRequestId: id,
-      startedAt: null,
+      startedAt: 1_000,
       failure: null,
       target: NEW_TARGET,
     });
@@ -138,15 +138,46 @@ describe("staged sandbox store", () => {
     expect(store.begin(SURFACE, false, 5_000)).toBe(id);
   });
 
+  const FAILED = {
+    kind: "failed",
+    code: "PROVIDER_CREATE_FAILED",
+    step: "booting",
+  } as const;
   it.each([
-    { failure: { kind: "unavailable" } as const, keeps: false },
-    { failure: { kind: "credits", shortfallMc: 120 } as const, keeps: false },
-    { failure: { kind: "unverified" } as const, keeps: true },
+    {
+      failure: { kind: "unavailable" } as const,
+      target: NEW_TARGET,
+      keeps: false,
+    },
+    {
+      failure: { kind: "credits", shortfallMc: 120 } as const,
+      target: NEW_TARGET,
+      keeps: false,
+    },
+    {
+      failure: { kind: "unverified" } as const,
+      target: NEW_TARGET,
+      keeps: true,
+    },
+    // The sandbox that key made failed: naming it again answers with that row.
+    { failure: FAILED, target: NEW_TARGET, keeps: false },
+    // A wake has no create key to bill twice; the next one wakes again.
+    { failure: FAILED, target: EXISTING_TARGET, keeps: true },
+    {
+      failure: { kind: "timed-out", step: "booting" } as const,
+      target: NEW_TARGET,
+      keeps: true,
+    },
+    {
+      failure: { kind: "settings", code: "settings" } as const,
+      target: NEW_TARGET,
+      keeps: true,
+    },
   ])(
-    "cancel after a $failure.kind failure keeps the key: $keeps",
-    ({ failure, keeps }) => {
+    "cancel after a $failure.kind failure on a $target.kind target keeps the key: $keeps",
+    ({ failure, target, keeps }) => {
       const store = useStagedSandboxStore.getState();
-      store.stage(SURFACE, NEW_TARGET);
+      store.stage(SURFACE, target);
       const id = store.begin(SURFACE, false, 1_000);
       store.report(SURFACE, { failure });
 
@@ -168,6 +199,24 @@ describe("staged sandbox store", () => {
     });
 
     expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(false);
+  });
+
+  it("rejoin takes the stage back to creating with its step and times as they were", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, NEW_TARGET);
+    const id = store.begin(SURFACE, false, 1_000);
+    store.report(SURFACE, { step: "applying", stepAt: 4_000 });
+    store.cancel(SURFACE);
+
+    store.rejoin(SURFACE);
+
+    expect(stageOf(SURFACE)).toMatchObject({
+      phase: "creating",
+      clientRequestId: id,
+      step: "applying",
+      stepAt: 4_000,
+      startedAt: 1_000,
+    });
   });
 
   it("keeps a stage in memory only, so a reload starts with nothing staged", () => {

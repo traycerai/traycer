@@ -34,10 +34,12 @@ import {
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  holdHandoffOwner,
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
   useStagedSandbox,
   useStagedSandboxStore,
+  type HandoffOwnerWatch,
 } from "@/stores/composer/staged-sandbox-store";
 
 /** A sandbox's name when the shape sheet set none: the message's first words. */
@@ -113,25 +115,45 @@ export function useStagedSandboxRunner(): StagedSandboxRunner {
   );
 }
 
+/** What became of an explicit terminal ask on a surface's stage. */
+export type StagedTerminalAsk =
+  /** The stage took it: the terminal opens on the handoff. */
+  | { readonly kind: "taken" }
+  /** The stage's sandbox is awake already: open the terminal there now. */
+  | { readonly kind: "awake"; readonly hostId: string }
+  /** The stage cannot take it: the caller opens its terminal as it would. */
+  | { readonly kind: "not-taken" };
+
 /**
  * An explicit terminal ask on a surface's stage (a Settings row's Open
  * terminal, the landing panel's `+`) is a first action, as a send is: the
  * stage is marked to open a folderless terminal on its sandbox once it is
- * awake, and its create or wake starts when none is running. `false` when
- * nothing is staged, or the stage is in its handoff (the surface is already
- * on the sandbox): the caller then opens its terminal as it would anyway.
+ * awake, and its create or wake starts when none is running. It takes the
+ * ask while nothing ran, while its run is on its way, or after a failure the
+ * next run starts over from (a new key). A sandbox that is up with settings
+ * that did not apply is awake: its terminal opens there now. Any other
+ * stage (handing off, or stopped where only the line's own actions go on)
+ * leaves the ask to the caller.
  */
 export function startStagedTerminal(
   surfaceKey: string,
   start: (fresh: boolean) => void,
-): boolean {
+): StagedTerminalAsk {
   const current = readStagedSandbox(surfaceKey);
-  if (current === null || current.phase === "handoff") return false;
-  useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
-  if (current.phase === "staged" || current.failure !== null) {
-    start(stagedCreateNeedsFreshKey(current));
+  if (current === null || current.phase === "handoff") {
+    return { kind: "not-taken" };
   }
-  return true;
+  if (current.failure?.kind === "settings" && current.createdHostId !== null) {
+    return { kind: "awake", hostId: current.createdHostId };
+  }
+  const fresh = stagedCreateNeedsFreshKey(current);
+  const running = current.phase === "creating" && current.failure === null;
+  if (!running && current.phase !== "staged" && !fresh) {
+    return { kind: "not-taken" };
+  }
+  useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
+  if (!running) start(fresh);
+  return { kind: "taken" };
 }
 
 /**
@@ -307,7 +329,9 @@ export function useStagedSandboxSend(input: {
  * landing composer resets its workspace to the new host's empty one).
  *
  * Mounted by whatever outlives the sending surface: the composer itself, or
- * a tab-level owner where the surface is a popover.
+ * a tab-level owner where the surface is a popover. A handoff whose sending
+ * draft is gone before it resubmits is dropped (`holdHandoffOwner`), as
+ * `watchOwner` says.
  */
 export function useStagedSandboxHandoff(input: {
   readonly surfaceKey: string | null;
@@ -316,6 +340,8 @@ export function useStagedSandboxHandoff(input: {
   readonly submit: () => boolean;
   readonly prepareHandoff: (hostId: string) => void;
   readonly ownerId: string | null;
+  /** When the draft is gone once this unmounts; stable across renders. */
+  readonly watchOwner: HandoffOwnerWatch;
 }): void {
   const {
     surfaceKey,
@@ -324,8 +350,13 @@ export function useStagedSandboxHandoff(input: {
     submit,
     prepareHandoff,
     ownerId,
+    watchOwner,
   } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
+  useEffect(() => {
+    if (surfaceKey === null) return;
+    return holdHandoffOwner(surfaceKey, ownerId, watchOwner);
+  }, [ownerId, surfaceKey, watchOwner]);
   // Once per handoff.
   const handedOffRef = useRef<string | null>(null);
   const preparedRef = useRef<string | null>(null);
