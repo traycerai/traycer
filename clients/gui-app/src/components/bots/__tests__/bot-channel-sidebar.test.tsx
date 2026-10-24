@@ -1,15 +1,19 @@
 /**
  * The bot tab's sidebar (Tracy Bots, decision 41): every environment is a
  * section, every bot in it a `# name` channel, unread channels are marked, and
- * a section ends with "Add a bot" for that environment. The real sidebar runs
- * over mocked reads and the real bot-tabs store; the create form and the
- * navigation helper are stubs that record what they were given.
+ * a section ends with "Add a bot" for that environment, and a team's section
+ * opens with its onboarding, whose gate locks a new team's chat until its
+ * GitHub set holds a repository. The real sidebar and the real onboarding
+ * gate run over mocked reads and the real bot-tabs store; the create form,
+ * the onboarding card and the navigation helper are stubs that record what
+ * they were given.
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 
 interface IndicatorState {
@@ -19,6 +23,8 @@ interface IndicatorState {
 
 const mocks = vi.hoisted(() => {
   const epics: Record<string, IndicatorState> = {};
+  /** Each team environment's onboarding read, by environment id. */
+  const onboarding: Record<string, BotOnboardingReadResponse> = {};
   return {
     client: { stub: "tab-host-client" },
     navigate: vi.fn(),
@@ -29,6 +35,7 @@ const mocks = vi.hoisted(() => {
       bots: [] as BotRecord[],
       connectable: { hostIds: [] as string[], resolved: true },
       epics,
+      onboarding,
     },
   };
 });
@@ -45,6 +52,22 @@ vi.mock("@/lib/tab-navigation", () => ({
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
+}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "host-tab",
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => true,
+}));
+vi.mock("@/hooks/bots/use-bot-onboarding-query", () => ({
+  useBotOnboardingQuery: (
+    _client: unknown,
+    environmentId: string,
+    enabled: boolean,
+  ) => {
+    const data = enabled ? mocks.state.onboarding[environmentId] : undefined;
+    return { status: data === undefined ? "pending" : "success", data };
+  },
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
@@ -76,6 +99,16 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
   ),
 }));
 
+vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
+  BotOnboardingCard: (props: { environmentId: string; teamName: string }) => (
+    <div
+      data-testid="stub-bot-onboarding-card"
+      data-environment-id={props.environmentId}
+      data-team-name={props.teamName}
+    />
+  ),
+}));
+
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
@@ -93,6 +126,8 @@ function bot(botId: string, environmentId: string, title: string): BotRecord {
     effort: null,
     profile: null,
     directive: null,
+    replyMode: "thread",
+    appConversationChatId: null,
     trunkChatId: `trunk-${botId}`,
     boundHostId: null,
     hostEpoch: 0,
@@ -112,6 +147,27 @@ function environment(
     ownerId: `owner-${environmentId}`,
     roomId: `room-${environmentId}`,
     label,
+  };
+}
+
+function onboarding(input: {
+  readonly unlocked: boolean;
+  readonly chosen: boolean;
+}): BotOnboardingReadResponse {
+  return {
+    github: {
+      state: "ok",
+      installingAdmin: null,
+      repositories: input.unlocked
+        ? [{ repositoryId: "1", fullName: "acme/web", permission: "write" }]
+        : [],
+      callerCanConnect: false,
+    },
+    unlocked: input.unlocked,
+    choice: input.chosen
+      ? { areas: ["flaky-tests"], chosenAt: 1, completedAt: null, pending: [] }
+      : null,
+    catalog: [],
   };
 }
 
@@ -152,6 +208,11 @@ beforeEach(() => {
   ];
   mocks.state.connectable = { hostIds: [TAB_HOST, OTHER_HOST], resolved: true };
   mocks.state.epics = {};
+  // Both teams read as onboarded, so only the onboarding cases lock.
+  mocks.state.onboarding = {
+    "env-team": onboarding({ unlocked: true, chosen: false }),
+    "env-empty": onboarding({ unlocked: true, chosen: false }),
+  };
   useBotTabsStore.setState({ tabs: {} });
 });
 
@@ -296,5 +357,85 @@ describe("<BotChannelSidebar /> Add a bot", () => {
     expect(
       within(orphan).queryByRole("button", { name: "Add a bot" }),
     ).toBeNull();
+  });
+});
+
+describe("<BotChannelSidebar /> team onboarding", () => {
+  it("opens each team section with its onboarding, and no other section", async () => {
+    const user = userEvent.setup();
+    mocks.state.bots = [
+      ...mocks.state.bots,
+      bot("bot-orphan", "env-left", "orphan-bot"),
+    ];
+    mount("bot-release");
+
+    const cards = screen.getAllByTestId("stub-bot-onboarding-card");
+    expect(
+      cards.map((card) => [
+        card.getAttribute("data-environment-id"),
+        card.getAttribute("data-team-name"),
+      ]),
+    ).toEqual([
+      ["env-team", "Acme"],
+      ["env-empty", "Quiet team"],
+    ]);
+    expect(
+      within(section("env-team")).getByTestId("stub-bot-onboarding-card"),
+    ).toBe(cards[0]);
+
+    // A collapsed section hides it with the rest of its body.
+    await user.click(
+      within(section("env-team")).getByRole("button", { name: "Acme" }),
+    );
+    expect(
+      within(section("env-team")).queryByTestId("stub-bot-onboarding-card"),
+    ).toBeNull();
+  });
+
+  it("locks a new team's chat until its GitHub set holds a repository, leaving a team that pre-dates onboarding open", () => {
+    mocks.state.onboarding = {
+      "env-team": onboarding({ unlocked: false, chosen: false }),
+      "env-empty": onboarding({ unlocked: false, chosen: false }),
+    };
+    mount("bot-release");
+
+    // The new team (no bots, no record) offers no "Add a bot".
+    expect(
+      within(section("env-empty")).queryByRole("button", { name: "Add a bot" }),
+    ).toBeNull();
+    // A team with bots and no onboarding record pre-dates onboarding.
+    expect(
+      within(section("env-team")).getByRole("button", { name: "Add a bot" }),
+    ).toBeTruthy();
+    expect(row("bot-triage")).toHaveProperty("disabled", false);
+    expect(
+      within(section("env-me")).getByRole("button", { name: "Add a bot" }),
+    ).toBeTruthy();
+
+    cleanup();
+    mocks.state.onboarding["env-empty"] = onboarding({
+      unlocked: true,
+      chosen: true,
+    });
+    mount("bot-release");
+    expect(
+      within(section("env-empty")).getByRole("button", { name: "Add a bot" }),
+    ).toBeTruthy();
+  });
+
+  it("closes the channels of a team mid-onboarding whose set holds no repository, and offers no create", async () => {
+    const user = userEvent.setup();
+    mocks.state.onboarding["env-team"] = onboarding({
+      unlocked: false,
+      chosen: true,
+    });
+    mount("bot-notes");
+
+    expect(
+      within(section("env-team")).queryByRole("button", { name: "Add a bot" }),
+    ).toBeNull();
+    expect(row("bot-triage")).toHaveProperty("disabled", true);
+    await user.click(row("bot-triage"));
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 });

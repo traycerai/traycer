@@ -187,8 +187,16 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // Entries 1.23–1.32 were regenerated again when the assistant row gained the
 // bot channel's optional `announcement` in place (no release carries 1.23 or
 // above); 1.0–1.22 did not move.
-// Re-captured 1.23–1.32 for the optional chat `opencodeLine` field. Removing
-// only that field reproduces every previous digest; 1.0–1.22 remain unchanged.
+// Entries 1.23–1.32 were regenerated a third time when the assistant row
+// gained the optional `options` (a bot reply's choices) and the announcement
+// kind gained `question` in place (Tracy Bots T46b); 1.0–1.22 did not move.
+// Entries 1.23–1.32 were regenerated a fourth time when a bot channel's rows
+// gained the direct reply mode in place (Tracy Bots T52): a user row's
+// conversation request the optional `direct`, an assistant row the optional
+// `repliesTo`; 1.0–1.22 did not move.
+// Entries 1.23–1.32 were regenerated a fifth time when the chat record gained
+// the optional `opencodeLine` (OpenCode 2) in place, above the T52 fields;
+// 1.0–1.22 did not move.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -283,27 +291,27 @@ const SERVER_FRAME_DIGESTS = {
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
   23: [
-    "e5b2e27d41f3846f43272e5215902d4b51413998a7b6caca40196227f1a08a1a",
-    "663615515f7defc8566c15991bfffb833075c730b037ac525a0adb351693ff15",
+    "9b49c1f10e3d6466e107c806ab2b7453eccf1f013cbbf320162cceb1a3f2fe50",
+    "4718b607511b2c3681a1fbc154c75461e0fdd8dfb8990f64e54eeda67636b755",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "573b2bafe505e1ae9be4a5384d45424ebbca87e17e552dd8696d00beed8e0d93",
-    "1f1f7f493f574f3a1e3a82de1a2bc1ded7c813992a46a9fb4cd0beafc24d0ef7",
+    "a8e7bdc76cb2300c66c469a6492b8adb07645d76a6105fd60a5d761cfb91c0e5",
+    "33586a7c4e1fa1e7c6a911c3e77247385b57b13b1a9b97bdd4609123744a7164",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "00b82e559e1f16064c5cad7c7d8c19ed5b6723d4b0f8f4f5004bd6f894fc2a93",
-    "c362fe0e7036cd93e920148431565ac4e411ec5fef3fcad771206eba65bf4157",
+    "c3e1899377342908bcfb109e2aa28e7969e261a82c03bc860e4ef43a178c581c",
+    "abdb7f21dcf2ba7e042e32fae9ab16882247d2b2dcb7d3eafbf05c75105967c1",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "601cab5c2878a170bdbff57c623ae56d687229749ba41ddca970b7ef9fe8cecc",
-    "8aedc5625da30bca513816a8401397ba6cf2e5fa4dc1d00863d44c2ba45c13b6",
+    "ae408530cd8ab0630a4f2249ffa356f9eeb3d72676d4e08225269a2b714930e9",
+    "f17dc33b4c26dbf3526e8e3208b5dfd65cb390fb9082336a97c9f161f6b9611c",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
   // task-overdue line, with no `signInParked` on a queued prompt and operation
@@ -312,8 +320,8 @@ const SERVER_FRAME_DIGESTS = {
   // one this tree pinned before main's 1.28 landed, and the merged tree's
   // frozen 1.27 reproduces it.
   27: [
-    "718a5e0b8ec90dc01bbe6d5760e0cf8c3f2a1d0a931053d8463db8ac00d8e471",
-    "2564a853950f8db1d31924d17e43695c0dc95a082f4e09ecdbdb76fd1c482d90",
+    "432f8db3f612497bdeb7246e7b53ea93d3c8370d528a942f768ee984479c1941",
+    "5e0641a946079b2ccc015491e60f4c61030a7a8cb6a537f90b286c2966831869",
   ],
   // The sign-in park line (main's 1.28): a queued prompt may carry
   // `signInParked`; operation blocks and events keep the four markdown kinds.
@@ -322,8 +330,8 @@ const SERVER_FRAME_DIGESTS = {
   // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
   // as 1.28–1.30, so the re-mint moved nothing else.
   28: [
-    "8ea94c144ad556d721e0dc1f2bfdb372ad3f735c3f706aa731eb577a5b2f491f",
-    "9adf69f8fae141bbda6f75dba6eeeb902d78a9fafa15d3790cfa446836db6c22",
+    "fc698062791e85b3f8e6f1e98afd600dac007228537554a717d6822c71e9210e",
+    "189fff2706eae3cb5f3fb017b58de8f89c9ec3b0a3918a7f46d3123a7d9d273e",
   ],
   // The delivery line (main's 1.29): a tool block may carry
   // `agentMessageDelivery`; operation blocks and events keep the four markdown
@@ -332,26 +340,26 @@ const SERVER_FRAME_DIGESTS = {
   // stamp gained `targetHostOffline` (traycer#2421): no stable release carries
   // 1.29 or above, and every line through 1.28 reproduces its value.
   29: [
-    "95abb6bee7b950d30abfaa0cef64d314172029c510cdf8902dad4f0b8f0371fa",
-    "88f30cb3fe5fe4b77cb1373c846e1171e251e5ed9658a030b910f8af376a4b0d",
+    "b51a0ae5bd4d505fc7b4433b421abbc4fb81f17ebf56509843468b19a1364b78",
+    "afbc45409c0d97fe09f7e3b5fa2d7c745b183c29fa2b0b4fce08268ecfcae02c",
   ],
   // The html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "50c243c20e8d569c35e3ed52346d0160377342475e74fbef50245469db05bfef",
-    "5cdae278062e70005fc996f6bff44304a9fad11f69cde4c7e792f1e187a37be5",
+    "7e6d7432d4dabce855eee12a745651f7ffcf2b77a27c605226923bb9ab54cdfc",
+    "2ce83228966acdfa0742fabb6942e0863a9a98ee6e70145a7a46c7fc561ecfbb",
   ],
   // The artifact-stamp line, with no canvas annotations. Re-minted above
   // main's 1.29.
   31: [
-    "8ab12ff1d9976a8b5479a746ca5522c540d30cb14a2ed90f0ba53718098d13aa",
-    "358bc97011ec3cd6da6ec032b635e613f5c61ee76dd9fd509306f442691eacb9",
+    "6008cf8bf8423de95af05d9f62026041e694c82a3587325c7ca430ca9e9ab4a7",
+    "b00a57a7ce9a9a648822d76c09e11a4e5756b0a38255324c2182132e304e18d3",
   ],
   // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
   // Re-minted above main's 1.29.
   32: [
-    "40bd1950fa9616569de17c9ccaa0cc9937691ede7fe8c6d2ff8a53c345388a58",
-    "6efca73b21560086bb16e59b0515aec80cf67fca70aec6409c8790d087743b51",
+    "bb99eaf3ff16b63d86cef022d4fb061437738bd9af1b08a769ef3a7f4045cb25",
+    "402f750cc5836980cbbb79a3955341134af3ad79c015e492eac8761b18c753d5",
   ],
 } as const;
 

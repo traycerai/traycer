@@ -3216,6 +3216,10 @@ export const epicSchemaSurfaceBaseline = {
                                 "type": "null"
                               }
                             ]
+                          },
+                          "direct": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
@@ -7092,7 +7096,8 @@ export const epicSchemaSurfaceBaseline = {
                               "proposal",
                               "automation",
                               "bot-created",
-                              "policy"
+                              "policy",
+                              "question"
                             ]
                           },
                           "link": {
@@ -7111,6 +7116,18 @@ export const epicSchemaSurfaceBaseline = {
                           "kind",
                           "link"
                         ]
+                      },
+                      "options": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "repliesTo": {
+                        "type": "string",
+                        "minLength": 1
                       }
                     },
                     "required": [
@@ -13196,6 +13213,10 @@ export const epicSchemaSurfaceBaseline = {
                                 "type": "null"
                               }
                             ]
+                          },
+                          "direct": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
@@ -17184,7 +17205,8 @@ export const epicSchemaSurfaceBaseline = {
                               "proposal",
                               "automation",
                               "bot-created",
-                              "policy"
+                              "policy",
+                              "question"
                             ]
                           },
                           "link": {
@@ -17204,6 +17226,18 @@ export const epicSchemaSurfaceBaseline = {
                           "link"
                         ],
                         "additionalProperties": false
+                      },
+                      "options": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "repliesTo": {
+                        "type": "string",
+                        "minLength": 1
                       }
                     },
                     "required": [

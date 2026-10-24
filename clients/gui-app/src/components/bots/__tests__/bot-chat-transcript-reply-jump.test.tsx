@@ -21,6 +21,7 @@ import {
   type Mock,
 } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type {
   AgentSender,
   ContentBlock,
@@ -128,7 +129,10 @@ vi.mock("@/components/chat/chat-messages", async () => {
   };
 });
 
-import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import {
+  BotChatTranscript,
+  type BotTranscriptSurface,
+} from "@/components/bots/bot-chat-transcript";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -242,7 +246,15 @@ function createReplyJumpStore(
   }));
 }
 
-function mountTranscript(messages: ReadonlyArray<Message>): {
+const THREAD_SURFACE: BotTranscriptSurface = {
+  kind: "thread",
+  chooseOption: vi.fn(),
+};
+
+function mountTranscript(
+  messages: ReadonlyArray<Message>,
+  surface: BotTranscriptSurface,
+): {
   readonly rerender: () => void;
 } {
   store = createReplyJumpStore(messages);
@@ -255,7 +267,7 @@ function mountTranscript(messages: ReadonlyArray<Message>): {
         hostId="host-1"
         title="Release Bot"
         instanceId="bot-thread:test"
-        surface={{ kind: "thread" }}
+        surface={surface}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
       />
     </StrictMode>
@@ -282,7 +294,7 @@ afterEach(() => {
 describe("<BotChatTranscript /> See reply", () => {
   it("scrolls to the projected reply ROW key, never the reply's message id", async () => {
     const user = userEvent.setup();
-    mountTranscript([resolvedUserMessage(), reply()]);
+    mountTranscript([resolvedUserMessage(), reply()], THREAD_SURFACE);
     expect(scrollStub().getAttribute("data-scroll-kind")).toBe("none");
 
     await user.click(screen.getByTestId("conversation-request-reply-link"));
@@ -309,28 +321,31 @@ describe("<BotChatTranscript /> See reply", () => {
   it("scrolls to the folded row when the reply is one record of a multi-record turn", async () => {
     const user = userEvent.setup();
     const request = resolvedUserMessage();
-    mountTranscript([
-      {
-        ...request,
-        conversationRequest: {
-          requestId: "req-1",
-          resolvedAt: 1_000,
-          resolvedByMessageId: "reply-first",
+    mountTranscript(
+      [
+        {
+          ...request,
+          conversationRequest: {
+            requestId: "req-1",
+            resolvedAt: 1_000,
+            resolvedByMessageId: "reply-first",
+          },
         },
-      },
-      assistantMessage({
-        messageId: "reply-first",
-        turnId: "turn-1",
-        timestamp: 2_000,
-        text: "First part",
-      }),
-      assistantMessage({
-        messageId: "reply-last",
-        turnId: "turn-1",
-        timestamp: 2_100,
-        text: "Second part",
-      }),
-    ]);
+        assistantMessage({
+          messageId: "reply-first",
+          turnId: "turn-1",
+          timestamp: 2_000,
+          text: "First part",
+        }),
+        assistantMessage({
+          messageId: "reply-last",
+          turnId: "turn-1",
+          timestamp: 2_100,
+          text: "Second part",
+        }),
+      ],
+      THREAD_SURFACE,
+    );
 
     await user.click(screen.getByTestId("conversation-request-reply-link"));
 
@@ -346,7 +361,7 @@ describe("<BotChatTranscript /> See reply", () => {
 
   it("holds an absent reply, locates it, requests its ordinal, then scrolls once its row appears", async () => {
     const user = userEvent.setup();
-    const view = mountTranscript([resolvedUserMessage()]);
+    const view = mountTranscript([resolvedUserMessage()], THREAD_SURFACE);
     requestTranscriptOrdinal.mockClear();
     mocks.locateRow.mockClear();
 
@@ -379,5 +394,179 @@ describe("<BotChatTranscript /> See reply", () => {
     expect(mocks.locateRow).toHaveBeenLastCalledWith(
       expect.objectContaining({ target: null }),
     );
+  });
+});
+
+describe("<BotChatTranscript /> in the channel", () => {
+  const QUESTION_ID = "question-1";
+
+  function question(options: ReadonlyArray<string> | null): Message {
+    const base: Extract<Message, { role: "assistant" }> = {
+      ...assistantMessage({
+        messageId: QUESTION_ID,
+        turnId: null,
+        timestamp: 2_000,
+        text: "Which environment?",
+      }),
+      announcement: { kind: "question", link: null },
+    };
+    return options === null ? base : { ...base, options: [...options] };
+  }
+
+  function channelSurface(
+    openAnnouncementThread: ((announcementId: string) => void) | null,
+    chooseOption: ((choice: string) => void) | null,
+  ): BotTranscriptSurface {
+    return {
+      kind: "channel",
+      threadLine: () => null,
+      openThread: null,
+      openAnnouncementThread,
+      chooseOption,
+    };
+  }
+
+  it("opens a question's thread from the thread line under its row, by the record's message id", async () => {
+    const user = userEvent.setup();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    mountTranscript(
+      [question(null)],
+      channelSurface(openAnnouncementThread, null),
+    );
+
+    const line = screen.getByTestId("bot-thread-line");
+    expect(within(line).getByText("Reply in thread")).toBeTruthy();
+    await user.click(line);
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID);
+  });
+
+  it("draws a question's options as buttons that cannot be clicked in the channel", () => {
+    mountTranscript(
+      [question(["Staging", "Production"])],
+      channelSurface(vi.fn(), null),
+    );
+
+    const buttons = within(
+      screen.getByTestId("bot-reply-options"),
+    ).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Staging",
+      "Production",
+    ]);
+    expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("<BotChatTranscript /> a bot that answers posts in the channel", () => {
+  const POST_ID = "ask-1";
+
+  const DIRECT_REQUEST: ConversationRequest = {
+    requestId: "req-1",
+    resolvedAt: 1_000,
+    resolvedByMessageId: REPLY_ID,
+    direct: true,
+  };
+
+  function directPost(
+    request: ConversationRequest,
+  ): Extract<Message, { role: "user" }> {
+    return { ...resolvedUserMessage(), conversationRequest: request };
+  }
+
+  function directReply(
+    options: ReadonlyArray<string> | null,
+  ): Extract<Message, { role: "assistant" }> {
+    const base: Extract<Message, { role: "assistant" }> = {
+      ...reply(),
+      repliesTo: POST_ID,
+    };
+    return options === null ? base : { ...base, options: [...options] };
+  }
+
+  function channel(
+    chooseOption: ((choice: string) => void) | null,
+  ): BotTranscriptSurface {
+    return {
+      kind: "channel",
+      threadLine: () => null,
+      openThread: vi.fn(),
+      openAnnouncementThread: vi.fn(),
+      chooseOption,
+    };
+  }
+
+  it("names the post a reply answers by its sender and first line, and lands the list on that post's row", async () => {
+    const user = userEvent.setup();
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(null)],
+      channel(null),
+    );
+
+    const line = screen.getByTestId("bot-replied-post");
+    expect(within(line).getByText("Please review")).toBeTruthy();
+    const postRow = within(scrollStub())
+      .getByTestId("bot-member-row")
+      .closest("[data-row-id]");
+    expect(postRow).not.toBeNull();
+    expect(scrollStub().getAttribute("data-scroll-kind")).toBe("none");
+
+    await user.click(line);
+
+    expect(scrollStub().getAttribute("data-scroll-kind")).toBe("message");
+    expect(scrollStub().getAttribute("data-scroll-row-id")).toBe(
+      postRow?.getAttribute("data-row-id"),
+    );
+  });
+
+  it("lands the list on the reply in the channel from a direct post's See reply", async () => {
+    const user = userEvent.setup();
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(null)],
+      channel(null),
+    );
+
+    await user.click(screen.getByTestId("conversation-request-reply-link"));
+
+    expect(scrollStub().getAttribute("data-scroll-row-id")).toBe(
+      "assistant:ts:2000",
+    );
+  });
+
+  it("offers no See reply on a resolved post that is not direct, whose verdict is in its thread", () => {
+    mountTranscript([resolvedUserMessage(), reply()], channel(vi.fn()));
+
+    expect(
+      screen
+        .getByTestId("conversation-request")
+        .getAttribute("data-request-state"),
+    ).toBe("resolved");
+    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+  });
+
+  it("posts the option a person clicks under a direct reply through the channel surface", async () => {
+    const user = userEvent.setup();
+    const chooseOption = vi.fn<(choice: string) => void>();
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(["Staging", "Production"])],
+      channel(chooseOption),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Production" }));
+
+    expect(chooseOption).toHaveBeenCalledTimes(1);
+    expect(chooseOption).toHaveBeenCalledWith("Production");
+  });
+
+  it("names no replied post in a thread, whose rows answer within it", () => {
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(null)],
+      THREAD_SURFACE,
+    );
+
+    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
   });
 });

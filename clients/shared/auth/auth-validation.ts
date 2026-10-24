@@ -651,6 +651,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Whether a 403/404 refresh answer is authn's own refusal of THIS request, as
+ * opposed to a 403/404 minted by whatever else answered on authn's URL.
+ *
+ * authn serializes every refusal through one error handler
+ * (`authn-v3/src/plugins/error-handler.ts`) as `{ statusCode, error }`: a
+ * deleted user's refresh is a 404 whose body is
+ * `{ "statusCode": 404, "error": "User not found" }`. Nothing else that can
+ * answer a 404 on that URL produces that shape:
+ *
+ * - a gateway, a reverse proxy, a wrong base URL or another process holding
+ *   authn's port answers with an empty, HTML or unrelated body. A dev stack
+ *   whose authn port was held by a WebSocket capture proxy answered exactly
+ *   this - `Content-Length: 0` - and every renderer on it concluded the account
+ *   had been deleted, latched, and sent the person to sign in with "a different
+ *   account" on a stack that had no sign-in service either;
+ * - Fastify's own route-not-found, a deployment that lacks the route, answers
+ *   `{ message, error: "Not Found", statusCode }`. authn's handler never emits
+ *   `message`, and a missing route is a statement about the deployment, not the
+ *   account.
+ *
+ * `statusCode` is checked against the status actually answered so a cached or
+ * replayed envelope for some other status cannot pass as this one.
+ */
+async function isAuthnRefusal(response: Response): Promise<boolean> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(payload) &&
+    payload.statusCode === response.status &&
+    typeof payload.error === "string" &&
+    !("message" in payload)
+  );
+}
+
+/**
  * Reads the additive `revocation_scope` off a `needs_reauth` refresh reject.
  *
  * authn stamps it ONLY on the per-user epoch gate — the routine "sign out
@@ -752,8 +791,17 @@ async function refreshAuthTokenOnceViaHttp(
   // fix, while retaining read access to already-on-disk data slightly past a
   // termination is mild. 409 is handled above (mid-rotation, retriable) and
   // every other non-2xx falls through to `network-error`, which also holds.
+  //
+  // The account verdict is TERMINAL three layers up (the renderer latches it,
+  // stops recovering, and tells the person their account is gone), so the
+  // status alone is not enough evidence for it: a 404 is also what answers
+  // when nothing at the URL is authn at all. The body decides - see
+  // `isAuthnRefusal`. Without authn's own answer behind it a 403/404 is an
+  // outage, which holds and keeps recovering like every other one.
   if (response.status === 403 || response.status === 404) {
-    return { kind: "rejected", rejection: { kind: "account" } };
+    return (await isAuthnRefusal(response))
+      ? { kind: "rejected", rejection: { kind: "account" } }
+      : { kind: "network-error" };
   }
 
   if (response.status === 400 || response.status === 401) {

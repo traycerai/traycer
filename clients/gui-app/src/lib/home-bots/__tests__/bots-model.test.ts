@@ -52,6 +52,8 @@ function bot(
     createdAt: 1_000,
     archivedAt,
     directive: null,
+    replyMode: "thread",
+    appConversationChatId: null,
   };
 }
 
@@ -71,6 +73,7 @@ function trackingTask(
     nextAt,
     state: "tracking",
     endedReason: null,
+    createdByUserId: null,
   };
 }
 
@@ -83,6 +86,7 @@ function endedTask(taskId: string, lastCheckinAt: number | null): BotTaskEntry {
     nextAt: null,
     state: "ended",
     endedReason: "by-bot",
+    createdByUserId: null,
   };
 }
 
@@ -97,6 +101,7 @@ function snapshot(input: {
     bot: input.record,
     tasks: input.tasks,
     openRequestCount: input.openRequestCount,
+    conversationsRevision: null,
     boundHost: { hostId: input.hostId, epoch: 2, isThisHost: input.isThisHost },
   };
 }

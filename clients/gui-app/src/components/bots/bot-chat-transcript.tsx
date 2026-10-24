@@ -7,7 +7,7 @@ import {
 } from "react";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { replyRowIdFor } from "@/lib/bots/reply-row";
+import { repliedPostOf, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
   botUserSenderLabel,
@@ -67,8 +67,18 @@ export type BotTranscriptSurface =
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
       /** Opens a post's thread; `null` where threads cannot be opened. */
       readonly openThread: ((postMessageId: string) => void) | null;
+      /** Opens the thread under a question, a proposal or a direct post; `null` where threads cannot be opened. */
+      readonly openAnnouncementThread:
+        | ((announcementId: string) => void)
+        | null;
+      /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
+      readonly chooseOption: ((choice: string) => void) | null;
     }
-  | { readonly kind: "thread" };
+  | {
+      readonly kind: "thread";
+      /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
+      readonly chooseOption: ((choice: string) => void) | null;
+    };
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
@@ -339,18 +349,25 @@ function BotChatTranscriptBody(props: {
       return {
         botTitle: title,
         scrollToMessage,
+        repliedPost: null,
         threadLine: null,
         openThread: null,
+        openAnnouncementThread: null,
+        chooseOption: surface.chooseOption,
       };
     }
     return {
       botTitle: title,
-      // A post's verdict is in its thread, which the thread line opens.
-      scrollToMessage: null,
+      // A thread post's verdict is in its thread, which the thread line
+      // opens; a direct post's reply, and the post it answers, are here.
+      scrollToMessage,
+      repliedPost: (messageId) => repliedPostOf(messages, messageId),
       threadLine: surface.threadLine,
       openThread: surface.openThread,
+      openAnnouncementThread: surface.openAnnouncementThread,
+      chooseOption: surface.chooseOption,
     };
-  }, [scrollToMessage, surface, title]);
+  }, [messages, scrollToMessage, surface, title]);
 
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow

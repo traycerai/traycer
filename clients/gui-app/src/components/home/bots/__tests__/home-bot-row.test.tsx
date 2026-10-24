@@ -77,6 +77,8 @@ const BOT: BotRecord = {
   createdAt: 1_000,
   archivedAt: null,
   directive: null,
+  replyMode: "thread",
+  appConversationChatId: null,
 };
 
 interface Mount {
@@ -130,6 +132,7 @@ function mountRow(input: Mount): void {
         environmentOwnerKind={input.environmentOwnerKind}
         createdBy={input.createdBy}
         isMain={input.isMain}
+        entryLocked={false}
       />
     </StrictMode>,
   );
@@ -262,6 +265,7 @@ describe("<HomeBotRow /> state", () => {
       bot: { ...BOT, boundHostId: null, hostEpoch: 2 },
       tasks: [],
       openRequestCount: 0,
+      conversationsRevision: null,
       boundHost: { hostId: null, epoch: 2, isThisHost: false },
     };
     mountRow(OWN_AND_DIALABLE);

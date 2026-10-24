@@ -24,6 +24,7 @@ import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import {
   useBotCostsQuery,
   type BotCosts,
+  type BotCostsEnvironmentBot,
 } from "@/hooks/bots/use-bot-costs-query";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
@@ -73,9 +74,10 @@ export function BotUnderTheHoodPanel(props: {
    * show, so a placeholder stands in for them. The task list comes from the
    * stream snapshot and keeps rendering. */
   readonly paused: boolean;
-  /** The bot's environment, named on its cost line, and every bot in it. */
+  /** The bot's environment, named on its cost line, and every bot in it
+   * (`null` while the bot list is not read). */
   readonly environmentLabel: string;
-  readonly environmentBotIds: ReadonlyArray<string>;
+  readonly environmentBots: ReadonlyArray<BotCostsEnvironmentBot> | null;
   /** The thread session whose transcript is shown; `null` shows the trunk. */
   readonly sessionChatId: string | null;
   readonly onSelectSession: (sessionChatId: string | null) => void;
@@ -89,7 +91,7 @@ export function BotUnderTheHoodPanel(props: {
     openRequestCount,
     paused,
     environmentLabel,
-    environmentBotIds,
+    environmentBots,
     sessionChatId,
     onSelectSession,
   } = props;
@@ -100,7 +102,6 @@ export function BotUnderTheHoodPanel(props: {
   const threadListEnabled = !paused && threadListSupported;
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: threadListEnabled,
-    poll: false,
   });
   const threads = threadList.data?.threads ?? EMPTY_THREADS;
   const shownThread =
@@ -111,9 +112,10 @@ export function BotUnderTheHoodPanel(props: {
   const usageSupported = useUsageSummarySupported(hostId);
   const costs = useBotCostsQuery(client, {
     botId,
-    trunkChatId,
-    environmentBotIds,
-    enabled: usageSupported,
+    hostId,
+    threadList: threadList.data,
+    environmentBots,
+    enabled: usageSupported && threadListSupported,
   });
   return (
     <div className="@container flex min-h-0 flex-1 flex-col">
@@ -192,8 +194,8 @@ function threadExcerpt(thread: BotThreadSummary): string {
 }
 
 /**
- * What the bot has cost and what its environment has, as the usage the
- * person can see records it; no figure per person (decision 43).
+ * What the bot has cost and what its environment's bots have, every
+ * member's turns; no figure per person (decision 43).
  */
 function BotCostSection(props: {
   readonly costs: BotCosts;

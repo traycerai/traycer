@@ -8,7 +8,10 @@ export const botMutationKeys = {
   create: () => ["bot.create"] as const,
   updateTitle: () => ["bot.updateTitle"] as const,
   updateRunSettings: () => ["bot.updateRunSettings"] as const,
+  updateReplyMode: () => ["bot.updateReplyMode"] as const,
   delete: () => ["bot.delete"] as const,
   open: () => ["bot.open"] as const,
   conversationSend: () => ["bot.conversation.send"] as const,
+  onboardingChoose: () => ["bot.onboarding.choose"] as const,
+  onboardingComplete: () => ["bot.onboarding.complete"] as const,
 };

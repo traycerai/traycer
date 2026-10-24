@@ -15,6 +15,8 @@ const BOT_ROW = {
   effort: null,
   profile: null,
   directive: null,
+  appConversationChatId: null,
+  replyMode: "direct",
   trunkChatId: "chat-1",
   boundHostId: "host-1",
   hostEpoch: 0,
@@ -72,5 +74,42 @@ describe("bot.list@1.1 main bot ids", () => {
         botListV11.responseSchema.safeParse({ bots: [], mainBotIds }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe("bot.list rows' app conversation", () => {
+  it("reads a row from a host that predates the field as naming no conversation", () => {
+    const olderRow = Object.fromEntries(
+      Object.entries(BOT_ROW).filter(
+        ([key]) => key !== "appConversationChatId",
+      ),
+    );
+    const [row] = botListV11.responseSchema.parse({
+      bots: [olderRow],
+      mainBotIds: null,
+    }).bots;
+
+    expect(row?.appConversationChatId).toBeNull();
+  });
+
+  it("reads a row from a host that predates the reply mode as answering in threads", () => {
+    const olderRow = Object.fromEntries(
+      Object.entries(BOT_ROW).filter(([key]) => key !== "replyMode"),
+    );
+    const [row] = botListV11.responseSchema.parse({
+      bots: [olderRow],
+      mainBotIds: null,
+    }).bots;
+
+    expect(row?.replyMode).toBe("thread");
+  });
+
+  it("keeps the conversation a row names", () => {
+    const [row] = botListV11.responseSchema.parse({
+      bots: [{ ...BOT_ROW, appConversationChatId: "conversation-app" }],
+      mainBotIds: null,
+    }).bots;
+
+    expect(row?.appConversationChatId).toBe("conversation-app");
   });
 });

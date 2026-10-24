@@ -1,4 +1,5 @@
 import { createContext } from "react";
+import type { ChatBotRepliedPost } from "@/lib/bots/reply-row";
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
@@ -25,11 +26,19 @@ export interface ChatBotPresentation {
   /** The bot's name on its rows: the current title, so a rename shows at once. */
   readonly botTitle: string;
   /**
-   * Lands the list on the reply that resolved a request, by its message id;
-   * `null` where the reply is not in this list (a channel post's verdict is
-   * in its thread, reached through the thread line).
+   * Lands the list on a message by its id: the reply that resolved a
+   * request, or the post a direct reply answers. In the channel only a
+   * direct post's reply is in the list; a thread post's verdict is in its
+   * thread, reached through the thread line.
    */
   readonly scrollToMessage: ((messageId: string) => void) | null;
+  /**
+   * The post a bot's direct reply answers, by its message id, as the reply's
+   * line names it; `null` when the post is not in the list, and in a thread.
+   */
+  readonly repliedPost:
+    | ((messageId: string) => ChatBotRepliedPost | null)
+    | null;
   /**
    * The thread line under a channel post, by the post's message id; `null`
    * in a thread, where messages open no thread, and for a post whose thread
@@ -40,6 +49,18 @@ export interface ChatBotPresentation {
     | null;
   /** Opens the thread of a channel post; `null` in a thread. */
   readonly openThread: ((postMessageId: string) => void) | null;
+  /**
+   * Opens the thread under a question, a proposal or a direct post, by the
+   * row's message id: its thread when it has one, else a box whose first
+   * reply opens it. `null` in a thread.
+   */
+  readonly openAnnouncementThread: ((announcementId: string) => void) | null;
+  /**
+   * Posts one of a bot reply's options as the person's next message: in the
+   * thread, or a new post in the channel for a direct reply's; `null` where
+   * nothing can post it.
+   */
+  readonly chooseOption: ((choice: string) => void) | null;
 }
 
 export const ChatBotPresentationContext =

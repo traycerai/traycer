@@ -26,6 +26,7 @@ import {
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
+  botUpdateReplyModeRequestSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -36,6 +37,14 @@ import {
   botThreadListRequestSchema,
   botThreadListResponseSchema,
 } from "./conversation-schemas";
+import {
+  botOnboardingChooseRequestSchema,
+  botOnboardingChooseResponseSchema,
+  botOnboardingCompleteRequestSchema,
+  botOnboardingCompleteResponseSchema,
+  botOnboardingReadRequestSchema,
+  botOnboardingReadResponseSchema,
+} from "./onboarding-schemas";
 
 /**
  * The `bot.*` namespace (Tracy Bots, T5). Brand-new v1.0 methods, none on
@@ -109,6 +118,13 @@ export const botUpdateDirectiveV10 = defineRpcContract({
   responseSchema: botUpdateResponseSchema,
 });
 
+export const botUpdateReplyModeV10 = defineRpcContract({
+  method: "bot.updateReplyMode",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateReplyModeRequestSchema,
+  responseSchema: botUpdateResponseSchema,
+});
+
 export const botDeleteV10 = defineRpcContract({
   method: "bot.delete",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -167,6 +183,34 @@ export const botThreadListV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botThreadListRequestSchema,
   responseSchema: botThreadListResponseSchema,
+});
+
+/**
+ * `bot.onboarding.*@1.0` (T48): a team environment's onboarding. The read
+ * and the choice answer from any host (the set is authn's, the choice the
+ * cloud's); the completion creates the chosen bots on the serving host, so
+ * the client sends it to a host the bots may run on. Same optional posture
+ * as the namespace.
+ */
+export const botOnboardingReadV10 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchema,
+});
+
+export const botOnboardingChooseV10 = defineRpcContract({
+  method: "bot.onboarding.choose",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOnboardingChooseRequestSchema,
+  responseSchema: botOnboardingChooseResponseSchema,
+});
+
+export const botOnboardingCompleteV10 = defineRpcContract({
+  method: "bot.onboarding.complete",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOnboardingCompleteRequestSchema,
+  responseSchema: botOnboardingCompleteResponseSchema,
 });
 
 /**

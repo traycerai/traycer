@@ -400,6 +400,13 @@ export const conversationRequestSchema = lazySchema(() =>
     requestId: z.string().min(1),
     resolvedAt: z.number().nullable(),
     resolvedByMessageId: z.string().nullable(),
+    /**
+     * `true` on a top-level post its bot answers itself, at the channel's
+     * top level (reply mode `direct`): no thread opens for it, and a member
+     * may open one by replying under it. Absent on every other row, a post
+     * whose thread opened with it included.
+     */
+    direct: z.literal(true).optional(),
   }),
 );
 export type ConversationRequest = z.infer<typeof conversationRequestSchema>;
@@ -542,9 +549,13 @@ export const assistantTurnProfileSchema = lazySchema(() =>
 );
 export type AssistantTurnProfile = z.infer<typeof assistantTurnProfileSchema>;
 
-/** What a bot announces at its channel's top level (Tracy Bots, decision 41). */
+/**
+ * What a bot announces at its channel's top level (Tracy Bots, decision 41).
+ * `question` is the trunk's ask of a person (decisions 55, 56): an
+ * automation's question the trunk could not settle itself.
+ */
 export const botAnnouncementKindSchema = lazySchema(() =>
-  z.enum(["proposal", "automation", "bot-created", "policy"]),
+  z.enum(["proposal", "automation", "bot-created", "policy", "question"]),
 );
 export type BotAnnouncementKind = z.infer<typeof botAnnouncementKindSchema>;
 
@@ -668,6 +679,21 @@ export const assistantMessageSchema = lazySchema(() =>
      * `turnProfile` reason above, and live line only for the same reason.
      */
     announcement: botAnnouncementSchema.optional(),
+    /**
+     * The choices a bot's thread reply offers the person (Tracy Bots,
+     * decision 56), shown as clickable choices; a chosen one is posted as an
+     * ordinary thread message. Present only on a thread reply that asks;
+     * absent everywhere else. Optional and live line only, as `turnProfile`.
+     */
+    options: z.array(z.string().min(1)).min(1).optional(),
+    /**
+     * The member's post a bot's direct reply answers, by its message id
+     * (Tracy Bots, reply mode `direct`). Present only on a bot reply at a
+     * channel's top level; absent everywhere else. Optional and live line
+     * only, as `turnProfile`. Not the agent sender's `inReplyTo`, which
+     * names an agent-to-agent message.
+     */
+    repliesTo: z.string().min(1).optional(),
   }),
 );
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;

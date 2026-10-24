@@ -145,6 +145,8 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   conversationRequest: (a, b) =>
     a.conversationRequest === b.conversationRequest,
   announcement: (a, b) => a.announcement === b.announcement,
+  options: (a, b) => a.options === b.options,
+  repliesTo: (a, b) => a.repliesTo === b.repliesTo,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,
   agentSenderInfo: (a, b) => a.agentSenderInfo === b.agentSenderInfo,
