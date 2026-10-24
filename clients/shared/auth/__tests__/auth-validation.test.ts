@@ -317,6 +317,76 @@ describe("refreshOnceAbortable", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("maps authn's own 404 - its error envelope on the body - to an ACCOUNT rejection", async () => {
+    // The shape authn's error handler gives a deleted user's refresh: a
+    // `UserNotFoundError` serialized as `{ statusCode, error }`. This is the
+    // one 404 that is a verdict about the account.
+    installMockFetch([
+      { status: 404, body: { statusCode: 404, error: "User not found" } },
+    ]);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      clientKind: null,
+      signal: null,
+    });
+
+    expect(result).toEqual({
+      kind: "rejected",
+      rejection: { kind: "account" },
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "an empty 404 from another process on authn's port",
+      spec: { status: 404, body: "" },
+    },
+    {
+      name: "Fastify's route-not-found (a deployment without the route)",
+      spec: {
+        status: 404,
+        body: {
+          message: "Route POST:/api/v3/auth/refresh not found",
+          error: "Not Found",
+          statusCode: 404,
+        },
+      },
+    },
+    {
+      name: "a gateway's HTML 403",
+      spec: { status: 403, body: "<html><body>Forbidden</body></html>" },
+    },
+    {
+      name: "an envelope answered for a different status than the one sent",
+      spec: { status: 404, body: { statusCode: 401, error: "Unauthorized" } },
+    },
+  ])(
+    "maps $name to network-error, never to an account verdict",
+    async ({ spec }) => {
+      // The account verdict latches the renderer and tells the person their
+      // account is gone, so a 403/404 that authn did not answer must hold and
+      // keep recovering exactly like an outage. One of these - the empty 404 -
+      // is what a dev stack answered when a capture proxy held authn's port,
+      // and every renderer on it reported a deleted account.
+      installMockFetch([spec]);
+
+      const result = await refreshOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "stale-bearer",
+        refreshToken: "stale-refresh",
+        clientKind: null,
+        signal: null,
+      });
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(1);
+    },
+  );
+
   it("makes exactly one attempt on a transient 5xx (no retry → no double-spend)", async () => {
     // installMockFetch replays the last spec for every call, so a retry would
     // surface as calls.length > 1. The single-attempt property is what keeps a

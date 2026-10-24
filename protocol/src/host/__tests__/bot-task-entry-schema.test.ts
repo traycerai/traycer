@@ -14,6 +14,7 @@ const TRACKING_EVERY: BotTaskEntry = {
   nextAt: 1_760_001_800_000,
   state: "tracking",
   endedReason: null,
+  createdByUserId: null,
 };
 
 const TRACKING_ON_COMPLETION: BotTaskEntry = {
@@ -24,6 +25,7 @@ const TRACKING_ON_COMPLETION: BotTaskEntry = {
   nextAt: null,
   state: "tracking",
   endedReason: null,
+  createdByUserId: null,
 };
 
 function issuePaths(entry: BotTaskEntry): string[] {
@@ -153,6 +155,7 @@ function snapshotFrame(
   readonly bot: object;
   readonly tasks: readonly BotTaskEntry[];
   readonly openRequestCount: number | null;
+  readonly conversationsRevision: number | null;
   readonly boundHost: object;
   readonly hasBinaryPayload: false;
 } {
@@ -173,9 +176,11 @@ function snapshotFrame(
       createdAt: 1_760_000_000_000,
       archivedAt: null,
       directive: null,
+      appConversationChatId: null,
     },
     tasks,
     openRequestCount,
+    conversationsRevision: 0,
     boundHost: { hostId: "host-1", epoch: 0, isThisHost: true },
     hasBinaryPayload: false,
   };
@@ -354,6 +359,23 @@ const LAST_CHECKIN: BotTaskLastCheckin = {
     },
   },
 };
+
+describe("botTaskEntrySchema createdByUserId", () => {
+  it("carries the member who set the task up", () => {
+    const parsed = botTaskEntrySchema.parse({
+      ...TRACKING_EVERY,
+      createdByUserId: "member-1",
+    });
+
+    expect(parsed.createdByUserId).toBe("member-1");
+  });
+
+  it("reads an entry from a host that predates the field as naming nobody", () => {
+    const { createdByUserId: _omitted, ...withoutField } = TRACKING_EVERY;
+
+    expect(botTaskEntrySchema.parse(withoutField).createdByUserId).toBeNull();
+  });
+});
 
 describe("botTaskEntrySchema lastCheckin", () => {
   it("accepts an entry carrying a full last check-in", () => {

@@ -757,6 +757,12 @@ export interface ChatMessage {
    */
   announcement?: BotAnnouncement;
   /**
+   * The choices a bot's thread reply offers the person (Tracy Bots, decision
+   * 56), each a button that posts it as their next message in the thread.
+   * Absent on every other row.
+   */
+  options?: ReadonlyArray<string>;
+  /**
    * The picture of the member who wrote this user row, in a bot
    * conversation whose member directory knows one. Absent on every other
    * row, and on a member with no picture.

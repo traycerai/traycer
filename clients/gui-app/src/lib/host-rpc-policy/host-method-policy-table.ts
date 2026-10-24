@@ -1662,11 +1662,23 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A read of the bound host's thread records. Polled (`poll: true`) only by
-  // the channel on screen, so a thread's reply count and last reply move
-  // while the person watches; a `bot.subscribe` signal on thread replies,
-  // once the host sends one, replaces the poll.
-  "bot.thread.list": { ...LATEST_SCHEDULING, poll: ON_SCREEN_FIXED_POLL },
+  // A read of the bound host's thread records, never polled: the bot's
+  // `bot.subscribe` snapshot moves `conversationsRevision` on every row
+  // written there, and the subscription reads the listing again then.
+  "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
+  // A team's onboarding (T48): the read is refetched when its card mounts or
+  // a choice or completion lands; the two writes persist, so they queue.
+  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.onboarding.choose": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.onboarding.complete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Unary byte channel, same posture as `epic.readChatAttachment` - but the
   // only one of the drafts methods whose BODY is megabytes rather than KB, so
   // it is also the only one that declares a budget. The value is declared once

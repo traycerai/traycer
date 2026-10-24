@@ -28,12 +28,19 @@ import {
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
+import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
+import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotOpenThread,
+} from "@/components/bots/bot-channel-view";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
@@ -65,6 +72,13 @@ function isBotTabView(value: string): value is BotTabView {
  *   away): the full tab;
  * - nobody can serve it from here: the paused state, which names no machine;
  *   the channel list and a queued post keep working through this host.
+ *
+ * While its team's onboarding locks the team's chat (`teamOnboardingGate`,
+ * as the sidebar's channel rows read it) the tab is not opened and shows the
+ * onboarding instead of the channel, so a restored tab or a direct
+ * navigation is no way around the lock. Until the gate is known - the bot
+ * and environment lists and the onboarding read answered - the tab neither
+ * opens nor shows the channel.
  *
  * Laid out as Slack is (decision 41): the person's environments and their
  * bots as channels down the side, and the bot's channel beside them, with
@@ -124,6 +138,12 @@ function BotTabBody(props: {
   const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
   const [view, setView] = useState<BotTabView>("messages");
 
+  const botList = useBotListQuery(client, true);
+  const listedBots = botList.data?.bots;
+  const environments = useEnvironmentListQuery(client, true);
+  const onboarding = useBotTeamOnboarding(botId, hostId, botList, environments);
+  const clear = onboarding.kind === "clear";
+
   // Open once per (bot, tab host) - this body remounts with the host - and
   // again on Retry or when the tab comes back into view. A mutation, not a
   // query: an open may claim the bot onto this host, which a background
@@ -148,8 +168,8 @@ function BotTabBody(props: {
     [botId, openBot],
   );
   useEffect(() => {
-    reopen();
-  }, [reopen]);
+    if (clear) reopen();
+  }, [clear, reopen]);
 
   const openState = botTabOpenState({
     response: answer,
@@ -171,11 +191,9 @@ function BotTabBody(props: {
   // that no longer carries the bot, which is how a delete made while this
   // stream was down reaches the tab, and how a `bot.open` that found no bot
   // does (every open invalidates the list).
-  const botList = useBotListQuery(client, true);
   // A teammate's rename, claim or delete reaches the list (and so this tab)
   // without waiting for focus, through the tab's own host.
   useBotListChangedSubscriptionForHost(hostId, true);
-  const listedBots = botList.data?.bots;
   const goneFromList =
     listedBots !== undefined && !listedBots.some((bot) => bot.botId === botId);
   useEffect(() => {
@@ -196,9 +214,9 @@ function BotTabBody(props: {
   // mounted, hidden).
   const { resubscribe } = subscription;
   const refresh = useCallback(() => {
-    reopen();
+    if (clear) reopen();
     resubscribe();
-  }, [reopen, resubscribe]);
+  }, [clear, reopen, resubscribe]);
   const paneVisible = usePaneVisible();
   const wasVisibleRef = useRef(paneVisible);
   useEffect(() => {
@@ -219,6 +237,21 @@ function BotTabBody(props: {
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
 
+  if (onboarding.kind === "locked") {
+    return (
+      <div
+        className="flex h-full justify-center overflow-y-auto p-4"
+        data-testid="bot-tab-onboarding"
+      >
+        <div className="flex w-full max-w-md flex-col">
+          <LockedTeamOnboarding
+            {...onboarding.team}
+            connectable={connectable}
+          />
+        </div>
+      </div>
+    );
+  }
   if (openState.kind === "failed") {
     return (
       <ErrorNotice
@@ -238,7 +271,11 @@ function BotTabBody(props: {
       />
     );
   }
-  if (snapshot === null || openState.kind === "opening") {
+  if (
+    onboarding.kind === "settling" ||
+    snapshot === null ||
+    openState.kind === "opening"
+  ) {
     return (
       <div
         className="flex h-full items-center justify-center text-muted-foreground"
@@ -310,12 +347,11 @@ function BotTabContent(props: {
     return match?.label ?? snapshot.bot.environmentId;
   }, [environments.data, snapshot.bot.environmentId]);
   const botList = useBotListQuery(client, true);
-  const environmentBotIds = useMemo(
+  const environmentBots = useMemo(
     () =>
-      environmentBotIdsOf(
-        botList.data?.bots ?? NO_BOTS,
-        snapshot.bot.environmentId,
-      ),
+      botList.data === undefined
+        ? null
+        : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
   const paused = pausedReason !== null;
@@ -330,7 +366,7 @@ function BotTabContent(props: {
   );
   // Held here, above the views, so the open thread and the session shown
   // under the hood survive a switch between the channel's tabs.
-  const [openThreadPostId, setOpenThreadPostId] = useState<string | null>(null);
+  const [openThread, setOpenThread] = useState<BotOpenThread | null>(null);
   const [sessionChatId, setSessionChatId] = useState<string | null>(null);
   const openUnderTheHood = useCallback(
     (threadSessionChatId: string) => {
@@ -389,10 +425,11 @@ function BotTabContent(props: {
               botId={botId}
               hostId={hostId}
               botTitle={snapshot.bot.title}
+              appConversationChatId={snapshot.bot.appConversationChatId}
               paused={paused}
               resolveMember={resolveMember}
-              openThreadPostId={openThreadPostId}
-              onOpenThread={setOpenThreadPostId}
+              openThread={openThread}
+              onOpenThread={setOpenThread}
               onOpenUnderTheHood={openUnderTheHood}
             />
           </TabsContent>
@@ -409,7 +446,7 @@ function BotTabContent(props: {
               openRequestCount={snapshot.openRequestCount}
               paused={paused}
               environmentLabel={environmentLabel}
-              environmentBotIds={environmentBotIds}
+              environmentBots={environmentBots}
               sessionChatId={sessionChatId}
               onSelectSession={setSessionChatId}
             />
@@ -426,16 +463,114 @@ function BotTabContent(props: {
   );
 }
 
-const NO_BOTS: ReadonlyArray<BotRecord> = [];
+/** A team whose onboarding locks its chat, as its card reads it. */
+type LockedTeam = {
+  readonly environmentId: string;
+  readonly teamName: string;
+  readonly botCount: number;
+};
 
-/** The bots of one environment, by id, as the list names them. */
-function environmentBotIdsOf(
+/**
+ * Whether the bot's team's onboarding keeps its channel closed: the same
+ * gate, on the same host's read, as the sidebar's channel rows. `settling`
+ * until the lists that name the bot's team and the team's onboarding read
+ * have answered; a list that failed never locks, as a failed read does not.
+ */
+type BotTabOnboarding =
+  | { readonly kind: "settling" }
+  | { readonly kind: "locked"; readonly team: LockedTeam }
+  | { readonly kind: "clear" };
+
+function useBotTeamOnboarding(
+  botId: string,
+  hostId: string,
+  botList: {
+    readonly status: "pending" | "error" | "success";
+    readonly data: { readonly bots: ReadonlyArray<BotRecord> } | undefined;
+  },
+  environmentList: {
+    readonly status: "pending" | "error" | "success";
+    readonly data:
+      | { readonly environments: ReadonlyArray<EnvironmentDescriptor> }
+      | undefined;
+  },
+): BotTabOnboarding {
+  const client = useTabHostClient();
+  const { environment, botCount } = botTeamOf(
+    botId,
+    botList.data?.bots ?? [],
+    environmentList.data?.environments ?? [],
+  );
+  // Read only for a team the list names: anything else is never locked.
+  const { gate } = useTeamOnboardingGate({
+    client,
+    hostId,
+    environmentId: environment?.environmentId ?? "",
+    isTeam: environment?.ownerKind === "organization",
+    botCount,
+  });
+  if (
+    botList.status === "pending" ||
+    environmentList.status === "pending" ||
+    gate === "pending"
+  ) {
+    return { kind: "settling" };
+  }
+  if (gate !== "locked" || environment === null) return { kind: "clear" };
+  return {
+    kind: "locked",
+    team: {
+      environmentId: environment.environmentId,
+      teamName: environment.label,
+      botCount,
+    },
+  };
+}
+
+/** The environment the lists name for a bot, with its live bots' count. */
+type BotTeam = {
+  readonly environment: EnvironmentDescriptor | null;
+  readonly botCount: number;
+};
+
+function botTeamOf(
+  botId: string,
+  bots: ReadonlyArray<BotRecord>,
+  environments: ReadonlyArray<EnvironmentDescriptor>,
+): BotTeam {
+  const environmentId =
+    bots.find((bot) => bot.botId === botId)?.environmentId ?? null;
+  if (environmentId === null) return { environment: null, botCount: 0 };
+  return {
+    environment:
+      environments.find((entry) => entry.environmentId === environmentId) ??
+      null,
+    botCount: environmentBotsOf(bots, environmentId).filter(
+      (bot) => bot.archivedAt === null,
+    ).length,
+  };
+}
+
+function LockedTeamOnboarding(
+  props: LockedTeam & { readonly connectable: ConnectableHosts },
+): ReactNode {
+  const { connectable, ...team } = props;
+  const bindings = useHostEnvironmentBindings(connectable.hostIds, true);
+  return (
+    <BotOnboardingCard
+      {...team}
+      connectableHostIds={connectable.hostIds}
+      environmentBindings={bindings}
+    />
+  );
+}
+
+/** The bots of one environment, as the list names them. */
+function environmentBotsOf(
   bots: ReadonlyArray<BotRecord>,
   environmentId: string,
-): ReadonlyArray<string> {
-  return bots
-    .filter((bot) => bot.environmentId === environmentId)
-    .map((bot) => bot.botId);
+): ReadonlyArray<BotRecord> {
+  return bots.filter((bot) => bot.environmentId === environmentId);
 }
 
 function ErrorNotice(props: {

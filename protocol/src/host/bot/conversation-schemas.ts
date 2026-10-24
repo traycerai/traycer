@@ -74,6 +74,13 @@ export const botConversationSendRequestSchema = lazySchema(() =>
      * session.
      */
     threadId: z.string().min(1).max(36).nullable().default(null),
+    /**
+     * A reply under a `question` or `proposal` announcement of `conversationId`
+     * (decision 55): the message opens, or joins, the thread hung off that
+     * announcement, as its first request when it opens it. `null` (or absent)
+     * otherwise; never set with `threadId`.
+     */
+    announcementId: z.string().min(1).max(255).nullable().default(null),
   }),
 );
 export type BotConversationSendRequest = z.infer<
@@ -138,7 +145,10 @@ export const botThreadSummarySchema = lazySchema(() =>
     lastReplyAt: z.number().int().nullable(),
     /** Open requests of the thread, the anchor's included while it is open. */
     openRequestCount: z.number().int().nonnegative(),
-    /** The thread session's cost in USD; `null` when this host cannot say. */
+    /**
+     * What the thread's sessions have cost in USD on the bound host, every
+     * member's turns; `null` when this host cannot say.
+     */
     costUsd: z.number().nonnegative().nullable(),
   }),
 );
@@ -153,6 +163,12 @@ export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 export const botThreadListResponseSchema = lazySchema(() =>
   z.object({
     threads: z.array(botThreadSummarySchema),
+    /**
+     * What the bot's trunk has cost in USD on the bound host, every member's
+     * turns; `null` when this host cannot say. The bot's figure is this plus
+     * its threads'.
+     */
+    trunkCostUsd: z.number().nonnegative().nullable(),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

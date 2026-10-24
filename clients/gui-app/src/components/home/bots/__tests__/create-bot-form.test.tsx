@@ -240,6 +240,7 @@ function botCreateResponse(): BotCreateResponse {
       createdAt: 1_000,
       archivedAt: null,
       directive: null,
+      appConversationChatId: null,
     },
     appConversationChatId: "conversation-1",
   };
