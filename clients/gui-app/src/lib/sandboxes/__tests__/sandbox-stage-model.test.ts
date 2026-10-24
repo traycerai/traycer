@@ -164,6 +164,7 @@ function catalogue(
         suspendFidelity: "memory",
         stoppedStorage: "snapshot",
         wakeClass: "resume",
+        shapes: null,
         dockerInGuest: true,
         creatable: true,
         notCreatableReason: null,
@@ -235,6 +236,27 @@ describe("defaultStageShape", () => {
       cpus: 2,
       memoryMb: 4096,
       region: "us-east",
+    });
+  });
+
+  it("stages the provider's default listed shape, not the bounds' 2 vCPU / 4 GB", () => {
+    const base = catalogue(null, "linux");
+    const [provider] = base.providers;
+    const listed = {
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            { cpus: 2, memoryMb: 4096, diskMb: 20480, default: false },
+            { cpus: 4, memoryMb: 8192, diskMb: 40960, default: true },
+          ],
+        },
+      ],
+    };
+    expect(defaultStageShape(listed)).toMatchObject({
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
     });
   });
 });

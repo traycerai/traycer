@@ -83,6 +83,7 @@ const CATALOGUE: SandboxCatalogue = {
       suspendFidelity: "memory",
       stoppedStorage: "snapshot",
       wakeClass: "resume",
+      shapes: null,
       dockerInGuest: true,
       creatable: true,
       notCreatableReason: null,

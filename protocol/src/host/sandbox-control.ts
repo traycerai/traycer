@@ -448,6 +448,28 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
   );
 
 /**
+ * One shape a provider offers, from its discrete list: a create must name one
+ * of them exactly or is refused `shape_not_offered`. Exactly one is the
+ * `default`, the shape a new sandbox takes unless the person picks another.
+ */
+export interface SandboxShapeRung {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+  readonly default: boolean;
+}
+
+export const sandboxShapeRungSchema: z.ZodType<SandboxShapeRung> = lazySchema(
+  () =>
+    z.object({
+      cpus: z.number().positive(),
+      memoryMb: z.number().int().positive(),
+      diskMb: z.number().int().positive(),
+      default: z.boolean(),
+    }),
+);
+
+/**
  * A region's awake rates per unit, in millicredits an hour: a shape costs
  * `(cpus × vcpu + memory GB × memory + disk GB × disk) × multiplier`.
  */
@@ -493,7 +515,17 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
 export interface SandboxCatalogueProvider {
   readonly provider: string;
   readonly os: readonly SandboxOs[];
+  /**
+   * The bounds a create must fall inside. A server that lists
+   * {@link shapes} collapses them to the default shape, so a client that
+   * reads only the bounds offers exactly that one.
+   */
   readonly shape: SandboxShapeBounds;
+  /**
+   * The shapes a create may name, exactly one of them the default; `null`
+   * from a server that predates the list, which leaves the bounds.
+   */
+  readonly shapes: readonly SandboxShapeRung[] | null;
   /** What a suspend keeps: memory and disk, disk only, or nothing. */
   readonly suspendFidelity: string;
   readonly stoppedStorage: string;
@@ -526,6 +558,16 @@ export const sandboxCatalogueProviderSchema: z.ZodType<SandboxCatalogueProvider>
       provider: z.string().min(1),
       os: z.array(sandboxOsSchema),
       shape: sandboxShapeBoundsSchema,
+      // Absent, unparseable, or without exactly one default reads as `null`,
+      // so one bad entry never fails the catalogue.
+      shapes: z
+        .array(sandboxShapeRungSchema)
+        .refine(
+          (shapes) => shapes.filter((shape) => shape.default).length === 1,
+        )
+        .nullable()
+        .default(null)
+        .catch(null),
       suspendFidelity: z.string(),
       stoppedStorage: z.string(),
       wakeClass: z.string(),
