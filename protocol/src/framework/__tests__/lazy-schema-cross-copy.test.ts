@@ -6,7 +6,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Zod's `Symbol.hasInstance` answers by trait name, so a schema built by one
- * 4.4.3 copy is still `instanceof` another copy's classes. The helper relies
+ * zod copy is still `instanceof` another copy's classes. The helper relies
  * on that and has no copy-specific code; this file pins the zod behaviour for
  * a stand-in, not a helper-owned reconstruction path.
  */
@@ -68,7 +68,7 @@ function loadSecondZodCopy(): ZodCopy {
   };
 }
 
-describe("zod trait-based instanceof across distinct 4.4.3 copies", () => {
+describe("zod trait-based instanceof across distinct zod copies", () => {
   it("a stand-in built with copy B is instanceof copy A's class because traits match, which the helper relies on", () => {
     const copyB = loadSecondZodCopy();
     expect(copyB.ZodObject).not.toBe(z.ZodObject);

@@ -522,7 +522,7 @@ describe("lazySchema error paths", () => {
     expect(laterSet).toBe(first);
     expect(builds).toBe(1);
     expect(lazySchemaStats().materialised).toBe(before.materialised);
-    expect(Reflect.ownKeys(standIn)).toEqual(["_def"]);
+    expect(Reflect.ownKeys(standIn)).toEqual([]);
   });
 
   it("a throw during in-place construction fail-closes with the same error and no leftover keys", () => {

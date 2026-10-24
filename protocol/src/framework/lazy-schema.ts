@@ -18,8 +18,9 @@
  * prototype is a trigger Proxy; the first read that reaches the prototype (a
  * property get, `in`, or an assignment) runs `build`, gives the stand-in the
  * built schema's class prototype, and runs zod's own construction on it in
- * place: `_zod.constr.init(standIn, def)`, then the `_zod.deferred` hooks,
- * which is exactly what `new` does (`zod/v4/core/core.js`, `$constructor`).
+ * place: `_zod.constr.init(standIn, def)`, then the `_zod.deferred` hooks and
+ * the global post-processor, which is exactly what `new` does
+ * (`zod/v4/core/core.js`, `$constructor`).
  * From then on the stand-in is an ordinary zod instance whose closures are
  * bound to itself; the trigger is out of its prototype chain, so parsing pays
  * nothing. The instance `build` returned is discarded; its children are
@@ -71,8 +72,9 @@
  * (either refusal, or a zod change, since `build` just succeeded on the same
  * `def`) cannot be retried, because zod defines some keys non-configurable.
  * The stand-in then gets its trigger back and rethrows that same error on
- * every later read; only those keys (`_def`, a literal's `value`) keep what
- * the failed construction gave them, and zod's global registry keeps any
+ * every later read; only those keys (a literal's `value`, a function's
+ * `_def`) keep what the failed construction gave them, and zod's global
+ * registry keeps any
  * entry a check-form `describe` or `meta` gave the stand-in.
  *
  * `build` must enclose the whole initialiser, including any base lookup
@@ -266,30 +268,43 @@ function construct(standIn: object, construction: Construction): void {
   try {
     // zod's `init` defines `_zod` only on an instance that has none, and then
     // non-configurable. Defining the same value here, configurable, is what
-    // lets a failed construction be undone below.
+    // lets a failed construction be undone below. It takes the discarded
+    // `_zod`'s prototype: zod installs lazily derived internals (`pattern`,
+    // `values`, ...) on the prototype of `_zod` itself, so a plain object here
+    // would put them on `Object.prototype`.
+    const ownInternals: object = Object.create(
+      Object.getPrototypeOf(internals),
+    );
+    Object.assign(ownInternals, { def, constr, traits: new Set<string>() });
     Object.defineProperty(standIn, "_zod", {
-      value: { def, constr, traits: new Set<string>() },
+      value: ownInternals,
       enumerable: false,
       writable: false,
       configurable: true,
     });
     construction.initialise(standIn);
-    const ownInternals = zodInternals(standIn);
     const parent: unknown = Reflect.get(internals, "parent");
     if (parent !== undefined) {
       Reflect.set(ownInternals, "parent", parent);
     }
-    let deferred: unknown = Reflect.get(ownInternals, "deferred");
-    if (deferred === undefined) {
-      deferred = [];
-      Reflect.set(ownInternals, "deferred", deferred);
-    }
+    const deferred: unknown = Reflect.get(ownInternals, "deferred");
     if (Array.isArray(deferred)) {
       for (const hook of deferred) {
         if (typeof hook === "function") {
           Reflect.apply(hook, undefined, []);
         }
       }
+      // Released, as `new` leaves it.
+      Reflect.set(ownInternals, "deferred", undefined);
+    }
+    // `new` hands the finished instance to the global post-processor last
+    // (`import "zod/compile"` installs one).
+    const config: unknown = Reflect.get(globalThis, "__zod_globalConfig");
+    const postProcessor: unknown = isObject(config)
+      ? Reflect.get(config, "postProcessor")
+      : undefined;
+    if (typeof postProcessor === "function") {
+      Reflect.apply(postProcessor, undefined, [standIn]);
     }
     refuseLostInternals(internals, ownInternals);
     refuseLostMetadata(construction.built, standIn);
