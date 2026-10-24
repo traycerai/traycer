@@ -60,14 +60,12 @@ describe("sharedInUseFromItems", () => {
         label: "2 API keys",
         names: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
         page: "providers",
-        includesMailPassword: false,
       },
       {
-        id: "mail",
-        label: "notification settings",
+        id: "secrets:secret",
+        label: "1 secret",
         names: ["NOTIFICATION_SMTP_PASSWORD"],
-        page: "notifications",
-        includesMailPassword: true,
+        page: "secrets",
       },
     ]);
   });

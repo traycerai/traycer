@@ -22,9 +22,6 @@ export const RETROSPECTIVE_HELD_NOT_IN_USE = "Held, not in use";
 export const RETROSPECTIVE_HELD_HOOK = "Held hook";
 export const RETROSPECTIVE_STILL_ON_THIS_COMPUTER = "Still on this computer";
 
-export const INCLUDING_MAIL_PASSWORD =
-  "including the mail password as a secret";
-
 export const KEEP_AS_SECRET = "Keep as a secret";
 export const KEEP_AS_VARIABLE = "Keep as a variable";
 export const LEAVE_ON_THIS_COMPUTER_ONLY = "Leave on this computer only";

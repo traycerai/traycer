@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-schemas";
 import {
   APPROVE,
   DISCARD,
@@ -19,6 +20,7 @@ import {
   RETROSPECTIVE_STOP_SHARING,
   type HeldApplyChoice,
 } from "@/components/settings/move/retrospective-copy";
+import { sharedInUseFromItems } from "@/components/settings/move/review-inventory";
 import {
   RetrospectiveSheet,
   type HeldRow,
@@ -46,14 +48,6 @@ const SHARED: readonly SharedInUseItem[] = [
     label: "2 API keys",
     names: ["Codex", "OpenCode"],
     page: "providers",
-    includesMailPassword: false,
-  },
-  {
-    id: "mail",
-    label: "notification settings",
-    names: ["mail password"],
-    page: "notifications",
-    includesMailPassword: true,
   },
 ];
 
@@ -285,14 +279,48 @@ describe("RetrospectiveSheet", () => {
     const { onStopSharing } = openSheet();
     fireEvent.click(screen.getByTestId("retrospective-link-keys"));
     expect(navigateMock).toHaveBeenCalledWith("providers");
-    fireEvent.click(screen.getByTestId("retrospective-link-mail"));
-    expect(navigateMock).toHaveBeenCalledWith("notifications");
-    expect(
-      screen.getByText(/including the mail password as a secret/),
-    ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: RETROSPECTIVE_STOP_SHARING }),
     );
     expect(onStopSharing).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an applied notification password as an ordinary secret", () => {
+    const smtpPassword: EnvironmentItemStatus = {
+      kind: "secret",
+      key: "NOTIFICATION_SMTP_PASSWORD",
+      os: "macos",
+      desiredRevision: 1,
+      status: "applied",
+      code: "ok",
+      args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+      brokerEnforced: null,
+      minimumHostVersion: null,
+      appliedAs: null,
+    };
+    render(
+      <RetrospectiveSheet
+        open
+        inventoryReady
+        hostName="MacBook Pro"
+        evidence={{ version: "1.5.2", at: OCT_14 }}
+        sharedInUse={sharedInUseFromItems([smtpPassword])}
+        roomShared={null}
+        appliedOn={["MacBook Pro"]}
+        held={[]}
+        stillLocal={STILL_LOCAL}
+        heldPendingId={null}
+        onOpenChange={vi.fn()}
+        onShown={vi.fn()}
+        onAcknowledged={vi.fn()}
+        onHeldApply={vi.fn()}
+        onMoveToPersonal={vi.fn()}
+        onStopSharing={vi.fn()}
+      />,
+    );
+    const link = screen.getByRole("button", { name: "1 secret" });
+    fireEvent.click(link);
+    expect(navigateMock).toHaveBeenCalledWith("secrets");
+    expect(screen.queryByText(/mail password/)).toBeNull();
   });
 });
