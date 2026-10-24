@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { LOG_LEVELS, DEFAULT_LOG_LEVEL } from "./log-level";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import {
+  DEFAULT_CLAUDE_SESSION_NAME_TEMPLATE,
+  SESSION_NAME_TEMPLATE_MAX_LENGTH,
+} from "./session-name-template";
 
 /**
  * Current on-disk schema version for `~/.traycer/cli/config.json`. Bump it
@@ -145,6 +149,33 @@ export const visualizationOnlyConfigSchema = lazySchema(() =>
 export type VisualizationConfig = z.infer<
   typeof visualizationOnlyConfigSchema
 >["visualization"];
+
+/**
+ * The `sessionNames` block in `~/.traycer/cli/config.json`: the template the
+ * host renders into `claude --name` for a Claude Code session it starts on the
+ * Terminal interface (`./session-name-template`). Read at the launch that
+ * creates the session, so a change applies to sessions started after it.
+ *
+ * Read and written on its own, never through `cliConfigSchema`, for the same
+ * reason the `visualization` block is: the top level of that schema is
+ * passthrough, so the block survives every other writer, and an unrelated
+ * defect elsewhere in the document cannot decide the name.
+ */
+export const sessionNamesOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    sessionNames: z
+      .object({
+        claudeTemplate: z
+          .string()
+          .max(SESSION_NAME_TEMPLATE_MAX_LENGTH)
+          .default(DEFAULT_CLAUDE_SESSION_NAME_TEMPLATE),
+      })
+      .default({ claudeTemplate: DEFAULT_CLAUDE_SESSION_NAME_TEMPLATE }),
+  }),
+);
+export type SessionNamesConfig = z.infer<
+  typeof sessionNamesOnlyConfigSchema
+>["sessionNames"];
 
 /**
  * The `simulator` block in `~/.traycer/cli/config.json`: the one switch for

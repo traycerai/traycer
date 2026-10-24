@@ -562,6 +562,8 @@ import {
   configWorktreesSetV10,
   configVisualizationGetV10,
   configVisualizationSetV10,
+  configSessionNamesGetV10,
+  configSessionNamesSetV10,
   configCatalogGetV10,
   configCatalogGetV11,
   configCatalogGetUpgradeV10ToV11,
@@ -6477,6 +6479,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: configVisualizationSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.sessionNames.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configSessionNamesGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.sessionNames.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configSessionNamesSetV10,
           upgradeFromPreviousVersion: null,
         },
       },
