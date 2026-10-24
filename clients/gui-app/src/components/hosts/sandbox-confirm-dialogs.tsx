@@ -61,6 +61,7 @@ import {
   type SandboxPeriodUnit,
   type SandboxSessionReport,
 } from "@/lib/sandboxes/sandbox-row-lines";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   KEEP_THIS_SANDBOX,
   alreadyDestroyedLine,
@@ -847,11 +848,13 @@ export function SandboxDestroyAllIdleDialog(props: {
       isPending={batch.isPending}
       // A retry repeats the confirmed set, whatever the list holds since.
       onConfirm={() =>
-        batch.mutate(
-          results === null
-            ? props.targets
-            : results.map(({ sandboxId, name }) => ({ sandboxId, name })),
-        )
+        batch.mutate({
+          targets:
+            results === null
+              ? props.targets
+              : results.map(({ sandboxId, name }) => ({ sandboxId, name })),
+          startedBy: signedInUserId(),
+        })
       }
     >
       <ul

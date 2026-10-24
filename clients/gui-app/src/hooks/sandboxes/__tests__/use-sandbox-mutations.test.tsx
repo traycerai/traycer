@@ -569,10 +569,13 @@ describe("useSandboxDestroyBatch", () => {
 
     let outcomes: readonly string[] = [];
     await act(async () => {
-      const results = await result.current.mutateAsync([
-        { sandboxId: "sbx_1", name: "one" },
-        { sandboxId: "sbx_2", name: "two" },
-      ]);
+      const results = await result.current.mutateAsync({
+        targets: [
+          { sandboxId: "sbx_1", name: "one" },
+          { sandboxId: "sbx_2", name: "two" },
+        ],
+        startedBy: null,
+      });
       outcomes = results.map((entry) => entry.outcome.kind);
     });
 
@@ -598,7 +601,10 @@ describe("useSandboxDestroyBatch", () => {
     const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
 
     await act(async () => {
-      await result.current.mutateAsync([{ sandboxId: "sbx_1", name: "one" }]);
+      await result.current.mutateAsync({
+        targets: [{ sandboxId: "sbx_1", name: "one" }],
+        startedBy: null,
+      });
     });
 
     expect(invalidatedKeys(invalidate)).toEqual([
@@ -977,10 +983,32 @@ describe("useSandboxDestroyBatch under another account", () => {
 
     await act(async () => {
       await result.current
-        .mutateAsync([{ sandboxId: "sbx_1", name: "one" }])
+        .mutateAsync({
+          targets: [{ sandboxId: "sbx_1", name: "one" }],
+          startedBy: "user-a",
+        })
         .catch(() => undefined);
     });
 
+    expect(state.binding?.auth.destroySandbox).not.toHaveBeenCalled();
+  });
+
+  it("reads and destroys nothing when the account changes between the confirm and the batch's start", async () => {
+    // A confirmed the batch; B is signed in by the time it runs.
+    signInAs("user-b");
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          targets: [{ sandboxId: "sbx_1", name: "one" }],
+          startedBy: "user-a",
+        })
+        .catch(() => undefined);
+    });
+
+    expect(state.binding?.auth.listSandboxes).not.toHaveBeenCalled();
     expect(state.binding?.auth.destroySandbox).not.toHaveBeenCalled();
   });
 });

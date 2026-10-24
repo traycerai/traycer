@@ -41,6 +41,12 @@ export interface SandboxBatchTarget {
   readonly name: string;
 }
 
+export interface SandboxDestroyBatchRequest {
+  readonly targets: readonly SandboxBatchTarget[];
+  /** The account signed in when the person confirmed the batch. */
+  readonly startedBy: string | null;
+}
+
 interface SandboxDestroyBatchContext {
   readonly directory: HostDirectoryService | null;
   readonly userId: string | null;
@@ -52,13 +58,13 @@ interface SandboxDestroyBatchContext {
  * that woke or was kept meanwhile is skipped rather than destroyed, and a
  * retry passes the same targets, so it never widens the set. The server
  * rechecks authority per target. Each request carries whoever is signed in
- * when it is sent, so the batch stops if the account that confirmed it is no
- * longer the one signed in.
+ * when it is sent, so the batch stops before any read or destroy once the
+ * account that confirmed it (`startedBy`) is no longer the one signed in.
  */
 export function useSandboxDestroyBatch(): UseMutationResult<
   readonly SandboxBatchResult[],
   Error,
-  readonly SandboxBatchTarget[],
+  SandboxDestroyBatchRequest,
   SandboxDestroyBatchContext
 > {
   const binding = useHostBinding();
@@ -67,17 +73,19 @@ export function useSandboxDestroyBatch(): UseMutationResult<
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const mutation = useMutation({
     mutationKey: sandboxMutationKeys.destroyBatch(userId),
-    onMutate: (): SandboxDestroyBatchContext => ({
+    onMutate: ({
+      startedBy,
+    }: SandboxDestroyBatchRequest): SandboxDestroyBatchContext => ({
       directory: binding === null ? null : binding.directory,
-      userId: signedInUserId(),
+      userId: startedBy,
     }),
-    mutationFn: async (
-      targets: readonly SandboxBatchTarget[],
-    ): Promise<readonly SandboxBatchResult[]> => {
+    mutationFn: async ({
+      targets,
+      startedBy,
+    }: SandboxDestroyBatchRequest): Promise<readonly SandboxBatchResult[]> => {
       if (binding === null) {
         throw new Error("Sign in to destroy these sandboxes.");
       }
-      const startedBy = signedInUserId();
       const stopIfAccountChanged = (): void => {
         if (signedInUserId() !== startedBy) {
           throw new Error("The account changed, so the batch stopped.");
