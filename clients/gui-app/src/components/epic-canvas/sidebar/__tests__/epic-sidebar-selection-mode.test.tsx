@@ -761,8 +761,15 @@ vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () => ({ kind: "none" }),
 }));
 
+// The hover card's sandbox projection is outside this tree-focused suite;
+// its real query needs the QueryClientProvider this harness intentionally lacks.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: undefined }),
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
+  useHostBinding: () => null,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => testState.activeHostClient,
 }));
