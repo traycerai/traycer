@@ -80,4 +80,97 @@ describe("shared client Sentry scrub", () => {
       "https://authn.test/api/v3/auth/link/status",
     );
   });
+
+  describe("home-folder names", () => {
+    function buildEvent(name: string, winName: string): ClientSentryEvent {
+      return {
+        breadcrumbs: [
+          {
+            message: `Worker thread errored with 'Cannot find module '/Users/${name}/.traycer/host/install/host-runtime/spawn-broker-worker.cjs''`,
+            data: { spawnfile: `/home/${name}/.traycer/bin/tool` },
+          },
+        ],
+        exception: {
+          values: [
+            {
+              value: `ENOENT C:\\Users\\${winName}\\.traycer\\x`,
+              stacktrace: {
+                frames: [
+                  {
+                    filename: `/Users/${name}/.traycer/host/install/host-main.cjs`,
+                    abs_path: `/Users/${name}/.traycer/host/install/host-main.cjs`,
+                  },
+                  {
+                    filename: `/home/${name}/.traycer/host/install/host-main.cjs`,
+                    abs_path: `/home/${name}/.traycer/host/install/host-main.cjs`,
+                  },
+                  {
+                    filename: `C:\\Users\\${winName}\\.traycer\\host\\install\\host-main.cjs`,
+                    abs_path: `C:\\Users\\${winName}\\.traycer\\host\\install\\host-main.cjs`,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
+    }
+
+    it("redacts the folder name in breadcrumbs, messages and every stack frame", () => {
+      const event = buildEvent("synthetic-user", "SyntheticUser");
+      scrubSentryEventInPlace(event);
+      expect(event.breadcrumbs?.[0]?.message).toBe(
+        "Worker thread errored with 'Cannot find module '/Users/<redacted>/.traycer/host/install/host-runtime/spawn-broker-worker.cjs''",
+      );
+      expect(event.breadcrumbs?.[0]?.data?.["spawnfile"]).toBe(
+        "/home/<redacted>/.traycer/bin/tool",
+      );
+      const value = event.exception?.values?.[0];
+      expect(value?.value).toBe("ENOENT C:\\Users\\<redacted>\\.traycer\\x");
+      expect(value?.stacktrace?.frames).toEqual([
+        {
+          filename: "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+          abs_path: "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+        },
+        {
+          filename: "/home/<redacted>/.traycer/host/install/host-main.cjs",
+          abs_path: "/home/<redacted>/.traycer/host/install/host-main.cjs",
+        },
+        {
+          filename:
+            "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+          abs_path:
+            "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+        },
+      ]);
+      const json = JSON.stringify(event);
+      expect(json).not.toContain("synthetic-user");
+      expect(json).not.toContain("SyntheticUser");
+    });
+
+    it("groups events that differ only by the home name, and is idempotent", () => {
+      const a = buildEvent("synthetic-user", "SyntheticUser");
+      const b = buildEvent("other-synthetic-user", "OtherSyntheticUser");
+      scrubSentryEventInPlace(a);
+      scrubSentryEventInPlace(b);
+      expect(a.exception?.values?.[0]?.stacktrace?.frames).toEqual(
+        b.exception?.values?.[0]?.stacktrace?.frames,
+      );
+      const once = JSON.stringify(a);
+      scrubSentryEventInPlace(a);
+      expect(JSON.stringify(a)).toBe(once);
+    });
+
+    it("redacts the folder name in a breadcrumb file URL", () => {
+      const breadcrumb = {
+        data: {
+          url: "file:///Users/synthetic-user/Applications/Traycer.app/x.html",
+        },
+      };
+      scrubSentryBreadcrumbInPlace(breadcrumb);
+      expect(breadcrumb.data.url).toBe(
+        "null/Users/<redacted>/Applications/Traycer.app/x.html",
+      );
+    });
+  });
 });

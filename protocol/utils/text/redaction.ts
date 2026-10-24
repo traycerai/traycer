@@ -406,3 +406,43 @@ export function reduceRequestTargetToPath(value: string): string {
     queryStart === -1 ? value : value.slice(0, queryStart),
   );
 }
+
+/**
+ * One path segment that can be a home folder's name: no separator, no
+ * whitespace, and none of the characters that end a path quoted in a message
+ * or a stack line (`'`, `"`, `` ` ``, `(`, `)`, `:`, `,`, `;`, `|`, `*`,
+ * `?`). Leaving out `<` and `>` is also what makes the rule idempotent:
+ * `<redacted>` is not a name.
+ */
+const HOME_FOLDER_NAME = String.raw`[^\s/\\:'"\x60<>|()*?,;]+`;
+
+/**
+ * The segment right after a `Users` (macOS, Windows) or `home` (Linux) path
+ * segment, under either separator, and under doubled ones (a JSON-escaped
+ * Windows path). A name with spaces, which a macOS full-name folder has
+ * (`/Users/Mary Jane/...`), is taken whole only where a separator follows it,
+ * so `/Users/name is missing` in prose loses the name and keeps the prose.
+ */
+const HOME_FOLDER_NAME_PATTERN = new RegExp(
+  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)(${HOME_FOLDER_NAME}(?: ${HOME_FOLDER_NAME})*(?=[/\\])|${HOME_FOLDER_NAME})`,
+  "gi",
+);
+
+/**
+ * The OS account's home-folder name, wherever an absolute path carries it:
+ * `/Users/<name>/.traycer/host/install/host-main.cjs` becomes
+ * `/Users/<redacted>/.traycer/host/install/host-main.cjs`. Only that one
+ * segment goes, so a stack frame stays readable, and every machine with the
+ * same install layout renders the same path, so Sentry groups on one form
+ * instead of one per person.
+ *
+ * Not part of {@link redactSensitiveText}: a home path is not a credential,
+ * and the log and support-bundle writers that call it keep their own path
+ * policy (the support bundle pseudonymizes whole paths). Telemetry egress
+ * applies both.
+ *
+ * Idempotent.
+ */
+export function redactHomeDirectoryNames(value: string): string {
+  return value.replace(HOME_FOLDER_NAME_PATTERN, `$1${REDACTED}`);
+}

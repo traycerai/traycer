@@ -1,7 +1,7 @@
 /**
  * The deep walker every Sentry scrubber in both repos runs over an
  * attacker-influenced or user-private payload (`extra`, `logentry.params`,
- * breadcrumb `data`, request `data`).
+ * breadcrumb `data`, request `data`), and the stack-frame path walk.
  *
  * Detection is `./redaction`; the Sentry *policy* - which event fields get
  * walked, whether a breadcrumb is scrubbed at record time - stays with each
@@ -36,6 +36,48 @@ export function isPlainRecord(
   value: unknown,
 ): value is { [key: string]: unknown } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The slice of an exception entry whose stack frames carry paths. */
+export interface SentryStacktraceHolder {
+  stacktrace?:
+    | {
+        frames?:
+          | {
+              filename?: string | undefined;
+              abs_path?: string | undefined;
+              module?: string | undefined;
+            }[]
+          | undefined;
+      }
+    | undefined;
+}
+
+/**
+ * Rewrites every frame's `filename`, `abs_path` and `module` with
+ * `scrubPath`, in place (the SDK takes back the event it handed to
+ * `beforeSend`). The SDK builds frames from the stack, so no string walk
+ * reaches them, and an installed app's frames name its absolute install
+ * folder, home folder included. `module` is derived from the path, and keeps
+ * the whole path when the SDK cannot place the file under its base folder.
+ */
+export function scrubStackFramePathsInPlace(
+  exceptions: readonly SentryStacktraceHolder[] | undefined,
+  scrubPath: (value: string) => string,
+): void {
+  for (const exception of exceptions ?? []) {
+    for (const frame of exception.stacktrace?.frames ?? []) {
+      if (frame.filename !== undefined) {
+        frame.filename = scrubPath(frame.filename);
+      }
+      if (frame.abs_path !== undefined) {
+        frame.abs_path = scrubPath(frame.abs_path);
+      }
+      if (frame.module !== undefined) {
+        frame.module = scrubPath(frame.module);
+      }
+    }
+  }
 }
 
 /** Recursively scrubs an arbitrary value, applying `scrubText` to every string. */

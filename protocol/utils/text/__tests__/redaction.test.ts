@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  redactHomeDirectoryNames,
   redactSensitiveText,
   reduceRequestTargetToPath,
   reduceUrlToOriginAndPath,
@@ -161,5 +162,38 @@ describe("arbitrary-key stem classifier", () => {
     expect(redactSensitiveText("Authorization: token ghs_x")).toBe(
       "Authorization: token <redacted>",
     );
+  });
+});
+
+describe("redactHomeDirectoryNames", () => {
+  it.each([
+    [
+      "/Users/synthetic-user/.traycer/host/install/host-main.cjs",
+      "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+    ],
+    [
+      "/home/synthetic-user/.traycer/host/install/host-runtime/spawn-broker-worker.cjs",
+      "/home/<redacted>/.traycer/host/install/host-runtime/spawn-broker-worker.cjs",
+    ],
+    [
+      "C:\\Users\\SyntheticUser\\.traycer\\host\\install\\host-main.cjs",
+      "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+    ],
+    ["C:/Users/SyntheticUser/x", "C:/Users/<redacted>/x"],
+    ["C:\\\\Users\\\\SyntheticUser\\\\x", "C:\\\\Users\\\\<redacted>\\\\x"],
+    ["file:///Users/synthetic-user/x.js", "file:///Users/<redacted>/x.js"],
+    ["/Users/Synthetic User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/synthetic-user", "/home/<redacted>"],
+    ["open '/home/synthetic-user'", "open '/home/<redacted>'"],
+    ["/var/home/synthetic-user/x", "/var/home/<redacted>/x"],
+    ["c:\\users\\SyntheticUser\\x", "c:\\users\\<redacted>\\x"],
+    ["/homework/x", "/homework/x"],
+    ["/myhome/x", "/myhome/x"],
+    ["/opt/traycer/x", "/opt/traycer/x"],
+    ["/Users", "/Users"],
+    ["/Users/<redacted>/x", "/Users/<redacted>/x"],
+  ])("rewrites %j to %j", (input, expected) => {
+    expect(redactHomeDirectoryNames(input)).toBe(expected);
+    expect(redactHomeDirectoryNames(expected)).toBe(expected);
   });
 });
