@@ -879,23 +879,37 @@ describe("desktop app updater", () => {
     expect(updater.getAppUpdateSnapshot().status).toBe("available");
   });
 
-  it("leaves a Scoop install to scoop update instead of downloading the installer", async () => {
-    setPlatform("win32");
-    const resources = mkdtempSync(join(tmpdir(), "traycer-scoop-resources-"));
-    writeFileSync(join(resources, "package-type"), "scoop\n");
-    Object.defineProperty(process, "resourcesPath", {
-      configurable: true,
-      value: resources,
-      writable: true,
+  describe("on a Scoop install", () => {
+    let resources = "";
+
+    beforeEach(() => {
+      setPlatform("win32");
+      resources = mkdtempSync(join(tmpdir(), "traycer-scoop-resources-"));
+      writeFileSync(join(resources, "package-type"), "scoop\n");
+      Object.defineProperty(process, "resourcesPath", {
+        configurable: true,
+        value: resources,
+        writable: true,
+      });
     });
-    try {
-      const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
-      autoUpdater.checkForUpdates.mockImplementation(() => {
-        autoUpdater.emit("update-available", { version: "2.0.0" });
+
+    afterEach(() => {
+      rmSync(resources, { recursive: true, force: true });
+    });
+
+    async function availableUpdate(version: string) {
+      const loaded = await loadUpdater(NOT_LINUX_GUIDANCE);
+      loaded.autoUpdater.checkForUpdates.mockImplementation(() => {
+        loaded.autoUpdater.emit("update-available", { version });
         return Promise.resolve(null);
       });
-      await updater.installAutoUpdater(true, makeDeps(true));
-      await updater.checkForUpdatesNow(false, "automatic");
+      await loaded.updater.installAutoUpdater(true, makeDeps(true));
+      await loaded.updater.checkForUpdatesNow(false, "automatic");
+      return loaded;
+    }
+
+    it("leaves a stable update to scoop update instead of downloading the installer", async () => {
+      const { autoUpdater, updater } = await availableUpdate("2.0.0");
       expect(updater.getAppUpdateSnapshot()).toMatchObject({
         status: "available",
         installBlockedReason:
@@ -906,9 +920,24 @@ describe("desktop app updater", () => {
 
       expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
       expect(updater.getAppUpdateSnapshot().status).toBe("available");
-    } finally {
-      rmSync(resources, { recursive: true, force: true });
-    }
+    });
+
+    // A release candidate reaches a Scoop install only through compatibility
+    // recovery's opt-in, and the bucket follows stable tags, so `scoop update`
+    // can never deliver it.
+    it("points a release candidate at the releases page, not scoop update", async () => {
+      const { autoUpdater, updater } = await availableUpdate("2.0.0-rc.1");
+      expect(updater.getAppUpdateSnapshot()).toMatchObject({
+        status: "available",
+        latestVersion: "2.0.0-rc.1",
+        installBlockedReason:
+          "Scoop has stable releases only. Download v2.0.0-rc.1 from https://github.com/traycerai/traycer/releases.",
+      });
+
+      updater.startUpdateDownload();
+
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    });
   });
 
   it("downloads only on user request and tracks whole-percent progress", async () => {

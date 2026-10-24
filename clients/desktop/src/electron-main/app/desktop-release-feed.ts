@@ -17,6 +17,7 @@ import type {
   UpdateInfo,
 } from "electron-updater/out/types";
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
+import { configuredDesktopReleaseRepo } from "../../config";
 import type { LinuxPackageType } from "./linux-update-guidance";
 import {
   isCanonicalReleaseCandidate,
@@ -566,6 +567,11 @@ export interface ExactReleaseFeedConfig {
  */
 export function desktopReleaseTag(version: string): string {
   return `desktop-v${version}`;
+}
+
+/** The desktop releases page, where a user downloads an installer by hand. */
+export function desktopReleasesUrl(): string {
+  return `https://github.com/${configuredDesktopReleaseRepo()}/releases`;
 }
 
 // A resolved desktop feed: the generic exact-release provider for public repos,

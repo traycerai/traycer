@@ -15,8 +15,6 @@ Download the Traycer Desktop app for your operating system. Links always point t
 | **Linux** (Fedora/RHEL)   | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)           | `sudo dnf install ./traycer-desktop-linux-x86_64.rpm` |
 | **Windows** (x64)         | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)            | Native installer for 64-bit Windows.             |
 | **Windows** (x64, MSI)    | [Download .msi](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.msi)            | Windows Installer package.                       |
-| **Windows** (winget)      | `winget install Traycer.Desktop`                                                                                          | Installs the native installer above.             |
-| **Windows** (Scoop)       | `scoop bucket add traycer https://github.com/traycerai/scoop-traycer`, then `scoop install traycer-desktop`               | Updates with `scoop update traycer-desktop`.     |
 | **Windows** (via WSL)     | [Install via WSL](#windows-via-wsl)                                                                                       | Run the Linux desktop app through WSL with WSLg. |
 
 All releases are published on [GitHub](https://github.com/traycerai/traycer/releases).
@@ -151,7 +149,6 @@ Traycer installs stable releases. It offers a release candidate only when a host
 
 - **macOS:** Traycer has to run from your Applications folder to update. If you open it from somewhere else, such as the disk image, it offers **Move to Applications Folder**.
 - **Windows:** once an update is downloaded, restart Traycer from the update button to install it.
-- **Windows with Scoop:** Traycer doesn't download updates itself. Run `scoop update traycer-desktop`.
 - **Linux `.deb` and `.rpm`:** installing an update asks for your administrator password. In WSL, or when the package manager doesn't own the install, the button reads **Finish update** instead. It opens **Finish updating Traycer**, which gives you a `sudo dpkg -i` or `sudo rpm -U` command to run in a terminal; restart Traycer when it finishes.
 
 ### Hosts
@@ -180,7 +177,7 @@ Some host updates need a newer CLI first. The host's Overview then shows **Needs
   </Step>
   <Step title="Remove the app">
     - **macOS:** drag Traycer from Applications to the Trash. If you installed it with Homebrew, run `brew uninstall --cask traycer-desktop`.
-    - **Windows:** uninstall Traycer from **Settings › Apps › Installed apps**, or run `winget uninstall Traycer.Desktop` if you installed it with winget. The `.exe` installer's uninstaller also removes the task that starts the host at logon. If you installed it with Scoop, run `scoop uninstall traycer-desktop`, which removes that task too.
+    - **Windows:** uninstall Traycer from **Settings › Apps › Installed apps**. The `.exe` installer's uninstaller also removes the task that starts the host at logon.
     - **Linux:** remove the package with `apt` or `dnf`, or delete the AppImage.
   </Step>
   <Step title="Remove the CLI, if you installed it">
