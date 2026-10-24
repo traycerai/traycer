@@ -2,12 +2,14 @@ import { ArrowRight, Check } from "lucide-react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { useOpenLink, type OpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   type GettingStartedCardId,
   type GettingStartedEntry,
@@ -27,6 +29,7 @@ export function GettingStartedCards(props: {
 }) {
   const navigate = useNavigate();
   const openLink = useOpenLink();
+  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const signInUrl = useRunnerHostOrNull()?.signInUrl;
   const downloadUrl = `${resolvePlatformBaseUrl(signInUrl === undefined || signInUrl.length === 0 ? "https://traycer.ai/sign-in" : signInUrl)}/download`;
   return (
@@ -45,6 +48,7 @@ export function GettingStartedCards(props: {
             openGettingStartedCard(entry.card.id, {
               navigate,
               openLink,
+              setPick,
               downloadUrl,
               event,
             });
@@ -60,6 +64,7 @@ function openGettingStartedCard(
   ctx: {
     readonly navigate: UseNavigateResult<string>;
     readonly openLink: OpenLink;
+    readonly setPick: (pick: EnvironmentPick | null) => void;
     readonly downloadUrl: string;
     readonly event: {
       readonly altKey: boolean;
@@ -70,14 +75,18 @@ function openGettingStartedCard(
     };
   },
 ): void {
+  // The provider and secret steps read this window's own machine, so their
+  // cards open its configuration (the default row) whatever was picked.
   switch (id) {
     case "provider":
+      ctx.setPick(null);
       navigateToSettingsSection("providers");
       return;
     case "task":
       activateTabIntent(ctx.navigate, openNewEpicIntent(), undefined);
       return;
     case "secret":
+      ctx.setPick(null);
       navigateToSettingsSection("secrets");
       return;
     case "install":

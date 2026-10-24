@@ -12,6 +12,7 @@ import {
   profile,
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
@@ -192,6 +193,7 @@ describe("GettingStartedSettingsPanel", () => {
     navigateMock.mockReset();
     activateTabIntentMock.mockClear();
     setSectionMock.mockReset();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
   afterEach(() => {
@@ -315,6 +317,24 @@ describe("GettingStartedSettingsPanel", () => {
       expect.objectContaining({ type: "click" }),
     );
   });
+
+  it.each([
+    ["secret", "secrets"],
+    ["provider", "providers"],
+  ])(
+    "opens this window's own configuration from the %s card under a team pick",
+    (card, section) => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: "env-team" },
+      });
+      render(<GettingStartedSettingsPanel />);
+
+      fireEvent.click(screen.getByTestId(`getting-started-card-${card}`));
+
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+      expect(setSectionMock).toHaveBeenCalledWith(section);
+    },
+  );
 
   it("marks credits complete once the balance is above zero", () => {
     mocks.staged = { target: { kind: "new" } };
