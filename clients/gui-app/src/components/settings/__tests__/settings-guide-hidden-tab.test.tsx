@@ -41,6 +41,7 @@ import { useSystemTabModalController } from "@/stores/tabs/use-system-tab-modal"
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { ThemeProvider } from "@/providers/theme-provider";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
@@ -79,17 +80,6 @@ vi.mock("@/components/epic-tabs/epic-surface", () => ({
 vi.mock("@/components/epics/history-surface", () => ({
   HistorySurface: () => null,
 }));
-// The sidebar's Guide group reads the Getting started facts through the host
-// runtime; that checklist has its own suite.
-vi.mock(
-  "@/components/onboarding/getting-started-checklist",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/onboarding/getting-started-checklist")
-    >()),
-    useGettingStartedGuideIsComplete: () => false,
-  }),
-);
 vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
   OnboardingCoachmark: () => <div data-testid="guide-coachmark" />,
 }));
@@ -170,7 +160,9 @@ function renderApp(router: AnyRouter): void {
     <QueryClientProvider client={new QueryClient()}>
       <TooltipProvider>
         <ThemeProvider>
-          <RouterProvider router={router} />
+          <HostRuntimeTestProvider>
+            <RouterProvider router={router} />
+          </HostRuntimeTestProvider>
         </ThemeProvider>
       </TooltipProvider>
     </QueryClientProvider>,

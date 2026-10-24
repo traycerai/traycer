@@ -45,6 +45,7 @@ import {
 } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   SystemTabModalHost,
@@ -84,30 +85,6 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: (): boolean => false,
   isMobileViewport: (): boolean => false,
 }));
-// The Personal page's chip reads host status through the host runtime, and
-// has its own suite; this one is about the Rules edit.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
-// The Team rows and the trigger's team label read the environment list
-// through the window's host client, and this suite mounts no host runtime.
-vi.mock("@/components/settings/environment/team-pick-label", () => ({
-  usePickedTeamLabel: () => null,
-}));
-vi.mock("@/components/settings/environment/team-rows", () => ({
-  TeamRows: () => null,
-}));
-// The sidebar's Guide group reads the Getting started facts through the host
-// runtime; that checklist has its own suite.
-vi.mock(
-  "@/components/onboarding/getting-started-checklist",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/onboarding/getting-started-checklist")
-    >()),
-    useGettingStartedGuideIsComplete: () => false,
-  }),
-);
 vi.mock("@/components/epics/history-modal-content", () => ({
   HistoryModalContent: () => <div data-testid="history-body" />,
 }));
@@ -288,7 +265,9 @@ function renderShell(): void {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ThemeProvider>
-          <RouterProvider router={buildRouter()} />
+          <HostRuntimeTestProvider>
+            <RouterProvider router={buildRouter()} />
+          </HostRuntimeTestProvider>
           <ThemeEditorHost />
         </ThemeProvider>
       </TooltipProvider>
@@ -588,19 +567,21 @@ describe("Rules edit through the system-tab modal shell", () => {
     const view = (open: boolean): ReactNode => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <Lifetime open={open} />
-          <DialogPrimitive.Root open={open}>
-            {open ? (
-              <SystemTabModalSurface
-                active={{ kind: "settings", section: "permissions" }}
-                editingTheme={false}
-                onClose={() => undefined}
-                onPromote={(onRejected) => {
-                  onRejected();
-                }}
-              />
-            ) : null}
-          </DialogPrimitive.Root>
+          <HostRuntimeTestProvider>
+            <Lifetime open={open} />
+            <DialogPrimitive.Root open={open}>
+              {open ? (
+                <SystemTabModalSurface
+                  active={{ kind: "settings", section: "permissions" }}
+                  editingTheme={false}
+                  onClose={() => undefined}
+                  onPromote={(onRejected) => {
+                    onRejected();
+                  }}
+                />
+              ) : null}
+            </DialogPrimitive.Root>
+          </HostRuntimeTestProvider>
         </TooltipProvider>
       </QueryClientProvider>
     );

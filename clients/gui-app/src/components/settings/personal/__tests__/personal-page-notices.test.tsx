@@ -11,21 +11,24 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
-
-// The grant minter a write carries is read from the host binding. The client
-// is a REAL `HostClient` over an in-memory messenger (`buildAccessHost`): only
-// the host on the far side is faked.
+// The grant minter a write carries is read from the host binding: the real
+// runtime's binding, with only its `auth` swapped for a minter. The client is a
+// REAL `HostClient` over an in-memory messenger (`buildAccessHost`): only the
+// host on the far side is faked.
 const hostMock = vi.hoisted(
   (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostBinding: () => hostMock.binding };
+  return {
+    ...actual,
+    useHostBinding: () => {
+      const real = actual.useHostBinding();
+      return real === null || hostMock.binding === null
+        ? real
+        : { ...real, auth: hostMock.binding.auth };
+    },
+  };
 });
 
 // Where the Review button asks Settings to go.
@@ -46,6 +49,8 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   recordNegotiatedHostMethods,
@@ -63,12 +68,21 @@ import {
   type AccessHostState,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { provider } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  HostRuntimeContext,
+  HostRuntimeProvider,
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 afterEach(() => {
   cleanup();
@@ -104,6 +118,55 @@ const SHELL_PAGE: FrameOptions = {
   mintsGrants: true,
 };
 
+/**
+ * The page under the host runtime Settings gives it: the real provider, and
+ * the scope's client re-provided the way a host-scoped panel does, so the
+ * page's own chip reads the same host the page does.
+ */
+function ScopedHostRuntime(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <RunnerHostProvider
+      runnerHost={
+        new MockRunnerHost({
+          signInUrl: "https://auth.traycer.invalid/sign-in",
+          authnBaseUrl: "https://authn.traycer.invalid",
+          localHost: null,
+          hosts: [],
+          workspaceFolderPickerPaths: undefined,
+          hasLocalHost: undefined,
+          traycerCli: undefined,
+        })
+      }
+    >
+      <HostRuntimeProvider
+        registry={hostRpcRegistry}
+        messengerFactory={(args) =>
+          new MockHostMessenger<HostRpcRegistry>({
+            registry: args.registry,
+            requestId: () => "req-runtime",
+            handlers: {},
+          })
+        }
+        invalidator={null}
+        requestId={null}
+        remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+        fallback={null}
+      >
+        <ScopedBinding>{props.children}</ScopedBinding>
+      </HostRuntimeProvider>
+    </RunnerHostProvider>
+  );
+}
+
+function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
+  const binding = useScopedHostBinding(useHostScope());
+  return (
+    <HostRuntimeContext.Provider value={binding}>
+      {props.children}
+    </HostRuntimeContext.Provider>
+  );
+}
+
 function renderPage(host: AccessHost, options: FrameOptions): void {
   recordNegotiatedHostMethods(options.windowHostId, options.methods);
   hostMock.binding = options.mintsGrants
@@ -138,13 +201,13 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
   );
   render(
     <QueryClientProvider client={queryClient}>
-      {options.runnerHost === null ? (
-        page
-      ) : (
+      <ScopedHostRuntime>
+        {/* The page's own shell, or none, as each case says; the runtime's
+            shell above is only what the provider starts on. */}
         <RunnerHostContext.Provider value={options.runnerHost}>
           {page}
         </RunnerHostContext.Provider>
-      )}
+      </ScopedHostRuntime>
     </QueryClientProvider>,
   );
 }

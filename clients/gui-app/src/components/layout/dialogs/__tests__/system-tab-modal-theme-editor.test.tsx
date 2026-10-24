@@ -18,6 +18,7 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -68,25 +69,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
 // History content is outside this regression's modal-lock boundary and needs
 // the full host runtime. Keep the actual system modal shell while isolating
 // that unrelated surface.
-// The Team rows and the trigger's team label read the environment list
-// through the window's host client, and this suite mounts no host runtime.
-vi.mock("@/components/settings/environment/team-pick-label", () => ({
-  usePickedTeamLabel: () => null,
-}));
-vi.mock("@/components/settings/environment/team-rows", () => ({
-  TeamRows: () => null,
-}));
-// The sidebar's Guide group reads the Getting started facts through the host
-// runtime; that checklist has its own suite.
-vi.mock(
-  "@/components/onboarding/getting-started-checklist",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/components/onboarding/getting-started-checklist")
-    >()),
-    useGettingStartedGuideIsComplete: () => false,
-  }),
-);
 vi.mock("@/components/epics/history-modal-content", () => ({
   HistoryModalContent: () => null,
 }));
@@ -172,7 +154,9 @@ describe("SystemTabModalHost theme editor integration", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ThemeProvider>
-            <RouterProvider router={router} />
+            <HostRuntimeTestProvider>
+              <RouterProvider router={router} />
+            </HostRuntimeTestProvider>
             <ThemeEditorHost />
           </ThemeProvider>
         </TooltipProvider>
