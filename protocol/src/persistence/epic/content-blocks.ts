@@ -1559,6 +1559,20 @@ export const errorBlockSchemaPreFallback = lazySchema(() =>
   }),
 );
 
+/** The compaction block shipped through chat.subscribe 1.35 and chat-sync 1.10. */
+export const compactionBlockSchemaPreNotApplied = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    type: z.literal("compaction"),
+    trigger: z.enum(["auto", "manual"]).nullable(),
+    preTokens: z.number().nullable(),
+    postTokens: z.number().nullable(),
+    durationMs: z.number().nullable(),
+    summary: z.string().nullable(),
+    error: z.string().nullable(),
+  }),
+);
+
 export const compactionBlockSchema = lazySchema(() =>
   z.object({
     ...baseBlockFields,
@@ -1569,6 +1583,7 @@ export const compactionBlockSchema = lazySchema(() =>
     durationMs: z.number().nullable(),
     summary: z.string().nullable(),
     error: z.string().nullable(),
+    notApplied: z.boolean().default(false),
   }),
 );
 export type CompactionBlock = z.infer<typeof compactionBlockSchema>;
@@ -2499,7 +2514,7 @@ export const contentBlockSchemaPreHtml = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
@@ -2630,7 +2645,7 @@ export const contentBlockSchemaPreReasonix = lazySchema(() =>
     todoBlockSchema,
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchemaPreReasonix,
     interviewBlockSchema,
@@ -2661,7 +2676,7 @@ export const contentBlockSchemaPreImage = lazySchema(() =>
     todoBlockSchema,
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
     steerBlockSchemaPreReasonix,
     interviewBlockSchemaPreSettlement,
@@ -2691,7 +2706,7 @@ export const contentBlockSchemaPreSettlement = lazySchema(() =>
     todoBlockSchema,
     planBlockSchemaPreReasonix,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
     steerBlockSchemaPreReasonix,
     interviewBlockSchemaPreSettlement,
@@ -2761,7 +2776,7 @@ export const contentBlockSchemaPreFallback = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreShellHost,
     steerBlockSchema,
     interviewBlockSchema,
@@ -2789,7 +2804,7 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreShellHost,
     steerBlockSchema,
     interviewBlockSchema,
@@ -2813,7 +2828,7 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
@@ -2840,7 +2855,7 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
@@ -2867,7 +2882,7 @@ export const contentBlockSchemaPreMcpApp = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     steerBlockSchema,
     interviewBlockSchema,
@@ -2911,7 +2926,7 @@ export const contentBlockSchemaV18 = lazySchema(() =>
     todoBlockSchema,
     planBlockSchema,
     errorBlockSchemaPreFallback,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
     steerBlockSchema,
     interviewBlockSchema,

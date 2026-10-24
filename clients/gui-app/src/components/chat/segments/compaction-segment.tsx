@@ -7,6 +7,7 @@ import { TraycerMarkdown } from "@/markdown";
 
 interface CompactionSegmentProps {
   status: "streaming" | "completed" | "errored";
+  notApplied: boolean;
   trigger: "auto" | "manual" | null;
   preTokens: number | null;
   postTokens: number | null;
@@ -53,21 +54,33 @@ function compactionMetricText(
 }
 
 // "Compacted" is a claim about what happened to the context. When compaction
-// failed nothing was folded, so the bar must not make that claim - it marks the
-// attempt, and the destructive line below carries the reason.
+// was unsuccessful nothing was folded, so the bar marks the attempt. A real
+// failure shows its reason; a not-applied outcome stays neutral.
 function terminalCompactionLabel(
   status: "completed" | "errored",
   isAuto: boolean,
+  notApplied: boolean,
 ): string {
   if (status === "errored") {
+    if (notApplied) {
+      return isAuto ? "Auto-compaction not applied" : "Compaction not applied";
+    }
     return isAuto ? "Auto-compaction failed" : "Compaction failed";
   }
   return isAuto ? "Auto-compacted" : "Compacted";
 }
 
 export function CompactionSegment(props: CompactionSegmentProps) {
-  const { status, trigger, preTokens, postTokens, durationMs, summary, error } =
-    props;
+  const {
+    status,
+    notApplied,
+    trigger,
+    preTokens,
+    postTokens,
+    durationMs,
+    summary,
+    error,
+  } = props;
   const isStreaming = status === "streaming";
   const isErrored = status === "errored";
   const readingWidth = useReadingWidthStyle();
@@ -75,7 +88,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
   const toggleExpanded = (): void => setExpanded((current) => !current);
 
   // A failed compaction has no boundary, so there are no real metrics and no
-  // summary to expand - only the failure and its reason.
+  // summary to expand.
   const metricText = isErrored
     ? ""
     : compactionMetricText(preTokens, postTokens, durationMs);
@@ -102,7 +115,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
       <FoldVertical className="size-3.5 shrink-0" aria-hidden />
       <span>
-        {terminalCompactionLabel(isErrored ? "errored" : "completed", isAuto)}
+        {terminalCompactionLabel(status, isAuto, notApplied)}
         <span className="text-muted-foreground/80">{metricText}</span>
       </span>
       {hasSummary ? (
@@ -157,7 +170,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
           </TraycerMarkdown>
         </div>
       ) : null}
-      {error !== null && error.length > 0 ? (
+      {!(isErrored && notApplied) && error !== null && error.length > 0 ? (
         <div className="text-center text-ui-xs text-destructive">{error}</div>
       ) : null}
     </div>

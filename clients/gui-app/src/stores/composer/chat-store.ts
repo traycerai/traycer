@@ -495,6 +495,7 @@ export type MessageSegment =
       id: string;
       kind: "compaction";
       status: "streaming" | "completed" | "errored";
+      notApplied: boolean;
       trigger: "auto" | "manual" | null;
       preTokens: number | null;
       postTokens: number | null;

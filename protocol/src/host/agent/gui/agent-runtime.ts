@@ -913,6 +913,17 @@ export type CompactionCompletedEvent = z.infer<
   typeof compactionCompletedEventSchema
 >;
 
+/** The errored compaction event shipped through chat.subscribe 1.35. */
+export const compactionErroredEventSchemaPreNotApplied = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("compaction.errored"),
+    trigger: z.enum(["auto", "manual"]).optional(),
+    preTokens: z.number().optional(),
+    error: z.string(),
+  }),
+);
+
 export const compactionErroredEventSchema = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
@@ -920,6 +931,7 @@ export const compactionErroredEventSchema = lazySchema(() =>
     trigger: z.enum(["auto", "manual"]).optional(),
     preTokens: z.number().optional(),
     error: z.string(),
+    notApplied: z.boolean().optional(),
   }),
 );
 export type CompactionErroredEvent = z.infer<
@@ -2111,7 +2123,7 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     planCompletedEventSchema,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchema,
     interviewResolvedEventSchema,
     interviewErroredEventSchema,
@@ -2165,7 +2177,7 @@ export const runtimeEventSchemaPreMcpApp = lazySchema(() =>
     planCompletedEventSchema,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchema,
     interviewResolvedEventSchema,
     interviewErroredEventSchema,
@@ -2218,7 +2230,7 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     planCompletedEventSchema,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchema,
     interviewResolvedEventSchema,
     interviewErroredEventSchema,
@@ -2280,7 +2292,7 @@ export const runtimeEventSchemaPreImage = lazySchema(() =>
     planCompletedEventSchemaPreReasonix,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchemaPreCustomAnswer,
     interviewResolvedEventSchemaPreSettlement,
     interviewErroredEventSchema,
@@ -2333,7 +2345,7 @@ export const runtimeEventSchemaV12PreInReplyTo = lazySchema(() =>
     planCompletedEventSchemaPreReasonix,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchemaPreCustomAnswer,
     interviewResolvedEventSchemaPreSettlement,
     interviewErroredEventSchema,
@@ -2397,7 +2409,7 @@ export const runtimeEventSchemaPreSettlement = lazySchema(() =>
     planCompletedEventSchemaPreReasonix,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchemaPreCustomAnswer,
     interviewResolvedEventSchemaPreSettlement,
     interviewErroredEventSchema,
@@ -2455,7 +2467,7 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     planCompletedEventSchema,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
-    compactionErroredEventSchema,
+    compactionErroredEventSchemaPreNotApplied,
     interviewRequestedEventSchema,
     interviewResolvedEventSchema,
     interviewErroredEventSchema,

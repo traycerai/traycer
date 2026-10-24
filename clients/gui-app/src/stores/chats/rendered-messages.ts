@@ -5358,6 +5358,7 @@ const BLOCK_HANDLERS: {
   compaction: (block) => ({
     kind: "compaction",
     status: block.status,
+    notApplied: block.notApplied,
     trigger: block.trigger,
     preTokens: block.preTokens,
     postTokens: block.postTokens,
