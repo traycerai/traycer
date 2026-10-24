@@ -372,7 +372,7 @@ describe("useSandboxStaging New rows", () => {
 });
 
 describe("useSandboxStaging In this task", () => {
-  it("lists the task's hosts but never an agent's burst sandbox", () => {
+  it("lists the task's hosts but never an agent's burst sandbox or Automations", () => {
     const burst = sandboxHost(
       "box-burst",
       {
@@ -385,8 +385,21 @@ describe("useSandboxStaging In this task", () => {
       },
       null,
     );
+    // A chat on Automations puts it in the task; it is still never a row.
+    const automations = sandboxHost(
+      "box-automations",
+      {
+        state: "awake",
+        summary: sandboxSummaryFixture({
+          id: "sbx-automations",
+          hostId: "box-automations",
+          kind: "automation",
+        }),
+      },
+      null,
+    );
     const task: SandboxStagingTask = {
-      hosts: [AWAKE, burst].map((host) => ({
+      hosts: [AWAKE, burst, automations].map((host) => ({
         hostId: host.hostId,
         label: host.name,
         principal: { kind: "user", id: "u1" },
@@ -399,7 +412,7 @@ describe("useSandboxStaging In this task", () => {
       const result = useSandboxStaging({
         surface: { surfaceKey: SURFACE, task },
         memoryHostId: MEMORY_HOST,
-        hosts: [LAPTOP, AWAKE, burst],
+        hosts: [LAPTOP, AWAKE, burst, automations],
       });
       useEffect(() => {
         latest = result;

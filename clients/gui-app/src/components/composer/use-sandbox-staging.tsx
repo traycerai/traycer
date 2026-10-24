@@ -10,7 +10,10 @@ import type { TaskHostGroup } from "@/components/epic-canvas/sidebar/task-host-g
 import { mirrorLineOtherHostName } from "@/components/home/composer/composer-mirror-line-model";
 import { SandboxShapeSheet } from "@/components/hosts/sandbox-shape-sheet";
 import { taskHasReadersOutsideTeam } from "@/components/hosts/team-host-disclosure-model";
-import { hostOptionTeamOwner } from "@/components/settings/host-scope/host-option-model";
+import {
+  hostOptionPickerGroup,
+  hostOptionTeamOwner,
+} from "@/components/settings/host-scope/host-option-model";
 import type {
   HostScopeOption,
   HostScopeSandbox,
@@ -302,16 +305,16 @@ export function useSandboxStaging(input: {
   );
 
   const composer = useMemo<HostSwitcherComposerMode>(() => {
-    // The picker's own rule for a sandbox: an agent's burst sandbox is never
-    // offered, and one whose row has not answered might be burst (fails closed).
+    // The picker's own rule: an agent's burst sandbox and Automations are
+    // never offered, and a sandbox whose row has not answered is not either
+    // (it fails closed).
     const inThisTask =
       task === null
         ? null
         : input.hosts.filter(
             (host) =>
               (task.hosts ?? []).some((row) => row.hostId === host.hostId) &&
-              (host.sandbox === null ||
-                (host.sandbox.summary !== null && !host.sandbox.summary.burst)),
+              hostOptionPickerGroup(host, false, null) !== "hidden",
           );
     return {
       viewerUserId: viewerUserId.length === 0 ? null : viewerUserId,

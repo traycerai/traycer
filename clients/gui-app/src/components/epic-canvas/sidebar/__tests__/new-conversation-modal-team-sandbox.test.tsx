@@ -81,6 +81,10 @@ type StagedSendInput = Parameters<typeof useStagedSandboxSend>[0];
 const testState = vi.hoisted(() => ({
   /** Whether a sandbox is staged: the staged send then takes the Start. */
   staged: false,
+  /** How many sends or Starts reached the staged send's intercept. */
+  intercepts: 0,
+  /** Whether the current host's workspace can start a send. */
+  workspaceReady: true,
   /** What the modal hands the staged send on its latest render. */
   stagedSendInput: null as StagedSendInput | null,
   /** The resolved host's catalog: `null` until it answers. */
@@ -273,6 +277,7 @@ vi.mock("@/components/composer/use-staged-sandbox-send", async () => {
           _messageText: string,
           terminalLaunch: TerminalAgentLaunch | null,
         ): boolean => {
+          testState.intercepts += 1;
           if (!testState.staged || input.surfaceKey === null) return false;
           useStagedSandboxStore
             .getState()
@@ -340,7 +345,7 @@ vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
 }));
 vi.mock("@/lib/composer/workspace-composer-availability", () => ({
   deriveFolderlessAllowedWorkspaceAvailability: () => ({ disabledHint: null }),
-  workspaceComposerCanStart: () => true,
+  workspaceComposerCanStart: () => testState.workspaceReady,
 }));
 vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,
@@ -456,6 +461,8 @@ afterEach(() => {
   testState.bodySubmit = null;
   testState.bodyStartTerminal = null;
   testState.staged = false;
+  testState.intercepts = 0;
+  testState.workspaceReady = true;
   testState.stagedSendInput = null;
   useStagedSandboxStore.setState({ bySurface: {} });
   testState.catalogHostId = null;
@@ -521,6 +528,42 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
     expectUnavailableNotice();
     expect(draftSurvived()).toBe(true);
     expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+});
+
+describe("new-conversation modal's send on a staged sandbox", () => {
+  it("lets a staged sandbox take a send though this host's workspace folder is unresolved", () => {
+    // The sandbox starts empty: the chip reads Empty sandbox and the
+    // workspace controls are hidden.
+    testState.workspaceReady = false;
+    testState.staged = true;
+    renderModal();
+    const surfaceKey = testState.stagedSendInput?.surfaceKey ?? null;
+    if (surfaceKey === null) throw new Error("expected a staging surface");
+    act(() => {
+      useStagedSandboxStore.getState().stage(surfaceKey, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: null,
+        },
+        name: "",
+        wakeString: null,
+      });
+    });
+
+    act(() => {
+      testState.bodySubmit?.();
+    });
+
+    expect(testState.intercepts).toBe(1);
+    expect(testState.createChat).not.toHaveBeenCalled();
   });
 });
 

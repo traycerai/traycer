@@ -130,10 +130,7 @@ import {
   type AttachmentsByHashPlan,
 } from "@/lib/composer/attachments-by-hash";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
-import {
-  deriveFolderlessAllowedWorkspaceAvailability,
-  workspaceComposerCanStart,
-} from "@/lib/composer/workspace-composer-availability";
+import { deriveFolderlessAllowedWorkspaceAvailability } from "@/lib/composer/workspace-composer-availability";
 import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { shouldDeferWorktreeProvisioning } from "@/lib/worktree/defer-worktree-provisioning";
 import { markEpicCreateSeedPending } from "@/lib/worktree/pending-epic-create-seeds";
@@ -146,6 +143,7 @@ import {
   useInTaskSandboxStagingSurface,
 } from "@/components/composer/use-sandbox-staging";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import { useStagedTerminalLaunch } from "@/stores/composer/staged-sandbox-store";
 import {
   stagedResubmitReady,
@@ -914,7 +912,19 @@ export function NewConversationModalBody(props: {
       resolvedWorkspace.isError,
     ],
   );
-  const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
+  // A request that names its host stages nothing: naming the machine IS the
+  // request. Otherwise the picker offers New sandbox rows keyed by this Epic's
+  // placement pin.
+  const sandboxStaging = useInTaskSandboxStagingSurface(
+    epicId,
+    newConversationSurfaceKey(epicId),
+    hostId,
+  );
+  const workspaceGate = useStagedWorkspaceGate(
+    stagingSurfaceKey(sandboxStaging),
+    workspaceAvailability,
+  );
+  const workspaceCanStart = workspaceGate.canStart;
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
   const paste = useComposerHashPaste(
@@ -941,14 +951,6 @@ export function NewConversationModalBody(props: {
   // The staged sandbox's send (sandboxes plan D1). The modal's workspace is
   // bucketed by host, so the new host's starts empty with nothing to reset.
   // `handleSubmit` is declared below and reads this hook, hence the ref.
-  // A request that names its host stages nothing: naming the machine IS the
-  // request. Otherwise the picker offers New sandbox rows keyed by this Epic's
-  // placement pin.
-  const sandboxStaging = useInTaskSandboxStagingSurface(
-    epicId,
-    newConversationSurfaceKey(epicId),
-    hostId,
-  );
   const { openTile } = useEpicTileNavigation();
   const stagedTerminal = useMemo(
     () => ({
@@ -1009,7 +1011,7 @@ export function NewConversationModalBody(props: {
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
-    workspaceAvailability.disabledHint;
+    workspaceGate.disabledHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();
   // Local partition OR epic replica, for the PASTE filter. On its own the epic
   // map strips a pasted hash-only node whose bytes are in this window's image

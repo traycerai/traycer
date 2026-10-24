@@ -68,10 +68,7 @@ import {
   type DraftRuntimeState,
 } from "@/stores/home/draft-runtime-registry";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
-import {
-  deriveFolderlessAllowedWorkspaceAvailability,
-  workspaceComposerCanStart,
-} from "@/lib/composer/workspace-composer-availability";
+import { deriveFolderlessAllowedWorkspaceAvailability } from "@/lib/composer/workspace-composer-availability";
 import {
   useLandingComposerActions,
   type TerminalAgentLaunch,
@@ -87,6 +84,7 @@ import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-s
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import { useStagedTerminalLaunch } from "@/stores/composer/staged-sandbox-store";
 import {
   stagedResubmitReady,
@@ -438,7 +436,13 @@ export function LandingComposer(props: LandingComposerProps) {
       resolvedWorkspace.isError,
     ],
   );
-  const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
+  // The window's pin key, which a staged sandbox is staged under.
+  const composerSurfaceKey = useComposerSurfaceHostKey();
+  const workspaceGate = useStagedWorkspaceGate(
+    composerSurfaceKey,
+    workspaceAvailability,
+  );
+  const workspaceCanStart = workspaceGate.canStart;
   const runnerHost = useRunnerHost();
   const paste = useLandingComposerPaste({
     editorRef,
@@ -474,7 +478,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // host resolver is the authoritative backstop either way.
   const packGate = useProviderPackGate(harnessId);
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
-    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    workspaceDisabledHint: workspaceGate.disabledHint,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
     profileDisabled: profileEligibility.disabled,
@@ -489,7 +493,6 @@ export function LandingComposer(props: LandingComposerProps) {
 
   // The staged sandbox's send (sandboxes plan D1). Phase 2 resets the
   // draft's workspace to the new host's, which starts empty, then resubmits.
-  const composerSurfaceKey = useComposerSurfaceHostKey();
   // The latest `handleSubmit`, which is declared below and reads this hook.
   const stagedSubmitRef = useRef<() => boolean>(() => false);
   const prepareSandboxHandoff = useCallback(

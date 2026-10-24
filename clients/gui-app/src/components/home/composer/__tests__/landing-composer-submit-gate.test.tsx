@@ -43,6 +43,8 @@ const testState = vi.hoisted(() => ({
   modelSlug: "claude-sonnet",
   /** The resolved host's catalog: `null` until it answers. */
   catalogHostId: null as string | null,
+  /** Whether the current host's workspace can start a send. */
+  workspaceReady: true,
   /** The resolved host's `providers.list`, `undefined` until it answers. */
   providers: undefined as
     | ReadonlyArray<{ readonly providerId: string; readonly profiles: [] }>
@@ -243,7 +245,7 @@ vi.mock("@/lib/composer/workspace-composer-availability", () => ({
   deriveFolderlessAllowedWorkspaceAvailability: () => ({
     disabledHint: null,
   }),
-  workspaceComposerCanStart: () => true,
+  workspaceComposerCanStart: () => testState.workspaceReady,
 }));
 
 vi.mock("@/components/home/composer/surface-activity-hooks", () => ({
@@ -397,6 +399,7 @@ afterEach(() => {
   testState.modelSlug = "claude-sonnet";
   testState.catalogHostId = null;
   testState.providers = undefined;
+  testState.workspaceReady = true;
 });
 
 describe("LandingComposer direct submit gate", () => {
@@ -501,6 +504,99 @@ describe("LandingComposer direct submit gate", () => {
       terminalAgentArgs: "--resume",
       profileId: null,
     });
+  });
+
+  it("lets a staged sandbox take a send though this host's workspace folder is unresolved", () => {
+    // The sandbox starts empty: the chip reads Empty sandbox and the
+    // workspace controls are hidden.
+    testState.workspaceReady = false;
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    const composer = (
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-test"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />
+    );
+    const view = render(composer);
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    view.rerender(composer);
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+    // The intercept took the send: it recorded the sending draft.
+    expect(testState.submit).not.toHaveBeenCalled();
+    expect(
+      useStagedSandboxStore.getState().bySurface["landing:window-test"]
+        ?.ownerId,
+    ).toBe("pending-test");
+  });
+
+  it("lets a staged sandbox take a terminal agent's Start though this host's workspace folder is unresolved", () => {
+    testState.workspaceReady = false;
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const start = testState.startTerminal;
+    if (start === null) throw new Error("expected ComposerBody seam");
+    const launch: TerminalAgentLaunch = {
+      harnessId: "claude",
+      model: null,
+      reasoningEffort: null,
+      terminalAgentArgs: null,
+      profileId: null,
+    };
+
+    act(() => {
+      start(launch, "host-test");
+    });
+
+    // The stage took the Start and keeps it for the new host.
+    expect(testState.selectTerminalAgent).not.toHaveBeenCalled();
+    expect(
+      useStagedSandboxStore.getState().bySurface["landing:window-test"]
+        ?.terminalLaunch,
+    ).toEqual(launch);
   });
 
   it("lets a staged sandbox take the send of a person with no model to pick yet", () => {
