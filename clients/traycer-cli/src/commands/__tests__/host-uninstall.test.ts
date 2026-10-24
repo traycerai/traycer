@@ -855,7 +855,7 @@ describe("runHostUninstall", () => {
     });
   });
 
-  it("reports the retained registration and running host a default uninstall leaves behind", async () => {
+  it("reports the retained registration and running host a forced default uninstall leaves behind", async () => {
     const deps = commandDeps({
       stop: async () => undefined,
       receivedOptions: [],
@@ -866,11 +866,11 @@ describe("runHostUninstall", () => {
         pid: 4242,
       }),
       liveness: "current",
-      successorAfterTeardown: null,
+      successorAfterTeardown: true,
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: false, force: false },
+      { all: false, force: true },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -905,7 +905,7 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({
       serviceRegistrationRetained: null,
       retainedServiceState: "not-installed",
-      hostStillRunning: false,
+      hostStillRunning: null,
     });
     expect(result.human).not.toContain("still registered");
   });
@@ -942,12 +942,12 @@ describe("runHostUninstall", () => {
     ]);
     expect(result.exitCode).toBe(0);
     // NULL for registration: `false` would be a claim about something this
-    // command never observed. Liveness is a SEPARATE instrument and answered
-    // fine, so it keeps its observed value rather than being dragged to null.
+    // command never observed. Liveness is a SEPARATE instrument: the boundary
+    // read found nothing published, so it is unknown on its own account.
     expect(result.data).toMatchObject({
       serviceRegistrationRetained: null,
       retainedServiceState: null,
-      hostStillRunning: false,
+      hostStillRunning: null,
     });
   });
 
@@ -1268,4 +1268,179 @@ describe("runHostUninstall - a published process that is not proven gone (trayce
       expect(result.data).toMatchObject({ removedInstallDir: true });
     });
   }
+});
+
+describe("runHostUninstall - default path stops a host that may be running", () => {
+  interface DefaultPathRun {
+    readonly deps: RunHostUninstallDeps;
+    readonly actuators: HostUninstallActuators;
+    readonly receivedOptions: UninstallHostOptions[];
+    readonly events: string[];
+    readonly stopOptions: StopServiceOptions[];
+  }
+
+  // The published host is live until `stop` runs; `exitsOnStop: false` models a
+  // stop that resolves while the host keeps serving. `stopError` makes it reject.
+  function defaultPathRun(args: {
+    readonly liveness: PublishedProcessIdentityVerdict | "unpublished";
+    readonly exitsOnStop: boolean;
+    readonly stopError: Error | null;
+  }): DefaultPathRun {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const events: string[] = [];
+    const stopOptions: StopServiceOptions[] = [];
+    let stopped = false;
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: args.liveness,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    const deps: RunHostUninstallDeps = {
+      ...base,
+      probeProcessExited: async (pid, startIdentity) =>
+        stopped && args.exitsOnStop
+          ? "dead"
+          : base.probeProcessExited(pid, startIdentity),
+      uninstallHost: async (options) => {
+        events.push("uninstallHost");
+        return base.uninstallHost(options);
+      },
+    };
+    const actuators: HostUninstallActuators = {
+      ...testActuators(deps),
+      uninstall: async () => {
+        events.push("uninstall");
+      },
+      stop: async (_controller, _label, options) => {
+        events.push("stop");
+        stopOptions.push(options);
+        stopped = true;
+        if (args.stopError !== null) throw args.stopError;
+      },
+    };
+    return { deps, actuators, receivedOptions, events, stopOptions };
+  }
+
+  it("stops a live published host before removing the bytes, and never deregisters the service", async () => {
+    const run = defaultPathRun({
+      liveness: "current",
+      exitsOnStop: true,
+      stopError: null,
+    });
+    const result = await runHostUninstall(
+      { all: false, force: false },
+      COMMAND_CONTEXT,
+      run.deps,
+      run.actuators,
+    );
+
+    expect(run.events).toEqual(["stop", "uninstallHost"]);
+    expect(run.stopOptions).toEqual([{ force: false }]);
+    expect(result.data).toMatchObject({
+      removedInstallDir: true,
+      serviceUninstalled: false,
+    });
+  });
+
+  it("rethrows the host's own E_HOST_BUSY and keeps the install", async () => {
+    const busy = cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: "host stop: the host has work in progress",
+      details: null,
+      exitCode: 1,
+    });
+    const run = defaultPathRun({
+      liveness: "current",
+      exitsOnStop: false,
+      stopError: busy,
+    });
+
+    await expect(
+      runHostUninstall(
+        { all: false, force: false },
+        COMMAND_CONTEXT,
+        run.deps,
+        run.actuators,
+      ),
+    ).rejects.toBe(busy);
+    expect(run.receivedOptions).toEqual([]);
+  });
+
+  it("with --force, stops with the forced stop and removes the install though the host stays live", async () => {
+    const run = defaultPathRun({
+      liveness: "current",
+      exitsOnStop: false,
+      stopError: null,
+    });
+    const result = await runHostUninstall(
+      { all: false, force: true },
+      COMMAND_CONTEXT,
+      run.deps,
+      run.actuators,
+    );
+
+    expect(run.stopOptions).toEqual([{ force: true }]);
+    expect(run.receivedOptions).toHaveLength(1);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
+  });
+
+  it("keeps the install when a resolved stop left the host live, naming --force and not --all", async () => {
+    const run = defaultPathRun({
+      liveness: "current",
+      exitsOnStop: false,
+      stopError: null,
+    });
+
+    const caught: unknown = await runHostUninstall(
+      { all: false, force: false },
+      COMMAND_CONTEXT,
+      run.deps,
+      run.actuators,
+    ).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      message: expect.stringContaining("traycer host uninstall --force"),
+    });
+    expect((caught as { message: string }).message).not.toContain("--all");
+    expect(run.receivedOptions).toEqual([]);
+  });
+
+  it("does not stop anything when nothing is published", async () => {
+    const run = defaultPathRun({
+      liveness: "unpublished",
+      exitsOnStop: false,
+      stopError: null,
+    });
+    await runHostUninstall(
+      { all: false, force: false },
+      COMMAND_CONTEXT,
+      run.deps,
+      run.actuators,
+    );
+
+    expect(run.events).toEqual(["uninstallHost"]);
+  });
+
+  it("does not stop anything when the published process is proven dead", async () => {
+    const run = defaultPathRun({
+      liveness: "dead",
+      exitsOnStop: false,
+      stopError: null,
+    });
+    await runHostUninstall(
+      { all: false, force: false },
+      COMMAND_CONTEXT,
+      run.deps,
+      run.actuators,
+    );
+
+    expect(run.events).toEqual(["uninstallHost"]);
+  });
 });
