@@ -31,6 +31,7 @@ import {
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * `chat.subscribe@1.17`: the sender-host line. `sentFromHostId` appears on
@@ -48,7 +49,9 @@ const SENT_FROM_HOST_NEEDLE = '"sentFromHostId":';
 function schemaText(schema: z.ZodType): string {
   return (["input", "output"] as const)
     .map((io) =>
-      JSON.stringify(z.toJSONSchema(schema, { io, unrepresentable: "any" })),
+      JSON.stringify(
+        toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }),
+      ),
     )
     .join("\n");
 }

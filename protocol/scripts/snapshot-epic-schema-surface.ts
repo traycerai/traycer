@@ -13,7 +13,7 @@
  */
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
-import { z } from "zod";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 const epicSchema = getRecordSchema(persistenceRecordRegistry, "epic", "latest");
 
@@ -22,8 +22,8 @@ const header =
   "// The registered epicSchema JSON-Schema surface; frozen by epic-schema-surface-compat.test.ts.\n";
 
 const baseline = {
-  storage: z.toJSONSchema(epicSchema, { io: "input" }),
-  domain: z.toJSONSchema(epicSchema),
+  storage: toCanonicalJsonSchema(epicSchema, { io: "input" }),
+  domain: toCanonicalJsonSchema(epicSchema, {}),
 };
 
 process.stdout.write(

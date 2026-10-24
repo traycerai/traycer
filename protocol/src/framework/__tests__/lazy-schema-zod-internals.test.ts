@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Canary for the zod 4.6.7 internals `lazySchema` reconstructs in place.
@@ -116,7 +117,10 @@ describe("lazySchema zod 4.6.7 internals canary", () => {
       schema.parse({ kind: "a", tags: null, choice: 1 }),
       canaryMessage(version),
     ).toEqual({ kind: "a", tags: null, choice: 1 });
-    expect(z.toJSONSchema(schema), canaryMessage(version)).toBeTypeOf("object");
+    expect(
+      toCanonicalJsonSchema(schema, {}),
+      canaryMessage(version),
+    ).toBeTypeOf("object");
     expect(Reflect.ownKeys(Object.prototype), canaryMessage(version)).toEqual(
       before,
     );

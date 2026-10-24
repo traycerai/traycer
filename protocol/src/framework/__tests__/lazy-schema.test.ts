@@ -9,6 +9,7 @@ import {
   toStreamFieldJsonSchemaText,
   toUnknownKeyTree,
 } from "@traycer/protocol/framework/json-schema-fingerprint";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 const titled = z.meta({ title: "T" });
 
@@ -219,7 +220,9 @@ describe("lazySchema pending operations", () => {
     const init = (): z.ZodObject => z.object({ a: z.string(), n: z.number() });
     const pending = lazySchema(init);
     const twin = init();
-    expect(z.toJSONSchema(pending)).toEqual(z.toJSONSchema(twin));
+    expect(toCanonicalJsonSchema(pending, {})).toEqual(
+      toCanonicalJsonSchema(twin, {}),
+    );
   });
 });
 
@@ -230,9 +233,13 @@ describe("lazySchema toJSONSchema pipe/codec child (seen.ref regression)", () =>
     const pendingChild = lazySchema(childInit);
     const eagerChild = childInit();
     expect(
-      z.toJSONSchema(z.object({ a: pendingChild }), { unrepresentable: "any" }),
+      toCanonicalJsonSchema(z.object({ a: pendingChild }), {
+        unrepresentable: "any",
+      }),
     ).toEqual(
-      z.toJSONSchema(z.object({ a: eagerChild }), { unrepresentable: "any" }),
+      toCanonicalJsonSchema(z.object({ a: eagerChild }), {
+        unrepresentable: "any",
+      }),
     );
   });
 
@@ -244,8 +251,8 @@ describe("lazySchema toJSONSchema pipe/codec child (seen.ref regression)", () =>
       });
     const pendingChild = lazySchema(childInit);
     const eagerChild = childInit();
-    expect(z.toJSONSchema(z.object({ a: pendingChild }))).toEqual(
-      z.toJSONSchema(z.object({ a: eagerChild })),
+    expect(toCanonicalJsonSchema(z.object({ a: pendingChild }), {})).toEqual(
+      toCanonicalJsonSchema(z.object({ a: eagerChild }), {}),
     );
   });
 });
@@ -318,7 +325,9 @@ describe("lazySchema describe parent", () => {
   function expectCheckFormParity(init: () => z.ZodType): void {
     const standIn = lazySchema(init);
     const twin = init();
-    expect(z.toJSONSchema(standIn)).toEqual(z.toJSONSchema(twin));
+    expect(toCanonicalJsonSchema(standIn, {})).toEqual(
+      toCanonicalJsonSchema(twin, {}),
+    );
     expect(standIn.description).toBe(twin.description);
     expect(z.globalRegistry.get(standIn)).toEqual(z.globalRegistry.get(twin));
     expect(standIn.safeParse("ok").success).toBe(true);
@@ -355,7 +364,9 @@ describe("lazySchema describe parent", () => {
     const init = (): z.ZodType => z.string().check(z.describe("cb")).min(3);
     const standIn = lazySchema(init);
     const twin = init();
-    expect(z.toJSONSchema(standIn)).toEqual(z.toJSONSchema(twin));
+    expect(toCanonicalJsonSchema(standIn, {})).toEqual(
+      toCanonicalJsonSchema(twin, {}),
+    );
     expect(standIn.description).toBe(twin.description);
     expect(z.globalRegistry.get(standIn)).toEqual(z.globalRegistry.get(twin));
     expect(standIn.safeParse("abc").success).toBe(true);
@@ -392,7 +403,9 @@ describe("lazySchema describe parent", () => {
     }
     const twin = init();
     z.globalRegistry.add(twin, meta);
-    expect(z.toJSONSchema(standIn)).toEqual(z.toJSONSchema(twin));
+    expect(toCanonicalJsonSchema(standIn, {})).toEqual(
+      toCanonicalJsonSchema(twin, {}),
+    );
     expect(z.globalRegistry.get(standIn)).toEqual(z.globalRegistry.get(twin));
     if (typeof id === "string") {
       expect(z.globalRegistry._idmap.get(id)).toBe(twin);
@@ -457,7 +470,9 @@ describe("lazySchema describe parent", () => {
   it("inner .describe is fine and z.toJSONSchema equals the eager twin", () => {
     const init = (): z.ZodObject => z.object({ a: z.string().describe("d") });
     const pending = lazySchema(init);
-    expect(z.toJSONSchema(pending)).toEqual(z.toJSONSchema(init()));
+    expect(toCanonicalJsonSchema(pending, {})).toEqual(
+      toCanonicalJsonSchema(init(), {}),
+    );
   });
 });
 

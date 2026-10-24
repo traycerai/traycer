@@ -62,6 +62,7 @@ import {
   chatActionSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
 // The minor each surface was minted on. A line carries a surface from its own
@@ -178,7 +179,9 @@ const MINORS = Object.keys(chatSubscribeLine.versions)
 function schemaText(schema: z.ZodType): string {
   return (["input", "output"] as const)
     .map((io) =>
-      JSON.stringify(z.toJSONSchema(schema, { io, unrepresentable: "any" })),
+      JSON.stringify(
+        toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }),
+      ),
     )
     .join("\n");
 }
@@ -264,7 +267,7 @@ function shellShapes(schema: z.ZodType): {
     for (const value of Object.values(record)) visit(value);
   };
   for (const io of ["input", "output"] as const) {
-    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
   }
   return tally;
 }
@@ -298,7 +301,7 @@ function toolCallArtifactStampPresent(schema: z.ZodType): boolean {
     for (const value of Object.values(record)) visit(value);
   };
   for (const io of ["input", "output"] as const) {
-    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
     if (found) return true;
   }
   return found;
@@ -345,7 +348,7 @@ function artifactOperationKinds(schema: z.ZodType): string[] {
     for (const value of Object.values(record)) visit(value);
   };
   for (const io of ["input", "output"] as const) {
-    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
   }
   return [...kinds];
 }
@@ -362,7 +365,7 @@ const literalSchema = z.object({ const: z.string() });
 
 function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
   const json = unionArmsSchema.parse(
-    z.toJSONSchema(serverFrameSchema, {
+    toCanonicalJsonSchema(serverFrameSchema, {
       io: "output",
       unrepresentable: "any",
     }),

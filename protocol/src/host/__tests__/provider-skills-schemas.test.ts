@@ -5,7 +5,6 @@
  * copies that must not grow those keys.
  */
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 import {
   nativeListResultSchema,
   nativeListResultSchemaV70Preimage,
@@ -18,6 +17,7 @@ import {
   providerSkillsCapabilitiesSchemaV70Preimage,
   providersSkillsInspectResultSchema,
 } from "@traycer/protocol/host/provider-native-schemas";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 type SkillsScope = "global" | "project";
 
@@ -657,9 +657,12 @@ describe("providerSkillsCapabilitiesSchema actionScopes skew gate", () => {
 
 describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   it("V70 skills capabilities JSON schema rejects inspect / edit / update keys", () => {
-    const json = z.toJSONSchema(providerSkillsCapabilitiesSchemaV70Preimage, {
-      unrepresentable: "any",
-    });
+    const json = toCanonicalJsonSchema(
+      providerSkillsCapabilitiesSchemaV70Preimage,
+      {
+        unrepresentable: "any",
+      },
+    );
     expect(json).toMatchObject({ additionalProperties: false });
     const actionScopes = json.properties?.actionScopes;
     expect(actionScopes).toMatchObject({ additionalProperties: false });
@@ -700,7 +703,7 @@ describe("v7.0 frozen skills shapes do not grow the new keys", () => {
   });
 
   it("V70 skill row JSON schema rejects origin and conflict", () => {
-    const json = z.toJSONSchema(providerSkillSchemaV70Preimage, {
+    const json = toCanonicalJsonSchema(providerSkillSchemaV70Preimage, {
       unrepresentable: "any",
     });
     expect(json).toMatchObject({ additionalProperties: false });

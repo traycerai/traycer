@@ -8,6 +8,7 @@ import {
   autoJudgeSetResponseSchemaV10,
   autoJudgeSetV10,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 // The same digest recipe as `chat-schema-checkpoints.test.ts`: SHA-256 over
 // the key-sorted JSON of `z.toJSONSchema(schema, { io })`.
@@ -28,7 +29,7 @@ function canonical(value: unknown): unknown {
 
 function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
   return createHash("sha256")
-    .update(JSON.stringify(canonical(z.toJSONSchema(schema, { io }))))
+    .update(JSON.stringify(canonical(toCanonicalJsonSchema(schema, { io }))))
     .digest("hex");
 }
 
