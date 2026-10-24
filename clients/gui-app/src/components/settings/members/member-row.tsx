@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  DONE_REMOVAL_LABEL,
   GAINED_EDITING_TAG,
   PENDING_REMOVAL_LABEL,
   REMOVE_LABEL,
@@ -31,11 +32,10 @@ export function MemberRow(props: {
 }): ReactNode {
   const name = memberDisplayName(props.member);
   const pending = props.member.inviteState === "pending";
-  const showRoleSelect = props.viewerIsAdmin && !props.isLastAdmin;
-  const showRemove =
-    props.viewerIsAdmin &&
-    !props.isLastAdmin &&
-    props.member.removalState !== "pending";
+  const beingRemoved = props.member.removalState !== "none";
+  const showRoleSelect =
+    props.viewerIsAdmin && !props.isLastAdmin && !beingRemoved;
+  const showRemove = showRoleSelect;
   const actionLabel = pending ? REVOKE_LABEL : REMOVE_LABEL;
   const detail = memberDetailLine(props.member, {
     isSelf: props.isSelf,
@@ -60,6 +60,9 @@ export function MemberRow(props: {
           ) : null}
           {props.member.removalState === "pending" ? (
             <Badge variant="muted">{PENDING_REMOVAL_LABEL}</Badge>
+          ) : null}
+          {props.member.removalState === "done" ? (
+            <Badge variant="muted">{DONE_REMOVAL_LABEL}</Badge>
           ) : null}
         </div>
         {detail.length === 0 ? null : (

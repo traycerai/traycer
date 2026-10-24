@@ -3,7 +3,7 @@ import {
   CANCEL_LABEL,
   CANNOT_RECALL_LABEL,
   LINKED_PLAN_LABEL,
-  REMOVE_LABEL,
+  RETRY_LABEL,
   SHARED_SIGN_INS_LABEL,
   paidSandboxesLabel,
   removeActivityLine,
@@ -12,6 +12,7 @@ import {
   removeLinkedPlanConsequence,
   removePaidSandboxesConsequence,
   removePendingUntilDone,
+  removePreviewFailed,
   removePreviewLead,
   removePreviewTitle,
   removeSharedSignInConsequence,
@@ -22,7 +23,10 @@ import {
   PreviewTable,
   type PreviewTableRow,
 } from "@/components/settings/members/preview-table";
-import type { RemovePreviewModel } from "@/components/settings/members/types";
+import type {
+  PreviewState,
+  RemovePreviewModel,
+} from "@/components/settings/members/types";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,6 +39,7 @@ import {
 } from "@/components/ui/dialog";
 
 function removePreviewRows(
+  memberName: string,
   teamName: string,
   preview: RemovePreviewModel,
 ): readonly PreviewTableRow[] {
@@ -42,10 +47,10 @@ function removePreviewRows(
   const activity = removeActivityLine(preview);
   const workNow =
     activity === null
-      ? removeTimingRule(preview.memberName)
-      : `${activity}. ${removeTimingRule(preview.memberName)}`;
+      ? removeTimingRule(memberName)
+      : `${activity}. ${removeTimingRule(memberName)}`;
   rows.push({
-    label: removeWorkNowLabel(preview.memberName),
+    label: removeWorkNowLabel(memberName),
     value: workNow,
   });
   if (preview.sharedSignIns.length > 0) {
@@ -55,9 +60,9 @@ function removePreviewRows(
     });
   }
   rows.push({
-    label: paidSandboxesLabel(preview.memberName),
+    label: paidSandboxesLabel(memberName),
     value: removePaidSandboxesConsequence(
-      preview.memberName,
+      memberName,
       teamName,
       preview.paidSandboxes,
     ),
@@ -68,29 +73,29 @@ function removePreviewRows(
   });
   rows.push({
     label: CANNOT_RECALL_LABEL,
-    value: removeCannotRecall(preview.memberName, teamName),
+    value: removeCannotRecall(memberName, teamName),
   });
   return rows;
 }
 
 /**
  * Offboarding preview for an accepted member. Omits the activity line when
- * turns, terminals, or hostName are null. Never names a clock.
+ * turns, terminals, or hostName are null. Never names a clock. A preview that
+ * could not be read says so, offers Retry, and keeps Remove off: nothing is
+ * shown as a consequence that was not read.
  */
 export function RemovePreviewDialog(props: {
   readonly open: boolean;
+  readonly memberName: string;
   readonly teamName: string;
-  readonly preview: RemovePreviewModel | null;
+  readonly preview: PreviewState<RemovePreviewModel>;
   readonly busy: boolean;
   readonly blockedReason: string | null;
   readonly onOpenChange: (open: boolean) => void;
+  readonly onRetry: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
   const preview = props.preview;
-  const title =
-    preview === null
-      ? REMOVE_LABEL
-      : removePreviewTitle(preview.memberName, props.teamName);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -98,31 +103,50 @@ export function RemovePreviewDialog(props: {
         data-testid="members-remove-preview"
       >
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>
+            {removePreviewTitle(props.memberName, props.teamName)}
+          </DialogTitle>
           <DialogDescription>
-            {preview === null
-              ? ""
-              : removePreviewLead(preview.memberName, props.teamName)}
+            {removePreviewLead(props.memberName, props.teamName)}
           </DialogDescription>
         </DialogHeader>
-        {preview === null ? (
+        {preview.status === "loading" ? (
           <AgentSpinningDots
             className={undefined}
             testId="members-remove-preview-busy"
             variant={undefined}
             tone="muted"
           />
-        ) : (
+        ) : null}
+        {preview.status === "failed" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p
+              className="max-w-[72ch] text-ui-sm text-destructive"
+              role="status"
+              data-testid="members-remove-preview-failed"
+            >
+              {removePreviewFailed(props.memberName)}
+            </p>
+            <Button type="button" variant="outline" onClick={props.onRetry}>
+              {RETRY_LABEL}
+            </Button>
+          </div>
+        ) : null}
+        {preview.status === "ready" ? (
           <>
             <PreviewTable
               testId="members-remove-preview-table"
-              rows={removePreviewRows(props.teamName, preview)}
+              rows={removePreviewRows(
+                props.memberName,
+                props.teamName,
+                preview.preview,
+              )}
             />
             <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-              {removePendingUntilDone(preview.memberName, props.teamName)}
+              {removePendingUntilDone(props.memberName, props.teamName)}
             </p>
           </>
-        )}
+        ) : null}
         {props.blockedReason === null ? null : (
           <p
             className="max-w-[72ch] text-ui-sm text-destructive"
@@ -145,7 +169,9 @@ export function RemovePreviewDialog(props: {
             variant="destructive"
             onClick={props.onConfirm}
             disabled={
-              props.busy || preview === null || props.blockedReason !== null
+              props.busy ||
+              preview.status !== "ready" ||
+              props.blockedReason !== null
             }
             data-testid="members-remove-confirm"
           >
@@ -157,9 +183,7 @@ export function RemovePreviewDialog(props: {
                 tone="inherit"
               />
             ) : null}
-            {preview === null
-              ? REMOVE_LABEL
-              : removeConfirmLabel(preview.memberName)}
+            {removeConfirmLabel(props.memberName)}
           </Button>
         </DialogFooter>
       </DialogContent>

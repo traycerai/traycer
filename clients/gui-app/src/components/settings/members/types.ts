@@ -50,8 +50,8 @@ export interface PaidSandboxPreview {
   readonly startedBy: string;
 }
 
+/** The member named by a row and its dialogs, not by a preview. */
 export interface RemovePreviewModel {
-  readonly memberName: string;
   readonly activeTurns: number | null;
   readonly terminals: number | null;
   readonly hostName: string | null;
@@ -60,12 +60,21 @@ export interface RemovePreviewModel {
   readonly linkedPlan: string | null;
 }
 
+/** `turnsOnPlan` null: the serving host cannot see the member's turns. */
 export interface PlanUnlinkPreviewModel {
-  readonly memberName: string;
   readonly planLabel: string;
-  readonly turnsOnPlan: number;
+  readonly turnsOnPlan: number | null;
   readonly whatKeepsWorking: string;
 }
+
+/** A dialog's preview: still being read, read, or refused. */
+export type PreviewState<Preview> =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly preview: Preview }
+  | { readonly status: "failed" };
+
+/** The members read: a failed read is never shown as an empty team. */
+export type MembersReadState = "loading" | "failed" | "ready";
 
 /**
  * P3's drawer subject. Members rows use kind `member` and key = userId;

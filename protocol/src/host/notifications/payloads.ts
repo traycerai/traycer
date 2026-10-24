@@ -716,7 +716,11 @@ export type HostNotificationRemovalHost = z.infer<
   typeof hostNotificationRemovalHostSchema
 >;
 
-/** `team.member.removed`: a member left or was removed, with each host's facts. */
+/**
+ * `team.member.removed`: a member left or was removed, with each host's facts.
+ * `receiptId` is the receipt `environment.members.remove` answered for this
+ * removal; absent or null on a row written without one.
+ */
 export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -725,6 +729,7 @@ export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
       teamName: z.string(),
       memberName: z.string(),
       hosts: z.array(hostNotificationRemovalHostSchema),
+      receiptId: idSchema.nullable().optional(),
     })
     .catchall(z.unknown()),
 );

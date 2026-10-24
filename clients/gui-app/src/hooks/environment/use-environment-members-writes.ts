@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentMembersRemovePreviewResponse } from "@traycer/protocol/host/environment/contracts";
 import type {
   MembersInviteOutcome,
   MembersRemoveOutcome,
@@ -24,15 +23,12 @@ export interface EnvironmentMembersWrites {
     readonly userId: string;
   }) => Promise<MembersRemoveOutcome>;
   readonly noticeSeen: () => void;
-  readonly loadRemovePreview: (
-    userId: string,
-  ) => Promise<EnvironmentMembersRemovePreviewResponse | null>;
 }
 
 /**
  * Members writes against `environment.members.invite` / `.setRole` /
- * `.remove` / `.noticeSeen` / `.removePreview`. A missing client answers
- * `forbidden` / `null` rather than throwing at the call site.
+ * `.remove` / `.noticeSeen`. A missing client answers `forbidden` rather
+ * than throwing at the call site.
  */
 export function useEnvironmentMembersWrites(
   client: HostClient<HostRpcRegistry> | null,
@@ -120,29 +116,10 @@ export function useEnvironmentMembersWrites(
     void noticeSeenMutation.mutateAsync({ environmentId });
   }, [environmentId, noticeSeenMutation]);
 
-  const loadRemovePreview = useCallback(
-    (
-      userId: string,
-    ): Promise<EnvironmentMembersRemovePreviewResponse | null> => {
-      if (client === null) return Promise.resolve(null);
-      return client
-        .request("environment.members.removePreview", {
-          environmentId,
-          userId,
-        })
-        .then(
-          (response) => response,
-          () => null,
-        );
-    },
-    [client, environmentId],
-  );
-
   return {
     invite,
     setRole,
     remove,
     noticeSeen,
-    loadRemovePreview,
   };
 }

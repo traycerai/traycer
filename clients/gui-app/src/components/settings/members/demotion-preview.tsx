@@ -4,9 +4,11 @@ import {
   AGENTS_ON_PLAN_LABEL,
   CANCEL_LABEL,
   CHANGE_ROLE_LABEL,
+  RETRY_LABEL,
   WHAT_KEEPS_WORKING_LABEL,
   WHO_PAYS_LABEL,
   demotionLossLine,
+  demotionPreviewFailed,
   demotionTitle,
   planUnlinkAfterwards,
   planUnlinkLead,
@@ -17,7 +19,10 @@ import {
   PreviewTable,
   type PreviewTableRow,
 } from "@/components/settings/members/preview-table";
-import type { PlanUnlinkPreviewModel } from "@/components/settings/members/types";
+import type {
+  PlanUnlinkPreviewModel,
+  PreviewState,
+} from "@/components/settings/members/types";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,23 +59,23 @@ function demotionRows(
 }
 
 /**
- * Demotion preview: the plan-unlink table plus the admin-powers loss line.
+ * Demotion preview: the plan-unlink table plus the admin-powers loss line. A
+ * preview that could not be read says so, offers Retry, and keeps Change role
+ * off.
  */
 export function DemotionPreviewDialog(props: {
   readonly open: boolean;
+  readonly memberName: string;
   readonly teamName: string;
   readonly nextRoleLabel: string;
-  readonly preview: PlanUnlinkPreviewModel | null;
+  readonly preview: PreviewState<PlanUnlinkPreviewModel>;
   readonly busy: boolean;
   readonly blockedReason: string | null;
   readonly onOpenChange: (open: boolean) => void;
+  readonly onRetry: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
   const preview = props.preview;
-  const title =
-    preview === null
-      ? CHANGE_ROLE_LABEL
-      : demotionTitle(preview.memberName, props.teamName);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -78,32 +83,49 @@ export function DemotionPreviewDialog(props: {
         data-testid="members-demotion-preview"
       >
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>
+            {demotionTitle(props.memberName, props.teamName)}
+          </DialogTitle>
           <DialogDescription>
-            {preview === null ? "" : planUnlinkLead(props.teamName)}
+            {planUnlinkLead(props.teamName)}
           </DialogDescription>
         </DialogHeader>
-        {preview === null ? (
+        {preview.status === "loading" ? (
           <AgentSpinningDots
             className={undefined}
             testId="members-demotion-preview-busy"
             variant={undefined}
             tone="muted"
           />
-        ) : (
+        ) : null}
+        {preview.status === "failed" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p
+              className="max-w-[72ch] text-ui-sm text-destructive"
+              role="status"
+              data-testid="members-demotion-preview-failed"
+            >
+              {demotionPreviewFailed(props.memberName)}
+            </p>
+            <Button type="button" variant="outline" onClick={props.onRetry}>
+              {RETRY_LABEL}
+            </Button>
+          </div>
+        ) : null}
+        {preview.status === "ready" ? (
           <>
             <PreviewTable
               testId="members-demotion-preview-table"
-              rows={demotionRows(props.teamName, preview)}
+              rows={demotionRows(props.teamName, preview.preview)}
             />
             <p
               className="max-w-[72ch] text-ui-sm"
               data-testid="members-demotion-loss"
             >
-              {demotionLossLine(preview.memberName)}
+              {demotionLossLine(props.memberName)}
             </p>
           </>
-        )}
+        ) : null}
         {props.blockedReason === null ? null : (
           <p
             className="max-w-[72ch] text-ui-sm text-destructive"
@@ -125,7 +147,9 @@ export function DemotionPreviewDialog(props: {
             type="button"
             onClick={props.onConfirm}
             disabled={
-              props.busy || preview === null || props.blockedReason !== null
+              props.busy ||
+              preview.status !== "ready" ||
+              props.blockedReason !== null
             }
             data-testid="members-demotion-confirm"
           >

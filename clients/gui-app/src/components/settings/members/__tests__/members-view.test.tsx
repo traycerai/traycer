@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -6,9 +7,14 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { EnvironmentMembersRemovePreviewResponse } from "@traycer/protocol/host/environment/contracts";
+import {
+  mountTeamPage,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { MembersView } from "@/components/settings/members/members-view";
 import type {
@@ -16,24 +22,14 @@ import type {
   MembersListMember,
   MembersRemoveOutcome,
   MembersSetRoleOutcome,
-  PlanUnlinkPreviewModel,
-  RemovePreviewModel,
   TeamRole,
 } from "@/components/settings/members/types";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
-afterEach(cleanup);
-
-function Providers(props: { readonly children: ReactNode }): ReactNode {
-  const [queryClient] = useState(() => new QueryClient());
-  return (
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
-        {props.children}
-      </RunnerHostContext.Provider>
-    </QueryClientProvider>
-  );
-}
+afterEach(() => {
+  cleanup();
+  resetTeamPageHarness();
+});
 
 function member(
   userId: string,
@@ -64,22 +60,21 @@ const PENDING = member("u-pending", "", "viewer", {
   displayName: null,
 });
 
-const REMOVE_PREVIEW: RemovePreviewModel = {
-  memberName: "Priya",
+/** What the host answers `environment.members.removePreview` with. */
+const PREVIEW: EnvironmentMembersRemovePreviewResponse = {
   activeTurns: 2,
   terminals: 1,
-  hostName: "This Mac",
+  localHostId: "host-local",
   sharedSignIns: ["github"],
   paidSandboxes: [],
   linkedPlan: null,
 };
 
-const DEMOTION_PREVIEW: PlanUnlinkPreviewModel = {
-  memberName: "Grace",
-  planLabel: "Claude Max",
-  turnsOnPlan: 1,
-  whatKeepsWorking: "Sandboxes keep running.",
-};
+type PreviewAnswer = (
+  userId: string,
+) =>
+  | EnvironmentMembersRemovePreviewResponse
+  | Promise<EnvironmentMembersRemovePreviewResponse>;
 
 function renderView(options: {
   readonly viewerRole: TeamRole;
@@ -88,6 +83,7 @@ function renderView(options: {
   readonly legacyRoleNoticeSeenAt: number | null;
   readonly removeOutcome: MembersRemoveOutcome;
   readonly setRoleOutcome: MembersSetRoleOutcome;
+  readonly preview: PreviewAnswer;
 }): {
   readonly onSetRole: Mock<
     (input: {
@@ -100,6 +96,13 @@ function renderView(options: {
   >;
   readonly onNoticeSeen: Mock<() => void>;
 } {
+  const harness = mountTeamPage(
+    { kind: "host" },
+    {
+      "environment.members.removePreview": (params) =>
+        options.preview(params.userId),
+    },
+  );
   const onSetRole = vi.fn((_input: { userId: string; role: TeamRole }) =>
     Promise.resolve(options.setRoleOutcome),
   );
@@ -109,27 +112,31 @@ function renderView(options: {
   const onNoticeSeen = vi.fn(() => undefined);
   const rowDetails = (): ReactNode => <button type="button">Details</button>;
   render(
-    <Providers>
-      <MembersView
-        environmentId="env-1"
-        teamName="Acme"
-        teamHandle="acme"
-        currentUserId={options.currentUserId}
-        viewerRole={options.viewerRole}
-        members={options.members}
-        legacyMembers={["Priya"]}
-        legacyRoleNoticeSeenAt={options.legacyRoleNoticeSeenAt}
-        rowDetails={rowDetails}
-        onInvite={(): Promise<MembersInviteOutcome> =>
-          Promise.resolve({ outcome: "sent", seatDelta: null })
-        }
-        onSetRole={onSetRole}
-        onRemove={onRemove}
-        onLoadRemovePreview={() => Promise.resolve(REMOVE_PREVIEW)}
-        onLoadDemotionPreview={() => Promise.resolve(DEMOTION_PREVIEW)}
-        onNoticeSeen={onNoticeSeen}
-      />
-    </Providers>,
+    <harness.Wrapper>
+      <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+        <MembersView
+          client={requireTeamHostClient()}
+          environmentId="env-1"
+          teamName="Acme"
+          teamHandle="acme"
+          currentUserId={options.currentUserId}
+          viewerRole={options.viewerRole}
+          membersRead="ready"
+          members={options.members}
+          legacyMembers={["Priya"]}
+          legacyRoleNoticeSeenAt={options.legacyRoleNoticeSeenAt}
+          rowDetails={rowDetails}
+          onRetryMembers={() => undefined}
+          onInvite={(): Promise<MembersInviteOutcome> =>
+            Promise.resolve({ outcome: "sent", seatDelta: null })
+          }
+          onSetRole={onSetRole}
+          onRemove={onRemove}
+          hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
+          onNoticeSeen={onNoticeSeen}
+        />
+      </RunnerHostContext.Provider>
+    </harness.Wrapper>,
   );
   return { onSetRole, onRemove, onNoticeSeen };
 }
@@ -142,6 +149,7 @@ const BASE = {
     receiptId: "r1",
   } satisfies MembersRemoveOutcome,
   setRoleOutcome: { outcome: "changed" } satisfies MembersSetRoleOutcome,
+  preview: (): EnvironmentMembersRemovePreviewResponse => PREVIEW,
 };
 
 describe("MembersView", () => {
@@ -248,36 +256,17 @@ describe("MembersView", () => {
 
   it("omits the activity line when the host reports null counts", async () => {
     const user = userEvent.setup();
-    render(
-      <Providers>
-        <MembersView
-          environmentId="env-1"
-          teamName="Acme"
-          teamHandle="acme"
-          currentUserId="u-admin"
-          viewerRole="admin"
-          members={[ADMIN, EDITOR]}
-          legacyMembers={[]}
-          legacyRoleNoticeSeenAt={1}
-          rowDetails={() => null}
-          onInvite={() => Promise.resolve({ outcome: "sent", seatDelta: null })}
-          onSetRole={() => Promise.resolve({ outcome: "changed" })}
-          onRemove={() =>
-            Promise.resolve({ outcome: "pending", receiptId: "r" })
-          }
-          onLoadRemovePreview={() =>
-            Promise.resolve({
-              ...REMOVE_PREVIEW,
-              activeTurns: null,
-              terminals: null,
-              hostName: null,
-            })
-          }
-          onLoadDemotionPreview={() => Promise.resolve(DEMOTION_PREVIEW)}
-          onNoticeSeen={() => undefined}
-        />
-      </Providers>,
-    );
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, EDITOR],
+      preview: () => ({
+        ...PREVIEW,
+        activeTurns: null,
+        terminals: null,
+        localHostId: null,
+      }),
+    });
     await user.click(screen.getByRole("button", { name: "Remove" }));
     const table = await screen.findByTestId("members-remove-preview-table");
     expect(table.textContent).not.toMatch(/\d+ turns?/);
@@ -329,5 +318,84 @@ describe("MembersView demotion", () => {
     ).textContent;
     expect(dialogText).not.toContain("within a minute");
     expect(dialogText).not.toContain("next turn");
+  });
+});
+
+describe("MembersView preview completions", () => {
+  function deferredPreviews(): {
+    readonly answer: PreviewAnswer;
+    readonly resolve: (
+      userId: string,
+      preview: EnvironmentMembersRemovePreviewResponse,
+    ) => void;
+  } {
+    const pending = new Map<
+      string,
+      (preview: EnvironmentMembersRemovePreviewResponse) => void
+    >();
+    return {
+      answer: (userId) =>
+        new Promise((resolve) => {
+          pending.set(userId, resolve);
+        }),
+      resolve: (userId, preview) => {
+        const settle = pending.get(userId);
+        if (settle === undefined) throw new Error(`no preview for ${userId}`);
+        act(() => {
+          settle(preview);
+        });
+      },
+    };
+  }
+
+  function rowOf(userId: string): HTMLElement {
+    const row = screen
+      .getAllByTestId("members-row")
+      .find((candidate) => candidate.getAttribute("data-member-id") === userId);
+    if (row === undefined) throw new Error(`no row for ${userId}`);
+    return row;
+  }
+
+  it("ignores a closed dialog's late preview for another member, and removes the member it names", async () => {
+    const user = userEvent.setup();
+    const previews = deferredPreviews();
+    const { onRemove } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: previews.answer,
+    });
+
+    await user.click(
+      within(rowOf("u-editor")).getByRole("button", { name: "Remove" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(rowOf("u-admin2")).getByRole("button", { name: "Remove" }),
+    );
+    previews.resolve("u-editor", {
+      ...PREVIEW,
+      paidSandboxes: [{ name: "priya-box", startedBy: "Priya" }],
+    });
+
+    const dialog = await screen.findByTestId("members-remove-preview");
+    expect(dialog.textContent).toContain("Remove Grace from Acme");
+    expect(dialog.textContent).not.toContain("priya-box");
+    expect(
+      within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")
+        .disabled,
+    ).toBe(true);
+
+    await waitFor(() => {
+      expect(() => {
+        previews.resolve("u-admin2", PREVIEW);
+      }).not.toThrow();
+    });
+    await within(dialog).findByTestId("members-remove-preview-table");
+    expect(dialog.textContent).not.toContain("priya-box");
+    await user.click(within(dialog).getByTestId("members-remove-confirm"));
+    await waitFor(() =>
+      expect(onRemove).toHaveBeenCalledWith({ userId: "u-admin2" }),
+    );
   });
 });

@@ -2,22 +2,18 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { MemberRowDetails } from "@/components/settings/details/member-row-details";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { MembersView } from "@/components/settings/members/members-view";
-import {
-  demotionWhatKeepsWorking,
-  memberDisplayName,
-} from "@/components/settings/members/copy";
 import type {
   MembersDetailsSubject,
   MembersListMember,
-  PaidSandboxPreview,
-  PlanUnlinkPreviewModel,
-  RemovePreviewModel,
+  MembersReadState,
 } from "@/components/settings/members/types";
 import {
   useEnvironmentMembersList,
   useTeamEnvironmentDescriptor,
+  type EnvironmentMembersListMember,
 } from "@/hooks/environment/use-environment-members-list";
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
+import { useCompletedMemberRemovalReceipts } from "@/hooks/environment/use-member-removal-receipts";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostDirectory, useOptionalHostClient } from "@/lib/host";
@@ -27,10 +23,18 @@ export interface MembersPageProps {
   readonly environmentId: string;
 }
 
-const EMPTY_NAMES: readonly string[] = [];
-const EMPTY_SANDBOXES: readonly PaidSandboxPreview[] = [];
+/**
+ * A removal the host answered `pending` for: the row as it was when removed,
+ * and the receipt that completes it. Kept apart from the members read, which
+ * stops listing the person as soon as the removal commits.
+ */
+interface PendingRemoval {
+  readonly member: MembersListMember;
+  readonly receiptId: string;
+}
+
 const FALLBACK_TEAM_NAME = "this team";
-const EMPTY_PENDING: ReadonlySet<string> = new Set();
+const NO_PENDING_REMOVALS: ReadonlyMap<string, PendingRemoval> = new Map();
 
 function memberRowDetails(subject: MembersDetailsSubject): ReactNode {
   return (
@@ -41,31 +45,8 @@ function memberRowDetails(subject: MembersDetailsSubject): ReactNode {
   );
 }
 
-function emptyRemovePreview(memberName: string): RemovePreviewModel {
+function listRow(member: EnvironmentMembersListMember): MembersListMember {
   return {
-    memberName,
-    activeTurns: null,
-    terminals: null,
-    hostName: null,
-    sharedSignIns: EMPTY_NAMES,
-    paidSandboxes: EMPTY_SANDBOXES,
-    linkedPlan: null,
-  };
-}
-
-function overlayRemovalState(
-  members: readonly {
-    readonly userId: string;
-    readonly displayName: string | null;
-    readonly email: string | null;
-    readonly effectiveRole: MembersListMember["effectiveRole"];
-    readonly linkedPlan: boolean;
-    readonly inviteState: MembersListMember["inviteState"];
-    readonly invitedAddress: string | null;
-  }[],
-  pendingRemovals: ReadonlySet<string>,
-): readonly MembersListMember[] {
-  return members.map((member) => ({
     userId: member.userId,
     displayName: member.displayName,
     email: member.email,
@@ -73,42 +54,53 @@ function overlayRemovalState(
     linkedPlan: member.linkedPlan,
     inviteState: member.inviteState,
     invitedAddress: member.invitedAddress,
-    removalState: pendingRemovals.has(member.userId) ? "pending" : "none",
-  }));
-}
-
-function demotionFromPreview(
-  memberName: string,
-  preview: {
-    readonly linkedPlan: string | null;
-    readonly activeTurns: number | null;
-  } | null,
-): PlanUnlinkPreviewModel {
-  if (preview === null) {
-    return {
-      memberName,
-      planLabel: "",
-      turnsOnPlan: 0,
-      whatKeepsWorking: demotionWhatKeepsWorking(),
-    };
-  }
-  return {
-    memberName,
-    planLabel: preview.linkedPlan ?? "",
-    turnsOnPlan: preview.activeTurns ?? 0,
-    whatKeepsWorking: demotionWhatKeepsWorking(),
+    removalState: "none",
   };
 }
 
 /**
+ * The read's rows, each pending removal marked on its row, and a pending
+ * removal the read no longer lists kept as its own row: `pending` until its
+ * receipt completes, then `done`.
+ */
+function overlayRemovals(
+  members: readonly EnvironmentMembersListMember[],
+  pendingRemovals: ReadonlyMap<string, PendingRemoval>,
+  completedReceipts: ReadonlySet<string>,
+): readonly MembersListMember[] {
+  const removalState = (
+    removal: PendingRemoval,
+  ): MembersListMember["removalState"] =>
+    completedReceipts.has(removal.receiptId) ? "done" : "pending";
+  const rows = members.map((member): MembersListMember => {
+    const removal = pendingRemovals.get(member.userId);
+    const row = listRow(member);
+    return removal === undefined
+      ? row
+      : { ...row, removalState: removalState(removal) };
+  });
+  const listed = new Set(members.map((member) => member.userId));
+  for (const removal of pendingRemovals.values()) {
+    if (listed.has(removal.member.userId)) continue;
+    rows.push({ ...removal.member, removalState: removalState(removal) });
+  }
+  return rows;
+}
+
+function membersReadState(failed: boolean, waiting: boolean): MembersReadState {
+  if (failed) return "failed";
+  return waiting ? "loading" : "ready";
+}
+
+/**
  * Settings ▸ Members for a team pick. Reads `environment.members@1.1` and
- * writes through invite / setRole / remove / noticeSeen / removePreview.
+ * writes through invite / setRole / remove / noticeSeen; the view's dialogs
+ * read removePreview for the member they name.
  */
 export function MembersPage(props: MembersPageProps): ReactNode {
   const client = useOptionalHostClient();
   const hostId = useReactiveHostReadiness(client).hostId;
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
+  const membersSupport = useHostMethodSupport(hostId, "environment.members");
   const listSupported =
     useHostMethodSupport(hostId, "environment.list") === true;
   const teamLabel = usePickedTeamLabel(props.environmentId);
@@ -120,18 +112,25 @@ export function MembersPage(props: MembersPageProps): ReactNode {
   const list = useEnvironmentMembersList(
     client,
     props.environmentId,
-    membersSupported,
+    membersSupport === true,
   );
   const writes = useEnvironmentMembersWrites(client, props.environmentId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? "");
   const [pendingRemovals, setPendingRemovals] =
-    useState<ReadonlySet<string>>(EMPTY_PENDING);
+    useState<ReadonlyMap<string, PendingRemoval>>(NO_PENDING_REMOVALS);
+  const completedReceipts = useCompletedMemberRemovalReceipts(
+    props.environmentId,
+  );
   const directory = useHostDirectory();
   const noticeSeenFor = useRef<string | null>(null);
 
   const members = useMemo(
-    () => overlayRemovalState(list.members, pendingRemovals),
-    [list.members, pendingRemovals],
+    () => overlayRemovals(list.members, pendingRemovals, completedReceipts),
+    [list.members, pendingRemovals, completedReceipts],
+  );
+  const membersRead = membersReadState(
+    list.isError,
+    client === null || membersSupport === null || list.isPending,
   );
 
   const viewerFromList = members.find(
@@ -149,73 +148,48 @@ export function MembersPage(props: MembersPageProps): ReactNode {
 
   const onRemove = useCallback(
     (input: { readonly userId: string }) => {
+      const removed = members.find((row) => row.userId === input.userId);
       return writes.remove(input).then((outcome) => {
-        if (outcome.outcome === "pending") {
+        if (outcome.outcome === "pending" && removed !== undefined) {
           setPendingRemovals((current) => {
-            const next = new Set(current);
-            next.add(input.userId);
+            const next = new Map(current);
+            next.set(input.userId, {
+              member: removed,
+              receiptId: outcome.receiptId,
+            });
             return next;
           });
         }
         return outcome;
       });
     },
-    [writes],
-  );
-
-  const onLoadRemovePreview = useCallback(
-    (userId: string): Promise<RemovePreviewModel> => {
-      const member = members.find((row) => row.userId === userId);
-      const memberName =
-        member === undefined ? userId : memberDisplayName(member);
-      return writes.loadRemovePreview(userId).then((preview) => {
-        if (preview === null) return emptyRemovePreview(memberName);
-        const hostName =
-          preview.localHostId === null
-            ? null
-            : (directory.findById(preview.localHostId)?.label ?? null);
-        return {
-          memberName,
-          activeTurns: preview.activeTurns,
-          terminals: preview.terminals,
-          hostName,
-          sharedSignIns: preview.sharedSignIns,
-          paidSandboxes: preview.paidSandboxes,
-          linkedPlan: preview.linkedPlan,
-        };
-      });
-    },
-    [directory, members, writes],
-  );
-
-  const onLoadDemotionPreview = useCallback(
-    (userId: string): Promise<PlanUnlinkPreviewModel> => {
-      const member = members.find((row) => row.userId === userId);
-      const memberName =
-        member === undefined ? userId : memberDisplayName(member);
-      return writes
-        .loadRemovePreview(userId)
-        .then((preview) => demotionFromPreview(memberName, preview));
-    },
     [members, writes],
+  );
+
+  const hostLabel = useCallback(
+    (hostId: string): string | null =>
+      directory.findById(hostId)?.label ?? null,
+    [directory],
   );
 
   return (
     <MembersView
+      client={client}
       environmentId={props.environmentId}
       teamName={teamName}
       teamHandle={team.teamHandle}
       currentUserId={currentUserId}
       viewerRole={viewerRole}
+      membersRead={membersRead}
       members={members}
       legacyMembers={list.legacyMembers}
       legacyRoleNoticeSeenAt={list.legacyRoleNoticeSeenAt}
       rowDetails={memberRowDetails}
+      onRetryMembers={list.retry}
       onInvite={writes.invite}
       onSetRole={writes.setRole}
       onRemove={onRemove}
-      onLoadRemovePreview={onLoadRemovePreview}
-      onLoadDemotionPreview={onLoadDemotionPreview}
+      hostLabel={hostLabel}
       onNoticeSeen={onNoticeSeen}
     />
   );

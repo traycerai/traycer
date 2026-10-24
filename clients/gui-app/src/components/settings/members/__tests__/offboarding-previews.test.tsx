@@ -7,7 +7,6 @@ import type { RemovePreviewModel } from "@/components/settings/members/types";
 afterEach(cleanup);
 
 const PREVIEW: RemovePreviewModel = {
-  memberName: "Priya",
   activeTurns: 1,
   terminals: 0,
   hostName: "This Mac",
@@ -20,11 +19,13 @@ function renderRemove(preview: RemovePreviewModel): string {
   render(
     <RemovePreviewDialog
       open
+      memberName="Priya"
       teamName="Acme"
-      preview={preview}
+      preview={{ status: "ready", preview }}
       busy={false}
       blockedReason={null}
       onOpenChange={() => undefined}
+      onRetry={() => undefined}
       onConfirm={() => undefined}
     />,
   );
@@ -58,11 +59,13 @@ describe("RemovePreviewDialog", () => {
     render(
       <RemovePreviewDialog
         open
+        memberName="Priya"
         teamName="Acme"
-        preview={PREVIEW}
+        preview={{ status: "ready", preview: PREVIEW }}
         busy={false}
         blockedReason="Promote another admin first."
         onOpenChange={() => undefined}
+        onRetry={() => undefined}
         onConfirm={() => undefined}
       />,
     );
@@ -80,17 +83,21 @@ describe("DemotionPreviewDialog", () => {
     render(
       <DemotionPreviewDialog
         open
+        memberName="Priya"
         teamName="Acme"
         nextRoleLabel="Viewer"
         preview={{
-          memberName: "Priya",
-          planLabel: "Claude Max",
-          turnsOnPlan: 2,
-          whatKeepsWorking: "Sandboxes keep running.",
+          status: "ready",
+          preview: {
+            planLabel: "Claude Max",
+            turnsOnPlan: 2,
+            whatKeepsWorking: "Sandboxes keep running.",
+          },
         }}
         busy={false}
         blockedReason={null}
         onOpenChange={() => undefined}
+        onRetry={() => undefined}
         onConfirm={() => undefined}
       />,
     );

@@ -35,6 +35,22 @@ export const ACCEPT_LABEL = "Accept";
 
 export const PENDING_REMOVAL_LABEL = "pending";
 
+export const DONE_REMOVAL_LABEL = "done";
+
+export const RETRY_LABEL = "Retry";
+
+export function membersReadFailed(teamName: string): string {
+  return `Couldn't load ${teamName}'s members.`;
+}
+
+export function removePreviewFailed(memberName: string): string {
+  return `Couldn't load what removing ${memberName} interrupts, so Remove stays off until it loads.`;
+}
+
+export function demotionPreviewFailed(memberName: string): string {
+  return `Couldn't load what changing ${memberName}'s role interrupts, so Change role stays off until it loads.`;
+}
+
 export function membersHeaderLine(teamName: string): string {
   return `Who is in ${teamName} and what each person can change. Seats and allowances are on the dashboard.`;
 }
@@ -172,8 +188,9 @@ export function memberDetailLine(
   return parts.join(" · ");
 }
 
+/** A member still in the team: accepted, and not being removed. */
 function isAcceptedMember(member: MembersListMember): boolean {
-  return member.inviteState !== "pending";
+  return member.inviteState !== "pending" && member.removalState === "none";
 }
 
 export function isLastAdminMember(
@@ -281,9 +298,13 @@ export function planUnlinkLead(teamName: string): string {
 
 export function planUnlinkTurnsLineFor(
   teamName: string,
-  turnsOnPlan: number,
+  turnsOnPlan: number | null,
 ): string {
-  return `${countNoun(turnsOnPlan, "turn")} on Claude Code. Each finishes its current step, then stops with "${teamName}'s Claude plan was unlinked. An admin can link one."`;
+  const stops = `then stops with "${teamName}'s Claude plan was unlinked. An admin can link one."`;
+  if (turnsOnPlan === null) {
+    return `Unavailable. Each turn on Claude Code finishes its current step, ${stops}`;
+  }
+  return `${countNoun(turnsOnPlan, "turn")} on Claude Code. Each finishes its current step, ${stops}`;
 }
 
 export function planUnlinkAfterwards(teamName: string): string {

@@ -46,6 +46,8 @@ export interface EnvironmentMembersListResult {
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly error: HostRpcError | null;
+  /** Reads every page that failed again. */
+  readonly retry: () => void;
 }
 
 type Requested = {
@@ -60,7 +62,10 @@ type CombinedPages = {
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly error: HostRpcError | null;
+  readonly retry: () => void;
 };
+
+function retryNothing(): void {}
 
 const EMPTY_LIST: EnvironmentMembersListResult = {
   members: [],
@@ -69,6 +74,7 @@ const EMPTY_LIST: EnvironmentMembersListResult = {
   isPending: false,
   isError: false,
   error: null,
+  retry: retryNothing,
 };
 
 /**
@@ -123,6 +129,11 @@ export function useEnvironmentMembersList(
         isPending: results.some((result) => result.isPending),
         isError: results.some((result) => result.isError),
         error: errorResult?.error ?? null,
+        retry: () => {
+          for (const result of results) {
+            if (result.isError) void result.refetch();
+          }
+        },
       };
     },
     [],
@@ -167,6 +178,7 @@ export function useEnvironmentMembersList(
         isPending: true,
         isError: false,
         error: null,
+        retry: retryNothing,
       };
     }
     if (combined.isError) {
@@ -177,6 +189,7 @@ export function useEnvironmentMembersList(
         isPending: false,
         isError: true,
         error: combined.error,
+        retry: combined.retry,
       };
     }
     const lastAsked = combined.pages[combined.pages.length - 1];
@@ -190,6 +203,7 @@ export function useEnvironmentMembersList(
         isPending: true,
         isError: false,
         error: null,
+        retry: retryNothing,
       };
     }
     const members: EnvironmentMembersListMember[] = [];
@@ -216,6 +230,7 @@ export function useEnvironmentMembersList(
       isPending: combined.isPending,
       isError: false,
       error: null,
+      retry: combined.retry,
     };
   }, [combined, enabled, environmentId, viewerUserId]);
 }
