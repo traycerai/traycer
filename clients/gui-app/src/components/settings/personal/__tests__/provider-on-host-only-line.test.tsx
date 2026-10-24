@@ -99,6 +99,8 @@ function renderLines(options: {
       ) : (
         <PersonalPageContext.Provider
           value={{
+            section: "providers",
+            pick: { kind: "personal" },
             state: { kind: "ready", status: environmentStatusFixture({}) },
             line: null,
             hostName: options.hostName,

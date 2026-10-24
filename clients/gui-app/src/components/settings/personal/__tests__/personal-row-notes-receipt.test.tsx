@@ -22,7 +22,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
@@ -57,11 +57,13 @@ function RowNotesProbe(): ReactNode {
 
 interface MountedPage {
   /** Change what the host answers, then make the page read it again. */
-  readonly hostNowAnswers: (status: EnvironmentStatusResponse) => Promise<void>;
+  readonly hostNowAnswers: (
+    status: EnvironmentStatusResponseV11,
+  ) => Promise<void>;
 }
 
-function mountPageOver(first: EnvironmentStatusResponse): MountedPage {
-  const answer: { current: EnvironmentStatusResponse } = { current: first };
+function mountPageOver(first: EnvironmentStatusResponseV11): MountedPage {
+  const answer: { current: EnvironmentStatusResponseV11 } = { current: first };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => answer.current,
     "environment.localOverrides": () => ({ overrides: [] }),
@@ -109,7 +111,9 @@ function statusLine(): string | null {
   return screen.queryByTestId("personal-page-status")?.textContent ?? null;
 }
 
-function waitingEdit(reachability: EnvironmentStatusResponse["reachability"]) {
+function waitingEdit(
+  reachability: EnvironmentStatusResponseV11["reachability"],
+) {
   return environmentStatusFixture({
     reachability,
     pendingUploads: [pendingUploadFixture({ kind: "variable", key: "EDITED" })],

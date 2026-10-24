@@ -71,6 +71,9 @@ import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
+
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.";
 const SAVED_FLASH_MS = 1600;
@@ -156,6 +159,15 @@ const SHELL_CONFIG_GATE_METHOD = "config.shell.get";
  * local truth about it to fall back to.
  */
 export function ShellSettingsPanel() {
+  const source = useConfigurationSource();
+  return source.kind === "pool" ? (
+    <TeamVariablesAndShells />
+  ) : (
+    <HostShellSettingsPanel />
+  );
+}
+
+function HostShellSettingsPanel() {
   const scope = usePersonalHostScope();
   // Hoisted above the branch, because the branch itself depends on it. The
   // nullable form is load-bearing: `false` is a host that HANDSHAKED without

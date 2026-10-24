@@ -138,10 +138,13 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/opening-behavior": "Settings - Opening behavior",
   "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
+  "/settings/sandboxes": "Settings - Sandboxes",
+  "/settings/members": "Settings - Members",
   "/settings/secrets": "Settings - Secrets",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Variables and shells",
   "/settings/usage": "Settings - Usage",
+  "/settings/credits": "Settings - Credits",
   "/settings/worktrees": "Settings - Worktrees",
   "/when-you-quit": "When you quit Traycer",
 };

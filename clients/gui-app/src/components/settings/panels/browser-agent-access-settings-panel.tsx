@@ -13,6 +13,15 @@ import { trackSettingChanged } from "@/lib/analytics";
 import { configMutationKeys } from "@/lib/query-keys";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
+import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
+import {
+  useCanAdministerConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
+import { useEnvironmentBrowserAccessQuery } from "@/hooks/environment/team/use-browser-access-query";
+import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
@@ -27,6 +36,7 @@ const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
  * host-scoped binding, so no picker reaches it.
  */
 export function BrowserAgentAccessSettingsPanel(): ReactNode {
+  const source = useConfigurationSource();
   const hostId = useAddressableHostId();
   // BOTH methods, because they negotiate independently: the row is an
   // interactive switch, so a host that could answer `get` but not `set` would
@@ -52,29 +62,38 @@ export function BrowserAgentAccessSettingsPanel(): ReactNode {
         dataTestId="settings-browser-agent-access"
         fill={false}
       >
-        {supported === true ? (
-          <AgentBrowserAccessRow hostId={hostId} />
+        {source.kind === "pool" ? (
+          <TeamBrowserAccessRow />
         ) : (
-          // `null` is a handshake still in flight: the row reappears on its
-          // own once the host advertises both methods, no reload.
-          <SettingsRow
-            row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
-            status={
-              supported === false
-                ? "Update this host to change this setting."
-                : undefined
-            }
-            control={
-              <Switch
-                checked={false}
-                disabled
-                aria-label="Let agents use the in-app browser"
-              />
-            }
-          />
+          <HostBrowserAccessRow supported={supported} hostId={hostId} />
         )}
       </SettingsGroup>
     </SettingsPanelShell>
+  );
+}
+
+function HostBrowserAccessRow(props: {
+  readonly supported: boolean | null;
+  readonly hostId: string | null;
+}): ReactNode {
+  if (props.supported === true)
+    return <AgentBrowserAccessRow hostId={props.hostId} />;
+  return (
+    <SettingsRow
+      row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
+      status={
+        props.supported === false
+          ? "Update this host to change this setting."
+          : undefined
+      }
+      control={
+        <Switch
+          checked={false}
+          disabled
+          aria-label="Let agents use the in-app browser"
+        />
+      }
+    />
   );
 }
 
@@ -124,5 +143,56 @@ function AgentBrowserAccessRow(props: {
         />
       }
     />
+  );
+}
+
+function TeamBrowserAccessRow(): ReactNode {
+  const source = useConfigurationSource();
+  const canEdit = useCanAdministerConfiguration();
+  const query = useEnvironmentBrowserAccessQuery(false);
+  const { put } = useConfigurationItemMutations();
+  const issue =
+    put.data === undefined ? null : configurationWriteIssue(put.data);
+  let control: ReactNode = null;
+  if (query.isPending)
+    control = <span className="text-ui-xs text-muted-foreground">Loading</span>;
+  else if (query.data !== undefined) {
+    control = canEdit ? (
+      <Switch
+        checked={query.data.agentAccess}
+        disabled={put.isPending}
+        aria-label="Let agents use the in-app browser"
+        onCheckedChange={(enabled) => {
+          if (source.kind !== "pool") return;
+          put.mutate({
+            environmentId: source.environmentId,
+            kind: "browser_agent_access",
+            key: "browser",
+            os: null,
+            value: { enabled },
+            revision: query.data.revision,
+          });
+        }}
+      />
+    ) : (
+      <span className="text-ui-sm text-muted-foreground">
+        {query.data.agentAccess ? "On" : "Off"}
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SettingsRow
+        row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
+        status={
+          query.isError
+            ? "Couldn't read this setting."
+            : "Running agents pick this up on their next turn."
+        }
+        control={control}
+      />
+      <ConfigurationWriteFeedback issue={issue} />
+    </div>
   );
 }

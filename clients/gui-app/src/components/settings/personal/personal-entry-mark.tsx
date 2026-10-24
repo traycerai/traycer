@@ -113,6 +113,7 @@ function AddToPersonalButton(props: {
             name: props.name,
           },
           executableWriteGrant: null,
+          expectedEnvironmentId: null,
         });
       }}
     >

@@ -67,6 +67,15 @@ export function alwaysAvailable(
 }
 
 /**
+ * Offered by no shell: a page the sidebar no longer lists
+ * (`RETIRED_SETTINGS_SECTION_IDS`), whose route still resolves. Search must
+ * not lead anyone to it either.
+ */
+export function neverOffered(_context: SettingsAvailabilityContext): boolean {
+  return false;
+}
+
+/**
  * Voice input — the mobile app refuses dictation outright
  * (`useDictationAvailability`), so the toggle would control nothing.
  */

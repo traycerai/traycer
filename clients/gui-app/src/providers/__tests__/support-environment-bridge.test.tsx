@@ -168,7 +168,7 @@ describe("SupportEnvironmentBridge", () => {
             reachability: "connected",
           }),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ secrets: [SECRET] }),
+        "environment.secrets.list": () => ({ removed: [], secrets: [SECRET] }),
         "environment.secrets.rotation": () => ({
           rotation: ROTATION,
           lastVerify: null,

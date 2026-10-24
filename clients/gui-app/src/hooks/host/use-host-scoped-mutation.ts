@@ -27,7 +27,7 @@ import {
   type AnalyticsProviderOperation,
 } from "@/lib/analytics";
 
-interface HostScopedMutationContext<Captured> {
+export interface HostScopedMutationContext<Captured> {
   readonly hostId: string | null;
   /** Whatever `captureContext` read at send time; `undefined` without one. */
   readonly captured: Captured;

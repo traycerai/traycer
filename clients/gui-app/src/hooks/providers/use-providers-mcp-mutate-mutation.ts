@@ -129,6 +129,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
           {
             providerId: variables.providerId,
             executableWriteGrant: null,
+            expectedEnvironmentId: null,
             mutation: {
               kind: "mcp",
               scope: variables.scope,

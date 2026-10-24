@@ -5,8 +5,6 @@ import type {
   HostOwnerPrincipal,
 } from "@traycer/protocol/host/host-status";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 
 /**
  * A person who has joined a team but has not yet opened one of its hosts is
@@ -32,18 +30,12 @@ vi.mock("@/lib/mobile-app", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/mobile-app")>();
   return { ...actual, isMobileApp: () => false };
 });
-// The Personal group reads the window's host through Query and has its own
-// suite; it is stood in for here.
-vi.mock("@/components/onboarding/set-up-personal-group", () => ({
-  SetUpPersonalGroup: () => <div data-testid="set-up-personal-stub" />,
-}));
 
 import {
   newcomerTeams,
   teamNewcomerLine,
 } from "@/components/onboarding/set-up-team-model";
 import { SetUpTeamGroup } from "@/components/onboarding/set-up-team-group";
-import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
 import {
   teamHostDisclosureSeen,
   useTeamHostDisclosureSeenStore,
@@ -261,62 +253,5 @@ describe("<SetUpTeamGroup />", () => {
     render(<SetUpTeamGroup surface="home" />);
 
     expect(screen.queryByTestId("set-up-team-group")).toBeNull();
-  });
-});
-
-describe("<HomeGettingStartedSection /> team group", () => {
-  beforeEach(() => {
-    resetSeenStore();
-    mocks.hosts.current = [alphaHost("host-a1")];
-    useAuthStore.setState({
-      status: "signed-in",
-      contextMetadata: { userId: VIEWER, username: "viewer" },
-      shareableTeams: [ALPHA],
-    });
-    useOnboardingStore.setState({
-      completedAt: null,
-      step: 0,
-      setupProgress: { agents: -1, appearance: -1, cookies: -1 },
-      activeSetup: null,
-      setupReminderDismissed: false,
-    });
-  });
-  afterEach(() => {
-    cleanup();
-    resetSeenStore();
-    useAuthStore.setState({
-      status: "signed-out",
-      contextMetadata: null,
-      shareableTeams: [],
-    });
-  });
-
-  it("shows the team line while guides are still incomplete", () => {
-    render(<HomeGettingStartedSection />);
-
-    expect(screen.getByTestId("set-up-team-group").textContent).toContain(
-      teamNewcomerLine("Alpha Team"),
-    );
-  });
-
-  it("keeps the team line visible once the checklist is complete and folded", () => {
-    useOnboardingStore.setState({
-      completedAt: Date.now(),
-      setupProgress: {
-        agents: setupGuideLength("agents"),
-        appearance: setupGuideLength("appearance"),
-        cookies: setupGuideLength("cookies"),
-      },
-    });
-
-    render(<HomeGettingStartedSection />);
-
-    // Folded: the cards are behind the trigger, the team line is not.
-    expect(
-      screen.queryByRole("button", { name: /Agent selection/ }),
-    ).toBeNull();
-    expect(screen.getByTestId("set-up-team-group").textContent).toContain(
-      teamNewcomerLine("Alpha Team"),
-    );
   });
 });

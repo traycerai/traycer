@@ -1621,6 +1621,39 @@ export const nativeMutationResultSchema = lazySchema(() =>
 );
 export type NativeMutationResult = z.infer<typeof nativeMutationResultSchema>;
 
+/**
+ * A mutation's refusal codes on `providers.nativeMutate@1.4`: the native
+ * vocabulary plus `environment_mismatch`, a write whose
+ * `expectedEnvironmentId` is not the environment this host serves when it
+ * writes.
+ */
+export const providerNativeMutateErrorCodeSchema = lazySchema(() =>
+  z.enum([
+    ...providerNativeErrorCodesV11,
+    "server_not_found",
+    "change_shadowed",
+    "environment_mismatch",
+  ]),
+);
+export type ProviderNativeMutateErrorCode = z.infer<
+  typeof providerNativeMutateErrorCodeSchema
+>;
+
+/** Mutation result on `providers.nativeMutate@1.4`. */
+export const nativeMutationResultSchemaV14 = lazySchema(() =>
+  z.union([
+    nativeMutationSuccessResultSchema,
+    z.object({
+      ok: z.literal(false),
+      code: providerNativeMutateErrorCodeSchema,
+      detail: z.string().nullable(),
+    }),
+  ]),
+);
+export type NativeMutationResultV14 = z.infer<
+  typeof nativeMutationResultSchemaV14
+>;
+
 /** MCP mutation result published on nativeMutate@1.1. */
 export const nativeMutationResultSchemaV11Preimage = lazySchema(() =>
   z.union([

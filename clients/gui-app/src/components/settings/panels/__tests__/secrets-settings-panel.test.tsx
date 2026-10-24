@@ -38,10 +38,6 @@ vi.mock("@/components/settings/secrets/secrets-page", () => ({
   SecretsPage: () => <div data-testid="secrets-page" />,
 }));
 
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => vi.fn(),
-}));
-
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
@@ -90,7 +86,7 @@ describe("<SecretsSettingsPanel />", () => {
 
     expect(screen.getByTestId("secrets-page")).toBeTruthy();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the page while the host's principal is not yet read", () => {
@@ -114,7 +110,7 @@ describe("<SecretsSettingsPanel />", () => {
     );
     expect(screen.getByTestId("team-owned-line").textContent).toContain("Acme");
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the team line on a team's host that predates the page", () => {
@@ -127,17 +123,19 @@ describe("<SecretsSettingsPanel />", () => {
     });
 
     expect(screen.getByTestId("secrets-team-view")).toBeTruthy();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
-  it("shows the dashboard link group on a host that predates the page", () => {
+  it("asks to update a host that predates the page", () => {
     renderPanel({
       supported: false,
       status: environmentStatusFixture({ principal: { kind: "personal" } }),
       hasClient: true,
     });
 
-    expect(screen.getByTestId("settings-secrets")).toBeTruthy();
+    expect(screen.getByTestId("secrets-update-host").textContent).toBe(
+      "Update this host to use your secrets here.",
+    );
     expect(screen.queryByTestId("secrets-page")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
@@ -150,7 +148,7 @@ describe("<SecretsSettingsPanel />", () => {
     });
 
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
 
