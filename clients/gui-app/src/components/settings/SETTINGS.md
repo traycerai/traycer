@@ -867,8 +867,11 @@ in their variables so paused-save status belongs to the picked team.
 Live facts, native skills and the guide share `useTeamViewingHost()`: an
 explicit reachable host registered to that team, or no host. Picking it does
 not activate or wake it. Skills and the guide use the team's room through
-that host; no-host states offer the common picker. Skill edits and removal stay read-only until the addressed native write
-method is available. First edits of an absent model-routing item
+that host; no-host states offer the common picker. Skill edits and removal
+capture the team id and require `providers.nativeMutate@1.4` at dispatch. A
+host that no longer serves that team refuses the write. The page refreshes
+the host list without reading native skills back from that host.
+First edits of an absent model-routing item
 start from the named host's seeded policy; Reset and Restore default tiers
 delete the team item. Host-source panels preserve their existing behavior.
 

@@ -6,7 +6,14 @@ import {
   MockHostMessenger,
   type MockHandlerMap,
 } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  type HostRequestOptions,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   ConfigurationSourceContext,
@@ -70,6 +77,68 @@ export function mountTeamPage(
   source: ConfigurationSource,
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): TeamPageHarness {
+  return buildTeamPage(source, handlers, null);
+}
+
+/**
+ * A host whose connection negotiated `negotiated` for a method: a request that
+ * carries a higher version floor for that method is refused before anything is
+ * sent, as the real transport does. Methods not listed negotiate whatever the
+ * request asks.
+ */
+export function mountTeamPageNegotiating(
+  source: ConfigurationSource,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  negotiated: Readonly<Record<string, { major: number; minor: number }>>,
+): TeamPageHarness {
+  return buildTeamPage(source, handlers, negotiated);
+}
+
+class FloorEnforcingMessenger extends MockHostMessenger<HostRpcRegistry> {
+  constructor(
+    options: ConstructorParameters<
+      typeof MockHostMessenger<HostRpcRegistry>
+    >[0],
+    private readonly negotiated: Readonly<
+      Record<string, { major: number; minor: number }>
+    >,
+  ) {
+    super(options);
+  }
+
+  override request<Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+    const floor = options.requiredHostMethodVersion;
+    const have = Object.entries(this.negotiated).find(
+      ([name]) => name === method,
+    )?.[1];
+    if (
+      floor !== null &&
+      have !== undefined &&
+      !negotiatedVersionMeetsRequirement(have, floor)
+    ) {
+      return Promise.reject(
+        new HostMethodVersionUnsatisfiedError({
+          requirement: floor,
+          negotiated: have,
+          requestId: "req-floor",
+          method,
+          hostId: mockLocalHostEntry.hostId,
+        }),
+      );
+    }
+    return super.request(method, params, options);
+  }
+}
+
+function buildTeamPage(
+  source: ConfigurationSource,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  negotiated: Readonly<Record<string, { major: number; minor: number }>> | null,
+): TeamPageHarness {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -77,14 +146,18 @@ export function mountTeamPage(
     },
   });
   let requestCounter = 0;
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
+  const messengerOptions = {
     registry: hostRpcRegistry,
     requestId: () => {
       requestCounter += 1;
       return `req-team-${String(requestCounter)}`;
     },
     handlers,
-  });
+  };
+  const messenger =
+    negotiated === null
+      ? new MockHostMessenger<HostRpcRegistry>(messengerOptions)
+      : new FloorEnforcingMessenger(messengerOptions, negotiated);
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),

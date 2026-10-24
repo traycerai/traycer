@@ -108,7 +108,11 @@ export function RetrospectiveSession(props: {
         }}
         onHeldApply={onHeldApply}
         onMoveToPersonal={() => {
-          if (props.stopHostId !== null) openMoveSheet(props.stopHostId);
+          if (props.stopHostId !== null)
+            openMoveSheet({
+              hostId: props.stopHostId,
+              hostName: props.hostName,
+            });
         }}
         onStopSharing={() => setStopOpen(true)}
       />

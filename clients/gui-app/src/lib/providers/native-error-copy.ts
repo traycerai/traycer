@@ -25,13 +25,14 @@ const NATIVE_ERROR_COPY: Readonly<
     "This server is no longer in this provider's configuration. Refresh the list.",
   change_shadowed: "Not changed: another settings file decides this.",
   environment_mismatch:
-    "Not changed: this computer no longer holds this configuration.",
+    "This host no longer runs this team. Pick another host.",
 };
 
 export function nativeErrorMessage(
   code: ProviderNativeMutateErrorCode,
   detail: string | null,
 ): string {
+  if (code === "environment_mismatch") return NATIVE_ERROR_COPY[code];
   if (detail !== null && detail.trim().length > 0) return detail.trim();
   return NATIVE_ERROR_COPY[code];
 }

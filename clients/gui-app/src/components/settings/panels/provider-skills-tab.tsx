@@ -1,3 +1,4 @@
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   PersonalEntryMark,
@@ -214,7 +215,7 @@ function ProviderSkillsTabBody({
   const allowed = skillWrites({
     caps,
     scope: effectiveScope,
-    canEdit: !team && canEdit,
+    canEdit,
     team,
     needsWorkspace: projectNeedsWorkspace,
   });
@@ -279,6 +280,7 @@ function ProviderSkillsTabBody({
       .then((expectedHash) =>
         mutate.mutateAsync({
           providerId,
+          environmentId: source.kind === "pool" ? source.environmentId : null,
           scope: effectiveScope,
           workspaceRoot: listWorkspaceRoot,
           mutation: {
@@ -298,9 +300,7 @@ function ProviderSkillsTabBody({
         return true;
       })
       .catch((err: unknown) => {
-        setDetailError(
-          err instanceof Error ? err.message : "Couldn't edit this skill.",
-        );
+        setDetailError(skillMutationMessage(err, "Couldn't edit this skill."));
         return false;
       })
       .finally(() => {
@@ -324,6 +324,7 @@ function ProviderSkillsTabBody({
     try {
       return await mutate.mutateAsync({
         providerId,
+        environmentId: source.kind === "pool" ? source.environmentId : null,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         mutation,
@@ -351,6 +352,7 @@ function ProviderSkillsTabBody({
     try {
       const data = await mutate.mutateAsync({
         providerId,
+        environmentId: source.kind === "pool" ? source.environmentId : null,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         mutation: confirm
@@ -383,9 +385,7 @@ function ProviderSkillsTabBody({
         return;
       }
       setUpdateConfirm(null);
-      setDetailError(
-        err instanceof Error ? err.message : "Couldn't update this skill.",
-      );
+      setDetailError(skillMutationMessage(err, "Couldn't update this skill."));
     } finally {
       setPendingKey(null);
     }
@@ -397,6 +397,7 @@ function ProviderSkillsTabBody({
     mutate.mutate(
       {
         providerId,
+        environmentId: source.kind === "pool" ? source.environmentId : null,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         // `name` AND `path`: the host re-lists and matches on both (plus a
@@ -417,7 +418,9 @@ function ProviderSkillsTabBody({
           // where the error renders, and re-confirming an operation that just
           // failed is not the next step.
           setRemoveTarget(null);
-          setDetailError(err.message);
+          setDetailError(
+            skillMutationMessage(err, "Couldn't remove this skill."),
+          );
         },
       },
     );
@@ -1142,4 +1145,10 @@ function skillWrites(args: {
       !needsWorkspace,
     removeScopes: canEdit ? caps.actionScopes.remove : [],
   };
+}
+
+function skillMutationMessage(error: unknown, fallback: string): string {
+  if (error instanceof HostMethodVersionUnsatisfiedError)
+    return "Changing skills needs an updated host.";
+  return error instanceof Error ? error.message : fallback;
 }
