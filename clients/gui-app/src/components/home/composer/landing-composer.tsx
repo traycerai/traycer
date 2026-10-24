@@ -45,6 +45,7 @@ import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
@@ -504,12 +505,8 @@ export function LandingComposer(props: LandingComposerProps) {
   // Phase 2 resubmits once the new host's catalog has answered, so the
   // selection holds its default model, or none when it offers no agent (the
   // line then says the sandbox is awake but cannot run one).
-  const catalogSettled = useStore(
-    toolbarStore,
-    (s) =>
-      s.catalog.hostId === resolvedHostId &&
-      s.catalog.harnesses !== undefined &&
-      (s.catalog.harnesses.length === 0 || s.catalog.modelsLoaded),
+  const catalogSettled = useStore(toolbarStore, (s) =>
+    catalogSettledFor(s, resolvedHostId),
   );
   const stagedSend = useStagedSandboxSend({
     surfaceKey: composerSurfaceKey,

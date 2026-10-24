@@ -160,6 +160,7 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -960,14 +961,23 @@ export function NewConversationModalBody(props: {
     [epicId, openTile, tabId],
   );
   const stagedSubmitRef = useRef<() => void>(() => undefined);
+  // Phase 2 resubmits once the new host's catalog has answered, so the
+  // selection holds its default model, or none when it offers no agent: that
+  // resubmit is refused, and the line says the sandbox is awake but cannot
+  // run one.
+  const stagedCanSubmit = useStore(
+    toolbarStore,
+    (s) => canSubmit && catalogSettledFor(s, resolvedHostId),
+  );
   const submitOnSandbox = useCallback((): boolean => {
+    if (toolbarStore.getState().selection.modelSlug.length === 0) return false;
     stagedSubmitRef.current();
     return true;
-  }, []);
+  }, [toolbarStore]);
   const stagedSend = useStagedSandboxSend({
     surfaceKey: stagingSurfaceKey(sandboxStaging),
     resolvedHostId,
-    canSubmit,
+    canSubmit: stagedCanSubmit,
     submit: submitOnSandbox,
     prepareHandoff: noopPrepareHandoff,
     terminal: stagedTerminal,
