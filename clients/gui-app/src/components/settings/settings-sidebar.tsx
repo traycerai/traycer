@@ -48,6 +48,7 @@ import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
+import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
 import { MoveSheet } from "@/components/settings/move-sheet";
 import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
@@ -103,6 +104,11 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   const sections = visibleSettingsSections();
   // A Local row hides the pages only a cloud configuration has.
   const environmentPick = useEnvironmentPick();
+  // The Guide group leaves the rail once every Getting started step is done.
+  const guideComplete = useGettingStartedGuideIsComplete();
+  const groups = guideComplete
+    ? SETTINGS_SECTION_GROUPS.filter((group) => group.id !== "guide")
+    : SETTINGS_SECTION_GROUPS;
   // The host picker below shows a live dot and a health word per row, so this
   // is a liveness surface and opts into the registry poll. It is also the ONE
   // place in Settings that has to: the picker is mounted for as long as any
@@ -133,7 +139,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           names the section every row belongs to. */}
       {searching
         ? null
-        : SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
+        : groups.map((group, groupIndex) => (
             <Fragment key={group.id}>
               {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
               {group.id !== "guide" ? (

@@ -43,6 +43,21 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 vi.mock("@/components/settings/move-sheet", () => ({
   MoveSheet: () => null,
 }));
+// The Team rows and the trigger's team label read the environment list
+// through the window's host client, and this suite mounts no host runtime.
+// The rows have their own suite; a Personal pick names no team.
+vi.mock("@/components/settings/environment/team-pick-label", () => ({
+  usePickedTeamLabel: () => null,
+}));
+vi.mock("@/components/settings/environment/team-rows", () => ({
+  TeamRows: () => null,
+}));
+// The Guide group leaves the rail once every Getting started step is done;
+// the real answer reads several `useQuery`s and this suite mounts no query
+// client. Not done, as for a new account.
+vi.mock("@/components/onboarding/getting-started-checklist", () => ({
+  useGettingStartedGuideIsComplete: () => false,
+}));
 
 vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,

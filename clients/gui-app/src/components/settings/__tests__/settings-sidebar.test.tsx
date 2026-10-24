@@ -70,6 +70,22 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 vi.mock("@/components/settings/move-sheet", () => ({
   MoveSheet: () => null,
 }));
+// The Team rows and the trigger's team label read the environment list
+// through the window's host client, and this suite mounts no host runtime.
+// The rows have their own suite; a Personal pick names no team.
+vi.mock("@/components/settings/environment/team-pick-label", () => ({
+  usePickedTeamLabel: () => null,
+}));
+vi.mock("@/components/settings/environment/team-rows", () => ({
+  TeamRows: () => null,
+}));
+// The Guide group leaves the rail once every Getting started step is done;
+// the real answer reads several `useQuery`s and this suite mounts no query
+// client. Not done by default, as for a new account.
+const guideComplete = vi.hoisted(() => ({ current: false }));
+vi.mock("@/components/onboarding/getting-started-checklist", () => ({
+  useGettingStartedGuideIsComplete: () => guideComplete.current,
+}));
 
 vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
@@ -205,6 +221,7 @@ describe("<SettingsSidebar /> leader hints", () => {
     vi.useRealTimers();
     scopeOverrides.current = { client: null };
     setMobileApp(false);
+    guideComplete.current = false;
   });
 
   // Chord capture is keyboard-only, so the installed mobile app does not offer
@@ -368,6 +385,21 @@ describe("<SettingsSidebar /> leader hints", () => {
         })
       ).getAttribute("aria-valuenow"),
     ).toBe("1");
+  });
+
+  it("drops the Guide group once every Getting started step is done", async () => {
+    guideComplete.current = true;
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    await screen.findByTestId("settings-sidebar-item-general");
+    expect(
+      screen.queryByTestId("settings-sidebar-item-getting-started"),
+    ).toBeNull();
   });
 
   it("delays sub-leader digit badges in settings navigation", async () => {
