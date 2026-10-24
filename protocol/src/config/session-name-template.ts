@@ -44,7 +44,12 @@ const LEADING_SEPARATORS = /^[\s\u00b7\-_/]+/u;
 const TRAILING_SEPARATORS = /[\s\u00b7\-_/]+$/u;
 const EDGE_SEPARATORS = /^[\s\u00b7\-_/]+|[\s\u00b7\-_/]+$/gu;
 const CONTROL_CHARACTERS = /\p{Cc}/gu;
-const FORMAT_CHARACTERS = /\p{Cf}/gu;
+// The bidi controls: the embeddings and overrides (U+202A..U+202E), the
+// isolates (U+2066..U+2069) and the invisible direction marks (U+200E,
+// U+200F, U+061C). Each changes how the text after it is ordered, so a title
+// could make a name display as something it does not say. Every other format
+// character stays: ZWJ joins an emoji sequence, ZWNJ is spelling in Persian.
+const BIDI_CONTROLS = /[‪-‮⁦-⁩‎‏؜]/gu;
 
 function isPlaceholder(name: string): name is SessionNamePlaceholder {
   return (SESSION_NAME_PLACEHOLDERS as readonly string[]).includes(name);
@@ -134,9 +139,8 @@ function renderOnce(template: string, values: SessionNameValues): string {
 
 /**
  * A control character (C0, DEL or C1: a newline in a title, say) becomes a
- * space. A format character (a bidi override, a zero-width space) goes: it
- * shows nothing, and a bidi control would reorder the rest of the name.
+ * space. A bidi control goes, since it would reorder the rest of the name.
  */
 function sanitize(text: string): string {
-  return text.replace(CONTROL_CHARACTERS, " ").replace(FORMAT_CHARACTERS, "");
+  return text.replace(CONTROL_CHARACTERS, " ").replace(BIDI_CONTROLS, "");
 }

@@ -73,10 +73,30 @@ describe("renderSessionName", () => {
     );
   });
 
-  it("drops format characters, so no bidi override reorders the name", () => {
+  it("drops bidi controls, so no override, isolate or mark reorders the name", () => {
     expect(
-      renderSessionName("{task}", withValues({ task: "abc\u202edef\u200b" })),
-    ).toBe("abcdef");
+      renderSessionName(
+        "{task}",
+        withValues({ task: "abc\u202edef\u2067gh\u2069\u200fi\u061cj" }),
+      ),
+    ).toBe("abcdefghij");
+    expect(renderSessionName("\u202a{project}\u202c", VALUES)).toBe("my-app");
+  });
+
+  it("keeps the joiners a name is spelled with", () => {
+    // ZWJ joins the technologist emoji; ZWNJ is part of the Persian spelling.
+    expect(
+      renderSessionName(
+        "{task}",
+        withValues({ task: "\u{1f469}\u200d\u{1f4bb}" }),
+      ),
+    ).toBe("\u{1f469}\u200d\u{1f4bb}");
+    expect(
+      renderSessionName(
+        "{task}",
+        withValues({ task: "\u0645\u06cc\u200c\u0631\u0648\u0645" }),
+      ),
+    ).toBe("\u0645\u06cc\u200c\u0631\u0648\u0645");
   });
 
   it("caps the name at 100 code points without a trailing separator", () => {
