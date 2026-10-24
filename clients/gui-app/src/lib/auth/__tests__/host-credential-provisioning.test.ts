@@ -3,6 +3,7 @@ import type { HostCredentialMintOutcome } from "@traycer-clients/shared/host-tra
 import {
   appHostCredentialMintFlow,
   noteHostCredentialState,
+  type HostCredentialMintRunnerOutcome,
   resetHostCredentialProvisioning,
   setHostCredentialMintRunner,
 } from "../host-credential-provisioning";
@@ -791,6 +792,71 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(60_001 + 1);
       await appHostCredentialMintFlow({ hostId, reason: "missing" });
       expect(runner).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one ladder between spent and provisioned mints, and the provisioned credential still reaches exactly one caller", async () => {
+    const runner = vi
+      .fn<() => Promise<HostCredentialMintRunnerOutcome>>()
+      .mockResolvedValueOnce({ kind: "spent" })
+      .mockResolvedValueOnce({ kind: "spent" })
+      .mockResolvedValue(provisionedOutcome());
+    setHostCredentialMintRunner(runner);
+    vi.useFakeTimers();
+    try {
+      const hostId = "host-ladder-spent-then-provisioned";
+      vi.setSystemTime(0);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      vi.setSystemTime(1_000);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(2);
+
+      // Two spent mints are two completed attempts: the 120s rung is open.
+      vi.setSystemTime(1_000 + 119_999);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 1 });
+      expect(runner).toHaveBeenCalledTimes(2);
+
+      const provisionedAt = 1_000 + 120_000;
+      vi.setSystemTime(provisionedAt);
+      const first = appHostCredentialMintFlow({ hostId, reason: "missing" });
+      const joiner = appHostCredentialMintFlow({ hostId, reason: "missing" });
+      await expect(first).resolves.toEqual(provisionedOutcome());
+      await expect(joiner).resolves.toEqual({
+        kind: "pending-elsewhere",
+        retryAfterMs: 60_000,
+      });
+      expect(runner).toHaveBeenCalledTimes(3);
+
+      // The adoption claim the provisioned mint took is held.
+      vi.setSystemTime(provisionedAt + 10_000);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 50_000 });
+      expect(runner).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not climb the ladder when the runner reports unavailable", async () => {
+    const runner = vi.fn((): Promise<HostCredentialMintRunnerOutcome> =>
+      Promise.resolve({ kind: "unavailable" }),
+    );
+    setHostCredentialMintRunner(runner);
+    vi.useFakeTimers();
+    try {
+      const hostId = "host-ladder-unavailable";
+      vi.setSystemTime(0);
+      for (let ask = 1; ask <= 3; ask += 1) {
+        await expect(
+          appHostCredentialMintFlow({ hostId, reason: "missing" }),
+        ).resolves.toEqual({ kind: "unavailable" });
+        expect(runner).toHaveBeenCalledTimes(ask);
+      }
     } finally {
       vi.useRealTimers();
     }
