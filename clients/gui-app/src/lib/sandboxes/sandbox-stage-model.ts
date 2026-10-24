@@ -172,35 +172,9 @@ export function defaultStageShape(
   })).find((candidate) => candidate.provider !== null);
   if (offered === undefined || offered.provider === null) return null;
   const { os, provider } = offered;
-  const rung = defaultShapeRung(provider);
-  if (rung !== null) {
-    return {
-      os,
-      cpus: rung.cpus,
-      memoryMb: rung.memoryMb,
-      diskMb: rung.diskMb,
-      region: provider.regions[0].id,
-      idleMinutes: STAGE_DEFAULT_IDLE_MINUTES,
-      destroyAfterRestingMinutes: STAGE_DEFAULT_DESTROY_AFTER_RESTING_MINUTES,
-    };
-  }
-  const bounds = provider.shape;
-  const asked = roundSandboxShape(bounds, DEFAULT_SHAPE);
-  const shape =
-    sandboxShapeProblem(bounds, asked) === null
-      ? asked
-      : {
-          cpus: bounds.cpuMin,
-          memoryMb: Math.max(
-            bounds.memoryMinMb,
-            bounds.cpuMin * bounds.memoryPerCpuMinMb,
-          ),
-        };
   return {
     os,
-    cpus: shape.cpus,
-    memoryMb: shape.memoryMb,
-    diskMb: null,
+    ...providerDefaultSize(provider),
     region: provider.regions[0].id,
     idleMinutes: STAGE_DEFAULT_IDLE_MINUTES,
     destroyAfterRestingMinutes: STAGE_DEFAULT_DESTROY_AFTER_RESTING_MINUTES,
@@ -208,13 +182,132 @@ export function defaultStageShape(
 }
 
 /**
- * A remembered shape when the catalogue still offers it, else the default.
- * A region or OS withdrawn since the pick falls back rather than staging a
- * create the server would refuse.
+ * A provider's default size: its default listed shape; of one that lists
+ * none, 2 vCPU / 4 GB rounded into its bounds, or its smallest shape when
+ * that one is outside them, on the provider's default disk.
  */
-export function rememberedOrDefaultStageShape(
+function providerDefaultSize(
+  provider: SandboxCatalogueProvider,
+): Pick<StageShape, "cpus" | "memoryMb" | "diskMb"> {
+  const rung = defaultShapeRung(provider);
+  if (rung !== null) {
+    return { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb };
+  }
+  const bounds = provider.shape;
+  const asked = roundSandboxShape(bounds, DEFAULT_SHAPE);
+  if (sandboxShapeProblem(bounds, asked) === null) {
+    return { ...asked, diskMb: null };
+  }
+  return {
+    cpus: bounds.cpuMin,
+    memoryMb: Math.max(
+      bounds.memoryMinMb,
+      bounds.cpuMin * bounds.memoryPerCpuMinMb,
+    ),
+    diskMb: null,
+  };
+}
+
+/**
+ * The shapes a configuration's defaults may name, Linux first: each OS's
+ * provider's listed shapes, or its default size when it lists none, in its
+ * default region.
+ */
+export function configurationShapeOptions(
+  catalogue: SandboxCatalogue,
+): readonly StageSize[] {
+  return STAGE_OS_PREFERENCE.flatMap((os): StageSize[] => {
+    const provider = stageProviderFor(catalogue, os);
+    if (provider === null) return [];
+    const region = provider.regions[0].id;
+    if (provider.shapes === null) {
+      return [{ os, region, ...providerDefaultSize(provider) }];
+    }
+    return provider.shapes.map((rung) => ({
+      os,
+      region,
+      cpus: rung.cpus,
+      memoryMb: rung.memoryMb,
+      diskMb: rung.diskMb,
+    }));
+  });
+}
+
+/**
+ * A configuration's defaults for a new sandbox, as its `sandbox_defaults`
+ * item holds them: shared by everyone who creates there, edited on Settings ›
+ * Sandboxes. `restingMinutes` `null` keeps a sandbox until it is destroyed.
+ */
+export interface SandboxConfigurationDefaults {
+  readonly os: SandboxOs;
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly diskMb: number;
+  readonly idleMinutes: number;
+  readonly restingMinutes: number | null;
+}
+
+/**
+ * What a configuration's New row stages when the person opens no gear: its
+ * defaults' shape while the catalogue still offers it, in the provider's
+ * default region, else the spec's default shape; the defaults' periods
+ * either way. With no defaults set, the spec's. `null` when no provider can
+ * create.
+ */
+export function configurationStageShape(
+  catalogue: SandboxCatalogue,
+  defaults: SandboxConfigurationDefaults | null,
+): StageShape | null {
+  const fallback = defaultStageShape(catalogue);
+  if (defaults === null) return fallback;
+  const periods = {
+    idleMinutes: defaults.idleMinutes,
+    destroyAfterRestingMinutes: defaults.restingMinutes,
+  };
+  const provider = stageProviderFor(catalogue, defaults.os);
+  if (provider !== null && stageSizeOffered(provider, defaults)) {
+    return {
+      os: defaults.os,
+      cpus: defaults.cpus,
+      memoryMb: defaults.memoryMb,
+      diskMb: defaults.diskMb,
+      region: provider.regions[0].id,
+      ...periods,
+    };
+  }
+  return fallback === null ? null : { ...fallback, ...periods };
+}
+
+/**
+ * A staged shape as the configuration's defaults hold it, an unset disk the
+ * provider's default; `null` when no provider serves its OS any more.
+ */
+export function stageShapeDefaults(
+  catalogue: SandboxCatalogue,
+  shape: StageShape,
+): SandboxConfigurationDefaults | null {
+  const provider = stageProviderFor(catalogue, shape.os);
+  if (provider === null) return null;
+  return {
+    os: shape.os,
+    cpus: shape.cpus,
+    memoryMb: shape.memoryMb,
+    diskMb: shape.diskMb ?? provider.shape.diskDefaultMb,
+    idleMinutes: shape.idleMinutes,
+    restingMinutes: shape.destroyAfterRestingMinutes,
+  };
+}
+
+/**
+ * The shape a New row's gear opens on: the person's remembered pick while
+ * the catalogue still offers it, else the configuration's. A region or OS
+ * withdrawn since the pick falls back rather than staging a create the
+ * server would refuse.
+ */
+export function rememberedOrConfigurationStageShape(
   catalogue: SandboxCatalogue,
   remembered: StageShape | null,
+  defaults: SandboxConfigurationDefaults | null,
 ): StageShape | null {
   if (remembered !== null) {
     const provider = stageProviderFor(catalogue, remembered.os);
@@ -226,7 +319,7 @@ export function rememberedOrDefaultStageShape(
       return remembered;
     }
   }
-  return defaultStageShape(catalogue);
+  return configurationStageShape(catalogue, defaults);
 }
 
 /**

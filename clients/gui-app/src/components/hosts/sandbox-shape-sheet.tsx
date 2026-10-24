@@ -34,7 +34,7 @@ import {
 import {
   consequenceClauses,
   defaultShapeRung,
-  rememberedOrDefaultStageShape,
+  rememberedOrConfigurationStageShape,
   stageBalanceMc,
   stageConfigurationCopy,
   stageNeedsCredits,
@@ -42,6 +42,7 @@ import {
   stageProviderFor,
   stageSizeIsRung,
   type ConsequencesInput,
+  type SandboxConfigurationDefaults,
   type StageConfiguration,
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
@@ -93,7 +94,12 @@ export function SandboxShapeSheet(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly configuration: StageConfiguration;
-  /** The staged shape, else the remembered one; `null` opens on the default. */
+  /** The configuration's defaults, `null` for none: what an unset gear opens on. */
+  readonly defaults: SandboxConfigurationDefaults | null;
+  /**
+   * The staged shape, else the person's remembered one; `null`, or one the
+   * catalogue no longer offers, opens on the configuration's defaults.
+   */
   readonly initialShape: StageShape | null;
   readonly initialName: string;
   readonly context: ShapeSheetContext;
@@ -123,6 +129,7 @@ export function SandboxShapeSheet(props: {
 function ShapeSheetBody(props: {
   readonly onOpenChange: (open: boolean) => void;
   readonly configuration: StageConfiguration;
+  readonly defaults: SandboxConfigurationDefaults | null;
   readonly initialShape: StageShape | null;
   readonly initialName: string;
   readonly context: ShapeSheetContext;
@@ -162,9 +169,10 @@ function ShapeSheetBody(props: {
       </div>
     );
   }
-  const shape = rememberedOrDefaultStageShape(
+  const shape = rememberedOrConfigurationStageShape(
     catalogue.data,
     props.initialShape,
+    props.defaults,
   );
   if (shape === null) {
     return (

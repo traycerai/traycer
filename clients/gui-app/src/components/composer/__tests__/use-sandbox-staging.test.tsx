@@ -1,7 +1,13 @@
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
-import { act, cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
@@ -24,8 +30,12 @@ import {
   userSubscription,
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
-import type { StageShape } from "@/lib/sandboxes/sandbox-stage-model";
+import type {
+  SandboxConfigurationDefaults,
+  StageShape,
+} from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  idleAndRestingLine,
   SANDBOXES_CANT_BE_CREATED,
   WAKE_STRING_MEMORY,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -39,6 +49,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const mocks = vi.hoisted(() => ({
   user: null as AuthenticatedUser | null,
   catalogue: null as SandboxCatalogue | null,
+  defaults: {} as Record<string, SandboxConfigurationDefaults>,
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
 }));
 
@@ -47,6 +58,9 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
+  useSandboxDefaultsLookup: () => (key: string) => mocks.defaults[key] ?? null,
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -98,6 +112,15 @@ const DEFAULT_SHAPE: StageShape = {
   region: "us-east",
   idleMinutes: 30,
   destroyAfterRestingMinutes: 10_080,
+};
+
+const TEAM_DEFAULTS: SandboxConfigurationDefaults = {
+  os: "linux",
+  cpus: 4,
+  memoryMb: 8192,
+  diskMb: 40_960,
+  idleMinutes: 2,
+  restingMinutes: 120,
 };
 
 function teamOwnedItem(): HostListItem {
@@ -175,7 +198,7 @@ function Harness(props: {
   useEffect(() => {
     latest = result;
   }, [result]);
-  return null;
+  return result === null ? null : result.sheet;
 }
 
 function mount(hosts: readonly HostScopeOption[]): SandboxStaging {
@@ -201,6 +224,7 @@ beforeEach(() => {
     [teamSubscription(1_000)],
   );
   mocks.catalogue = CATALOGUE;
+  mocks.defaults = {};
   mocks.openSettings.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSandboxShapeMemoryStore.setState({
@@ -261,39 +285,66 @@ describe("useSandboxStaging New rows", () => {
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
   });
 
-  it("stages the remembered shape of that configuration", () => {
-    const remembered: StageShape = {
-      ...DEFAULT_SHAPE,
-      cpus: 4,
-      memoryMb: 8192,
-    };
-    useSandboxShapeMemoryStore
-      .getState()
-      .remember(MEMORY_HOST, "team-1", remembered);
+  it("stages the configuration's defaults, shape and periods, for everyone who picks a New row", () => {
+    mocks.defaults = { "team-1": TEAM_DEFAULTS };
     const { composer } = mount([LAPTOP]);
 
+    expect(composer.newRows[1].subLine).toContain("4 vCPU");
     act(() => composer.onPickNew("team-1"));
 
     expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
       kind: "new",
       configuration: { kind: "team", teamId: "team-1", teamName: "acme" },
-      shape: remembered,
+      shape: {
+        cpus: 4,
+        memoryMb: 8192,
+        idleMinutes: 2,
+        destroyAfterRestingMinutes: 120,
+      },
     });
-    expect(staging().composer.rememberedConfigurationKey).toBe("team-1");
   });
 
-  it("falls back to the default when the remembered region is no longer offered", () => {
-    useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "personal", {
+  it("stages the configuration's defaults, not the person's remembered pick", () => {
+    mocks.defaults = { "team-1": TEAM_DEFAULTS };
+    useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "team-1", {
       ...DEFAULT_SHAPE,
-      region: "eu-west",
+      cpus: 8,
+      memoryMb: 16_384,
+      idleMinutes: 45,
     });
     const { composer } = mount([LAPTOP]);
 
-    act(() => composer.onPickNew("personal"));
+    act(() => composer.onPickNew("team-1"));
 
     expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
-      shape: DEFAULT_SHAPE,
+      shape: { cpus: 4, memoryMb: 8192, idleMinutes: 2 },
     });
+  });
+
+  it("opens the gear on the person's remembered pick over the configuration's defaults", () => {
+    mocks.defaults = { personal: TEAM_DEFAULTS };
+    useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "personal", {
+      ...DEFAULT_SHAPE,
+      idleMinutes: 45,
+    });
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onOpenShape("personal"));
+
+    expect(screen.getByText(idleAndRestingLine(45, 10_080))).toBeDefined();
+    // Cancel closes the sheet, clearing the open configuration it is keyed by.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  });
+
+  it("opens the gear on the configuration's defaults when the person remembered nothing", () => {
+    mocks.defaults = { personal: TEAM_DEFAULTS };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => composer.onOpenShape("personal"));
+
+    expect(screen.getByText(idleAndRestingLine(2, 120))).toBeDefined();
+    // Cancel closes the sheet, clearing the open configuration it is keyed by.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   });
 
   it("stages nothing while the catalogue has not answered", () => {
