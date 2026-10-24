@@ -239,10 +239,10 @@ const runtimeApprovalCardFactFields = {
   displayFacts: lazySchema(() =>
     z.array(runtimeApprovalDisplayFactSchema).optional(),
   ),
-  // The CLI's own "this ask must not be waved through" stamp: the ask carried
-  // the tool's own `decisionReason` or a `matchedAskRule`. NOT the judge's
-  // `tier` (`chatApprovalReasonSchema`), which says why TRAYCER's judge
-  // escalated - a card can carry both, either, or neither.
+  // The provider's stamp that this ask needs individual human review:
+  // Claude's `defaultToNo` or `matchedAskRule`, or Copilot's managed-approval
+  // marker. Distinct from the judge's `tier` (`chatApprovalReasonSchema`),
+  // which says why Traycer's judge escalated; a card can carry either or both.
   cautious: lazySchema(() => z.boolean().optional()),
 } as const;
 
@@ -746,14 +746,15 @@ export const approvalRequestedEventSchema = lazySchema(() =>
   approvalRequestedEventSchemaPreDisplayFacts.extend({
     ...runtimeApprovalCardFactFields,
     /**
-     * A `permissions.ask` rule forced this prompt (the SDK's `matchedAskRule`).
+     * The provider requires this prompt to go to a person: Claude's matched
+     * ask rule or Copilot's managed-approval marker.
      *
      * Rides the EVENT, not the request, and on the event only: the adapter has
-     * the rule in hand when it builds the event, before it calls the approval
+     * the requirement when it builds the event, before it calls the approval
      * handler, and the host's event classifier must learn from the event itself
      * that this ask may not be parked for a judge - the callback and the event
      * race, and a fact carried only by the callback loses whenever the event
-     * wins. Optional: absent is "no rule forced it" (or the SDK did not say).
+     * wins. Optional: absent means no requirement was reported.
      *
      * A live-only key on a frame clients also receive, so it joins the `1.20`
      * strip list like the two fields above.
