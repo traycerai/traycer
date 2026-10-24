@@ -3,13 +3,13 @@ title: "General"
 description: "Composer behavior, keeping the computer awake while agents run, the worktree branch prefix, experimental features, and resetting this device's app state."
 ---
 
-**General** holds app behavior that doesn't belong to a provider, a host, or one part of the app. It sits in the **Application** group of [Settings](/settings). Most settings apply to the app on this device, whichever host you are looking at; automatic chat archiving applies to your account across hosts.
+**General** holds app behavior that doesn't belong to a provider, a host, or one part of the app. It sits in the **Application** group of [Settings](/settings), so its settings apply to the app on this device, whichever host you are looking at.
 
 ## Chat & Composer
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Voice input** | On | Dictate prompts with the composer's mic button or <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> (the same keys on macOS). The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves your machine. The language you speak is detected automatically. |
+| **Voice input** | On | Dictate prompts with the composer's mic button or <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> (the same keys on macOS). The microphone opens only while you are dictating, and turning this off closes it. Speech is transcribed on your device; audio never leaves your machine. |
 | **Quote reply on text selection** | On | Selecting text in an agent's reply shows a quote button that inserts the selection into the composer. |
 | **Steer with ⌘+Enter** (**Steer with Ctrl+Enter** on Windows and Linux) | On | While a turn is running, <kbd>Cmd</kbd> + <kbd>Enter</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd> sends the composer text into that turn as a steering message, ahead of the queue. Plain <kbd>Enter</kbd> still queues. Works with agents that support steering; see [Message queue](/panels/agents/message-queue). |
 
@@ -18,35 +18,6 @@ To hide the mic button but keep the dictation shortcut, set **Microphone** to **
 ## Running Agents
 
 **Prevent sleep while running** keeps the computer awake while an agent is running, so work continues when you step away. It is off by default.
-
-## Automatically Archive Idle Chats
-
-In **General › Agents**, turn on **Archive idle agents automatically**. It is off by default. The setting applies across your hosts and initially includes only chats started by agents. While it is on, two options appear under it:
-
-- **Archive after** sets how long a chat must be idle. Pick a preset from 1 hour to 30 days, or choose **Custom…** to enter a number of minutes, hours or days.
-- **Include chats I started** archives your own chats too. Terminal agent chats count as yours, so they are included only with this option on.
-
-Turning the setting off hides the options and keeps your choices for the next time you turn it on.
-
-The host skips chats that are being viewed or still have work running. Archiving is applied when a host next looks at the chat's Task, rather than at an exact deadline. Sending a new message unarchives the chat.
-
-## When You Quit Traycer
-
-On Desktop, **General › Agents › When you quit Traycer** controls the host on this computer, regardless of which host is selected in Settings.
-
-| Choice | What happens |
-| --- | --- |
-| **Keep the host running in the background** (default) | Starts the host at login and keeps work running after you quit Traycer. Other devices can still connect to it. |
-| **Ask me each time** | Starts the host with Traycer and asks whether to keep work running or stop it when you quit. |
-| **Stop the host if nothing is running, otherwise ask** | Starts the host with Traycer. On quit, stops an idle host automatically and asks if work is running or the host reports terminals still in use. |
-| **Stop the host with the app** | Starts the host with Traycer and stops it when you quit, ending work running on it. |
-| **Don't run a host on this computer** | Uses remote hosts instead of starting a local host. Choosing this while Traycer manages a local host asks you to confirm stopping it. |
-
-If a terminal is still in use, you can keep the host running so it carries on, stop the host and quit, or cancel quitting. Stopping the host ends that terminal.
-
-A host you started manually in a terminal keeps running when you quit Desktop. If Settings says a restart is needed to apply your choice, follow that notice.
-
-You can also inspect or change the choice with the [host lifecycle CLI commands](/cli/commands#host-lifecycle).
 
 ## Worktrees
 

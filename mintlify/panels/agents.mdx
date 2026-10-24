@@ -135,14 +135,6 @@ Use the [Message queue](/panels/agents/message-queue) to reorder, edit, pause, o
 
 Answer structured questions inline or compare an alternative answer in a fork. See [Agent questions](/panels/agents/agent-questions).
 
-## Interactive Pages
-
-An agent can show an interactive page inside its reply. While it prepares the page, the chat shows **Building page**. Pages also appear in the Task’s **Files** panel and are visible to everyone in the Task, including pages created in private chats.
-
-Hover the page to choose **Expand** to open it in a separate panel, or **Download HTML** to save an HTML copy. On a phone, open **Page actions** (⋯) and choose **Open full screen** or **Download HTML**.
-
-If a page stops responding, choose **Reload** to run it again. When an updated page includes an **Updated from an earlier page** link, use it to return to the earlier version.
-
 ## Message Actions
 
 Hover a message to show its actions. They are icons; hover one to see its name.
@@ -178,14 +170,6 @@ Click **Fork**, or press ⌘Enter / Ctrl+Enter. Where the new tile opens follows
 A fork on another host gets a copy of the transcript. Folder paths and uncommitted changes stay on the original machine, so pick that host's workspace for the fork.
 
 Question cards have their own fork actions, **Cross Question** and **A/B Fork**. See [Agent questions](/panels/agents/agent-questions#compare-answers-in-a-fork). To ask a quick side question without forking by hand, use `/btw`. See [Side chats](/panels/agents/composer#side-chats).
-
-## Continue A Subagent As A Chat
-
-When a coding agent delegates work to a native subagent, its activity appears in a subagent card inside the conversation. Hover the card's **Open as chat** icon to identify it, then click it to read the subagent's conversation. This view is read-only. **Back to chat** returns to the parent conversation.
-
-For a **Claude Code** or **Codex** subagent in your own chat, click **Continue as chat** in the subagent view to carry on its work yourself. The button is disabled while the subagent is still running. The chat's host must support this action. To create the independent chat for the first time, it must still be able to read the provider's record of the subagent.
-
-Traycer opens an independent chat with the subagent's conversation, nested beneath the parent in the same Task. It runs on the same host and shares the parent's workspace, including any worktree; it does not create a separate worktree. Messages you send there do not go to the original subagent or its parent. Choosing **Continue as chat** again opens the chat already created for that subagent.
 
 ## Undo A Turn
 
@@ -299,7 +283,7 @@ Open an agent row's ⋯ menu, or right-click the row:
 | **Archive** / **Unarchive**         | Hides the agent, or brings it back. See [Archiving](#archiving).                                  |
 | **Share with task** / **Make private** | Controls whether people you share the Task with can see this agent. Not shown for Terminal-interface agents. See [Sharing](/panels/sharing). |
 | **Copy ID**                         | Copies the agent's ID.                                                                            |
-| **Delete**                          | Deletes the agent after you confirm. Agents nested under it are kept, and the ones directly under it move to the top level. |
+| **Delete**                          | Deletes the agent after you confirm. Agents nested under it are deleted too.                      |
 
 ### Archiving
 
@@ -315,12 +299,6 @@ An icon at the start of a row shows when the agent is running, has background wo
 
 - **Asleep**: the session is paused. It resumes on the next message or when you open the agent.
 - **Stopped**: the session has ended.
-
-## Claude Scheduled Jobs
-
-When Claude Code schedules a job in a Chat session, open the chat’s **Background** panel to see its schedule and prompt. **Next run** appears when a future run time is available.
-
-Ask Claude to cancel a scheduled job; it has no individual Stop button in the panel. Scheduled jobs last only as long as their session; they do not survive the session ending.
 
 ## Session State
 

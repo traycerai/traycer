@@ -119,8 +119,6 @@ Deleting an artifact removes it, and every artifact nested under it, from the tr
 
 The live document you edit in the app is the primary copy of each artifact. The host that has the Task open also keeps a Markdown copy of every artifact on disk and syncs it both ways: edits in the app are written to the file, and edits to the file flow back into the app.
 
-A host keeps its copy current only while the Task is open there or one of its agents is working in it. Elsewhere the copy is the one that host last had, and it can be out of date or missing artifacts until the Task opens there again.
-
 The copy exists only for people with the **Editor** or **Owner** role. Viewers have no files on disk.
 
 ```text
@@ -136,8 +134,6 @@ The copy exists only for people with the **Editor** or **Owner** role. Viewers h
 - Each artifact is a folder, named after the artifact's title when it was created, that holds an `index.md`.
 - Nested artifacts are nested folders.
 - A new folder with an `index.md` becomes a new artifact in the Task. This is how agents create artifacts.
-
-Only `index.md` and the `.comments/` files sync between hosts and to collaborators. An artifact's `images/` folder holds copies of the images in that artifact, which each host writes for itself. The host keeps that folder matching the artifact, so a file you add there is removed, and one you change or delete is put back. Any other file you put in an artifact folder stays on the machine where it was written.
 
 Each `index.md` starts with frontmatter:
 

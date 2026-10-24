@@ -3,7 +3,7 @@ title: "CLI"
 description: "Reference for the traycer command: sign-in, running and updating the host, configuration, worktrees, and agent automation."
 ---
 
-The Traycer CLI is the `traycer` command. Use it to sign in, run and update the host on a machine, configure the shell Traycer uses, manage provider profiles and worktrees, and let agents work with other agents in a Task.
+The Traycer CLI is the `traycer` command. Use it to sign in, run and update the host on a machine, configure the shell Traycer uses, manage worktrees, and let agents work with other agents in a Task.
 
 ## Installation
 
@@ -130,7 +130,7 @@ Options for these commands:
 | `--no-service-register` | `install`, `ensure` | Install the files only, without registering or starting the OS service. `host install` does not support it on Windows. |
 | `--keep-installed` | `ensure` | Keep whichever host version is installed instead of moving to this CLI's default. |
 | `--no-linger` | `install`, `ensure`, `host service install` | Linux only: skip `loginctl enable-linger`. |
-| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats or local tasks on this machine were saved in a newer format than it can read. Those chats and local tasks are unavailable while that host is installed. |
+| `--accept-store-format-loss` | `install`, `ensure`, `update`, `apply` | Install a host even though chats on this machine were saved in a newer format than it can read. Those chats are unavailable while that host is installed. |
 
 The CLI reads the host's connection details from `~/.traycer/host/`.
 
@@ -145,16 +145,6 @@ The `host service` commands manage the OS registration that keeps the host runni
 | `traycer host service start` | Start the registered service in the background and return. |
 | `traycer host service status` | Show the registration and whether the host is running. It only reads. |
 | `traycer host service uninstall` | Deregister the service, which also asks the host to stop. The host files stay installed; `traycer host uninstall` removes them. |
-
-### Host Lifecycle
-
-`traycer host lifecycle get` shows the current mode, whether Desktop is open, how the host was started, and whether its supervisor supports the chosen mode.
-
-`traycer host lifecycle set <mode>` accepts `background`, `linked`, `ask`, `stop-if-idle`, or `none`. See [When you quit Traycer](/settings/general#when-you-quit-traycer) for the corresponding behavior.
-
-Setting a mode does **not** start or stop the host. Startup changes apply to the next automatic start. Quit behavior can update while Desktop is open, but a quit already in progress keeps its earlier choice. A running host with an older supervisor may need a restart; the command reports this.
-
-In particular, `set none` leaves a running host alone and switches Desktop to remote hosts on its next launch. This differs from choosing **Don't run a host** in Settings, which can ask you to confirm stopping the local host. Manually started foreground hosts remain unaffected when Desktop quits.
 
 ## CLI Commands
 
@@ -189,29 +179,6 @@ The shell and environment settings apply when Traycer starts the host and opens 
 
 Provider credentials are not set here. Configure them in [Settings › Providers](/settings/providers).
 
-## Provider Profile Commands
-
-A profile is an account a provider runs under. The provider's own CLI login is the Terminal account, which these commands call `ambient`. [Managed profiles](/settings/providers#managed-profiles) are extra accounts next to it, available for Claude Code, Codex, Grok, and Antigravity. These commands change the same profiles as **Profiles & Limits** in [Settings › Providers](/settings/providers), on the host running on this machine.
-
-| Command | Purpose |
-| --- | --- |
-| `traycer profile list` | List every provider that has profiles, with each profile's ID, name, account, whether it is enabled and signed in, and its last known usage-limit status. |
-| `traycer profile list <provider>` | List one provider's profiles. |
-| `traycer profile add <provider>` | Create a managed profile and sign it in. The CLI prints a sign-in URL, and a code where the provider uses one, opens the page in your browser when it can, and waits until the sign-in finishes. The profile is named after the part of the account's email before the `@`. |
-| `traycer profile add <provider> --label <name>` | Create the profile with a name of your own, up to 64 characters. |
-| `traycer profile login <provider> <profile>` | Sign an existing profile in again. |
-| `traycer profile rename <provider> <profile> <label>` | Rename a profile. |
-| `traycer profile disable <provider> <profile>` | Stop Traycer using a profile without removing it. |
-| `traycer profile enable <provider> <profile>` | Let Traycer use the profile again. |
-| `traycer profile remove <provider> <profile>` | Remove a managed profile and its stored sign-in, after asking you to confirm. The Terminal account cannot be removed. |
-| `traycer profile remove <provider> <profile> --yes` | Remove without asking. Required with `--json` and when the terminal cannot ask. |
-
-- `<provider>` is `claude`, `codex`, `grok`, or `antigravity`.
-- `<profile>` is `ambient` or a profile ID from `traycer profile list`.
-- `add` and `login` need a person at a terminal, so they are refused with `--json` and in CI. Claude Code is also refused when input is piped or redirected, because you may need to paste a code. Press Ctrl-C to cancel a sign-in; a profile that was being created is discarded.
-- For Claude Code, if the browser shows a code instead of finishing, paste it into the terminal and press Enter.
-- If the account you sign in to already belongs to another profile, `add` reports that profile and adds nothing.
-
 ## Workspace and Worktree Commands
 
 | Command | Purpose |
@@ -244,35 +211,6 @@ These commands need [agent context](#agent-context).
 | `traycer comments list [artifact-path...]` | List comment threads on the artifacts you name, or on every artifact in the Task. Filter with `--status open`, `--status resolved`, or `--status all` (the default). |
 | `traycer comments set-status --artifact <path> --status <status> <thread-id...>` | Set threads to `open` or `resolved`. |
 
-## Task Commands
-
-| Command | Purpose |
-| --- | --- |
-| `traycer task create --message <text> --harness <id> --model <id>` | Start a Task on this machine and send its first message. The first agent starts working at once and uses your provider plan. Prints the Task id and the first agent's id. See [Task Create Options](#task-create-options). |
-
-`task create` runs as the person signed in with `traycer login`, on this machine's host, so the host must be running (`traycer host ensure`). The Task is yours and appears in your Task list like one you started in the app. It needs no [agent context](#agent-context) and is refused inside an agent session; an agent starts a Task with its `traycer_create_task` tool.
-
-Exit code 0 means the Task and its first agent exist and the host accepted the message, not that the first turn has started. With `--json`, the result is `{ "taskId", "agentId", "alreadyCreated" }`.
-
-### Task Create Options
-
-| Option | Purpose |
-| --- | --- |
-| `--message <text>` | The first agent's first message. Required. |
-| `--harness <id>` | Coding agent for the first agent. `traycer agent list-harnesses` lists the ids. Required. |
-| `--model <id>` | Model. `traycer agent list-harness-models <harness>` lists them. Required. |
-| `--title <title>` | Task title. Without it, one is generated. |
-| `--workspace <path>` | Absolute path of a folder on this machine the Task works in. Repeatable. Without it, the first agent has no folder. |
-| `--repo <owner/repo>` | A repository the Task is about. Repeatable. |
-| `--reasoning-effort <effort>` | Reasoning effort, for models that support it. |
-| `--permission-mode <mode>` | `supervised`, `auto_accept_edits`, `auto`, or `full_access`. The default is `full_access`. With `supervised`, the first turn waits for an approval nobody may be there to give. |
-| `--profile <profile>` | Account: `ambient` for the coding agent's own CLI sign-in (the default), or a profile id from `traycer profile list`. |
-| `--idempotency-key <key>` | Start at most one Task for this key within 24 hours. A rerun with the same key and options prints the first run's ids with `alreadyCreated: true`; the same key with different options is refused. Build the key from the schedule slot, such as `nightly-$(date +%F)`. |
-
-If a run with a key sends the request and cannot tell whether the Task was created, it exits non-zero naming the Task id and the key's record file, and later runs with that key refuse instead of starting a second Task. A sign-in that expires while the request is in flight is one such case: the run does not refresh it and send again. A sign-in that had already expired when the run started is refreshed, and the run creates as usual. Check your Task list, then delete that file to use the key again.
-
-A run that finds a run with the same key still creating its Task waits for it, and exits `75` having created nothing if that run takes too long. Run it again to read that run's result.
-
 ## Agent Commands
 
 Agent commands are for agents that Traycer launches. They read the Task and the calling agent from the environment; see [Agent Context](#agent-context). For how agents coordinate, see [Agent-to-Agent](/concepts/agent-to-agent).
@@ -281,16 +219,12 @@ Agent commands are for agents that Traycer launches. They read the Task and the 
 | --- | --- |
 | `traycer agent list` | List your agents in the Task, with the settings each one runs with. |
 | `traycer agent list --all` | Include other people's agents in the Task. |
-| `traycer agent list --live` | Leave archived agents out. If the host is too old to report which agents are archived, the command fails and says so; update the host, or run it without `--live`. |
-| `traycer agent list --compact` | Print one short line per agent, without folders, model, or session detail. |
-| `traycer agent list --json` | Each agent carries `archived`: `true`, `false`, or `null` when the host is too old to report it. Each agent also carries `profile` and `permissionMode`, the values `agent configure` takes as `--profile` and `--permission-mode`, or `null` when the host cannot say. |
 | `traycer agent create` | Create a child agent of the calling agent. See [Create Options](#create-options). |
 | `traycer agent fork --agent-id <id>` | Copy an agent on this host into a new agent, starting from its latest checkpoint. Works for Chat-interface agents and Claude Code Terminal agents. See [Fork Options](#fork-options). |
 | `traycer agent configure` | Change the coding agent, model, and account a Chat-interface agent uses from its next turn. See [Configure Options](#configure-options). |
 | `traycer agent stop --agent-id <id>` | Stop an agent's current turn. The agent is not deleted; a later message wakes it again. Add `--cascade` to also stop the agents it delegated to. |
 | `traycer agent archive --agent-id <id>` | Archive an agent. A working agent cannot be archived; stop it first. A later message to the agent unarchives it. |
 | `traycer agent archive --agent-id <id> --unarchive` | Unarchive an agent. |
-| `traycer agent rename <id> <name>` | Set an agent's display name. It needs the full agent id, and the agent must run on this host. |
 | `traycer agent send --to <id> --message <text>` | Send a message to another agent. |
 | `traycer agent send ... --expect-reply` | Ask for a reply. Without it, the other agent never reports back. |
 | `traycer agent send ... --response-id <id>` | Answer a request you received from that agent. |
@@ -371,16 +305,15 @@ There is no flag for the Task. Commands that need these values read them from th
 | Needs | Commands |
 | --- | --- |
 | `TRAYCER_EPIC_ID` | `workspace list`, `terminal list`, `terminal output`, `comments list`, `comments set-status`, `agent stop`, `agent archive`, `agent transcript`, and `agent role list` |
-| `TRAYCER_EPIC_ID` and `TRAYCER_AGENT_ID` | `agent list`, `create`, `fork`, `configure`, `rename`, `send`, `selection-guide`, `list-profiles`, and `profile-rate-limits` |
+| `TRAYCER_EPIC_ID` and `TRAYCER_AGENT_ID` | `agent list`, `create`, `fork`, `configure`, `send`, `selection-guide`, `list-profiles`, and `profile-rate-limits` |
 | `TRAYCER_EPIC_ID`, and `TRAYCER_AGENT_ID` or `--agent-id` | `agent inbox`, `agent role claim`, `agent role relinquish`, and `monitor` |
 | Neither | `agent list-harnesses` and `agent list-harness-models` |
-| Neither, and refused when either is set | `task create` |
 
 Run outside an agent, these commands fail with "epic id required - set TRAYCER_EPIC_ID." or "sender agent id required - set TRAYCER_AGENT_ID." `monitor` checks the agent first: "agent id required — pass --agent-id or set TRAYCER_AGENT_ID."
 
 ### Read-Only Agents
 
-Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent rename`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, `task create`, and `worktree delete`. The `profile` commands that change a profile (`add`, `login`, `rename`, `enable`, `disable`, `remove`) are refused too; `profile list` still works.
+Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, and `worktree delete`.
 
 ## JSON Output
 
@@ -400,7 +333,7 @@ For example, an agent command run outside an agent ends with:
 
 - `--no-progress` drops the `progress` lines. Setting `CI` or `TRAYCER_NONINTERACTIVE` does the same.
 - `--help` and `--version` with `--json` return one `result` line with the text in `data.output`.
-- A few commands differ: `monitor` ignores `--json`, `link-phone`, `profile add`, and `profile login` do not support it, `host logs` ignores `--follow` with it, and `host capabilities --json` prints a single JSON document instead of NDJSON.
+- A few commands differ: `monitor` ignores `--json`, `link-phone` does not support it, `host logs` ignores `--follow` with it, and `host capabilities --json` prints a single JSON document instead of NDJSON.
 
 ### Exit Codes
 
@@ -410,7 +343,6 @@ For example, an agent command run outside an agent ends with:
 | `1` | The command failed. With `--json`, the `result` line carries the error code. |
 | `2` | The Traycer sign-in service could not be reached (`login`, `whoami`, `link-phone`). |
 | `75` | Another Traycer command, such as a host install or update, is already in progress. Try again when it finishes. |
-| `130` | You cancelled a `profile add` or `profile login` sign-in with Ctrl-C. |
 
 ## Paths and Logs
 
@@ -469,16 +401,6 @@ traycer agent create --surface gui --harness codex --model <model-id> \
 ```
 
 `agent create` prints the new agent's id. Use `traycer agent list-harness-models codex` to find a model id.
-
-### Start a Task Every Night
-
-On a machine where you ran `traycer login`, add this as one line in your crontab, replacing `<model-id>` with your model id. It starts one Task per day, even if the job runs twice:
-
-```bash
-0 6 * * * traycer host ensure && traycer task create --title "Nightly triage" --workspace /srv/app --harness codex --model <model-id> --message "Triage last night's failed CI runs and list the causes." --idempotency-key "nightly-$(date +\%F)"
-```
-
-The first agent spends your provider plan as soon as it starts. Without `--idempotency-key`, every run starts its own Task.
 
 ### Send a Message and Get a Reply
 

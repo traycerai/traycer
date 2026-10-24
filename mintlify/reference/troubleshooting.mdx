@@ -157,7 +157,7 @@ Every tab belongs to the host it was opened on. See [Tabs and their host](/conce
 | `Host "{label}" is unreachable. This terminal is permanently closed.` | A terminal can't move to another host. Close the tab and open a new terminal. |
 | `Host "{label}" is unreachable, so this agent is unavailable until that host is back.` | An agent on the Terminal interface stays on its host. The agent and its transcript are kept; closing the tab only removes it from the canvas. |
 | `This agent is not running on "{label}" right now, and it can only be started on that machine.` | An agent on the Terminal interface on another machine isn't running. Start it from that machine. |
-| `Clone this agent to continue while "{label}" is offline; the original stays there.` | Click **Clone agent** to continue on the active host, or open Traycer on the original host. Cloning creates a new agent and leaves the original where it was. With view-only access to the Task, the banner explains that cloning is unavailable and shows no Clone button. |
+| `Bound host "{label}" is offline. Continuing here creates a new agent on the active host; this one stays bound to "{label}".` | An agent on the Chat interface. Continuing clones it onto the active host; the original stays where it was. With view-only access to the Task, it can't be cloned. |
 | `This agent lives on {host}, which is offline — showing the last published copy. Sending resumes when that host is back.` | You're reading a read-only copy. See [Sync and offline](/concepts/sync-and-offline). |
 | `This agent belongs to another collaborator, and its history isn't available here.` | A shared agent whose live history isn't on this host. The tab may show its last published copy, and cloning creates your own agent on the active host. |
 | `This agent is no longer shared with you.` | Access was removed while the tab was open. |
@@ -224,18 +224,6 @@ For Cursor, add the Cursor API key in [Settings › Providers](/settings/provide
 | **Connect &lt;provider&gt;** / **Add API key** | The provider needs an API key. **Add API key** opens its settings. |
 
 If a provider is missing from the picker, it may not be installed or configured on that host.
-
-## Models Or Model Downloads Fail Behind Antivirus Or A Proxy
-
-If a provider's model list never loads or a model download fails, and a browser or `curl` reaches the same address fine, your antivirus or company proxy may be inspecting secure (HTTPS) connections with its own certificate. Traycer doesn't recognize that certificate, so it refuses the connection. The [host log](#logs) reports the model list or the download failing, and if the log names a certificate error such as `SELF_SIGNED_CERT_IN_CHAIN`, this is the cause.
-
-To fix it:
-
-1. Export the security software's root certificate as a PEM file (`.pem` or `.crt`). Your antivirus or IT team can tell you where it is.
-2. In [Settings › Shell](/settings/shell#host-environment), under **Host environment**, click **Add environment variable**, enter `NODE_EXTRA_CA_CERTS` as the **Name**, choose **Set**, and enter the full path of the file on the machine the host runs on.
-3. Restart the host: **⋯ › Restart** in [Settings › Host](/settings/host). For a remote host this is the route to use, because **Help › Restart Host** and the tray menu's **Restart Host** restart only this computer's host. If the host is busy, a dialog names the running work and lets you defer the restart.
-
-Traycer keeps trusting its normal certificates. Traycer, and the agents it runs, then also trust every site that certificate's authority vouches for.
 
 ## App Menus
 
