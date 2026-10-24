@@ -18,6 +18,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { ReplaceSecretValueDialog } from "@/components/settings/secrets/replace-secret-value-dialog";
 import { SecretVersionsList } from "@/components/settings/secrets/secret-versions-list";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
@@ -71,6 +72,17 @@ afterEach(() => {
   cleanup();
 });
 
+function testQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+}
+
+/** The dialog's writes are host mutations, so it renders under a cache. */
+function underCache(queryClient: QueryClient, node: ReactNode): ReactNode {
+  return <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>;
+}
+
 function buttonOf(element: HTMLElement): HTMLButtonElement {
   if (!(element instanceof HTMLButtonElement)) {
     throw new Error("the element is not a button");
@@ -81,7 +93,7 @@ function buttonOf(element: HTMLElement): HTMLButtonElement {
 interface DialogMount {
   readonly requests: EnvironmentSecretsReplaceValueRequest[];
   readonly onReplaced: Mock<() => void>;
-  readonly onStale: Mock<() => void>;
+  readonly queryClient: QueryClient;
 }
 
 function mountDialog(
@@ -99,18 +111,20 @@ function mountDialog(
     },
   });
   const onReplaced = vi.fn<() => void>();
-  const onStale = vi.fn<() => void>();
+  const queryClient = testQueryClient();
   render(
-    <ReplaceSecretValueDialog
-      open
-      secret={secret}
-      client={client}
-      onOpenChange={() => undefined}
-      onReplaced={onReplaced}
-      onStale={onStale}
-    />,
+    underCache(
+      queryClient,
+      <ReplaceSecretValueDialog
+        open
+        secret={secret}
+        client={client}
+        onOpenChange={() => undefined}
+        onReplaced={onReplaced}
+      />,
+    ),
   );
-  return { requests, onReplaced, onStale };
+  return { requests, onReplaced, queryClient };
 }
 
 function typeValue(value: string): void {
@@ -157,6 +171,11 @@ describe("the Replace value dialog's answers", () => {
     const mounted = mountDialog(secretFixture({}), () =>
       Promise.resolve({ outcome: "pending", uploadId: "u1" }),
     );
+    const listKey = hostQueryKeys.methodScope(
+      HOST_ID,
+      "environment.secrets.list",
+    );
+    mounted.queryClient.setQueryData(listKey, { secrets: [], removed: [] });
 
     typeValue(TYPED);
     fireEvent.click(replaceButton());
@@ -164,7 +183,9 @@ describe("the Replace value dialog's answers", () => {
     expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
       SECRET_SAVED_OFFLINE,
     );
-    expect(mounted.onStale).not.toHaveBeenCalled();
+    expect(mounted.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
+      false,
+    );
     expect(mounted.onReplaced).not.toHaveBeenCalled();
     expect(screen.getByTestId("replace-secret-dialog")).toBeTruthy();
   });
@@ -227,7 +248,6 @@ function ReopenableReplaceDialog(props: {
         client={props.client}
         onOpenChange={setOpen}
         onReplaced={() => undefined}
-        onStale={() => undefined}
       />
     </>
   );
@@ -253,7 +273,10 @@ describe("the Replace value dialog across a close and a reopen", () => {
       },
     });
     render(
-      <ReopenableReplaceDialog secret={secretFixture({})} client={client} />,
+      underCache(
+        testQueryClient(),
+        <ReopenableReplaceDialog secret={secretFixture({})} client={client} />,
+      ),
     );
     typeValue(TYPED);
     fireEvent.click(replaceButton());
@@ -296,16 +319,18 @@ function mountRerenderableDialog(
       },
     },
   });
-  const dialogFor = (shown: EnvironmentSecret): ReactNode => (
-    <ReplaceSecretValueDialog
-      open
-      secret={shown}
-      client={client}
-      onOpenChange={() => undefined}
-      onReplaced={() => undefined}
-      onStale={() => undefined}
-    />
-  );
+  const queryClient = testQueryClient();
+  const dialogFor = (shown: EnvironmentSecret): ReactNode =>
+    underCache(
+      queryClient,
+      <ReplaceSecretValueDialog
+        open
+        secret={shown}
+        client={client}
+        onOpenChange={() => undefined}
+        onReplaced={() => undefined}
+      />,
+    );
   const mounted = render(dialogFor(secret));
   return {
     requests,
@@ -344,17 +369,24 @@ describe("the Replace value dialog's expected version", () => {
         },
       },
     });
+    const queryClient = testQueryClient();
     const view = render(
-      <ReopenableReplaceDialog
-        secret={secretFixture({ currentVersionId: "ver-1" })}
-        client={client}
-      />,
+      underCache(
+        queryClient,
+        <ReopenableReplaceDialog
+          secret={secretFixture({ currentVersionId: "ver-1" })}
+          client={client}
+        />,
+      ),
     );
     view.rerender(
-      <ReopenableReplaceDialog
-        secret={secretFixture({ currentVersionId: "ver-2" })}
-        client={client}
-      />,
+      underCache(
+        queryClient,
+        <ReopenableReplaceDialog
+          secret={secretFixture({ currentVersionId: "ver-2" })}
+          client={client}
+        />,
+      ),
     );
     fireEvent.click(screen.getByText("Cancel"));
     await waitFor(() => {
@@ -412,9 +444,7 @@ function mountVersions(
       "environment.secrets.undo": () => undoAnswer,
     },
   });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  const queryClient = testQueryClient();
   render(
     <QueryClientProvider client={queryClient}>
       <SecretVersionsList

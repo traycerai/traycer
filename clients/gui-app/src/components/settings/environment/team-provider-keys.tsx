@@ -70,7 +70,6 @@ export function TeamProviderKeys(): ReactNode {
           open={adding}
           client={client}
           onOpenChange={setAdding}
-          onSaved={reread}
           initialKind="provider"
         />
       ) : null}

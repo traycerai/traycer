@@ -123,7 +123,6 @@ export function SecretsPage(props: {
           open={adding}
           client={props.client}
           onOpenChange={setAdding}
-          onSaved={reread}
         />
       ) : null}
     </section>

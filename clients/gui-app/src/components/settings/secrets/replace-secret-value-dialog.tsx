@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -13,35 +14,40 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useEnvironmentSecretsReplaceValueMutation } from "@/hooks/environment/team/use-secret-value-mutations";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 import {
   SECRET_CUSTODY_SENTENCE,
   SECRET_RESTART_LINE,
   SECRET_SCOPE_LINE,
+  SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * Replace value: a rotation, compare-and-set on the version the list showed
  * when the dialog opened. The typed value lives in this component only, is
- * sent by a direct request, and is dropped when the dialog closes.
+ * read when the request is dispatched, so it reaches no query or mutation
+ * cache, and is dropped when the dialog closes. The mutation re-reads the list
+ * once the value is accepted or found changed elsewhere.
  */
 export function ReplaceSecretValueDialog(props: {
   readonly open: boolean;
   readonly secret: EnvironmentSecret;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
-  /** Accepted: the row shows the rotation and re-reads the list. */
+  /** Accepted: the row shows the rotation. */
   readonly onReplaced: () => void;
-  /** Changed elsewhere: the list is re-read before another try. */
-  readonly onStale: () => void;
 }): ReactNode {
-  const environmentId = useConfigurationEnvironmentId();
   const { secret } = props;
   const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
+  // The value a Replace sends, read at dispatch.
+  const sentValue = useRef("");
+  const replacement = useEnvironmentSecretsReplaceValueMutation(
+    props.client,
+    () => sentValue.current,
+  );
+  const busy = replacement.isPending;
   const [note, setNote] = useState<string | null>(null);
   // Which open of the dialog a replace belongs to: one that settles after a
   // close (the person cancelled and opened it again) leaves the form now
@@ -81,38 +87,23 @@ export function ReplaceSecretValueDialog(props: {
     openGeneration.current += 1;
     setValue("");
     setNote(null);
-    setBusy(false);
+    replacement.reset();
     props.onOpenChange(false);
   };
 
   const replace = async (): Promise<void> => {
     if (expectedVersionId === null) return;
     const sentFrom = openGeneration.current;
-    setBusy(true);
     setNote(null);
+    sentValue.current = value;
     try {
-      const method = "environment.secrets.replaceValue";
-      const request = {
+      const answer = await replacement.mutateAsync({
         secretId: secret.secretId,
-        value,
         expectedVersionId,
-        environmentId,
-      };
-      if (environmentId !== null) cloudVerdictPreflight(method)();
-      const answer =
-        environmentId === null
-          ? await props.client.request(method, request)
-          : await props.client.requestWithSignalRequiringHostMethodVersion(
-              method,
-              { ...request, environmentId },
-              undefined,
-              { method, version: { major: 1, minor: 1 } },
-            );
-
+      });
       const outcome = replaceOutcome(answer);
-      // The row and the list follow the server whichever open is showing.
+      // The row follows the server whichever open is showing.
       if (outcome.kind === "accepted") props.onReplaced();
-      else if (outcome.reread) props.onStale();
       if (openGeneration.current !== sentFrom) return;
       if (outcome.kind === "accepted") {
         close(false);
@@ -124,13 +115,15 @@ export function ReplaceSecretValueDialog(props: {
       setNote(outcome.text);
     } catch (error) {
       if (openGeneration.current !== sentFrom) return;
+      if (error instanceof HostMethodVersionUnsatisfiedError) {
+        setNote(SECRETS_NEED_UPDATED_HOST);
+        return;
+      }
       setNote(
         error instanceof Error && error.message.length > 0
           ? error.message
           : "Couldn't replace the value.",
       );
-    } finally {
-      if (openGeneration.current === sentFrom) setBusy(false);
     }
   };
 

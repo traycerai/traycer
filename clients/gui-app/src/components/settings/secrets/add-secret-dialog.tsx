@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -12,9 +13,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  useEnvironmentSecretsCreateMutation,
+  useEnvironmentSecretsVerifyCandidateMutation,
+} from "@/hooks/environment/team/use-secret-value-mutations";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
   DESKTOP_SECRET_KINDS,
@@ -38,6 +41,7 @@ import {
 import {
   SECRET_CUSTODY_SENTENCE,
   SECRET_SAVED_OFFLINE,
+  SECRETS_NEED_UPDATED_HOST,
   secretSaveConfirmationLines,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { cn } from "@/lib/utils";
@@ -50,9 +54,9 @@ import { cn } from "@/lib/utils";
  * the cloud and certificate kinds have no row. A kind no protocol of which
  * is brokered is greyed with the catalogue's own line.
  *
- * The typed value lives in this component's state only: Verify and Save send
- * it by a direct request, so it reaches no query or mutation cache, and
- * closing the dialog drops it.
+ * The typed value lives in this component's state only: Verify and Save read
+ * it when their request is dispatched, so it reaches no query or mutation
+ * cache, and closing the dialog drops it.
  */
 
 type Step =
@@ -74,6 +78,9 @@ const NOTE_TONE: Readonly<Record<SecretVerifyLine["tone"], string>> = {
 };
 
 function errorText(error: unknown, fallback: string): string {
+  if (error instanceof HostMethodVersionUnsatisfiedError) {
+    return SECRETS_NEED_UPDATED_HOST;
+  }
   return error instanceof Error && error.message.length > 0
     ? error.message
     : fallback;
@@ -179,16 +186,26 @@ export function AddSecretDialog(props: {
   readonly initialKind?: DesktopSecretKind;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
-  /** A secret was saved: re-read the list. */
-  readonly onSaved: () => void;
 }): ReactNode {
-  const environmentId = useConfigurationEnvironmentId();
   const initialStep: Step =
     props.initialKind === undefined
       ? PICK
       : { kind: "form", form: initialSecretForm(props.initialKind) };
   const [step, setStep] = useState<Step>(initialStep);
-  const [busy, setBusy] = useState<"verify" | "save" | null>(null);
+  // The form a Verify or Save sends, read at dispatch.
+  const sentForm = useRef<SecretFormState | null>(null);
+  const readSentForm = (): SecretFormState => {
+    if (sentForm.current === null) throw new Error("Nothing to send.");
+    return sentForm.current;
+  };
+  const verifyCandidate = useEnvironmentSecretsVerifyCandidateMutation(
+    props.client,
+    () => secretVerifyCandidateRequest(readSentForm()),
+  );
+  const create = useEnvironmentSecretsCreateMutation(props.client, () =>
+    secretCreateRequest(readSentForm()),
+  );
+  const busy = verifyCandidate.isPending || create.isPending;
   const [verifyNote, setVerifyNote] = useState<SecretVerifyLine | null>(null);
   const [saveNote, setSaveNote] = useState<SecretVerifyLine | null>(null);
   // Which open of the dialog a check or save belongs to. A close ends the
@@ -203,7 +220,8 @@ export function AddSecretDialog(props: {
     setStep(initialStep);
     setVerifyNote(null);
     setSaveNote(null);
-    setBusy(null);
+    verifyCandidate.reset();
+    create.reset();
     props.onOpenChange(false);
   };
 
@@ -218,21 +236,10 @@ export function AddSecretDialog(props: {
 
   const verify = async (form: SecretFormState): Promise<void> => {
     const sentFrom = openGeneration.current;
-    setBusy("verify");
     setVerifyNote(null);
+    sentForm.current = form;
     try {
-      const method = "environment.secrets.verify";
-      const request = secretVerifyCandidateRequest(form);
-      if (environmentId !== null) cloudVerdictPreflight(method)();
-      const result =
-        environmentId === null
-          ? await props.client.request(method, request)
-          : await props.client.requestWithSignalRequiringHostMethodVersion(
-              method,
-              { ...request, environmentId },
-              undefined,
-              { method, version: { major: 1, minor: 1 } },
-            );
+      const result = await verifyCandidate.mutateAsync();
       if (openGeneration.current !== sentFrom) return;
       setVerifyNote(secretVerifyLine(result, form.protocol, "dialog"));
     } catch (error) {
@@ -241,31 +248,18 @@ export function AddSecretDialog(props: {
         tone: "warning",
         text: errorText(error, "Couldn't check."),
       });
-    } finally {
-      if (openGeneration.current === sentFrom) setBusy(null);
     }
   };
 
   const save = async (form: SecretFormState): Promise<void> => {
     const sentFrom = openGeneration.current;
-    setBusy("save");
     setSaveNote(null);
+    sentForm.current = form;
     try {
-      const method = "environment.secrets.create";
-      const request = secretCreateRequest(form);
-      if (environmentId !== null) cloudVerdictPreflight(method)();
-      const outcome =
-        environmentId === null
-          ? await props.client.request(method, request)
-          : await props.client.requestWithSignalRequiringHostMethodVersion(
-              method,
-              { ...request, environmentId },
-              undefined,
-              { method, version: { major: 1, minor: 1 } },
-            );
+      // The mutation re-reads the list once the secret is saved, whichever
+      // open is showing.
+      const outcome = await create.mutateAsync();
       const note = createOutcomeNote(outcome);
-      // The list is re-read whichever open is showing: the secret is saved.
-      if (outcome.outcome !== "refused") props.onSaved();
       if (openGeneration.current !== sentFrom) return;
       if (note === null) {
         close(false);
@@ -278,8 +272,6 @@ export function AddSecretDialog(props: {
         tone: "warning",
         text: errorText(error, "Couldn't save this secret."),
       });
-    } finally {
-      if (openGeneration.current === sentFrom) setBusy(null);
     }
   };
 
@@ -348,20 +340,18 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={
-                busy !== null || secretVerifyProblem(step.form) !== null
-              }
+              disabled={busy || secretVerifyProblem(step.form) !== null}
               onClick={() => void verify(step.form)}
               data-testid="secret-form-verify"
             >
               Verify
-              <Busy busy={busy === "verify"} />
+              <Busy busy={verifyCandidate.isPending} />
             </Button>
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy !== null || secretFormProblem(step.form) !== null}
+              disabled={busy || secretFormProblem(step.form) !== null}
               onClick={() => setStep({ kind: "confirm", form: step.form })}
               data-testid="secret-form-continue"
             >
@@ -390,7 +380,7 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() => {
                 setSaveNote(null);
                 setStep({ kind: "form", form: step.form });
@@ -402,12 +392,12 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() => void save(step.form)}
               data-testid="secret-save"
             >
               Save
-              <Busy busy={busy === "save"} />
+              <Busy busy={create.isPending} />
             </Button>
           </DialogFooter>
         ) : null}

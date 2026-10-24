@@ -397,11 +397,7 @@ export function SecretRow(props: {
         secret={secret}
         client={props.client}
         onOpenChange={setReplacing}
-        onReplaced={() => {
-          setReplacements((count) => count + 1);
-          props.onChanged();
-        }}
-        onStale={props.onChanged}
+        onReplaced={() => setReplacements((count) => count + 1)}
       />
       <ConfirmDestructiveDialog
         open={removing}
