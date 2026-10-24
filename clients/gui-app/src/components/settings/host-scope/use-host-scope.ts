@@ -19,6 +19,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-status";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
   resolveScopedHost,
@@ -122,19 +123,41 @@ export function useHostScope(): HostScope {
 }
 
 /**
- * Personal and Account pages never read through the picker: what they show
- * follows the person, not a machine, so they read through the window's own
- * host, which is `useHostScopeFor`'s answer to a `null` selection. Nothing on
- * those pages can re-point it - the setter is a no-op - so a pick made under
- * the Host group never changes what a Personal page shows.
+ * Environment and Account pages never read through the Host picker: a pick
+ * made under the Host group never changes what they show, and nothing on them
+ * can re-point it - the setter is a no-op.
+ *
+ * Account pages follow the person, so they read through the window's own
+ * host, `useHostScopeFor`'s answer to a `null` selection. Environment pages
+ * read through the host the Environment dropdown names: a Local row's
+ * computer, and the window's own host for Personal (and for a team, whose
+ * pages P1 reads through the pool).
  */
-const PERSONAL_HOST_SELECTION: HostScopeSelection = {
+const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: () => undefined,
 };
 
+function noScopedHostWrite(): void {
+  return undefined;
+}
+
 export function usePersonalHostScope(): HostScope {
-  return useHostScopeFor(PERSONAL_HOST_SELECTION);
+  const pick = useEnvironmentPick();
+  const localHostId = pick.kind === "local" ? pick.hostId : null;
+  const selection = useMemo(
+    (): HostScopeSelection => ({
+      scopedHostId: localHostId,
+      setScopedHostId: noScopedHostWrite,
+    }),
+    [localHostId],
+  );
+  return useHostScopeFor(selection);
+}
+
+/** The window's own host, for Account pages. */
+export function useAccountHostScope(): HostScope {
+  return useHostScopeFor(WINDOW_HOST_SELECTION);
 }
 
 /**

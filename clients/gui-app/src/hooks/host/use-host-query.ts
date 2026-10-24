@@ -133,6 +133,8 @@ export interface UseHostQueryWithResponseMapOptions<
    * on the retained host credential.
    */
   readonly preflight?: () => void;
+  /** Version floor checked by the connection carrying this dispatch. */
+  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
   /**
    * Transforms the raw RPC response into what TanStack caches/returns for
    * this query. Runs inside the queryFn, so its return value - not the raw
@@ -282,17 +284,27 @@ export function useHostQueryWithResponseMap<
       const buildRequest = args.buildRequest;
       const payload =
         buildRequest === undefined ? params : buildRequest(params);
+      const requirement = args.requiredHostMethodVersion?.() ?? null;
       const requestContext = args.captureRequestContext?.();
       const responseTimeoutMs = args.responseTimeoutMs;
-      const response =
-        responseTimeoutMs === undefined
-          ? await client.requestWithSignal(method, payload, signal)
-          : await client.requestWithOptions(method, payload, {
-              responseTimeoutMs,
-              idempotencyKey: null,
-              requiredHostMethodVersion: null,
-              signal,
-            });
+      let response: ResponseOfMethod<Registry, Method>;
+      if (responseTimeoutMs !== undefined) {
+        response = await client.requestWithOptions(method, payload, {
+          responseTimeoutMs,
+          idempotencyKey: null,
+          requiredHostMethodVersion: requirement,
+          signal,
+        });
+      } else if (requirement !== null) {
+        response = await client.requestWithSignalRequiringHostMethodVersion(
+          method,
+          payload,
+          signal,
+          requirement,
+        );
+      } else {
+        response = await client.requestWithSignal(method, payload, signal);
+      }
       return mapResponse({
         response,
         queryClient,

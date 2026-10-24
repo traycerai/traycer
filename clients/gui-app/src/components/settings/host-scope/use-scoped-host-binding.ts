@@ -20,12 +20,15 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
  *     to hand this hook, so it structurally cannot use it.
  *
- * ELEVEN surfaces re-provide `HostRuntimeContext` in total. The count is one
- * formula — NINE through this hook, plus the two exceptions above — stated
+ * TWELVE surfaces re-provide `HostRuntimeContext` in total. The count is one
+ * formula — TEN through this hook, plus the two exceptions above — stated
  * once here so a surface added later moves both halves of it rather than
- * leaving a headline and a list disagreeing about how many there are. The nine:
+ * leaving a headline and a list disagreeing about how many there are. The ten:
  *
  *   `rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
+ *   `environment-host-binding` (around the Agent definitions and Browser agent
+ *   access pages, which read the ambient binding: a Local row's pick reaches
+ *   them through it; Settings pages, no composer beneath),
  *   `app-status-bar` (the bottom strip, re-providing for the host it watches),
  *   `layout` (around its WHOLE Status bar group: the live preview at the top of
  *   it and the per-provider toggles below describe one machine, and resolving

@@ -29,7 +29,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   EnvironmentDescriptor,
   EnvironmentHostBinding,
-  EnvironmentHostRecord,
+  EnvironmentHostRecordV11,
 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -91,7 +91,7 @@ function bindingTo(environment: EnvironmentDescriptor): EnvironmentHostBinding {
   };
 }
 
-function machine(hostId: string): EnvironmentHostRecord {
+function machine(hostId: string): EnvironmentHostRecordV11 {
   return {
     hostId,
     hostLabel: hostId,
@@ -99,6 +99,9 @@ function machine(hostId: string): EnvironmentHostRecord {
     enrolledByUserId: "user-1",
     kind: "personal",
     boundAt: 1,
+    reachable: true,
+    lastReportedAt: null,
+    applied: [],
   };
 }
 
@@ -122,7 +125,7 @@ async function mountBindScenario(scenario: BindScenario): Promise<{
   readonly hostIdsListed: (environmentId: string) => ReadonlyArray<string>;
 }> {
   const queryClient = new QueryClient();
-  const machines = new Map<string, ReadonlyArray<EnvironmentHostRecord>>([
+  const machines = new Map<string, ReadonlyArray<EnvironmentHostRecordV11>>([
     [
       OLD.environmentId,
       scenario.listNamesHost

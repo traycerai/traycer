@@ -22,10 +22,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostMock.binding };
 });
 
-// What a dashboard link asks the app to open.
-const openLinkMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => openLinkMock,
+// Where the Review button asks Settings to go.
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -51,8 +51,6 @@ import {
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
   buildAccessHost,
-  DASHBOARD_ORIGIN,
-  dashboardRunnerHost,
   noticeFixture,
   reviewEntryFixture,
   type AccessHost,
@@ -71,7 +69,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostMock.binding = null;
-  openLinkMock.mockReset();
+  navigateToSettingsSectionMock.mockReset();
 });
 
 function FakePanel(): ReactNode {
@@ -567,7 +565,7 @@ describe("Keep this host's value", () => {
 });
 
 describe("a Personal page's 'needs you' rows", () => {
-  it("says why each held value waits, with a way to review it in the dashboard", async () => {
+  it("says why each held value waits, with a way to review it in Secrets", async () => {
     const host = hostWith(
       {},
       {
@@ -595,7 +593,7 @@ describe("a Personal page's 'needs you' rows", () => {
         ],
       },
     );
-    renderPage(host, { ...SHELL_PAGE, runnerHost: dashboardRunnerHost() });
+    renderPage(host, SHELL_PAGE);
 
     const rows = await screen.findAllByTestId("personal-review-row");
     expect(rows.map((row) => row.textContent)).toEqual([
@@ -609,32 +607,12 @@ describe("a Personal page's 'needs you' rows", () => {
       expect.stringContaining("FUTURE_THING is waiting for you."),
     ]);
     for (const row of rows) {
-      expect(
-        within(row).getByRole("button", { name: "Review in the dashboard" }),
-      ).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Review" })).toBeTruthy();
     }
 
-    fireEvent.click(
-      within(rows[0]).getByRole("button", { name: "Review in the dashboard" }),
-    );
-    expect(openLinkMock).toHaveBeenCalledTimes(1);
-    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
-      `${DASHBOARD_ORIGIN}/environments/personal/review`,
-    );
-    expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
-  });
-
-  it("says the row text and offers no review button without a shell to name the dashboard", async () => {
-    const host = hostWith({}, { review: [reviewEntryFixture({})] });
-    renderPage(host, SHELL_PAGE);
-
-    const row = await screen.findByTestId("personal-review-row");
-    expect(row.textContent).toContain(
-      "DATABASE_URL is waiting for you: looks like a secret.",
-    );
-    expect(
-      within(row).queryByRole("button", { name: "Review in the dashboard" }),
-    ).toBeNull();
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
   });
 
   it("shows only the rows of this page's kinds", async () => {
@@ -668,13 +646,11 @@ describe("a team's host on a Personal page", () => {
         review: [reviewEntryFixture({})],
       },
     );
-    renderPage(host, { ...SHELL_PAGE, runnerHost: dashboardRunnerHost() });
+    renderPage(host, SHELL_PAGE);
 
     const line = await screen.findByTestId("team-owned-line");
     expect(
-      within(line).getByText(
-        "These settings belong to Acme. Change them in the dashboard.",
-      ),
+      within(line).getByText("These settings belong to Acme."),
     ).toBeTruthy();
     expect(line.closest("[inert]")).toBeNull();
     expect(

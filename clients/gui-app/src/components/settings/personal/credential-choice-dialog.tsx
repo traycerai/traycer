@@ -8,10 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ignoreError } from "@/lib/browser-view/ignore-error";
-import { useOpenLink } from "@/lib/links/open-link";
-import { secretsDashboardUrl } from "@/lib/sandboxes/secrets-dashboard";
-import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 
 /**
  * The question a variable save asks before a value that looks like a
@@ -26,8 +23,6 @@ export function CredentialChoiceDialog(props: {
   readonly onKeepAsVariable: () => void;
   readonly onDismiss: () => void;
 }): ReactNode {
-  const openLink = useOpenLink();
-  const runnerHost = useRunnerHostOrNull();
   return (
     <Dialog
       open={props.name !== null}
@@ -54,15 +49,8 @@ export function CredentialChoiceDialog(props: {
           </Button>
           <Button
             type="button"
-            disabled={runnerHost === null}
-            onClick={(event) => {
-              if (runnerHost !== null) {
-                void openLink(
-                  secretsDashboardUrl(runnerHost.signInUrl),
-                  "account",
-                  event,
-                ).catch(ignoreError);
-              }
+            onClick={() => {
+              navigateToSettingsSection("secrets");
               props.onDismiss();
             }}
           >

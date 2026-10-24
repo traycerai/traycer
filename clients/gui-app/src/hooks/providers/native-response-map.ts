@@ -1,12 +1,11 @@
 import type {
   NativeAuthResult,
   NativeListResult,
-  NativeMutationResult,
+  NativeMutationResultV14,
   ProviderMcpServer,
   ProviderMcpNotice,
   ProviderMcpCoverage,
-  ProviderNativeErrorCode,
-  ProviderNativeErrorResult,
+  ProviderNativeMutateErrorCode,
   ProviderPlugin,
   ProviderPluginIcon,
   ProviderSkill,
@@ -65,11 +64,11 @@ export type SkillsMutateData = SkillsInspectData | SkillsListMutateData;
 export type McpAuthData = { readonly result: NativeAuthResult };
 
 export class ProviderNativeRpcError extends HostRpcError {
-  readonly nativeCode: ProviderNativeErrorCode;
+  readonly nativeCode: ProviderNativeMutateErrorCode;
   readonly nativeDetail: string | null;
 
   constructor(args: {
-    readonly code: ProviderNativeErrorCode;
+    readonly code: ProviderNativeMutateErrorCode;
     readonly detail: string | null;
     readonly method: string;
   }) {
@@ -100,13 +99,12 @@ export function isProviderNativeRpcError(
   return error instanceof ProviderNativeRpcError;
 }
 
-function throwIfNativeError(
-  result: NativeListResult | NativeMutationResult | null,
+function throwIfNativeError<
+  Result extends NativeListResult | NativeMutationResultV14,
+>(
+  result: Result | null,
   method: string,
-): asserts result is Exclude<
-  NativeListResult | NativeMutationResult,
-  ProviderNativeErrorResult
-> | null {
+): asserts result is Exclude<Result, { readonly ok: false }> | null {
   if (result !== null && !result.ok) {
     throw new ProviderNativeRpcError({
       code: result.code,

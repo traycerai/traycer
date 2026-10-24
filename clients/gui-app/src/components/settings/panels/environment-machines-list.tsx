@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentDescriptor,
-  EnvironmentHostRecord,
+  EnvironmentHostRecordV11,
 } from "@traycer/protocol/host/environment/contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,7 +60,7 @@ export function EnvironmentMachinesList(props: {
 function EnvironmentMachines(props: {
   readonly environment: EnvironmentDescriptor;
   /** `null` while the list has not answered. */
-  readonly hosts: ReadonlyArray<EnvironmentHostRecord> | null;
+  readonly hosts: ReadonlyArray<EnvironmentHostRecordV11> | null;
   /** The list was asked for and could not be read. */
   readonly failed: boolean;
   readonly onRetry: () => void;
@@ -100,7 +100,7 @@ function EnvironmentMachines(props: {
 
 function EnvironmentMachineRows(props: {
   readonly environmentLabel: string;
-  readonly hosts: ReadonlyArray<EnvironmentHostRecord> | null;
+  readonly hosts: ReadonlyArray<EnvironmentHostRecordV11> | null;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { environmentLabel, hosts, viewerUserId } = props;
@@ -135,7 +135,7 @@ function EnvironmentMachineRows(props: {
 }
 
 function MachineOwnerBadge(props: {
-  readonly host: EnvironmentHostRecord;
+  readonly host: EnvironmentHostRecordV11;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { host, viewerUserId } = props;

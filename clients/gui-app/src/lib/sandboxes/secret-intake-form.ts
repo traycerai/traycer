@@ -1,6 +1,8 @@
 import type {
   EnvironmentSecretsCreateRequest,
+  EnvironmentSecretsCreateRequestV11,
   EnvironmentSecretsVerifyRequest,
+  EnvironmentSecretsVerifyRequestV11,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   SANDBOX_DATABASE_DEFAULT_PORT,
@@ -269,15 +271,16 @@ function bindingFields(state: SecretFormState): SecretBindingFields {
 /** Verify's candidate: the dialog's binding before the secret exists. */
 export function secretVerifyCandidateRequest(
   state: SecretFormState,
-): EnvironmentSecretsVerifyRequest {
-  return { target: "candidate", ...bindingFields(state) };
+): EnvironmentSecretsVerifyRequestV11 {
+  return { target: "candidate", ...bindingFields(state), environmentId: null };
 }
 
 /** The create request for a form `secretFormProblem` passed. */
 export function secretCreateRequest(
   state: SecretFormState,
-): EnvironmentSecretsCreateRequest {
+): EnvironmentSecretsCreateRequestV11 {
   return {
+    environmentId: null,
     name: state.name,
     ...bindingFields(state),
     mode: state.mode,

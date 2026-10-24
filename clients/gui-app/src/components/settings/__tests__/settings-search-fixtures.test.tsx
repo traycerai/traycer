@@ -39,6 +39,30 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => null,
+  useOptionalHostClient: () => null,
+}));
+
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
+  useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+
+vi.mock("@/lib/sandboxes/staged-sandbox-in-window", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/sandboxes/staged-sandbox-in-window")
+    >();
+  return {
+    ...actual,
+    useStagedSandboxInThisWindow: () => null,
+  };
+});
+
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => () => Promise.resolve(),
 }));
 
 // The host Overview re-provides a scoped STREAM binding for its import and

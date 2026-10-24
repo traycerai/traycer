@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  DESKTOP_SECRET_KINDS,
   SECRET_DIALECT_LABEL,
-  isDesktopSecretKind,
   secretDefaultVariableName,
   secretKindHint,
   secretKindLabel,
@@ -123,33 +121,6 @@ describe("what the picker greys", () => {
     expect(secretKindHint("api_key")).toBe(
       "A key or token for an HTTPS service",
     );
-  });
-});
-
-describe("the kinds added on the desktop", () => {
-  it("are exactly api_key, provider and database", () => {
-    expect([...DESKTOP_SECRET_KINDS].sort()).toEqual(
-      ["api_key", "database", "provider"].sort(),
-    );
-    expect(isDesktopSecretKind("api_key")).toBe(true);
-    expect(isDesktopSecretKind("provider")).toBe(true);
-    expect(isDesktopSecretKind("database")).toBe(true);
-  });
-
-  it("leave every other form kind to the web", () => {
-    for (const kind of [
-      "ssh",
-      "aws",
-      "azure_storage",
-      "azure_sp",
-      "gcp_sa",
-      "client_certificate",
-      "broker",
-      "mail",
-      "rdp",
-    ] as const) {
-      expect(isDesktopSecretKind(kind), kind).toBe(false);
-    }
   });
 });
 

@@ -839,6 +839,48 @@ Supporting pieces, all viewport-agnostic where possible:
   multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
   unchanged regardless of density.
 
+## Team configuration sources
+
+The Environment dropdown uses `useEnvironmentPick()`. Personal and Local
+keep the existing host reads. A team mounts `ConfigurationSourceBoundary`
+before its page, resolves its descriptor through `environment.list@1.1`, and
+provides `ConfigurationSourceContext` with the team id, room id, provider
+handle and effective role. An unresolved or unavailable team never mounts a
+page with the host source. The boundary is keyed by team id so unsent edits
+and secret input do not cross team selections.
+
+Team hooks live under `hooks/environment/team/`. Variables, provider env
+overrides, shell, managed profiles, pack policies, MCP tool toggles, agent
+definitions, browser access and model routing read revisioned configuration
+items through the pool requester. Saves quote the displayed revision; conflicts
+reread the row and show who changed it. Approval policy reads its item and
+writes through the dedicated policy method. Editors can change configuration;
+plan linking and approval/browser policy changes require an admin. Viewers get
+read-only values, with secret names and read-access Details entries only.
+
+Secrets and plan sign-in requests carry the source environment id and require
+the addressing minor before dispatch. Raw secret values and sign-in codes stay
+in local component state and direct requests. Pool query caches include the
+signed-in viewer's identity. Generic item mutations also retain environmentId
+in their variables so paused-save status belongs to the picked team.
+
+Live facts, native skills and the guide share `useTeamViewingHost()`: an
+explicit reachable host registered to that team, or no host. Picking it does
+not activate or wake it. Skills and the guide use the team's room through
+that host; no-host states offer the common picker. Skill edits and removal
+capture the team id and require `providers.nativeMutate@1.4` at dispatch. A
+host that no longer serves that team refuses the write. The page refreshes
+the host list without reading native skills back from that host.
+First edits of an absent model-routing item
+start from the named host's seeded policy; Reset and Restore default tiers
+delete the team item. Host-source panels preserve their existing behavior.
+
+Providers renders Plans in place of Add a profile, with an unlink preview.
+Only controls with a persisted team store are rendered. MCP rows expose the
+server id and tool toggles; declarations and Add are absent. Provider Details
+uses the persisted kind and key. Personal rows offer it only when applied-item
+metadata proves the address.
+
 ## Scope: the organising idea
 
 Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
@@ -902,20 +944,23 @@ variable". The one exception is the auto-mode policy file's own
 On a host that serves `environment.secrets.list` the page is the list: each
 secret's name, kind, protocol and destinations, "Written as a plain value on
 every host you own; agents there can read it. Brokered on your sandboxes.",
-and **Verify** (`environment.secrets.verify` by id, so every kind, those added
-on the web too), whose refusal names the setting that is the likely cause
-("Nothing answered on that port. Check the port this secret is set to.").
-Empty, it reads "Secrets are keys and logins your agents use. On a sandbox
-they are used without being seen; on a computer you own they are set as
-values." with Add a secret. **Add a secret** is kind first: every form kind
-of the secret intake catalogue (`@traycer/protocol/host/secret-intake-catalogue`,
-the table the broker's intake and the dashboard read), a kind none of whose
-protocols is brokered greyed with the catalogue's own line. API key, model
-provider key and database login are added here (`lib/sandboxes/secret-intake-form.ts`:
-hosts, port, login, database, variables, mode, "Every sandbox gets it", the
-database's plaintext lines and their disclosure version); SSH, the cloud
-kinds and client certificate are "Set up on the web" and open the dashboard's
-Secrets page with `?add=<kind>`. Verify works on the dialog's candidate too,
+and **Verify** (`environment.secrets.verify` by id, so every kind, those
+already stored included), whose refusal names the setting that is the likely
+cause ("Nothing answered on that port. Check the port this secret is set
+to."). Empty, it reads "Values and logins your agents use. On your computers
+they are set as values; on sandboxes agents use them without seeing them."
+with Add a secret. **Add a secret** is kind first: only the kinds whose form
+lives in the app — API key, model provider key and database login
+(`lib/sandboxes/secret-intake-form.ts`: hosts, port, login, database,
+variables, mode, "Every sandbox gets it", the database's plaintext lines and
+their disclosure version). SSH, the cloud kinds and client certificate are
+not offered; the protocol catalogue
+(`@traycer/protocol/host/secret-intake-catalogue`) is unchanged. A kind none
+of whose protocols is brokered is greyed with the catalogue's own line. Add
+and Replace carry "Stored encrypted in Traycer's cloud. Computers running
+Personal receive the value, readable by their tools and agents; sandboxes
+use it through the broker."; Replace adds "Tools already running keep the
+old value until they restart." Verify works on the dialog's candidate too,
 and Save first shows where the value becomes readable. The typed value is
 sent by a direct `client.request`, never through a query or mutation, so it
 reaches no cache, and closing the dialog drops it. A refusal shows the host's
@@ -923,7 +968,7 @@ words (`Connect to manage secrets.` with no session on this computer) or the
 `secretChangeRefusalLine` for a create refusal's code. On a team's host the
 page is the team line and "Team secrets are brokered only; a tool that needs
 a plain value needs a personal sandbox.", no list; on a host whose version
-predates the page, the way to the dashboard's Secrets page.
+predates the page, "Update this host to use your secrets here."
 Each row also has **Replace value** (`environment.secrets.replaceValue`,
 compare-and-set on the version the list showed; a stale answer asks to look
 again), after which the row reads the rotation (`environment.secrets.rotation`,
@@ -934,11 +979,33 @@ enforced." with each one's proof ("postgres: 3 sessions closed", "3 sessions
 closed on dev-sandbox", "contained by expiry"); a bare zero session count is
 no proof (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox
 card's per-grant line). It adds that a tool running on this computer keeps
-the old value until it restarts. **Versions** lists each version with Undo
-(Restore on a revoked secret, sent with `regrant`) and Destroy behind a
-confirmation, refusals read by `secretChangeRefusalLine`, beside the recovery
-order for a leaked secret and the line that a change reaches only the copy
-stored here.
+the old value until it restarts. **Remove** confirms with where the value
+came from, its current version, which hosts hold it, and that running tools
+keep it until they restart (`secretRemovePreview`); a fact the wire does not
+yet name reads `unknown`. Confirm does not yet call a remove RPC. **Versions**
+lists each version with Undo (Restore on a revoked secret, sent with
+`regrant`) and Destroy behind a confirmation, refusals read by
+`secretChangeRefusalLine`, beside the recovery order for a leaked secret and
+the line that a change reaches only the copy stored here. A held secret's
+row keeps its "Waiting for you" badge.
+
+**Environment ▸ Retrospective sheet and Stop sharing.** On a 1.1 host,
+Overview shows `Shared by an earlier version` / `This computer stopped
+sharing on …` / `This computer went back to your own settings.`
+(`environment.status` planes and `returnedFromTeam`), the `Details` verb on
+the earlier-version line, and `Stop sharing from this computer` while any
+plane is not `stopped` and not fully `local`. `Details` opens the
+retrospective sheet (`environment.review@1.1` evidence and held rows); Got it
+records acknowledgement (`environment.review.record`) and Escape does not. A
+Local picker row's subtitle and `Move to Personal` / `finish moving` verb
+come from those planes (E4's slot). The Secrets page's `N items from {host}
+is/are not in use · Review them` line opens the same sheet for that host's
+held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
+hosts, port, swap sites, gateway consent) with no value field, then
+`environment.review.heldApply`. Stop sharing opens the preview
+(`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
+every needs-choice row has Keep locally, Remove from this computer, or
+Resolve.
 
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
 Under a Personal page's status line, for the item
@@ -947,7 +1014,7 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 looks like a secret / runs a command / was changed without your
-confirmation.") with Review in the dashboard. On the host a variable or
+confirmation.") with Review, which opens Secrets. On the host a variable or
 provider-variable notice came from, "Keep dev-box's value on dev-box" writes
 the value that host has now as its own (`config.env.localOverride.set`, the
 value read as the page reads it: `config.env.list` or `providers.list`) and
@@ -957,8 +1024,8 @@ provider-variable row this host keeps its own value for ("Overridden on
 <host>" on Variables) shows the shared value, and its Set and Remove change
 the shared value only; the host's own value is changed under Access and setup
 ▸ This host's own values. A team's host shows no
-notices: its Personal pages are read-only (`inert`) under the team line and
-its dashboard link, like a host whose version predates these settings.
+notices: its Personal pages are read-only (`inert`) under the team line,
+like a host whose version predates these settings.
 
 **Two sections are both called "Diagnostics"**, one per group, and the group
 heading above each is what distinguishes them - the same way the rail already
@@ -5962,7 +6029,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
     bottom, each only while it applies:
     1. **"Your settings moved to Personal. Review what changed."** once setup
        is done and a notice came from the move (`source: "migration"`), with
-       Review in the dashboard (`personalReviewUrl`) and Dismiss. Dismissed
+       Review (opens Secrets) and Dismiss. Dismissed
        per host on this desktop (`useHostAccessPromptsStore`).
     2. **Finishing setup** from `environment.status.setup {stage, state}`:
        Registering this host, Moving this host's settings to Personal,
@@ -5990,7 +6057,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
        change use the new value; restart the host for the host itself to
        pick it up."
        On a team's host every section is read-only (`inert`) under "These
-       settings belong to <team>. Change them in the dashboard." with a link.
+       settings belong to <team>."
   - **The notices strip, top to bottom, drawing only what applies**
     (`host-overview-notices.tsx`, between the header and the tab bar; its
     decisions are in `host-overview-status-model.ts`, and the panel resolves

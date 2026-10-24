@@ -66,6 +66,7 @@ export function useProvidersPluginsMutate(): UseMutationResult<
           {
             providerId: variables.providerId,
             executableWriteGrant: null,
+            expectedEnvironmentId: null,
             mutation: {
               kind: "plugins",
               scope: variables.scope,
