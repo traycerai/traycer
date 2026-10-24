@@ -249,9 +249,8 @@ describe("a 10.0 caller of providers.list receives no scope or onHostOnly", () =
     onHostOnly: [{ providerId: "claude-code", profileId: "p1" }],
   };
 
-  it("keeps both envelope keys on the live 10.5 response schema", () => {
+  it("keeps both envelope keys on the 10.5 response schema", () => {
     const line = hostRpcRegistry["providers.list"][10];
-    expect(line.latestMinor).toBe(5);
     const live = line.versions[5].contract.responseSchema.parse(tenOne);
     expect(live.scope).toBe("personal");
     expect(live.onHostOnly).toEqual([

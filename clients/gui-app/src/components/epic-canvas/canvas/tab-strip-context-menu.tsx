@@ -17,6 +17,7 @@ import {
 
 import type { SplitDirection } from "@/stores/epics/canvas/types";
 import { ChatRoutingTabMenu } from "@/components/epic-canvas/canvas/chat-routing-menu";
+import { ContinueOnOpencodeTwoTabMenu } from "@/components/epic-canvas/canvas/continue-on-opencode-two-menu";
 
 export interface TabStripContextMenuProps {
   readonly groupId: string;
@@ -54,7 +55,7 @@ export interface TabStripContextMenuProps {
   readonly onOpenUsage: (() => void) | null;
   /**
    * The chat this tab shows, for the per-agent "On a usage limit or error"
-   * setting. `null` for every non-chat tab.
+   * setting and "Continue on OpenCode 2". `null` for every non-chat tab.
    */
   readonly chatRouting: {
     readonly epicId: string;
@@ -157,6 +158,7 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
         <>
           <ContextMenuSeparator />
           <ChatRoutingTabMenu {...chatRouting} />
+          <ContinueOnOpencodeTwoTabMenu {...chatRouting} tabId={tabId} />
         </>
       )}
       {onOpenUsage === null ? null : (

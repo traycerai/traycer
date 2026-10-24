@@ -7474,6 +7474,18 @@ export const epicSchemaSurfaceBaseline = {
                 "policy",
                 "hold"
               ]
+            },
+            "opencodeLine": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "const": 1
+                },
+                {
+                  "type": "number",
+                  "const": 2
+                }
+              ]
             }
           },
           "required": [
@@ -17584,6 +17596,18 @@ export const epicSchemaSurfaceBaseline = {
               "enum": [
                 "policy",
                 "hold"
+              ]
+            },
+            "opencodeLine": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "const": 1
+                },
+                {
+                  "type": "number",
+                  "const": 2
+                }
               ]
             }
           },

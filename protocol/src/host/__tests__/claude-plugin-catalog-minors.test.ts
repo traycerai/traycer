@@ -19,6 +19,7 @@ import {
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
   providersListResponseSchemaV104Preimage,
+  providersListResponseSchemaV105Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
@@ -77,8 +78,8 @@ describe("Claude plugin and command catalog minors", () => {
     expect(row.nativeCapabilities.supportedTabs).toEqual(["plugins"]);
   });
 
-  it("keeps Kilo's published 10.3 and Claude's 10.4 below the live 10.5", () => {
-    expect(hostRpcRegistry["providers.list"][10].latestMinor).toBe(5);
+  it("keeps Kilo's published 10.3 and Claude's 10.4 below the live 10.6", () => {
+    expect(hostRpcRegistry["providers.list"][10].latestMinor).toBe(6);
     expect(
       hostRpcRegistry["providers.list"][10].versions[2].contract.responseSchema,
     ).toBe(providersListResponseSchemaV102Preimage);
@@ -90,6 +91,9 @@ describe("Claude plugin and command catalog minors", () => {
     ).toBe(providersListResponseSchemaV104Preimage);
     expect(
       hostRpcRegistry["providers.list"][10].versions[5].contract.responseSchema,
+    ).toBe(providersListResponseSchemaV105Preimage);
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[6].contract.responseSchema,
     ).toBe(providersListResponseSchema);
     expect(
       JSON.stringify(
@@ -187,6 +191,6 @@ describe("Claude plugin and command catalog minors", () => {
         profileId: "managed-a",
       }),
     ).toEqual(v10);
-    expect(hostRpcRegistry["agent.gui.listCommands"][1].latestMinor).toBe(1);
+    expect(hostRpcRegistry["agent.gui.listCommands"][1].latestMinor).toBe(2);
   });
 });

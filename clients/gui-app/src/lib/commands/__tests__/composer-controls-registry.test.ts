@@ -60,7 +60,12 @@ describe("focused composer controls registry", () => {
 
   it("registers an entry and exposes it via getter", () => {
     const controls = noopControls();
-    const dispose = registerFocusedComposerControls("landing", controls, null);
+    const dispose = registerFocusedComposerControls(
+      "landing",
+      controls,
+      null,
+      null,
+    );
     const entry = getFocusedComposerControls();
     expect(entry?.kind).toBe("landing");
     expect(entry?.controls).toBe(controls);
@@ -71,10 +76,11 @@ describe("focused composer controls registry", () => {
   it("the latest registration wins; disposing the winner clears the slot", () => {
     const first = noopControls();
     const second = noopControls();
-    registerFocusedComposerControls("landing", first, null);
+    registerFocusedComposerControls("landing", first, null, null);
     const disposeSecond = registerFocusedComposerControls(
       "chat-tile",
       second,
+      null,
       null,
     );
     expect(getFocusedComposerControls()?.controls).toBe(second);
@@ -89,8 +95,9 @@ describe("focused composer controls registry", () => {
       "landing",
       first,
       null,
+      null,
     );
-    registerFocusedComposerControls("chat-tile", second, null);
+    registerFocusedComposerControls("chat-tile", second, null, null);
     disposeFirst();
     expect(getFocusedComposerControls()?.controls).toBe(second);
   });
@@ -104,6 +111,7 @@ describe("focused composer controls registry", () => {
       "landing",
       noopControls(),
       null,
+      null,
     );
     expect(calls).toBe(1);
     disposeRegister();
@@ -115,10 +123,10 @@ describe("focused composer controls registry", () => {
     const clientA = buildTestHostClient("host-a");
     const clientB = buildTestHostClient("host-b");
 
-    registerFocusedComposerControls("landing", noopControls(), clientA);
+    registerFocusedComposerControls("landing", noopControls(), clientA, null);
     expect(getFocusedComposerControls()?.hostClient).toBe(clientA);
 
-    registerFocusedComposerControls("landing", noopControls(), clientB);
+    registerFocusedComposerControls("landing", noopControls(), clientB, null);
     expect(getFocusedComposerControls()?.hostClient).toBe(clientB);
   });
 });

@@ -15,6 +15,7 @@ import {
   createChatRequestSchema,
   createChatRequestSchemaV11,
   createChatRequestSchemaV12,
+  createChatRequestSchemaV13,
   createChatResponseSchema,
   createChatResponseSchemaV12,
   continueSubagentRequestSchema,
@@ -1064,6 +1065,25 @@ export const epicCreateChatV12 = defineRpcContract({
 // additive optional: a `@1.1` caller's initial message names no machine, so
 // its `sentFromHostId` is the honest `null`. `attachmentsByHash` and
 // `deferWorktreeProvisioning` stay absent, which already means `false`.
+export const epicCreateChatV13 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: createChatRequestSchemaV13,
+  responseSchema: createChatResponseSchemaV12,
+});
+
+// Both upgrades are the identity: `@1.3` only gains an optional request key a
+// `@1.2` caller never sends, and its response is `@1.2`'s.
+export const epicCreateChatUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicCreateChatV12,
+  typeof epicCreateChatV13
+>({
+  from: epicCreateChatV12.schemaVersion,
+  to: epicCreateChatV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const epicCreateChatUpgradeV11ToV12 = defineUpgradePath<
   typeof epicCreateChatV11,
   typeof epicCreateChatV12

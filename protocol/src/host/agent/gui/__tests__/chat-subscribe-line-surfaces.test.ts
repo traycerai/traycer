@@ -105,9 +105,10 @@ const CLAUDE_PARITY_MINOR = 20;
 // `checkpoint-artifact-kinds.test.ts`). `1.34` adds the optional `sendWouldQueue` bit (pinned by
 // `chat-subscribe-send-would-queue-v134.test.ts`). `1.35` adds the
 // `memory-curation` queue item (pinned by
-// `chat-subscribe-memory-curation-v135.test.ts`). Every threshold above still
-// reads `>=` against the live line.
-const LIVE_MINOR = 35;
+// `chat-subscribe-memory-curation-v135.test.ts`). `1.36` has `1.35`'s frames
+// and marks a client that shows both Managed OpenCode rows. Every threshold
+// above still reads `>=` against the live line.
+const LIVE_MINOR = 36;
 // `1.28`: the host's sign-in park mark on a queued prompt, server frames only
 // (the host sets it; a client never sends a queue item).
 const SIGN_IN_PARK_MINOR = 28;
@@ -381,13 +382,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.35 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.36 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
