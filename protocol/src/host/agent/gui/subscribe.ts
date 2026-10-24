@@ -1805,7 +1805,7 @@ export const chatApprovalStateSchema = lazySchema(() =>
     displayFacts: z.array(runtimeApprovalDisplayFactSchema).optional(),
     /**
      * The provider stamped this ask for individual human review: Claude's
-     * `decisionReason` or `matchedAskRule`, or Copilot's managed-approval marker.
+     * `defaultToNo` or `matchedAskRule`, or Copilot's managed-approval marker.
      * "Approve all" skips it. Distinct from the judge's `tier`, which says why
      * Traycer's judge escalated. This stamp exists in every mode, judge or none.
      */

@@ -240,7 +240,7 @@ const runtimeApprovalCardFactFields = {
     z.array(runtimeApprovalDisplayFactSchema).optional(),
   ),
   // The provider's stamp that this ask needs individual human review:
-  // Claude's `decisionReason` or `matchedAskRule`, or Copilot's managed-approval
+  // Claude's `defaultToNo` or `matchedAskRule`, or Copilot's managed-approval
   // marker. Distinct from the judge's `tier` (`chatApprovalReasonSchema`),
   // which says why Traycer's judge escalated; a card can carry either or both.
   cautious: lazySchema(() => z.boolean().optional()),
