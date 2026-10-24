@@ -865,6 +865,7 @@ export function LandingComposer(props: LandingComposerProps) {
       editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
+      stagedAhead={workspaceGate.stagedAhead}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
       expansion={composerExpansion}

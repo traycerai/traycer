@@ -39,9 +39,15 @@ import {
 /**
  * A refusal the server answered before anything was created. Any other
  * failure may follow an accepted, billed create (an answer that never came,
- * a sandbox that failed on its way up), so a send repeats that create.
+ * a sandbox that failed on its way up), so a send repeats that create; so
+ * does any failure once a sandbox was accepted, such as one frozen for
+ * credits while it settles.
  */
-function refusedBeforeCreate(failure: StagedSandboxFailure): boolean {
+function refusedBeforeCreate(
+  failure: StagedSandboxFailure,
+  createdSandboxId: string | null,
+): boolean {
+  if (createdSandboxId !== null) return false;
   switch (failure.kind) {
     case "credits":
     case "shape":
@@ -207,7 +213,10 @@ export function useStagedSandboxSend(input: {
         // A send is a new create, with its own idempotency key, unless the
         // last one may have been accepted: then it repeats that one, as Retry
         // does.
-        run(current.failure === null || refusedBeforeCreate(current.failure));
+        run(
+          current.failure === null ||
+            refusedBeforeCreate(current.failure, current.createdSandboxId),
+        );
       }
       return true;
     },

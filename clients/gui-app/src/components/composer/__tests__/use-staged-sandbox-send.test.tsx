@@ -522,6 +522,28 @@ describe("useStagedSandboxSend's send after a failed create", () => {
 
     expect(second).toBe(first);
   });
+
+  it("repeats the same create after an accepted sandbox froze for credits while it settled", () => {
+    // Accepted, then frozen on its way up: the same failure a refusal
+    // reports, after a billed create.
+    stageCreated("booting", { kind: "credits", shortfallMc: null });
+    const accepted = readStagedSandbox(SURFACE)?.clientRequestId;
+    const keys: (string | null)[] = [];
+    mocks.runStagedSandbox.mockImplementation((surfaceKey, fresh) => {
+      keys.push(
+        useStagedSandboxStore.getState().begin(surfaceKey, fresh, Date.now()),
+      );
+      return Promise.resolve();
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("second", null);
+    });
+
+    expect(accepted).toBeDefined();
+    expect(keys).toEqual([accepted]);
+  });
 });
 
 describe("stagedSandboxFallbackName", () => {

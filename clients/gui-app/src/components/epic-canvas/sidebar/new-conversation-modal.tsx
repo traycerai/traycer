@@ -1995,6 +1995,7 @@ export function NewConversationModalBody(props: {
       editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
+      stagedAhead={workspaceGate.stagedAhead}
       header={header}
       topBanner={
         <>
