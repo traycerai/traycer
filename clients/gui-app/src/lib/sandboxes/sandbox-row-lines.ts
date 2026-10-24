@@ -677,8 +677,10 @@ export function sandboxRowActions(input: {
   readonly frozenNeedsOwnCredits: boolean;
 }): SandboxRowActions {
   const { summary } = input;
+  // No Open terminal: a landing terminal follows the composer's host, and
+  // the composer never offers the Automations host.
   if (summary.kind === "automation") {
-    return { primary: "open-terminal", menu: ["rename"] };
+    return { primary: null, menu: ["rename"] };
   }
   const state = sandboxPublicState(summary);
   if (state === "frozen") {

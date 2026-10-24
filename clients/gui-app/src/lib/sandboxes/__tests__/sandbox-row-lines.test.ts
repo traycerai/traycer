@@ -110,7 +110,7 @@ const MATRIX: readonly MatrixCase[] = [
     summary: { state: "awake", kind: "automation" },
     unreachable: false,
     frozenNeedsOwnCredits: false,
-    primary: "open-terminal",
+    primary: null,
     menu: ["rename"],
   },
   {
