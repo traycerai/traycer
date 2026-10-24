@@ -9,16 +9,18 @@ import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
 // section so the Markdown source editor can use all remaining panel space.
 //
 // Titled "Agent selection" rather than "Agents": the page configures how a
-// coding agent and model are CHOSEN when spawning child agents. The
+// coding agent and model are CHOSEN when Traycer creates an agent. The
 // description says so explicitly, because "Agents" read as a manager for the
-// Agents inside a Task - a different surface entirely. Who reviews what the
+// Agents inside a Task - a different surface entirely. It also names native
+// subagents, which a coding agent starts on its own and this guide never
+// configures. Who reviews what the
 // chosen agent then DOES is a different question again, and lives on its own
 // page (Permissions).
 export function AgentsSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Agent selection"
-      description="How Traycer picks a coding agent, model, and reasoning effort when it spawns child agents. This does not manage the agents inside a Task."
+      description="How Traycer picks a coding agent, model, and reasoning effort for the agents it creates. Native subagents keep their provider's settings. This does not manage the agents inside a Task."
       fillHeight
     >
       <AgentSelectionGuideSection />
