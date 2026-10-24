@@ -110,6 +110,8 @@
     "rehype-raw": "catalog:",
     "rehype-sanitize": "catalog:",
     "remark-gfm": "catalog:",
+    "remark-parse": "catalog:",
+    "remark-rehype": "catalog:",
     "reselect": "catalog:",
     "shadcn": "catalog:",
     "shiki": "catalog:",
