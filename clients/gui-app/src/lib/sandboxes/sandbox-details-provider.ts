@@ -1,8 +1,18 @@
 import type {
   SandboxCost,
   SandboxCostSegment,
+  SandboxListResponse,
   SandboxSummary,
+  UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import { sandboxQueryKeys } from "@/lib/query-keys";
+import type {
+  DetailsEntry,
+  DetailsHistory,
+  DetailsProviderContext,
+  DetailsStatus,
+  DetailsSubject,
+} from "@/lib/settings-details-entry";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
@@ -16,17 +26,20 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   KEPT_UNTIL_YOU_DESTROY_IT,
+  SANDBOX_LIST_FAILED,
   formatSandboxDollars,
 } from "@/lib/sandboxes/sandbox-strings";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * The sandbox provider of the Details drawer: Status, History and a
  * sanitized Export for ONE sandbox, read from the control plane's row and
  * its cost ledger, never from the host. Reading it never wakes or spends.
  *
- * Shaped as the environments design's `DetailsEntry` (`kind: "sandbox"`), so
- * its drawer can take this provider once it lands; until then
- * `sandbox-details-drawer.tsx` renders the same three sections.
+ * `sandbox-details-drawer.tsx` renders it wherever a sandbox's Details opens
+ * (a row, the setup line, the hover card, a notification);
+ * `sandboxDetailsProvider` hands the same entry to the Settings Details
+ * drawer as its `sandbox` kind.
  */
 
 /** One line of a section: what it is, and what it says. */
@@ -252,5 +265,132 @@ export function sandboxDetailsEntry(
         detail: event.value,
       })),
     }),
+  };
+}
+
+/** The rows every cached answer of one query family holds. */
+function cachedAnswers<T>(
+  context: DetailsProviderContext,
+  queryKey: readonly unknown[],
+): T[] {
+  return context.queryClient
+    .getQueriesData<T | null>({ queryKey })
+    .flatMap(([, data]) => (data === undefined || data === null ? [] : [data]));
+}
+
+/** Why the sandbox needs attention, or `null` when nothing does. */
+function sandboxReason(summary: SandboxSummary): string | null {
+  if (summary.state === "failed") {
+    return `Failed to start (${summary.failureCode ?? "unknown"})`;
+  }
+  if (summary.frozen) return "Out of credits";
+  if (summary.guestConfigured === false) return "Settings didn't apply";
+  return null;
+}
+
+function detailsStatus(summary: SandboxSummary): DetailsStatus {
+  const state = SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(summary)];
+  const reason = sandboxReason(summary);
+  return {
+    summary: `${state} · ${sandboxShapeLine(summary)} · ${summary.region}`,
+    currentVersion: null,
+    changedBy: null,
+    changedAt: summary.lastTransitionAt,
+    reason,
+    hosts: [
+      {
+        hostId: summary.hostId,
+        name: summary.displayName,
+        item: null,
+        state,
+        reason,
+        at: summary.lastTransitionAt,
+        lastReportedAt: summary.lastActivityAt,
+        recovery: null,
+      },
+    ],
+  };
+}
+
+function detailsHistory(entry: SandboxDetailsEntry): DetailsHistory {
+  return {
+    readerScope: "full",
+    // The drawer's history is timed; Kept, which carries no time, stays in
+    // the Status rows.
+    entries: entry.history.flatMap((event) =>
+      event.at === null
+        ? []
+        : [
+            {
+              at: event.at,
+              actor: null,
+              operation: event.label,
+              outcome: event.value,
+              hosts: [],
+            },
+          ],
+    ),
+  };
+}
+
+/**
+ * The Settings Details drawer's `sandbox` provider, for the sandbox
+ * `subject.key` names. Every load refetches the control plane's list and cost
+ * ledger first, so a reader never sees a row the server no longer returns.
+ */
+export async function sandboxDetailsProvider(
+  subject: DetailsSubject,
+  context: DetailsProviderContext,
+): Promise<DetailsEntry> {
+  await Promise.all([
+    context.queryClient.refetchQueries({
+      queryKey: sandboxQueryKeys.listAll(),
+    }),
+    context.queryClient.refetchQueries({
+      queryKey: sandboxQueryKeys.costsAll(),
+    }),
+  ]);
+  const lists = cachedAnswers<SandboxListResponse>(
+    context,
+    sandboxQueryKeys.listAll(),
+  );
+  if (lists.length === 0) throw new Error(SANDBOX_LIST_FAILED);
+  const summary = lists
+    .flatMap((list) => list.sandboxes)
+    .find((row) => row.id === subject.key);
+  if (summary === undefined) {
+    throw new Error("This sandbox is no longer listed: it was destroyed.");
+  }
+  const entry = sandboxDetailsEntry({
+    summary,
+    cost:
+      cachedAnswers<UserSandboxCost>(context, sandboxQueryKeys.costsAll())
+        .flatMap((costs) => costs.sandboxes)
+        .find((cost) => cost.sandboxId === summary.id) ?? null,
+    wakeString: null,
+    viewerUserId: useAuthStore.getState().contextMetadata?.userId ?? null,
+    // The configuration is not known here: an unnamed creator is left
+    // unsaid rather than called "you".
+    personal: false,
+    now: Date.now(),
+  });
+  const status = detailsStatus(summary);
+  const history = detailsHistory(entry);
+  return {
+    subject,
+    title: summary.displayName,
+    status: () => status,
+    history: () => history,
+    exportDiagnostics: async () => {
+      // Retrieval rechecks the list, even while the drawer stays open.
+      const fresh = await sandboxDetailsProvider(subject, context);
+      return {
+        subject,
+        title: fresh.title,
+        exportedAt: Date.now(),
+        status: fresh.status(),
+        history: fresh.history(),
+      };
+    },
   };
 }

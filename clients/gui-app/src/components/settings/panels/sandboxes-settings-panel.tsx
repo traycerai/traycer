@@ -7,6 +7,7 @@ import type {
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
 import { SandboxDestroyAllIdleDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
 import { Badge } from "@/components/ui/badge";
@@ -134,7 +135,7 @@ export function SandboxesSettingsPanel(): ReactNode {
   const team = configuration.kind === "team";
   return (
     <SettingsPanelShell
-      title="Sandboxes"
+      title={SANDBOXES.page.label}
       description={
         team
           ? `Every sandbox running on ${configuration.teamName}'s settings, whoever started it, and what each one costs. Start one from a task's host picker.`

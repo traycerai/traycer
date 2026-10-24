@@ -16,6 +16,7 @@ import { registerDetailsProvider } from "@/lib/settings-details-entry";
 import { recoveryForHost } from "@/components/settings/details/details-copy";
 
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
+import { sandboxDetailsProvider } from "@/lib/sandboxes/sandbox-details-provider";
 
 type HistoryResponse = ResponseOfMethod<HostRpcRegistry, "environment.history">;
 type HistorySubject = RequestOfMethod<
@@ -129,3 +130,5 @@ for (const kind of [
 ]) {
   registerDetailsProvider(kind, environmentDetailsProvider);
 }
+// A sandbox's evidence is the control plane's row and cost ledger.
+registerDetailsProvider("sandbox", sandboxDetailsProvider);

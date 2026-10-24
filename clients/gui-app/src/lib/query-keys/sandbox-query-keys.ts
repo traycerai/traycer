@@ -15,6 +15,7 @@ export const sandboxQueryKeys = {
     authService,
     userId,
   ],
+  listAll: (): readonly unknown[] => ["auth", "registered-hosts", "sandboxes"],
   listMissing: (): readonly unknown[] => [
     "auth",
     "registered-hosts",
