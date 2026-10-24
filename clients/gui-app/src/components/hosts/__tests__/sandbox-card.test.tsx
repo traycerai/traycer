@@ -832,7 +832,7 @@ describe("<SandboxCard /> Automations row", () => {
       "Running. Automations aren't billed.",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
-      "Released after a day with no shell",
+      "Stops after 30 min idle · files kept · the next shell starts it",
     );
   });
 
