@@ -1,8 +1,10 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SandboxCatalogue,
+  SandboxCataloguePricing,
   SandboxCatalogueProvider,
   SandboxOs,
+  SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   sandboxCreateTeams,
@@ -114,11 +116,52 @@ export function stageProviderFor(
 /** Linux first; Windows when no provider can create Linux. */
 const STAGE_OS_PREFERENCE: readonly SandboxOs[] = ["linux", "windows"];
 
+/** What a stage is priced and matched by: its OS, region and size. */
+export type StageSize = Pick<
+  StageShape,
+  "os" | "region" | "cpus" | "memoryMb" | "diskMb"
+>;
+
+/** Whether a stage's size is this listed shape; an unset disk is the default. */
+export function stageSizeIsRung(
+  provider: SandboxCatalogueProvider,
+  rung: SandboxShapeRung,
+  size: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
+): boolean {
+  return (
+    size.cpus === rung.cpus &&
+    size.memoryMb === rung.memoryMb &&
+    (size.diskMb ?? provider.shape.diskDefaultMb) === rung.diskMb
+  );
+}
+
+/** The listed shape a provider defaults to, or `null` when it lists none. */
+export function defaultShapeRung(
+  provider: SandboxCatalogueProvider,
+): SandboxShapeRung | null {
+  return provider.shapes?.find((rung) => rung.default) ?? null;
+}
+
 /**
- * The shape a New row stages: 2 vCPU / 4 GB of the first OS a provider can
- * create (Linux, else Windows) in its default region, rounded into the
- * catalogue's bounds; the provider's smallest shape when that one is outside
- * them. `null` when no provider can create either.
+ * Whether the provider offers a stage's size: one of its listed shapes, or
+ * inside its bounds when it lists none.
+ */
+function stageSizeOffered(
+  provider: SandboxCatalogueProvider,
+  size: Pick<StageShape, "cpus" | "memoryMb" | "diskMb">,
+): boolean {
+  if (provider.shapes === null) {
+    return sandboxShapeProblem(provider.shape, size) === null;
+  }
+  return provider.shapes.some((rung) => stageSizeIsRung(provider, rung, size));
+}
+
+/**
+ * The shape a New row stages, of the first OS a provider can create (Linux,
+ * else Windows) in its default region: the provider's default listed shape;
+ * from a provider that lists none, 2 vCPU / 4 GB rounded into its bounds, or
+ * its smallest shape when that one is outside them. `null` when no provider
+ * can create either.
  */
 export function defaultStageShape(
   catalogue: SandboxCatalogue,
@@ -129,6 +172,18 @@ export function defaultStageShape(
   })).find((candidate) => candidate.provider !== null);
   if (offered === undefined || offered.provider === null) return null;
   const { os, provider } = offered;
+  const rung = defaultShapeRung(provider);
+  if (rung !== null) {
+    return {
+      os,
+      cpus: rung.cpus,
+      memoryMb: rung.memoryMb,
+      diskMb: rung.diskMb,
+      region: provider.regions[0].id,
+      idleMinutes: STAGE_DEFAULT_IDLE_MINUTES,
+      destroyAfterRestingMinutes: STAGE_DEFAULT_DESTROY_AFTER_RESTING_MINUTES,
+    };
+  }
   const bounds = provider.shape;
   const asked = roundSandboxShape(bounds, DEFAULT_SHAPE);
   const shape =
@@ -166,7 +221,7 @@ export function rememberedOrDefaultStageShape(
     if (
       provider !== null &&
       provider.regions.some((region) => region.id === remembered.region) &&
-      sandboxShapeProblem(provider.shape, remembered) === null
+      stageSizeOffered(provider, remembered)
     ) {
       return remembered;
     }
@@ -185,19 +240,64 @@ export interface StagePrice {
   readonly exact: boolean;
 }
 
+/** A size's awake price an hour from a region's per-unit rates. */
+function ratedAwakeMcPerHour(
+  rates: SandboxCataloguePricing,
+  size: { readonly cpus: number; readonly memoryMb: number },
+  diskMb: number,
+): number {
+  return Math.round(
+    (size.cpus * rates.vcpuHourMillicredits +
+      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits +
+      (diskMb / MB_PER_GIB) * rates.diskGbHourMillicredits) *
+      rates.multiplier,
+  );
+}
+
+/** A provider's smallest listed shape: fewest vCPU, then memory, then disk. */
+function smallestShapeRung(
+  shapes: readonly SandboxShapeRung[],
+): SandboxShapeRung | null {
+  return shapes.reduce<SandboxShapeRung | null>((smallest, rung) => {
+    if (smallest === null) return rung;
+    const order =
+      rung.cpus - smallest.cpus ||
+      rung.memoryMb - smallest.memoryMb ||
+      rung.diskMb - smallest.diskMb;
+    return order < 0 ? rung : smallest;
+  }, null);
+}
+
 /**
  * The region's smallest shape: its price, and whether `shape` is it, by its
- * cpus, memory and disk (an unset disk is the provider's default).
+ * cpus, memory and disk (an unset disk is the provider's default). Of a
+ * provider that lists its shapes, the smallest listed one, priced from the
+ * region's rates when it has them.
  */
 export function stageSmallestShape(
   catalogue: SandboxCatalogue,
-  shape: StageShape,
+  shape: StageSize,
 ): { readonly isStaged: boolean; readonly awakeMcPerHour: number } | null {
   const provider = stageProviderFor(catalogue, shape.os);
   if (provider === null) return null;
   const region =
     provider.regions.find((candidate) => candidate.id === shape.region) ?? null;
   if (region === null) return null;
+  const smallestRung =
+    provider.shapes === null ? null : smallestShapeRung(provider.shapes);
+  if (smallestRung !== null) {
+    return {
+      isStaged: stageSizeIsRung(provider, smallestRung, shape),
+      awakeMcPerHour:
+        region.pricing === null
+          ? region.fromPriceMcPerHour.awakeMc
+          : ratedAwakeMcPerHour(
+              region.pricing,
+              smallestRung,
+              smallestRung.diskMb,
+            ),
+    };
+  }
   const bounds = provider.shape;
   const smallestMemoryMb = Math.max(
     bounds.memoryMinMb,
@@ -214,7 +314,7 @@ export function stageSmallestShape(
 
 export function stagePrice(
   catalogue: SandboxCatalogue,
-  shape: StageShape,
+  shape: StageSize,
 ): StagePrice | null {
   const provider = stageProviderFor(catalogue, shape.os);
   const region =
@@ -229,14 +329,11 @@ export function stagePrice(
       exact: smallest.isStaged,
     };
   }
-  const bounds = provider.shape;
-  const diskMb = shape.diskMb ?? bounds.diskDefaultMb;
-  const perHour =
-    (shape.cpus * rates.vcpuHourMillicredits +
-      (shape.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits +
-      (diskMb / MB_PER_GIB) * rates.diskGbHourMillicredits) *
-    rates.multiplier;
-  return { awakeMcPerHour: Math.round(perHour), exact: true };
+  const diskMb = shape.diskMb ?? provider.shape.diskDefaultMb;
+  return {
+    awakeMcPerHour: ratedAwakeMcPerHour(rates, shape, diskMb),
+    exact: true,
+  };
 }
 
 /**

@@ -7,6 +7,12 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { setMobileApp } from "@/lib/mobile-app";
+import type { StagedNewShape } from "@/lib/sandboxes/staged-sandbox-in-window";
+
+/** A landing composer's staged New sandbox, as the panel reads it. */
+interface StagedNewFixture {
+  readonly target: { readonly kind: "new"; readonly shape: StagedNewShape };
+}
 
 const mocks = vi.hoisted(() => ({
   data: null as AuthenticatedUser | null,
@@ -15,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   isFetching: false,
   refetch: vi.fn(() => Promise.resolve({})),
   openLink: vi.fn(() => Promise.resolve()),
-  staged: null as { readonly target: { readonly kind: string } } | null,
+  staged: null as StagedNewFixture | null,
   catalogue: null as SandboxCatalogue | null,
 }));
 
@@ -83,6 +89,7 @@ const CATALOGUE: SandboxCatalogue = {
       suspendFidelity: "memory",
       stoppedStorage: "snapshot",
       wakeClass: "resume",
+      shapes: null,
       dockerInGuest: true,
       creatable: true,
       notCreatableReason: null,
@@ -96,6 +103,29 @@ const CATALOGUE: SandboxCatalogue = {
       ],
     },
   ],
+};
+
+// Rates chosen so each rung prices differently from the others and from the
+// region's `fromPriceMcPerHour` (120): 1/1/10 -> 20, 2/4/20 -> 46, 4/8/40 -> 92.
+const LISTED_SHAPES_CATALOGUE: SandboxCatalogue = {
+  providers: CATALOGUE.providers.map((provider) => ({
+    ...provider,
+    shapes: [
+      { cpus: 1, memoryMb: 1024, diskMb: 10240, default: false },
+      { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true },
+      { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false },
+      { cpus: 8, memoryMb: 16384, diskMb: 61440, default: false },
+    ],
+    regions: provider.regions.map((region) => ({
+      ...region,
+      pricing: {
+        vcpuHourMillicredits: 7,
+        memoryGbHourMillicredits: 3,
+        diskGbHourMillicredits: 1,
+        multiplier: 1,
+      },
+    })),
+  })),
 };
 
 describe("CreditsSettingsPanel", () => {
@@ -183,6 +213,94 @@ describe("CreditsSettingsPanel", () => {
       "https://traycer.ai/billing",
       "account",
       expect.objectContaining({ type: "click" }),
+    );
+  });
+
+  it("quotes the default listed shape when nothing is staged", () => {
+    mocks.data = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 30,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    mocks.catalogue = LISTED_SHAPES_CATALOGUE;
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-hourly-price").textContent).toBe(
+      "$0.05 an hour while awake",
+    );
+  });
+
+  // The first creatable provider serves Windows only and lists no shapes; its
+  // $0.50 floor must not stand in for the Linux default rung (46 mc, $0.05).
+  it("quotes the default stage's provider, not the first priced one", () => {
+    mocks.data = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 30,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    const [windowsOnly] = CATALOGUE.providers;
+    const [linuxListed] = LISTED_SHAPES_CATALOGUE.providers;
+    mocks.catalogue = {
+      providers: [
+        {
+          ...windowsOnly,
+          os: ["windows"],
+          regions: windowsOnly.regions.map((region) => ({
+            ...region,
+            fromPriceMcPerHour: { awakeMc: 500, suspendedMc: 4, stoppedMc: 2 },
+          })),
+        },
+        linuxListed,
+      ],
+    };
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-hourly-price").textContent).toBe(
+      "$0.05 an hour while awake",
+    );
+  });
+
+  it("quotes the staged listed shape", () => {
+    mocks.data = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 30,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    mocks.catalogue = LISTED_SHAPES_CATALOGUE;
+    mocks.staged = {
+      target: {
+        kind: "new",
+        shape: {
+          os: "linux",
+          region: "us-east",
+          cpus: 4,
+          memoryMb: 8192,
+          diskMb: 40960,
+        },
+      },
+    };
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-hourly-price").textContent).toBe(
+      "$0.09 an hour while awake",
     );
   });
 });

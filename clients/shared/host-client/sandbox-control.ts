@@ -300,7 +300,7 @@ export async function listSandboxesViaHttp(
   return { kind: "ok", response: parsed.data };
 }
 
-/** `GET /api/sandboxes/catalogue`: providers, shape bounds, regions, prices. */
+/** `GET /api/sandboxes/catalogue`: providers, shapes, regions, prices. */
 export async function fetchSandboxCatalogueViaHttp(
   serverBaseUrl: string,
   bearerToken: string,

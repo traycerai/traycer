@@ -4,12 +4,22 @@ import type {
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
 import { formatCredits } from "@/lib/sandboxes/sandbox-pricing";
-import { stagedNewShape } from "@/lib/sandboxes/staged-sandbox-in-window";
+import {
+  defaultStageShape,
+  stagePrice,
+  stageProviderFor,
+} from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  stagedNewShape,
+  type StagedNewShape,
+} from "@/lib/sandboxes/staged-sandbox-in-window";
 
 /**
  * The hourly awake price a staged sandbox would meet, or the catalogue's
- * default (smallest bound) shape when none is staged. Catalogue regions
- * price only the smallest shape, so a larger staged shape is a lower bound.
+ * default shape when none is staged: the default listed shape, priced as the
+ * stage is, of a provider that lists its shapes; else the smallest bound.
+ * Regions of a provider without a list price only the smallest shape, so a
+ * larger staged shape is a lower bound.
  */
 export interface SandboxHourlyQuote {
   readonly awakeMc: number;
@@ -34,9 +44,27 @@ export function formatAwakeHourlyPrice(quote: SandboxHourlyQuote): string {
     : `from ${dollars} an hour while awake`;
 }
 
+/**
+ * The default shape's quote: the default stage's own when its provider lists
+ * shapes, so the figure is the sandbox a New row would create; else the
+ * first priced provider's smallest-shape price.
+ */
 function defaultSmallestQuote(
   catalogue: SandboxCatalogue,
 ): SandboxHourlyQuote | null {
+  const staged = defaultStageShape(catalogue);
+  const stagedProvider =
+    staged === null ? null : stageProviderFor(catalogue, staged.os);
+  if (
+    staged !== null &&
+    stagedProvider !== null &&
+    stagedProvider.shapes !== null
+  ) {
+    const price = stagePrice(catalogue, staged);
+    if (price !== null) {
+      return { awakeMc: price.awakeMcPerHour, exact: price.exact };
+    }
+  }
   const provider = firstPricedProvider(catalogue, null);
   const region = provider?.regions[0];
   if (region === undefined) return null;
@@ -45,17 +73,18 @@ function defaultSmallestQuote(
 
 function quoteForShape(
   catalogue: SandboxCatalogue,
-  shape: {
-    readonly os: string;
-    readonly region: string;
-    readonly cpus: number;
-    readonly memoryMb: number;
-  },
+  shape: StagedNewShape,
 ): SandboxHourlyQuote | null {
   const os = sandboxOs(shape.os);
   if (os === null) return null;
   const provider = firstPricedProvider(catalogue, os);
   if (provider === null) return null;
+  if (provider.shapes !== null) {
+    const price = stagePrice(catalogue, { ...shape, os });
+    return price === null
+      ? null
+      : { awakeMc: price.awakeMcPerHour, exact: price.exact };
+  }
   const region =
     provider.regions.find((candidate) => candidate.id === shape.region) ??
     provider.regions[0];
