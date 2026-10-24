@@ -1,6 +1,7 @@
 import { createContext, use } from "react";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
 
 /**
  * The OpenCode line of the chat a surface belongs to (`chatOpencodeLine`), so
@@ -16,14 +17,14 @@ export function useChatOpencodeLine(): OpencodeLine | null {
 
 /**
  * The `opencodeLine` key a catalog request for `harnessId` carries: the chat's
- * line for the one harness with two lines, nothing otherwise, so every other
- * harness keeps its single cache slot.
+ * line for every harness that runs OpenCode, which reads its catalogs on that
+ * line; nothing otherwise, so every other harness keeps its single cache slot.
  */
 export function catalogOpencodeLineParam(
   harnessId: GuiHarnessId,
   line: OpencodeLine | null,
 ): { readonly opencodeLine?: OpencodeLine } {
-  return harnessId === "opencode" && line !== null
+  return isOpencodeFamilyHarness(harnessId) && line !== null
     ? { opencodeLine: line }
     : {};
 }

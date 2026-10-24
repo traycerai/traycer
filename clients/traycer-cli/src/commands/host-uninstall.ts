@@ -519,7 +519,7 @@ async function runHostUninstallWithActuators(
       }
       throw cliError({
         code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
-        message: `host uninstall: the host did not stop, so its install was kept. If it is not responding, run 'traycer host uninstall${args.all ? " --all" : ""} --force' to stop it and remove the install (running terminal sessions and in-flight agent work will be killed).`,
+        message: `host uninstall: the host did not stop, so its install was kept. If it is not responding, run ${args.all ? "'traycer host uninstall --all --force'" : "'traycer host uninstall --force'"} to stop it and remove the install (running terminal sessions and in-flight agent work will be killed).`,
         details: {
           environment: ctx.environment,
           hostStillRunning: liveness === "live" ? true : null,

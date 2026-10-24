@@ -227,10 +227,10 @@ describe("DraftRuntimeRegistry", () => {
     const runtime = draftRuntimeRegistry.attach("draft-a");
     if (runtime === null) throw new Error("expected keyed draft runtime");
 
-    const first = runtime.startSubmission(PLACEMENT);
+    const first = runtime.startSubmission(PLACEMENT, null);
     if (first === null) throw new Error("expected first submission attempt");
 
-    expect(runtime.startSubmission(PLACEMENT)).toBeNull();
+    expect(runtime.startSubmission(PLACEMENT, null)).toBeNull();
     draftRuntimeRegistry.close("draft-a");
 
     expect(first.abortController.signal.aborted).toBe(true);
@@ -275,7 +275,7 @@ describe("DraftRuntimeRegistry", () => {
     if (runtime === null) throw new Error("expected keyed draft runtime");
 
     runtime.setSnapshot(imageContent("submit-hash"), null);
-    const attempt = runtime.startSubmission(PLACEMENT);
+    const attempt = runtime.startSubmission(PLACEMENT, null);
     if (attempt === null) throw new Error("expected submission attempt");
     runtime.setSnapshot(content("new live text"), null);
 
@@ -297,7 +297,7 @@ describe("DraftRuntimeRegistry", () => {
     if (runtime === null) throw new Error("expected keyed draft runtime");
 
     runtime.setSnapshot(content("send me"), null);
-    const attempt = runtime.startSubmission(PLACEMENT);
+    const attempt = runtime.startSubmission(PLACEMENT, null);
     if (attempt === null) throw new Error("expected submission attempt");
 
     runtime.setSelection({ from: 2, to: 2 });
@@ -319,7 +319,7 @@ describe("DraftRuntimeRegistry", () => {
     if (runtime === null) throw new Error("expected keyed draft runtime");
 
     runtime.setSnapshot(content("send me"), null);
-    const attempt = runtime.startSubmission(PLACEMENT);
+    const attempt = runtime.startSubmission(PLACEMENT, null);
     if (attempt === null) throw new Error("expected submission attempt");
     expect(runtime.markCreateStarted(attempt)).toBe(true);
 
@@ -338,7 +338,7 @@ describe("DraftRuntimeRegistry", () => {
     if (runtime === null) throw new Error("expected keyed draft runtime");
 
     runtime.setSnapshot(content("send me"), null);
-    const attempt = runtime.startSubmission(PLACEMENT);
+    const attempt = runtime.startSubmission(PLACEMENT, null);
     if (attempt === null) throw new Error("expected submission attempt");
     expect(runtime.markCreateStarted(attempt)).toBe(true);
 
@@ -380,7 +380,7 @@ describe("DraftRuntimeRegistry", () => {
     const retired = draftRuntimeRegistry.attach("draft-a");
     if (retired === null) throw new Error("expected retired runtime");
     retired.setSnapshot(imageContent("retired-hash"), null);
-    const retiredAttempt = retired.startSubmission(PLACEMENT);
+    const retiredAttempt = retired.startSubmission(PLACEMENT, null);
     if (retiredAttempt === null || !retired.markCreateStarted(retiredAttempt)) {
       throw new Error("expected committed retired attempt");
     }
@@ -413,7 +413,7 @@ describe("DraftRuntimeRegistry", () => {
     const firstRuntime = draftRuntimeRegistry.attach("draft-a");
     if (firstRuntime === null) throw new Error("expected first runtime");
     firstRuntime.setSnapshot(imageContent("first-hash"), null);
-    const firstAttempt = firstRuntime.startSubmission(PLACEMENT);
+    const firstAttempt = firstRuntime.startSubmission(PLACEMENT, null);
     if (
       firstAttempt === null ||
       !firstRuntime.markCreateStarted(firstAttempt)
@@ -427,7 +427,7 @@ describe("DraftRuntimeRegistry", () => {
       .setDraftContent("draft-a", imageContent("second-hash"), null);
     const secondRuntime = draftRuntimeRegistry.attach("draft-a");
     if (secondRuntime === null) throw new Error("expected second runtime");
-    const secondAttempt = secondRuntime.startSubmission(PLACEMENT);
+    const secondAttempt = secondRuntime.startSubmission(PLACEMENT, null);
     if (
       secondAttempt === null ||
       !secondRuntime.markCreateStarted(secondAttempt)

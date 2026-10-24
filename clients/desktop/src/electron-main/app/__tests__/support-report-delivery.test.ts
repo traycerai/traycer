@@ -200,6 +200,7 @@ vi.mock("../sentry-delivery-observer", async (importOriginal) => {
 });
 
 import { DesktopSupportService } from "../support";
+import type { HostEnsureFailure } from "../../host/host-controller-types";
 import {
   createSentryRateLimitWindow,
   observeSentryTransportFeedback,
@@ -385,6 +386,9 @@ const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 
 let tempDir = "";
 let hostLogPath = "";
+let hostEnsureFailure: HostEnsureFailure | null = null;
+let hostEnsureFailureReader: (() => Promise<HostEnsureFailure | null>) | null =
+  null;
 
 function buildService(
   signedInEmail: string | null | (() => string | null),
@@ -410,6 +414,10 @@ function buildService(
   return new DesktopSupportService({
     appName: "Traycer",
     host: { getSnapshot: () => null },
+    readHostEnsureFailure: () =>
+      hostEnsureFailureReader === null
+        ? Promise.resolve(hostEnsureFailure)
+        : hostEnsureFailureReader(),
     authSession: {
       get: () => {
         const email =
@@ -606,6 +614,8 @@ async function writeOfflineQueueFixture(
 let defaultFakeClient: FakeSentryClient;
 
 beforeEach(async () => {
+  hostEnsureFailure = null;
+  hostEnsureFailureReader = null;
   tempDir = await mkdtemp(join(tmpdir(), "traycer-support-"));
   loggerMock.desktopLogPath = join(tempDir, "traycer-desktop.log");
   hostLogPath = join(tempDir, "host.log");
@@ -1200,6 +1210,79 @@ describe("DesktopSupportService.submitReport - includeDiagnostics gate", () => {
       KEY,
     );
     expect(lastEnvironmentContext()).toEqual({ status: "unavailable" });
+  });
+});
+
+const STARTUP_FAILURE: HostEnsureFailure = {
+  code: "E_SERVICE_CONTROL_FAILED",
+  message:
+    "Last Run Result: 0x80070005 reading C:\\Users\\anurag\\secret-host.json with Bearer startuptoken",
+};
+
+function expectScrubbedStartupFailure(value: unknown): void {
+  expect(value).toEqual({
+    code: "E_SERVICE_CONTROL_FAILED",
+    message: expect.stringContaining("Last Run Result: 0x80070005"),
+  });
+  const raw = JSON.stringify(value);
+  expect(raw).not.toContain("anurag");
+  expect(raw).not.toContain("startuptoken");
+}
+
+describe("DesktopSupportService host startup failure diagnostics", () => {
+  it("exposes the last ensure failure on the snapshot and null when there is none", async () => {
+    expect(
+      (await buildService(null).getSnapshot()).host.ensureFailure,
+    ).toBeNull();
+
+    hostEnsureFailure = STARTUP_FAILURE;
+    expect((await buildService(null).getSnapshot()).host.ensureFailure).toEqual(
+      STARTUP_FAILURE,
+    );
+  });
+
+  it("degrades to a null ensureFailure when reading it rejects, without blocking the snapshot or the report", async () => {
+    const service = buildService(null);
+    hostEnsureFailureReader = async () => {
+      throw new Error("status probe failed");
+    };
+
+    expect((await service.getSnapshot()).host.ensureFailure).toBeNull();
+    await freezeAndSubmit(service);
+    expect(sentryMock.captureFeedback).toHaveBeenCalledTimes(1);
+    expect(lastHint().captureContext.contexts?.hostStartup).toBeUndefined();
+  });
+
+  it("sends a scrubbed hostStartup context only when diagnostics are included", async () => {
+    hostEnsureFailure = STARTUP_FAILURE;
+    await freezeAndSubmit(buildService(null));
+    expectScrubbedStartupFailure(
+      lastHint().captureContext.contexts?.hostStartup,
+    );
+
+    const declined = buildService(null);
+    await declined.freezeEvidence(KEY, null);
+    await declined.submitReport({ ...FORM, includeDiagnostics: false }, KEY);
+    expect(lastHint().captureContext.contexts?.hostStartup).toBeUndefined();
+  });
+
+  it("writes a scrubbed host.ensureFailure into the saved bundle only with consent", async () => {
+    hostEnsureFailure = STARTUP_FAILURE;
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    const read = async (includeDiagnostics: boolean) => {
+      const { path } = await service.saveDiagnosticBundle(
+        { ...FORM, includeDiagnostics },
+        KEY,
+      );
+      return JSON.parse(await readFile(path, "utf8")) as {
+        host?: { ensureFailure?: unknown };
+      };
+    };
+
+    expectScrubbedStartupFailure((await read(true)).host?.ensureFailure);
+    expect((await read(false)).host).toBeUndefined();
   });
 });
 

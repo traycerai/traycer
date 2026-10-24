@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { ServiceInstallArgs } from "../service-install";
+import { writeInstalledHostFixture } from "./service-install-host-fixture";
 
 // The ruling is "the desktop leaves a host that a
 // person started in a terminal untouched; the mode governs the service run
@@ -299,6 +300,11 @@ beforeEach(async () => {
   // later "no foreground run" control can never accidentally inherit an
   // earlier test's live foreground run.
   rmSync(hostHomeDir("production"), { recursive: true, force: true });
+  // The registration starts the installed host, so the command refuses
+  // without a real install record and executable (`service-install-missing-host.test.ts`).
+  writeInstalledHostFixture(
+    (await import("../../store/paths")).hostInstallRecordPath("production"),
+  );
   mocks.takeoverMock.mockReset();
   mocks.takeoverMock.mockResolvedValue({
     kind: "cli-host-stopped",

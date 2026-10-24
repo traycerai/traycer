@@ -10,8 +10,17 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import {
+  openSandboxDetails,
+  useSandboxDetailsStore,
+} from "@/stores/sandboxes/sandbox-details-store";
+import {
+  revealSandboxOnPage,
+  useSandboxesPageStore,
+} from "@/stores/sandboxes/sandboxes-page-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -146,13 +155,6 @@ describe("<EpicSessionLifecycleBridge />", () => {
     useWatchHostStore.setState({ scopedHostId: null });
     window.localStorage.clear();
     useAddHostDialogStore.getState().closeDialog();
-    useSandboxCreateDialogStore.setState({
-      open: false,
-      preselect: null,
-      workingHostTeamId: null,
-      draft: null,
-      failure: null,
-    });
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
     useProviderLinkDialogStore.getState().close();
@@ -312,6 +314,70 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(useWatchHostStore.getState().scopedHostId).toBeNull();
   });
 
+  it("drops every staged sandbox on user-switch", () => {
+    // Left standing, the next account would send into the outgoing
+    // account's team, or resubmit its create key.
+    useStagedSandboxStore.getState().stage("composer:w1", {
+      kind: "existing",
+      hostId: "host-owned-by-alice",
+      sandboxId: "sbx-alice",
+      name: "alice-box",
+      configuration: { kind: "team", teamId: "team-alice", teamName: "Acme" },
+      verb: "resume",
+    });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("drops a terminal a sandbox row asked the landing panel for on user-switch", () => {
+    useLandingPanelStore
+      .getState()
+      .requestTerminal("landing:window-alice", "host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+  });
+
+  it("closes the Details drawer and resets the Sandboxes page on user-switch", () => {
+    openSandboxDetails("sbx-alice");
+    revealSandboxOnPage({ kind: "team", teamId: "team-alice" }, "sbx-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useSandboxDetailsStore.getState().sandboxId).toBeNull();
+    expect(useSandboxesPageStore.getState()).toMatchObject({
+      requestedConfiguration: null,
+      revealSandboxId: null,
+    });
+  });
+
   it("drops the shared watch-host pick on sign-out", () => {
     useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");
 
@@ -365,40 +431,6 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useAddHostDialogStore.getState().open).toBe(false);
-  });
-
-  it("closes the New-sandbox dialog and drops its draft and failure on user-switch", () => {
-    // Module-level like the Add-host dialog, and it carries what account A
-    // typed and the failure A's last create got: left standing, account B
-    // opens Settings into A's open dialog, A's sandbox name and A's failure.
-    useSandboxCreateDialogStore.getState().openDialog(null, null);
-    useSandboxCreateDialogStore.getState().setDraft({
-      name: "alice-box",
-      os: "linux",
-      cpus: "2",
-      memoryGb: "4",
-      region: "us-east",
-      idleMinutes: 30,
-      belongsTo: { kind: "personal" },
-    });
-    useSandboxCreateDialogStore
-      .getState()
-      .setFailure({ message: "x", code: null });
-
-    render(
-      <EpicSessionLifecycleBridge>
-        <div />
-      </EpicSessionLifecycleBridge>,
-    );
-
-    act(() => {
-      resetAuth("signed-in", "bob@example.com", "user-bob");
-    });
-
-    const dialog = useSandboxCreateDialogStore.getState();
-    expect(dialog.open).toBe(false);
-    expect(dialog.draft).toBeNull();
-    expect(dialog.failure).toBeNull();
   });
 
   it("drops a pending Providers deep-link intent on user-switch", () => {

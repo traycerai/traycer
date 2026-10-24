@@ -7,6 +7,7 @@ import {
   parseSandboxAutomationOpenTarget,
   parseSandboxCreateRequest,
   parseSandboxLifecycleVerb,
+  parseSandboxPatchRequest,
   parseSecretRequestDecision,
 } from "../ipc-parsers";
 
@@ -160,10 +161,19 @@ describe("parseSandboxCreateRequest", () => {
     createdByHostId: null,
     createdByAgentId: null,
     environmentId: null,
+    destroyAfterRestingMinutes: null,
+    createdByTaskId: null,
+    clientRequestId: null,
   };
 
   it("returns a valid request unchanged, nulls kept as the server's defaults", () => {
     expect(parseSandboxCreateRequest(VALID)).toEqual(VALID);
+  });
+
+  it("passes a resting period of 0, which is never", () => {
+    expect(
+      parseSandboxCreateRequest({ ...VALID, destroyAfterRestingMinutes: 0 }),
+    ).toEqual({ ...VALID, destroyAfterRestingMinutes: 0 });
     expect(
       parseSandboxCreateRequest({
         ...VALID,
@@ -241,11 +251,71 @@ describe("parseSandboxCreateRequest", () => {
       ["environmentId", { environmentId: "" }],
       ["environmentId", { environmentId: undefined }],
       ["environmentId", { environmentId: 7 }],
+      ["destroyAfterRestingMinutes", { destroyAfterRestingMinutes: -1 }],
+      ["createdByTaskId", { createdByTaskId: "" }],
+      ["clientRequestId", { clientRequestId: undefined }],
     ];
     for (const [field, override] of cases) {
       expect(() =>
         parseSandboxCreateRequest({ ...VALID, ...override }),
       ).toThrow(`createSandbox.request.${field}`);
+    }
+  });
+});
+
+describe("parseSandboxPatchRequest", () => {
+  const VALID = {
+    displayName: "renamed",
+    idleMinutes: null,
+    destroyAfterRestingMinutes: null,
+  };
+
+  it("refuses what the protocol refuses: an idle period under 2, a name over 191", () => {
+    expect(() =>
+      parseSandboxPatchRequest({ ...VALID, idleMinutes: 1 }),
+    ).toThrow(/patchSandbox\.request\.idleMinutes/);
+    expect(() =>
+      parseSandboxPatchRequest({ ...VALID, displayName: "x".repeat(192) }),
+    ).toThrow(/patchSandbox\.request\.displayName/);
+  });
+
+  it("returns a valid request unchanged, 0 kept as a resting period of never", () => {
+    expect(parseSandboxPatchRequest(VALID)).toEqual(VALID);
+    expect(
+      parseSandboxPatchRequest({
+        displayName: null,
+        idleMinutes: 45,
+        destroyAfterRestingMinutes: 0,
+      }),
+    ).toEqual({
+      displayName: null,
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: 0,
+    });
+  });
+
+  it("throws on a body that is not an object", () => {
+    for (const bad of [null, undefined, "renamed", [VALID]]) {
+      expect(() => parseSandboxPatchRequest(bad)).toThrow(
+        "patchSandbox.request must be an object",
+      );
+    }
+  });
+
+  it("throws on each bad field, naming it", () => {
+    const cases: readonly [string, Record<string, unknown>][] = [
+      ["displayName", { displayName: "" }],
+      // A missing key is not a null: only an explicit null leaves it as is.
+      ["displayName", { displayName: undefined }],
+      ["idleMinutes", { idleMinutes: 0 }],
+      ["idleMinutes", { idleMinutes: 1.5 }],
+      ["destroyAfterRestingMinutes", { destroyAfterRestingMinutes: -1 }],
+      ["destroyAfterRestingMinutes", { destroyAfterRestingMinutes: "never" }],
+    ];
+    for (const [field, override] of cases) {
+      expect(() => parseSandboxPatchRequest({ ...VALID, ...override })).toThrow(
+        `patchSandbox.request.${field}`,
+      );
     }
   });
 });

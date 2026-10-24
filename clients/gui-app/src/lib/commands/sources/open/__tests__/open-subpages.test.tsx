@@ -7,10 +7,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
-import type {
-  SandboxPod,
-  SandboxSummary,
-} from "@traycer/protocol/host/sandbox-control";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { BrowserSessionsLifecycle } from "@traycer-clients/shared/platform/browser-view";
@@ -47,12 +44,7 @@ const spies = vi.hoisted(() => ({
   setBrowserPinSelection: vi.fn(),
   setTerminalPinSelection: vi.fn(),
   retryBrowserHosts: vi.fn(),
-  openTeamPod: vi.fn(),
 }));
-/** No team has a pod list here: the picker's team pods have their own suite. */
-const teamPodsMock = vi.hoisted<{
-  current: ReadonlyMap<string, readonly SandboxPod[]>;
-}>(() => ({ current: new Map() }));
 vi.mock("sonner", () => ({
   toast: Object.assign(spies.toast, {
     error: spies.toastError,
@@ -498,14 +490,6 @@ vi.mock("@/lib/host", () => ({
     onChange: () => () => undefined,
   }),
 }));
-// The new terminal picker reads each team's pod list and opens a pod that
-// cannot be dialed yet; both need a QueryClient this suite does not mount.
-vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
-  useSandboxTeamPods: () => teamPodsMock.current,
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
-  useSandboxAutomationOpen: () => ({ mutate: spies.openTeamPod }),
-}));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () =>
     latestConversationWorkspaceSeedMock.seed,
@@ -718,7 +702,6 @@ afterEach(() => {
   remoteHostAvailableMock.current = true;
   extraHostsMock.directory = [];
   extraHostsMock.options = [];
-  teamPodsMock.current = new Map();
   terminalBindingsMock.active.data.rows = ACTIVE_ROWS;
   terminalBindingsMock.active.data.folderlessCwd = "/work/default-cwd";
   terminalBindingsMock.active.isPending = false;
@@ -953,7 +936,7 @@ describe("Terminals opener sub-page", () => {
     expect(launchedTerminalCwd(opened.ref)).toBe("/remote/feature-worktree");
   });
 
-  it("offers the personal host and the Automations pod, never an agent's burst sandbox or an unanswered sandbox", () => {
+  it("offers the personal host, never the Automations pod, an agent's burst sandbox or an unanswered sandbox", () => {
     const dialable = (hostId: string, label: string): HostDirectoryEntry => ({
       hostId,
       label,
@@ -1006,7 +989,7 @@ describe("Terminals opener sub-page", () => {
     );
 
     expect(labels).toContain("Create terminal on Remote Terminal Mac");
-    expect(labels).toContain("Create terminal on Automations");
+    expect(labels).not.toContain("Create terminal on Automations");
     expect(labels).not.toContain("Create terminal on Task box");
     expect(labels).not.toContain("Create terminal on Unanswered box");
   });
@@ -1101,18 +1084,6 @@ describe("Terminals opener sub-page", () => {
       });
     };
 
-    const podRow = (ordinal: number): SandboxPod => ({
-      sandbox: sandboxSummaryFixture({
-        id: POD_ID,
-        hostId: POD_HOST,
-        kind: "automation",
-        environmentId: "env-team",
-      }),
-      ordinal,
-      liveShells: 0,
-      headroom: 4,
-    });
-
     function newTerminalItems(): ReadonlyArray<CommandItem> {
       const items = renderItems(useTerminalsOpenerItems);
       const newTerminal = items[0];
@@ -1122,148 +1093,29 @@ describe("Terminals opener sub-page", () => {
       return renderItems(newTerminal.subpage.useItems);
     }
 
-    it("offers a pod that cannot be dialed yet as an Open row, and opens it by environment and ordinal", () => {
-      extraHostsMock.options = [
-        ...extraHostsMock.options,
-        teamPodOption("env-team"),
-      ];
-      teamPodsMock.current = new Map([["env-team", [podRow(3)]]]);
+    it("lists no row for a team's pod, whether or not it can be dialed", () => {
+      for (const dialable of [false, true]) {
+        extraHostsMock.options = [teamPodOption("env-team")];
+        extraHostsMock.directory = [
+          {
+            hostId: POD_HOST,
+            label: "Team pod",
+            kind: "remote",
+            websocketUrl: dialable ? `ws://${POD_HOST}.test` : null,
+            version: null,
+            transportDialability: "dialable",
+          },
+        ];
 
-      const rows = newTerminalItems();
-      const openRow = rows.find(
-        (item) => item.id === `open:terminals:new:pod:${POD_HOST}`,
-      );
-      expect(openRow?.label).toBe("Open Team pod");
+        const rows = newTerminalItems();
 
-      runById(rows, `open:terminals:new:pod:${POD_HOST}`);
-
-      // No callback rides along: the hook reports the open itself, because
-      // the picker that ran it closes on run.
-      expect(spies.openTeamPod).toHaveBeenCalledTimes(1);
-      expect(spies.openTeamPod).toHaveBeenCalledWith({
-        environmentId: "env-team",
-        ordinal: 3,
-      });
-    });
-
-    it("opens a named pod once when the same selected row is invoked twice before the view rerenders", () => {
-      // Cmdk can invoke a selected row twice before its view rerenders, as the
-      // workspace rows already guard against: one selection must start one
-      // pod open, not two.
-      extraHostsMock.options = [
-        ...extraHostsMock.options,
-        teamPodOption("env-team"),
-      ];
-      teamPodsMock.current = new Map([["env-team", [podRow(3)]]]);
-
-      const rows = newTerminalItems();
-      runById(rows, `open:terminals:new:pod:${POD_HOST}`);
-      runById(rows, `open:terminals:new:pod:${POD_HOST}`);
-
-      expect(spies.openTeamPod).toHaveBeenCalledTimes(1);
-    });
-
-    it("opens the team's generic pod row once when it is invoked twice before the view rerenders", () => {
-      extraHostsMock.options = [
-        ...extraHostsMock.options,
-        teamPodOption("env-team"),
-      ];
-
-      const rows = newTerminalItems();
-      runById(rows, "open:terminals:new:team-pod:env-team");
-      runById(rows, "open:terminals:new:team-pod:env-team");
-
-      expect(spies.openTeamPod).toHaveBeenCalledTimes(1);
-    });
-
-    it("offers a sleeping team pod that cannot be dialed once, as its Open row, not also as a Create row", () => {
-      extraHostsMock.directory = [
-        {
-          hostId: POD_HOST,
-          label: "Team pod",
-          kind: "remote",
-          websocketUrl: null,
-          version: null,
-          transportDialability: "dialable",
-        },
-      ];
-      extraHostsMock.options = [
-        ...extraHostsMock.options,
-        teamPodOption("env-team"),
-      ];
-      teamPodsMock.current = new Map([["env-team", [podRow(3)]]]);
-
-      const rows = newTerminalItems();
-      const forPod = rows.filter(
-        (item) =>
-          item.id === `open:terminals:new:host:${POD_HOST}` ||
-          item.id === `open:terminals:new:pod:${POD_HOST}`,
-      );
-
-      expect(forPod.map((item) => item.id)).toEqual([
-        `open:terminals:new:pod:${POD_HOST}`,
-      ]);
-    });
-
-    it("offers the team's one generic row, opening with a null ordinal, while the environment's pod list has not answered", () => {
-      extraHostsMock.options = [
-        ...extraHostsMock.options,
-        teamPodOption("env-team"),
-      ];
-
-      const rows = newTerminalItems();
-      // The named row would claim a pod the server may not pick.
-      expect(
-        rows.find((item) => item.id === `open:terminals:new:pod:${POD_HOST}`),
-      ).toBeUndefined();
-      const generic = rows.find(
-        (item) => item.id === "open:terminals:new:team-pod:env-team",
-      );
-      expect(generic?.label).toBe("Open a pod for Alpha");
-
-      runById(rows, "open:terminals:new:team-pod:env-team");
-
-      expect(spies.openTeamPod).toHaveBeenCalledWith({
-        environmentId: "env-team",
-        ordinal: null,
-      });
-    });
-
-    it("offers no Open row for a pod that can already be dialed", () => {
-      extraHostsMock.options = [
-        ...extraHostsMock.options,
-        teamPodOption("env-team"),
-      ];
-      extraHostsMock.directory = [
-        {
-          hostId: POD_HOST,
-          label: "Team pod",
-          kind: "remote",
-          websocketUrl: `ws://${POD_HOST}.test`,
-          version: null,
-          transportDialability: "dialable",
-        },
-      ];
-      teamPodsMock.current = new Map([["env-team", [podRow(3)]]]);
-
-      const rows = newTerminalItems();
-
-      expect(
-        rows.some((item) => item.id.startsWith("open:terminals:new:pod:")),
-      ).toBe(false);
-      expect(rows.map((item) => item.subpage?.title ?? null)).toContain(
-        "Create terminal on Team pod",
-      );
-    });
-
-    it("offers no Open row for a pod with no environment", () => {
-      extraHostsMock.options = [...extraHostsMock.options, teamPodOption(null)];
-
-      const rows = newTerminalItems();
-
-      expect(
-        rows.some((item) => item.id.startsWith("open:terminals:new:pod:")),
-      ).toBe(false);
+        expect(
+          rows.some((item) => /^open:terminals:new:(team-)?pod/.test(item.id)),
+        ).toBe(false);
+        expect(rows.map((item) => item.subpage?.title ?? null)).not.toContain(
+          "Create terminal on Team pod",
+        );
+      }
     });
   });
 

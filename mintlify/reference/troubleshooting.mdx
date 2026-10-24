@@ -41,6 +41,14 @@ If startup needs your attention, a card explains why:
 
 Every card offers **Open settings**. **Retry** and **Report issue** appear once something has failed.
 
+### Windows blocks the host start script
+
+If startup reports `EPERM` or `EACCES` for `host-start-hidden.vbs`, or says Windows denied permission to create Traycer's start script, security software may be blocking it.
+
+Allow Traycer's data folder in your security software, then restart Traycer. The default folder is `%USERPROFILE%\.traycer`; if you moved Traycer's data, use that folder instead.
+
+For Microsoft Defender, open **Windows Security › Virus & threat protection › Manage settings**. Under **Exclusions**, choose **Add or remove exclusions › Add an exclusion › Folder**, then select Traycer's data folder.
+
 ## Missing Home Activity
 
 **Some activity may be missing** on the **Home** tab means Home can't see every running Task right now. When only some of your machines are affected, the notice sits under that machine's heading.

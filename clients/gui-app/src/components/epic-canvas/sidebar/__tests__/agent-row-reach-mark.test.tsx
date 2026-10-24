@@ -41,6 +41,10 @@ import {
   TASK_HOST_UNREACHABLE_LINE,
 } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import {
+  reachSentence,
+  REACH_UNNAMED_HOSTS,
+} from "@/lib/sandboxes/sandbox-strings";
+import {
   AgentReachHoverLine,
   AgentReachMark,
 } from "@/components/epic-canvas/sidebar/agent-reach-mark";
@@ -244,9 +248,8 @@ describe("AgentReachHoverLine", () => {
   it("renders the line, verbatim, under its own test id", () => {
     render(<AgentReachHoverLine />);
     expect(screen.getByTestId("agent-hover-reach-line").textContent).toBe(
-      TASK_HOST_UNREACHABLE_LINE,
+      reachSentence(REACH_UNNAMED_HOSTS),
     );
-    expect(TASK_HOST_UNREACHABLE_LINE).toBe("not reachable from this host");
   });
 });
 
@@ -298,7 +301,7 @@ describe("AgentReachMark", () => {
     const texts = screen
       .queryAllByRole("tooltip")
       .map((element) => element.textContent);
-    expect(texts).toContain(TASK_HOST_UNREACHABLE_LINE);
+    expect(texts).toContain(reachSentence(REACH_UNNAMED_HOSTS));
   });
 });
 
@@ -555,7 +558,7 @@ describe("the Agents tree's local rows: the reach mark comes from reach alone", 
       within(localHoverExtra("chat-foreign")).getByTestId(
         "agent-hover-reach-line",
       ).textContent,
-    ).toBe(TASK_HOST_UNREACHABLE_LINE);
+    ).toBe(reachSentence(REACH_UNNAMED_HOSTS));
   });
 
   it("leaves a row on the viewer's own principal unmarked, with no hover line", () => {

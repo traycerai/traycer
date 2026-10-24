@@ -1,12 +1,15 @@
 /**
  * A build that cannot reach the sandbox control plane (staging: its server is
  * fronted by IAP, which refuses the app's bearer) sends no sandbox call at all.
- * `AuthService` is the floor under every surface: each of the eight sandbox
+ * `AuthService` is the floor under every surface: each of the ten sandbox
  * methods answers `{ kind: "unavailable" }` BEFORE it reads a bearer, and the
  * runner host's method is never reached.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxPatchRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -28,6 +31,15 @@ const CREATE_REQUEST: SandboxCreateRequest = {
   createdByHostId: null,
   createdByAgentId: null,
   environmentId: null,
+  destroyAfterRestingMinutes: null,
+  createdByTaskId: null,
+  clientRequestId: null,
+};
+
+const PATCH_REQUEST: SandboxPatchRequest = {
+  displayName: "renamed",
+  idleMinutes: null,
+  destroyAfterRestingMinutes: null,
 };
 
 const trackedServices: AuthService[] = [];
@@ -47,6 +59,12 @@ function sandboxSpies() {
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
     destroySandbox: vi.fn<IRunnerHost["destroySandbox"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    patchSandbox: vi.fn<IRunnerHost["patchSandbox"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    keepSandbox: vi.fn<IRunnerHost["keepSandbox"]>(() =>
       Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
     ),
     runSandboxVerb: vi.fn<IRunnerHost["runSandboxVerb"]>(() =>
@@ -90,7 +108,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     ).toBeNull();
   });
 
-  it("answers every one of the eight calls with the unavailable failure and never reaches the runner host", async () => {
+  it("answers every one of the ten calls with the unavailable failure and never reaches the runner host", async () => {
     const { service, spies } = makeService(REASON);
     const unavailable = { kind: "unavailable", reason: REASON };
 
@@ -99,6 +117,10 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(await service.getSandboxCatalogue()).toEqual(unavailable);
     expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
     expect(await service.destroySandbox("sbx_1")).toEqual(unavailable);
+    expect(await service.patchSandbox("sbx_1", PATCH_REQUEST)).toEqual(
+      unavailable,
+    );
+    expect(await service.keepSandbox("sbx_1")).toEqual(unavailable);
     expect(
       await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
     ).toEqual(unavailable);
@@ -110,6 +132,8 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(spies.getSandboxCatalogue).not.toHaveBeenCalled();
     expect(spies.createSandbox).not.toHaveBeenCalled();
     expect(spies.destroySandbox).not.toHaveBeenCalled();
+    expect(spies.patchSandbox).not.toHaveBeenCalled();
+    expect(spies.keepSandbox).not.toHaveBeenCalled();
     expect(spies.runSandboxVerb).not.toHaveBeenCalled();
     expect(spies.getSandboxAutomation).not.toHaveBeenCalled();
     expect(spies.openSandboxAutomation).not.toHaveBeenCalled();
@@ -150,6 +174,12 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     );
     await expect(service.destroySandbox("sbx_1")).rejects.toThrow(
       "Sign in to destroy this sandbox.",
+    );
+    await expect(service.patchSandbox("sbx_1", PATCH_REQUEST)).rejects.toThrow(
+      "Sign in to change this sandbox.",
+    );
+    await expect(service.keepSandbox("sbx_1")).rejects.toThrow(
+      "Sign in to keep this sandbox.",
     );
     expect(await service.getSandboxAutomation(null)).toEqual({
       kind: "unauthorized",

@@ -65,6 +65,28 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   }),
 }));
 
+// The host's folderless cwd, read only for a terminal opened with none.
+const bindingsState = vi.hoisted(() => ({
+  enabledReads: 0,
+  folderlessCwd: undefined as string | undefined,
+}));
+vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
+  useTerminalWorkspaceBindingsForClient: (args: {
+    readonly enabled: boolean;
+  }) => {
+    if (args.enabled) bindingsState.enabledReads += 1;
+    const cwd = args.enabled ? bindingsState.folderlessCwd : undefined;
+    return cwd === undefined
+      ? { isSuccess: false, isError: false, data: undefined, refetch: vi.fn() }
+      : {
+          isSuccess: true,
+          isError: false,
+          data: { rows: [], folderlessCwd: cwd },
+          refetch: vi.fn(),
+        };
+  },
+}));
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => ({
     request: hostRequest,
@@ -128,6 +150,8 @@ describe("<EpicPlainTerminalCreateOwner />", () => {
     authorityState.canMutate = false;
     authorityState.collection = undefined;
     toastFromHostError.mockReset();
+    bindingsState.enabledReads = 0;
+    bindingsState.folderlessCwd = undefined;
     hostRequest.mockReset();
     hostRequest.mockImplementation((method) =>
       Promise.reject(new Error(`unexpected ${method}`)),
@@ -158,6 +182,40 @@ describe("<EpicPlainTerminalCreateOwner />", () => {
       wrapper,
     });
   }
+
+  it("creates a terminal opened with no cwd in the host's folderless cwd once the host answers", async () => {
+    const ref = mintNewEpicTerminalTile({
+      hostId: HOST_ID,
+      cwd: "",
+      epicId: EPIC_ID,
+    });
+    hostRequest.mockImplementation((method) => {
+      if (method === "terminal.plain.create") {
+        return Promise.resolve({ terminal: runningProjection(ref.id) });
+      }
+      return Promise.reject(new Error(`unexpected ${method}`));
+    });
+    authorityState.capability = "capable";
+    authorityState.canMutate = true;
+
+    const rendered = renderOwner();
+    expect(bindingsState.enabledReads).toBeGreaterThan(0);
+    expect(hostCreateCalls("terminal.plain.create")).toEqual([]);
+
+    bindingsState.folderlessCwd = "/home/sbx";
+    rendered.rerender(<EpicPlainTerminalCreateOwner epicId={EPIC_ID} />);
+    await waitFor(() =>
+      expect(hostCreateCalls("terminal.plain.create")).toEqual([
+        {
+          terminalId: ref.id,
+          scope: SCOPE,
+          cwd: "/home/sbx",
+          cols: 80,
+          rows: 24,
+        },
+      ]),
+    );
+  });
 
   it("closes the tab before readiness and still creates the durable terminal once", async () => {
     const store = useEpicCanvasStore.getState();

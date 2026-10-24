@@ -141,6 +141,12 @@ interface NewConversationModalStore {
     seedWorkspace: LandingDraftWorkspaceSnapshot,
     folderPath: string,
   ) => void;
+  /**
+   * Drops the modal's own workspace, so the draft reads its host's seed
+   * again: a sandbox handoff, whose new host has none of the folders picked
+   * on the old one.
+   */
+  readonly clearWorkspace: (epicId: string) => void;
   readonly clearDraft: (epicId: string) => void;
   readonly resetForTests: () => void;
 }
@@ -332,6 +338,13 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         }
         notifyDraftLocalEdit(
           applyNewChatLocalPatch(epicId, { workspace }, false),
+        );
+      },
+      clearWorkspace: (epicId) => {
+        const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        if (current.workspace === null) return;
+        notifyDraftLocalEdit(
+          applyNewChatLocalPatch(epicId, { workspace: null }, false),
         );
       },
       clearDraft: (epicId) => {
