@@ -66,6 +66,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
   return {
     useHostScope,
     usePersonalHostScope: useHostScope,
+    useAccountHostScope: useHostScope,
   };
 });
 

@@ -78,7 +78,14 @@ interface Allowed {
   readonly closedBy: string;
 }
 
-const ALLOWED: readonly Allowed[] = [];
+const ALLOWED: readonly Allowed[] = [
+  {
+    file: "gui-app/src/lib/settings-sections.ts",
+    text: "Environment",
+    closedBy:
+      "the environments redesign names the Settings sidebar group Environment",
+  },
+];
 
 interface Hit {
   readonly file: string;
