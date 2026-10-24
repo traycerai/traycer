@@ -18,6 +18,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
 import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
@@ -233,16 +234,22 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
   };
 });
 
+// The copy tile's owner recovery read is a real `useHostQuery`; its client is
+// null here, so it only needs a QueryClient to mount.
+const queryClient = new QueryClient();
+
 function activeTabBody(): ReactNode {
   return (
-    <ActiveTabBody
-      activeTab={CHAT}
-      epicId="epic-1"
-      groupId="group-1"
-      tabId="view-tab-1"
-      selected
-      globallyActive
-    />
+    <QueryClientProvider client={queryClient}>
+      <ActiveTabBody
+        activeTab={CHAT}
+        epicId="epic-1"
+        groupId="group-1"
+        tabId="view-tab-1"
+        selected
+        globallyActive
+      />
+    </QueryClientProvider>
   );
 }
 
