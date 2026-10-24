@@ -69,15 +69,18 @@ export const botConversationSendRequestSchema = lazySchema(() =>
     text: z.string().min(1).max(100_000),
     /**
      * `null` (or absent) posts at the channel's top level, which opens a
-     * thread run by a thread session of the bot (T41); a thread id puts the
+     * thread run by a thread session of the bot (T41), or, for a bot in
+     * reply mode `direct`, is answered by the bot itself at the top level
+     * and opens no thread; a thread id puts the
      * message in that thread of `conversationId`, delivered to the thread's
      * session.
      */
     threadId: z.string().min(1).max(36).nullable().default(null),
     /**
      * A reply under a `question` or `proposal` announcement of `conversationId`
-     * (decision 55): the message opens, or joins, the thread hung off that
-     * announcement, as its first request when it opens it. `null` (or absent)
+     * (decision 55), or under a member's post its bot answered at the top
+     * level (a `direct` post): the message opens, or joins, the thread hung
+     * off that row, as its first request when it opens it. `null` (or absent)
      * otherwise; never set with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
@@ -102,9 +105,11 @@ export const botConversationSendResponseSchema = lazySchema(() =>
     /**
      * The thread the message is in: the request's own thread when it was a
      * top-level post (derived from the message, so it is known even while
-     * the message waits in the mailbox), the named one otherwise.
+     * the message waits in the mailbox), the named one otherwise. `null` for
+     * a top-level post the bot answers itself (reply mode `direct`): its
+     * answer lands on the channel, and no thread opens.
      */
-    threadId: z.string().min(1),
+    threadId: z.string().min(1).nullable(),
   }),
 );
 export type BotConversationSendResponse = z.infer<

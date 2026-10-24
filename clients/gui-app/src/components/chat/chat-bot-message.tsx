@@ -29,7 +29,9 @@ import { TextSegment } from "./segments/text-segment";
  * the "APP" tag Slack puts beside an app's name, and an announcement its
  * kind on a coloured bar, as Slack draws an app's attachment. A question or
  * a proposal carries the line that opens the thread a member answers it in,
- * and a thread reply that asks carries its options as buttons.
+ * and a reply that asks carries its options as buttons. A bot that answers
+ * posts itself (reply mode `direct`) replies in the channel, its row naming
+ * the post it answers; the post's line opens a thread under it on demand.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
@@ -54,7 +56,12 @@ export function ChatBotMessage(props: {
     postId === null || presentation.threadLine === null
       ? null
       : presentation.threadLine(postId);
-  const openThread = presentation.openThread;
+  // A direct post has no thread until a member replies under it: its line
+  // opens the box whose first reply starts one, as under a question.
+  const openThread =
+    message.conversationRequest?.direct === true
+      ? presentation.openAnnouncementThread
+      : presentation.openThread;
   return (
     <BotMessageFrame
       avatar={
@@ -68,7 +75,10 @@ export function ChatBotMessage(props: {
     >
       {body}
       {message.conversationRequest === undefined ? null : (
-        <ConversationRequestLine request={message.conversationRequest} />
+        <ConversationRequestLine
+          request={message.conversationRequest}
+          inChannel={presentation.threadLine !== null}
+        />
       )}
       {postId === null || openThread === null ? null : (
         <ThreadLine line={threadLine} onOpen={() => openThread(postId)} />
@@ -89,6 +99,7 @@ function BotRow(props: {
 }): ReactElement {
   const { message, presentation, sentAt, body } = props;
   const announcement = message.announcement ?? null;
+  const repliesTo = message.repliesTo ?? null;
   const announcementId = message.persistentMessageId;
   const openAnnouncementThread = presentation.openAnnouncementThread;
   const answerable =
@@ -105,6 +116,9 @@ function BotRow(props: {
       instanceId={message.id}
       testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
     >
+      {repliesTo === null ? null : (
+        <RepliedPostLine postId={repliesTo} presentation={presentation} />
+      )}
       {announcement === null ? (
         body
       ) : (
@@ -316,17 +330,59 @@ function AnnouncementLink(props: { readonly link: string }): ReactElement {
 }
 
 /**
+ * The post a bot's direct reply answers, above the reply: who wrote it and
+ * its first line, a jump back to it. Nothing while the post is not in the
+ * list the channel has read.
+ */
+function RepliedPostLine(props: {
+  readonly postId: string;
+  readonly presentation: ChatBotPresentation;
+}): ReactNode {
+  const { postId, presentation } = props;
+  const post = presentation.repliedPost?.(postId) ?? null;
+  const scrollToMessage = presentation.scrollToMessage;
+  if (post === null) return null;
+  const label = (
+    <>
+      <span className="font-medium">{post.senderLabel}</span>
+      <span className="truncate">{post.excerpt}</span>
+    </>
+  );
+  const className =
+    "flex w-fit max-w-full min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground";
+  return scrollToMessage === null ? (
+    <div className={className} data-testid="bot-replied-post">
+      {label}
+    </div>
+  ) : (
+    <button
+      type="button"
+      className={cn(className, "rounded-sm hover:text-foreground")}
+      data-testid="bot-replied-post"
+      onClick={() => scrollToMessage(postId)}
+    >
+      {label}
+    </button>
+  );
+}
+
+/**
  * The state of the request a member's message opened: `Open` until the bot
  * resolves it, `Resolved` after, with a jump to the reply that resolved it
- * when that reply is in this list. Read off the member's row, which is where
- * the host keeps it; the reply row says nothing about the request.
+ * when that reply is in this list: in a thread, or in the channel for a
+ * direct post, whose reply is in the channel. Read off the member's row,
+ * which is where the host keeps it; the reply row says nothing about the
+ * request.
  */
 function ConversationRequestLine(props: {
   readonly request: ConversationRequest;
+  readonly inChannel: boolean;
 }): ReactElement {
-  const { request } = props;
-  const scrollToMessage =
+  const { request, inChannel } = props;
+  const presented =
     useContext(ChatBotPresentationContext)?.scrollToMessage ?? null;
+  const scrollToMessage =
+    inChannel && request.direct !== true ? null : presented;
   const open = request.resolvedAt === null;
   const replyId = request.resolvedByMessageId;
   return (

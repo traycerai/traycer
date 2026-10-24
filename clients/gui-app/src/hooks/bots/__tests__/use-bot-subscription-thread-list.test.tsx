@@ -156,6 +156,7 @@ function snapshot(
       createdAt: 1,
       archivedAt: null,
       directive: null,
+      replyMode: "thread",
       appConversationChatId: null,
     },
     tasks: [],

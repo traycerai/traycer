@@ -10,6 +10,7 @@ import type {
   BotDeleteResponse,
   BotOpenRequest,
   BotOpenResponse,
+  BotUpdateReplyModeRequest,
   BotUpdateResponse,
   BotUpdateRunSettingsRequest,
   BotUpdateTitleRequest,
@@ -118,6 +119,27 @@ export function useBotUpdateRunSettingsMutation(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.updateRunSettings(),
+      onSuccess: () => {
+        invalidateBotLists(queryClient);
+      },
+    },
+  });
+}
+
+export function useBotUpdateReplyModeMutation(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  BotUpdateResponse,
+  HostRpcError,
+  BotUpdateReplyModeRequest
+> {
+  const queryClient = useQueryClient();
+  return useHostMutation<HostRpcRegistry, "bot.updateReplyMode">({
+    client,
+    method: "bot.updateReplyMode",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: botMutationKeys.updateReplyMode(),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },

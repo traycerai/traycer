@@ -3216,6 +3216,10 @@ export const epicSchemaSurfaceBaseline = {
                                 "type": "null"
                               }
                             ]
+                          },
+                          "direct": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
@@ -7120,6 +7124,10 @@ export const epicSchemaSurfaceBaseline = {
                           "type": "string",
                           "minLength": 1
                         }
+                      },
+                      "repliesTo": {
+                        "type": "string",
+                        "minLength": 1
                       }
                     },
                     "required": [
@@ -13193,6 +13201,10 @@ export const epicSchemaSurfaceBaseline = {
                                 "type": "null"
                               }
                             ]
+                          },
+                          "direct": {
+                            "type": "boolean",
+                            "const": true
                           }
                         },
                         "required": [
@@ -17210,6 +17222,10 @@ export const epicSchemaSurfaceBaseline = {
                           "type": "string",
                           "minLength": 1
                         }
+                      },
+                      "repliesTo": {
+                        "type": "string",
+                        "minLength": 1
                       }
                     },
                     "required": [

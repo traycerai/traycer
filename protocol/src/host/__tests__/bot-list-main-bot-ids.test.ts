@@ -16,6 +16,7 @@ const BOT_ROW = {
   profile: null,
   directive: null,
   appConversationChatId: null,
+  replyMode: "direct",
   trunkChatId: "chat-1",
   boundHostId: "host-1",
   hostEpoch: 0,
@@ -89,6 +90,18 @@ describe("bot.list rows' app conversation", () => {
     }).bots;
 
     expect(row?.appConversationChatId).toBeNull();
+  });
+
+  it("reads a row from a host that predates the reply mode as answering in threads", () => {
+    const olderRow = Object.fromEntries(
+      Object.entries(BOT_ROW).filter(([key]) => key !== "replyMode"),
+    );
+    const [row] = botListV11.responseSchema.parse({
+      bots: [olderRow],
+      mainBotIds: null,
+    }).bots;
+
+    expect(row?.replyMode).toBe("thread");
   });
 
   it("keeps the conversation a row names", () => {

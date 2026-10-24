@@ -177,6 +177,7 @@ function snapshotFrame(
       archivedAt: null,
       directive: null,
       appConversationChatId: null,
+      replyMode: "thread",
     },
     tasks,
     openRequestCount,

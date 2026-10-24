@@ -52,6 +52,7 @@ function bot(
     createdAt: 1_000,
     archivedAt,
     directive: null,
+    replyMode: "thread",
     appConversationChatId: null,
   };
 }
