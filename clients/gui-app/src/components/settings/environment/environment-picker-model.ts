@@ -3,6 +3,7 @@ import {
   localRowCohort,
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
@@ -38,6 +39,21 @@ export interface EnvironmentPickerModel {
   readonly localRows: readonly LocalPickerRow[];
   /** What the window opens on when the person has picked nothing. */
   readonly defaultPick: EnvironmentPick;
+}
+
+/**
+ * The computers the Environment group reads `environment.status` from. This
+ * window's own computer always counts: a new computer registers with remote
+ * access off, and the account's host list leaves such a host out, so registry
+ * membership would hide it until its settings had moved. Any other computer
+ * counts once the account lists it, since an unlisted one cannot be reached
+ * from this window. A sandbox never counts: it is created on a
+ * configuration's settings and has none of its own to move.
+ */
+export function isEnvironmentComputer(
+  host: Pick<HostScopeOption, "isLocalMachine" | "registered" | "sandbox">,
+): boolean {
+  return host.sandbox === null && (host.isLocalMachine || host.registered);
 }
 
 /**

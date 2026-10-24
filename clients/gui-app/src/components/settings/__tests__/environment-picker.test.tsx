@@ -31,6 +31,14 @@ vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersions: () => reads.versions,
 }));
+// The team rows read the account's configuration list; this suite has none.
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: { environments: [] } }),
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => null,
+}));
 const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigation.navigate,
@@ -50,10 +58,23 @@ function answer(
 
 const awaiting = environmentStatusFixture({
   principal: null,
+  planes: { records: "local", broker: "local", room: "local" },
   setup: { stage: "moving_settings", state: "awaiting_consent" },
 });
 const partlyMoved = environmentStatusFixture({
   principal: null,
+  planes: { records: "moved", broker: "local", room: "local" },
+  pendingUploads: [
+    {
+      uploadId: "u1",
+      kind: "secret",
+      key: "k",
+      os: "macos",
+      queuedAt: 1,
+      receipt: "accepted",
+      code: null,
+    },
+  ],
   setup: { stage: "moving_settings", state: "running" },
   consent: { acceptedAt: 1, planHash: "hash" },
 });
@@ -204,6 +225,70 @@ describe("<EnvironmentPicker />", () => {
     answer("old", running, V11);
     renderPicker("mac");
     expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+  });
+
+  it("gives this window's own computer its Local row while the account's host list leaves it out, and no other unlisted computer", () => {
+    // A new computer registers with remote access off, and the account's host
+    // list omits it until remote access is on.
+    const hosts = [
+      hostScopeOptionFixture({
+        hostId: "mac",
+        name: "MacBook Pro",
+        isLocalMachine: true,
+        registered: false,
+        item: null,
+      }),
+      hostScopeOptionFixture({
+        hostId: "dev",
+        name: "dev-box",
+        isLocalMachine: false,
+        registered: false,
+        item: null,
+      }),
+    ];
+    answer("mac", awaiting, V11);
+    answer("dev", awaiting, V11);
+    render(
+      <EnvironmentPicker
+        scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "mac" })}
+        activeSection="mcp-servers"
+      />,
+    );
+    openMenu();
+
+    expect(
+      screen.getByTestId("environment-picker-local-mac").textContent,
+    ).toContain("not moved · Personal's settings are not on it");
+    expect(screen.queryByTestId("environment-picker-local-dev")).toBeNull();
+    fireEvent.click(screen.getByTestId("environment-picker-move-mac"));
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "mac",
+      hostName: "MacBook Pro",
+    });
+  });
+
+  it("names this window's own computer under Personal once it runs Personal, listed or not", () => {
+    const hosts = [
+      hostScopeOptionFixture({
+        hostId: "mac",
+        name: "MacBook Pro",
+        isLocalMachine: true,
+        registered: false,
+        item: null,
+      }),
+    ];
+    answer("mac", running, V11);
+    render(
+      <EnvironmentPicker
+        scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "mac" })}
+        activeSection="mcp-servers"
+      />,
+    );
+    openMenu();
+
+    expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
+      "Personalyour settings · on MacBook Pro",
+    );
   });
 
   it("picking a row that hides the open page leaves it for Providers", () => {

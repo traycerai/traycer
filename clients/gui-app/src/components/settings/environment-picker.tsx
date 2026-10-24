@@ -2,6 +2,7 @@ import { useEffect, useMemo, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   environmentPickerModel,
+  isEnvironmentComputer,
   isStaleLocalPick,
   type EnvironmentPickerModel,
   type LocalPickerRow,
@@ -37,18 +38,15 @@ import {
 } from "@/stores/settings/move-sheet-store";
 
 /**
- * The model the Environment dropdown draws, from every registered computer's
- * `environment.status`. Also keeps the window's default pick current and
- * drops a Local pick whose computer has since moved: the store is what every
- * Environment page reads (`useEnvironmentPick`), and this is the one place
- * that knows each computer's state.
+ * The model the Environment dropdown draws, from each computer's
+ * `environment.status` (`isEnvironmentComputer`). Also keeps the window's
+ * default pick current and drops a Local pick whose computer has since moved:
+ * the store is what every Environment page reads (`useEnvironmentPick`), and
+ * this is the one place that knows each computer's state.
  */
 function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
-  // Computers only: a sandbox is created on a configuration's settings and
-  // never has settings of its own to move.
   const hosts = useMemo(
-    () =>
-      scope.hosts.filter((host) => host.registered && host.sandbox === null),
+    () => scope.hosts.filter(isEnvironmentComputer),
     [scope.hosts],
   );
   const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);

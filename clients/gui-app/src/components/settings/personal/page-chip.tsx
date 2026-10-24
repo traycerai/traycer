@@ -7,7 +7,10 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
-import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
+import {
+  isEnvironmentComputer,
+  localPickerRow,
+} from "@/components/settings/environment/environment-picker-model";
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
 import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
 import { hostConfigurationChip } from "@/components/settings/environment/status-chip-hosts";
@@ -81,8 +84,7 @@ function PersonalPageChip(props: {
   const environmentId = useDetailsEnvironmentId(client);
   const queryClient = useQueryClient();
   const hosts = useMemo(
-    () =>
-      scope.hosts.filter((host) => host.registered && host.sandbox === null),
+    () => scope.hosts.filter(isEnvironmentComputer),
     [scope.hosts],
   );
   const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);

@@ -18,7 +18,7 @@ const EMPTY_PARAMS = {};
 
 /**
  * Long, because the Environment dropdown is the only reader that asks every
- * registered computer: a Local row changes when a person moves that
+ * computer (`isEnvironmentComputer`): a Local row changes when a person moves that
  * computer's settings, which they do from this window or from that
  * computer's own, and the one host this window shows is polled by its page.
  */
