@@ -194,13 +194,16 @@ export function useStagedSandboxSend(input: {
         }
         return false;
       }
-      useStagedSandboxStore.getState().report(surfaceKey, { terminalLaunch });
       // A first action that stopped short leaves a stage like any other: the
-      // send runs it again.
+      // send runs it again. The action it hands off is the owner's alone; one
+      // in flight takes any other send and records nothing, and the chip says
+      // it is busy.
       if (current.phase === "staged" || current.failure !== null) {
         messageTextRef.current = messageText;
         setFallbackName(stagedSandboxFallbackName(messageText));
-        useStagedSandboxStore.getState().report(surfaceKey, { ownerId });
+        useStagedSandboxStore
+          .getState()
+          .report(surfaceKey, { ownerId, terminalLaunch });
         // A send is a new create, with its own idempotency key, unless the
         // last one may have been accepted: then it repeats that one, as Retry
         // does.

@@ -324,6 +324,73 @@ describe("useStagedSandboxSend's handoff", () => {
     expect(submitA).toHaveBeenCalledTimes(1);
     expect(submitB).not.toHaveBeenCalled();
   });
+
+  it("hands off the sending draft's action, not a Start another draft pressed while it booted", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    const submitA = vi.fn(() => true);
+    const submitB = vi.fn(() => true);
+    let sendA: StagedSandboxSend | null = null;
+    let sendB: StagedSandboxSend | null = null;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DraftComposer
+          draftId="draft-a"
+          submit={submitA}
+          onSend={(send) => {
+            sendA = send;
+          }}
+        />
+        <DraftComposer
+          draftId="draft-b"
+          submit={submitB}
+          onSend={(send) => {
+            sendB = send;
+          }}
+        />
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      sendA?.intercept("fix the login bug", null);
+      // Phase 1 is under way.
+      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now());
+    });
+    let takenFromB = false;
+    act(() => {
+      takenFromB =
+        sendB?.intercept("terminal", {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        }) ?? false;
+    });
+
+    // B's Start runs nowhere, and the stage still holds A's send.
+    expect(takenFromB).toBe(true);
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      ownerId: "draft-a",
+      terminalLaunch: null,
+    });
+
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        createdHostId: NEW_HOST,
+        phase: "handoff",
+      });
+    });
+
+    expect(submitA).toHaveBeenCalledTimes(1);
+    expect(submitB).not.toHaveBeenCalled();
+  });
 });
 
 describe("useStagedSandboxSend's refused resubmit", () => {
