@@ -2165,6 +2165,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "direct": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": [
@@ -6151,6 +6155,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "type": "string",
                               "minLength": 1
                             }
+                          },
+                          "repliesTo": {
+                            "type": "string",
+                            "minLength": 1
                           }
                         },
                         "required": [

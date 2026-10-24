@@ -61,6 +61,11 @@ const mocks = vi.hoisted(() => ({
     support: null as boolean | null,
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
+    environments: [] as Array<{
+      environmentId: string;
+      label: string;
+      ownerKind: "organization" | "user";
+    }>,
   },
 }));
 
@@ -184,11 +189,7 @@ vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
     status: "success",
-    data: {
-      environments: [
-        { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
-      ],
-    },
+    data: { environments: mocks.state.environments },
   }),
 }));
 // One stable mutation object, like TanStack's `mutate`: the surface re-opens
@@ -233,15 +234,16 @@ vi.mock("@/components/bots/bot-under-the-hood-panel", () => ({
     <div data-testid="stub-under-the-hood" data-paused={String(props.paused)} />
   ),
 }));
-// The panel takes the bot and whether it is main, and nothing else: no prop
-// says which host serves the tab, so no control can be gated on it. The stub
-// lists the props it was given.
+// The panel takes the bot, whether it is main and whether its environment is
+// a person's own, and nothing else: no prop says which host serves the tab,
+// so no control can be gated on it. The stub lists the props it was given.
 vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotSettingsPanel: (props: { isMain: boolean | null }) => (
+  BotSettingsPanel: (props: { isMain: boolean | null; personal: boolean }) => (
     <div
       data-testid="stub-settings"
       data-prop-names={Object.keys(props).join(",")}
       data-is-main={String(props.isMain)}
+      data-personal={String(props.personal)}
     />
   ),
 }));
@@ -269,6 +271,7 @@ const BOT: BotRecord = {
   createdAt: 1_000,
   archivedAt: null,
   directive: null,
+  replyMode: "thread",
   appConversationChatId: "conversation-app",
 };
 
@@ -324,6 +327,9 @@ beforeEach(() => {
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
+  mocks.state.environments = [
+    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+  ];
   onboardingReads.clear();
   onboardingReads.set("env-team", noOnboardingRead());
   useBotTabsStore.setState({ tabs: {} });
@@ -704,7 +710,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("true");
   });
 
-  it("keeps Settings ungated: the panel is given the bot and whether it is main, and no editing flag", async () => {
+  it("keeps Settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -715,7 +721,39 @@ describe("<BotTabSurface /> paused", () => {
     await user.click(screen.getByTestId("bot-tab-view-settings"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot,isMain");
+    ).toBe("bot,isMain,personal");
+  });
+
+  it.each<readonly [string, "user" | "organization", string]>([
+    ["a person's own", "user", "true"],
+    ["a team's", "organization", "false"],
+  ])(
+    "tells the settings panel whether the bot's environment is personal: %s",
+    async (_name, ownerKind, expected) => {
+      const user = userEvent.setup();
+      mocks.state.environments = [
+        { environmentId: "env-team", label: "Acme", ownerKind },
+      ];
+      render(surface());
+
+      await user.click(screen.getByTestId("bot-tab-view-settings"));
+      expect(
+        screen.getByTestId("stub-settings").getAttribute("data-personal"),
+      ).toBe(expected);
+    },
+  );
+
+  it("treats the environment as not personal until the environment list names it", async () => {
+    const user = userEvent.setup();
+    mocks.state.environments = [
+      { environmentId: "env-other", label: "Mine", ownerKind: "user" },
+    ];
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-tab-view-settings"));
+    expect(
+      screen.getByTestId("stub-settings").getAttribute("data-personal"),
+    ).toBe("false");
   });
 
   it("asks again on Retry and drops the banner when the answer changes", async () => {

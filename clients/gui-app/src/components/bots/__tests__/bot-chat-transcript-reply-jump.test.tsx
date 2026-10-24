@@ -21,6 +21,7 @@ import {
   type Mock,
 } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type {
   AgentSender,
   ContentBlock,
@@ -414,19 +415,24 @@ describe("<BotChatTranscript /> in the channel", () => {
 
   function channelSurface(
     openAnnouncementThread: ((announcementId: string) => void) | null,
+    chooseOption: ((choice: string) => void) | null,
   ): BotTranscriptSurface {
     return {
       kind: "channel",
       threadLine: () => null,
       openThread: null,
       openAnnouncementThread,
+      chooseOption,
     };
   }
 
   it("opens a question's thread from the thread line under its row, by the record's message id", async () => {
     const user = userEvent.setup();
     const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
-    mountTranscript([question(null)], channelSurface(openAnnouncementThread));
+    mountTranscript(
+      [question(null)],
+      channelSurface(openAnnouncementThread, null),
+    );
 
     const line = screen.getByTestId("bot-thread-line");
     expect(within(line).getByText("Reply in thread")).toBeTruthy();
@@ -439,7 +445,7 @@ describe("<BotChatTranscript /> in the channel", () => {
   it("draws a question's options as buttons that cannot be clicked in the channel", () => {
     mountTranscript(
       [question(["Staging", "Production"])],
-      channelSurface(vi.fn()),
+      channelSurface(vi.fn(), null),
     );
 
     const buttons = within(
@@ -452,5 +458,115 @@ describe("<BotChatTranscript /> in the channel", () => {
     expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
       true,
     );
+  });
+});
+
+describe("<BotChatTranscript /> a bot that answers posts in the channel", () => {
+  const POST_ID = "ask-1";
+
+  const DIRECT_REQUEST: ConversationRequest = {
+    requestId: "req-1",
+    resolvedAt: 1_000,
+    resolvedByMessageId: REPLY_ID,
+    direct: true,
+  };
+
+  function directPost(
+    request: ConversationRequest,
+  ): Extract<Message, { role: "user" }> {
+    return { ...resolvedUserMessage(), conversationRequest: request };
+  }
+
+  function directReply(
+    options: ReadonlyArray<string> | null,
+  ): Extract<Message, { role: "assistant" }> {
+    const base: Extract<Message, { role: "assistant" }> = {
+      ...reply(),
+      repliesTo: POST_ID,
+    };
+    return options === null ? base : { ...base, options: [...options] };
+  }
+
+  function channel(
+    chooseOption: ((choice: string) => void) | null,
+  ): BotTranscriptSurface {
+    return {
+      kind: "channel",
+      threadLine: () => null,
+      openThread: vi.fn(),
+      openAnnouncementThread: vi.fn(),
+      chooseOption,
+    };
+  }
+
+  it("names the post a reply answers by its sender and first line, and lands the list on that post's row", async () => {
+    const user = userEvent.setup();
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(null)],
+      channel(null),
+    );
+
+    const line = screen.getByTestId("bot-replied-post");
+    expect(within(line).getByText("Please review")).toBeTruthy();
+    const postRow = within(scrollStub())
+      .getByTestId("bot-member-row")
+      .closest("[data-row-id]");
+    expect(postRow).not.toBeNull();
+    expect(scrollStub().getAttribute("data-scroll-kind")).toBe("none");
+
+    await user.click(line);
+
+    expect(scrollStub().getAttribute("data-scroll-kind")).toBe("message");
+    expect(scrollStub().getAttribute("data-scroll-row-id")).toBe(
+      postRow?.getAttribute("data-row-id"),
+    );
+  });
+
+  it("lands the list on the reply in the channel from a direct post's See reply", async () => {
+    const user = userEvent.setup();
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(null)],
+      channel(null),
+    );
+
+    await user.click(screen.getByTestId("conversation-request-reply-link"));
+
+    expect(scrollStub().getAttribute("data-scroll-row-id")).toBe(
+      "assistant:ts:2000",
+    );
+  });
+
+  it("offers no See reply on a resolved post that is not direct, whose verdict is in its thread", () => {
+    mountTranscript([resolvedUserMessage(), reply()], channel(vi.fn()));
+
+    expect(
+      screen
+        .getByTestId("conversation-request")
+        .getAttribute("data-request-state"),
+    ).toBe("resolved");
+    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+  });
+
+  it("posts the option a person clicks under a direct reply through the channel surface", async () => {
+    const user = userEvent.setup();
+    const chooseOption = vi.fn<(choice: string) => void>();
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(["Staging", "Production"])],
+      channel(chooseOption),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Production" }));
+
+    expect(chooseOption).toHaveBeenCalledTimes(1);
+    expect(chooseOption).toHaveBeenCalledWith("Production");
+  });
+
+  it("names no replied post in a thread, whose rows answer within it", () => {
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), directReply(null)],
+      THREAD_SURFACE,
+    );
+
+    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
   });
 });

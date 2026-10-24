@@ -18,7 +18,11 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  BotConversationSendRequest,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
@@ -40,6 +44,14 @@ const mocks = vi.hoisted(() => {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
     refetchThreads: vi.fn<() => void>(),
+    send: vi.fn<
+      (
+        variables: BotConversationSendRequest,
+        options: { onError: (error: HostRpcError) => void },
+      ) => void
+    >(),
+    toastFromHostError:
+      vi.fn<(error: HostRpcError, fallback: string) => void>(),
     markReadMutation: {
       mutate: (entity: { epicId: string; chatId: string }): void => {
         mocks.markRead(entity);
@@ -60,6 +72,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      // Whether a `bot.conversation.send` is in flight.
+      sending: false,
       chats,
     },
   };
@@ -97,6 +111,15 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
     };
   },
 }));
+vi.mock("@/hooks/bots/use-bot-mutations", () => ({
+  useBotConversationSendMutation: () => ({
+    mutate: mocks.send,
+    isPending: mocks.state.sending,
+  }),
+}));
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: mocks.toastFromHostError,
+}));
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: mocks.state.chats }),
 }));
@@ -128,10 +151,23 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
               />
             ))
           : null}
+        {surface !== null && surface.kind === "channel" ? (
+          <ChannelChoice chooseOption={surface.chooseOption} />
+        ) : null}
       </div>
     );
   },
 }));
+/** The channel surface's option pick, or a mark that none can be sent now. */
+function ChannelChoice(props: {
+  readonly chooseOption: ((choice: string) => void) | null;
+}): ReactNode {
+  if (props.chooseOption === null) {
+    return <span data-testid="stub-choose-unavailable" />;
+  }
+  return <ChooseStub chooseOption={props.chooseOption} />;
+}
+
 vi.mock("@/components/bots/bot-message-composer", () => ({
   BotMessageComposer: (props: {
     conversationId: string;
@@ -149,6 +185,19 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     />
   ),
 }));
+
+function ChooseStub(props: {
+  readonly chooseOption: (choice: string) => void;
+}): ReactNode {
+  const { chooseOption } = props;
+  return (
+    <button
+      type="button"
+      data-testid="stub-choose"
+      onClick={() => chooseOption("Ship it")}
+    />
+  );
+}
 
 function PostStub(props: {
   readonly postId: string;
@@ -312,6 +361,7 @@ beforeEach(() => {
   mocks.state.threads = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
+  mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.postIds = [];
   // jsdom reports no focus until an element takes it; the window starts in
@@ -513,6 +563,52 @@ describe("<BotChannelView /> channel", () => {
         .getByTestId("stub-bot-thread-composer")
         .getAttribute("data-announcement-id"),
     ).toBe("question-1");
+  });
+
+  it("posts a direct reply's chosen option as a new top-level post in the channel", async () => {
+    const user = userEvent.setup();
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.send).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("stub-choose"));
+
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0][0]).toEqual({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      text: "Ship it",
+      threadId: null,
+      announcementId: null,
+    });
+  });
+
+  it("offers no option to pick while an earlier pick is still being sent", () => {
+    mocks.state.sending = true;
+    mount({ paused: false, openThreadPostId: null });
+
+    expect(screen.getByTestId("stub-choose-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("stub-choose")).toBeNull();
+  });
+
+  it("tells the person when a pick could not be sent", async () => {
+    const user = userEvent.setup();
+    mount({ paused: false, openThreadPostId: null });
+    await user.click(screen.getByTestId("stub-choose"));
+    const failure = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "host refused the pick",
+      requestId: "req-1",
+      method: "bot.conversation.send",
+      fatalDetails: null,
+    });
+
+    mocks.send.mock.calls[0][1].onError(failure);
+
+    expect(mocks.toastFromHostError).toHaveBeenCalledTimes(1);
+    expect(mocks.toastFromHostError).toHaveBeenCalledWith(
+      failure,
+      "Couldn't send your choice.",
+    );
   });
 
   it("posts at the channel's top level, not under an announcement", () => {

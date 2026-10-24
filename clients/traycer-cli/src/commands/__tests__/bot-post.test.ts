@@ -102,10 +102,12 @@ afterEach(() => {
 
 // ---- commands: choosing the bot and its channel ------------------------- //
 
-function stageSend(input: {
+/** `threadId` is null when the bot answers the post itself, in the channel. */
+function stageSendInThread(input: {
   readonly bots: readonly BotRecord[];
   readonly conversations: readonly BotConversationRecord[];
   readonly delivery: "written" | "queued";
+  readonly threadId: string | null;
 }): void {
   hoisted.callHostRpc.mockImplementation(
     routeRpc({
@@ -114,11 +116,19 @@ function stageSend(input: {
       "bot.conversation.send": () => ({
         messageId: "msg-sent",
         requestId: REQUEST_ID,
-        threadId: THREAD_ID,
+        threadId: input.threadId,
         delivery: input.delivery,
       }),
     }),
   );
+}
+
+function stageSend(input: {
+  readonly bots: readonly BotRecord[];
+  readonly conversations: readonly BotConversationRecord[];
+  readonly delivery: "written" | "queued";
+}): void {
+  stageSendInThread({ ...input, threadId: THREAD_ID });
 }
 
 /** The params of every `callHostRpc(method, ...)` so far. */
@@ -205,6 +215,30 @@ describe("bot post", () => {
     expect(result.exitCode).toBe(0);
     // Without --wait nothing follows the post.
     expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+  });
+
+  it("says the bot answers in the channel, and prints no thread, when the post opened none", async () => {
+    stageSendInThread({
+      bots: [tracy],
+      conversations: [conversationRecord({ conversationId: "conv-first" })],
+      delivery: "written",
+      threadId: null,
+    });
+
+    const result = await post({ bot: BOT_ID_A, wait: null });
+
+    expect(result.human).toBe(
+      `Posted to Tracy (request ${REQUEST_ID}, answered in the channel, delivered).`,
+    );
+    expect(result.data).toEqual({
+      botId: BOT_ID_A,
+      conversationId: "conv-first",
+      messageId: "msg-sent",
+      requestId: REQUEST_ID,
+      threadId: null,
+      delivery: "written",
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it("refuses a bot with no channel, and sends nothing", async () => {
@@ -491,15 +525,19 @@ describe("post and reply on a host without bots", () => {
 // ---- commands: --wait, end to end --------------------------------------- //
 
 /** Starts a `--wait` run and returns once it is following the request. */
-async function startWaiting(run: () => Promise<CommandResult>): Promise<{
+async function startWaiting(
+  run: () => Promise<CommandResult>,
+  threadId: string | null,
+): Promise<{
   readonly run: Promise<CommandResult>;
   readonly client: FakeStreamClient;
   readonly session: FakeStreamSession;
 }> {
-  stageSend({
+  stageSendInThread({
     bots: [botRecord({ botId: BOT_ID_A, title: "Tracy" })],
     conversations: [conversationRecord({ conversationId: CONVERSATION_ID })],
     delivery: "written",
+    threadId,
   });
   const client = new FakeStreamClient(() => undefined);
   hoisted.openLocalStreamClient.mockResolvedValue({
@@ -515,7 +553,7 @@ async function startWaiting(run: () => Promise<CommandResult>): Promise<{
 }
 
 function startWaitingPost(wait: string) {
-  return startWaiting(() => post({ bot: BOT_ID_A, wait }));
+  return startWaiting(() => post({ bot: BOT_ID_A, wait }), THREAD_ID);
 }
 
 function resolvedSnapshot(
@@ -626,6 +664,50 @@ describe("bot post --wait", () => {
     expect(result.exitCode).toBe(0);
     expect(session.closeCount).toBe(1);
     expect(threadSession.closeCount).toBe(1);
+    expect(client.closeReasons).toEqual(["bot-wait-settled"]);
+  });
+
+  it("follows only the channel when the bot answers in it, for the request and for the reply, and prints the reply", async () => {
+    const { run, client, session } = await startWaiting(
+      () => post({ bot: BOT_ID_A, wait: "30s" }),
+      null,
+    );
+
+    expect(session.params).toEqual({
+      epicId: BOT_ID_A,
+      chatId: CONVERSATION_ID,
+      resume: null,
+    });
+    // The channel holds the resolved post and the reply that resolved it.
+    session.pushFrame(
+      resolvedSnapshot(REPLY_MESSAGE_ID, [
+        assistantRow({
+          messageId: REPLY_MESSAGE_ID,
+          texts: ["Answered right here."],
+        }),
+      ]),
+    );
+    const result = await run;
+
+    expect(client.sessions).toHaveLength(1);
+    expect(result.human).toBe(
+      `Posted to Tracy (request ${REQUEST_ID}, answered in the channel, delivered).\nTracy replied:\nAnswered right here.`,
+    );
+    expect(result.data).toEqual({
+      botId: BOT_ID_A,
+      conversationId: CONVERSATION_ID,
+      messageId: "msg-sent",
+      requestId: REQUEST_ID,
+      threadId: null,
+      delivery: "written",
+      outcome: {
+        kind: "replied",
+        replyMessageId: REPLY_MESSAGE_ID,
+        text: "Answered right here.",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(session.closeCount).toBe(1);
     expect(client.closeReasons).toEqual(["bot-wait-settled"]);
   });
 
@@ -742,8 +824,9 @@ describe("bot reply --wait", () => {
   }
 
   it("follows only the thread, where both the request and its reply are, and prints the reply", async () => {
-    const { run, client, session } = await startWaiting(() =>
-      reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "30s" }),
+    const { run, client, session } = await startWaiting(
+      () => reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "30s" }),
+      THREAD_ID,
     );
 
     expect(session.params).toEqual({
@@ -772,8 +855,9 @@ describe("bot reply --wait", () => {
   });
 
   it("exits 1 and leaves the request open when the wait runs out", async () => {
-    const { run, session } = await startWaiting(() =>
-      reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "45s" }),
+    const { run, session } = await startWaiting(
+      () => reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "45s" }),
+      THREAD_ID,
     );
 
     await vi.advanceTimersByTimeAsync(45_000);

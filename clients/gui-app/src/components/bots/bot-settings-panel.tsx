@@ -1,6 +1,9 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotRecord,
+  BotReplyMode,
+} from "@traycer/protocol/host/bot/schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -9,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -19,6 +23,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import {
   useBotDeleteMutation,
+  useBotUpdateReplyModeMutation,
   useBotUpdateRunSettingsMutation,
   useBotUpdateTitleMutation,
 } from "@/hooks/bots/use-bot-mutations";
@@ -28,7 +33,8 @@ const BOT_TITLE_MAX = 500;
 
 /**
  * A bot's own settings (Tracy Bots): its name, the model its trunk runs on,
- * whether it is its environment's main bot, and deletion. Every write goes through the tab host's client - the host
+ * how a personal bot answers posts, whether it is its environment's main
+ * bot, and deletion. Every write goes through the tab host's client - the host
  * `bot.open` chose to serve the tab - with nothing gated on which host that
  * is: a host that cannot make the change refuses it, and the refusal is shown
  * in place, under the control. The stream snapshot, not the mutation's
@@ -38,14 +44,17 @@ export function BotSettingsPanel(props: {
   readonly bot: BotRecord;
   /** Whether the bot is its environment's main bot; `null` when not known. */
   readonly isMain: boolean | null;
+  /** Whether the bot is a personal environment's; a team's always answers in threads. */
+  readonly personal: boolean;
 }): ReactNode {
-  const { bot, isMain } = props;
+  const { bot, isMain, personal } = props;
   return (
     <div className="flex flex-col gap-6 overflow-y-auto p-4">
       {/* Keyed by the stream's title: a rename made elsewhere remounts the
           form on the new name instead of leaving the field on the old one. */}
       <BotTitleForm key={bot.title} bot={bot} />
       <BotRunSettingsForm bot={bot} />
+      {personal ? <BotReplyModeSection bot={bot} /> : null}
       {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
       <BotDeleteSection bot={bot} />
     </div>
@@ -233,6 +242,100 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
         message={update.error === null ? null : update.error.message}
       />
     </section>
+  );
+}
+
+const REPLY_MODE_OPTIONS: ReadonlyArray<{
+  readonly mode: BotReplyMode;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    mode: "direct",
+    label: "In the channel",
+    description: "The bot answers each post right under it.",
+  },
+  {
+    mode: "thread",
+    label: "In a thread",
+    description: "Each post gets a thread of its own.",
+  },
+];
+
+/**
+ * How the bot answers a post (T52): drawn for a personal environment's bot
+ * only, where the tab's host can write it. A pick applies to the next post.
+ */
+function BotReplyModeSection(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
+  const client = useTabHostClient();
+  const hostId = useTabHostId();
+  const supported =
+    useHostMethodSupport(hostId, "bot.updateReplyMode") === true;
+  const update = useBotUpdateReplyModeMutation(client);
+  const groupId = useId();
+  if (!supported) return null;
+  return (
+    <section
+      className="flex flex-col gap-2"
+      aria-label="Replies"
+      data-testid="bot-settings-reply-mode"
+    >
+      <span id={groupId} className="text-ui-sm font-medium text-foreground">
+        Replies
+      </span>
+      <RadioGroup
+        aria-labelledby={groupId}
+        value={bot.replyMode}
+        disabled={update.isPending}
+        onValueChange={(value) => {
+          const option = REPLY_MODE_OPTIONS.find(
+            (candidate) => candidate.mode === value,
+          );
+          if (option === undefined || option.mode === bot.replyMode) return;
+          update.mutate({ botId: bot.botId, replyMode: option.mode });
+        }}
+      >
+        {REPLY_MODE_OPTIONS.map((option) => (
+          <BotReplyModeOption
+            key={option.mode}
+            groupId={groupId}
+            option={option}
+          />
+        ))}
+      </RadioGroup>
+      <BotSettingsRefusal
+        message={update.error === null ? null : update.error.message}
+      />
+    </section>
+  );
+}
+
+function BotReplyModeOption(props: {
+  readonly groupId: string;
+  readonly option: (typeof REPLY_MODE_OPTIONS)[number];
+}): ReactNode {
+  const { groupId, option } = props;
+  const id = `${groupId}-${option.mode}`;
+  const descriptionId = `${id}-description`;
+  return (
+    <div
+      className="flex items-start gap-3 py-1"
+      data-testid={`bot-settings-reply-mode-${option.mode}`}
+    >
+      <RadioGroupItem
+        value={option.mode}
+        id={id}
+        aria-describedby={descriptionId}
+        className="mt-0.5"
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <Label htmlFor={id}>{option.label}</Label>
+        <p id={descriptionId} className="text-ui-xs text-muted-foreground">
+          {option.description}
+        </p>
+      </div>
+    </div>
   );
 }
 

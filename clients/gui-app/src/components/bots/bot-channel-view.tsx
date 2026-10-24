@@ -32,6 +32,8 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import {
@@ -98,7 +100,11 @@ function channelConversation(
  */
 export type BotOpenThread = {
   readonly anchorMessageId: string;
-  /** The anchor is the bot's question or proposal, not a member's post. */
+  /**
+   * The thread opens with the first reply under its anchor, sent with the
+   * anchor's id: the bot's question or proposal, or a post the bot answered
+   * in the channel (reply mode `direct`). `false` for a post's own thread.
+   */
   readonly announcement: boolean;
 };
 
@@ -169,8 +175,34 @@ export function BotChannelView(props: {
     isUnread,
   } = useChannelThreads({ client, botId, hostId, paused });
 
-  // A question or proposal with no thread yet shows a box whose first reply
-  // opens it, rather than waiting for a thread nobody has started.
+  // A direct reply's option, clicked, is the person's next post: offered
+  // only while no earlier pick is still being sent.
+  const { mutate: send, isPending: sending } =
+    useBotConversationSendMutation(client);
+  const channelId = channel?.conversationId ?? null;
+  const chooseOption = useCallback(
+    (choice: string) => {
+      if (channelId === null) return;
+      send(
+        {
+          botId,
+          conversationId: channelId,
+          text: choice,
+          threadId: null,
+          announcementId: null,
+        },
+        {
+          onError: (error) =>
+            toastFromHostError(error, "Couldn't send your choice."),
+        },
+      );
+    },
+    [botId, channelId, send],
+  );
+
+  // A question, a proposal or a direct post with no thread yet shows a box
+  // whose first reply opens it, rather than waiting for a thread nobody has
+  // started.
   const openAnnouncementThread = useCallback(
     (announcementId: string) =>
       onOpenThread({ anchorMessageId: announcementId, announcement: true }),
@@ -200,11 +232,14 @@ export function BotChannelView(props: {
       openAnnouncementThread: threadListSupported
         ? openAnnouncementThread
         : null,
+      chooseOption: sending ? null : chooseOption,
     }),
     [
+      chooseOption,
       isUnread,
       onOpenThread,
       openAnnouncementThread,
+      sending,
       threadListSupported,
       threadsByPost,
     ],
@@ -217,7 +252,6 @@ export function BotChannelView(props: {
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { refetch: refetchThreads } = threadList;
-  const channelId = channel?.conversationId ?? null;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     if (openThread !== null) return { kind: "listed", thread: openThread };
     if (threadList.isError) {

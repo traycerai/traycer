@@ -71,6 +71,7 @@ function channelPresentation(
   return {
     botTitle: "Release Bot",
     scrollToMessage: null,
+    repliedPost: null,
     threadLine,
     openThread,
     openAnnouncementThread: null,
@@ -300,6 +301,7 @@ describe("<ChatMessage /> bot rows", () => {
   const presentation: ChatBotPresentation = {
     botTitle: "Release Bot",
     scrollToMessage: null,
+    repliedPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
@@ -396,6 +398,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     return {
       botTitle: "Release Bot",
       scrollToMessage: null,
+      repliedPost: null,
       threadLine: input.threadLine,
       openThread: null,
       openAnnouncementThread: input.openAnnouncementThread,
@@ -541,6 +544,207 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       }),
     );
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+  });
+});
+
+describe("<ChatMessage /> direct replies in a bot channel", () => {
+  const REPLY_ID = "reply-9";
+  const CHANNEL: ChatBotPresentation = {
+    botTitle: "Release Bot",
+    scrollToMessage: null,
+    repliedPost: null,
+    threadLine: NO_THREAD_LINE,
+    openThread: null,
+    openAnnouncementThread: null,
+    chooseOption: null,
+  };
+
+  function resolvedPost(direct: boolean): ChatMessageModel {
+    const request: ConversationRequest = {
+      requestId: "req-d",
+      resolvedAt: 5_000,
+      resolvedByMessageId: REPLY_ID,
+    };
+    return memberPost(direct ? { ...request, direct: true } : request);
+  }
+
+  it("opens the thread box under a direct post, not a post thread", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      memberPost({
+        requestId: "req-d",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+        direct: true,
+      }),
+      { ...CHANNEL, openThread, openAnnouncementThread },
+    );
+
+    await user.click(screen.getByTestId("bot-thread-line"));
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID);
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("still opens the post's own thread from a post that is not direct", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      memberPost({
+        requestId: "req-t",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      }),
+      { ...CHANNEL, openThread, openAnnouncementThread },
+    );
+
+    await user.click(screen.getByTestId("bot-thread-line"));
+
+    expect(openThread).toHaveBeenCalledTimes(1);
+    expect(openThread).toHaveBeenCalledWith(POST_ID);
+    expect(openAnnouncementThread).not.toHaveBeenCalled();
+  });
+
+  it("jumps from a resolved direct post to the reply that is in the channel", async () => {
+    const user = userEvent.setup();
+    const scrollToMessage = vi.fn<(messageId: string) => void>();
+    renderRow(resolvedPost(true), { ...CHANNEL, scrollToMessage });
+
+    const link = screen.getByTestId("conversation-request-reply-link");
+    expect(link.textContent).toBe("See reply");
+
+    await user.click(link);
+
+    expect(scrollToMessage).toHaveBeenCalledTimes(1);
+    expect(scrollToMessage).toHaveBeenCalledWith(REPLY_ID);
+  });
+
+  it("offers no jump from a resolved post that is not direct, whose reply is in its thread", () => {
+    renderRow(resolvedPost(false), {
+      ...CHANNEL,
+      scrollToMessage: vi.fn(),
+    });
+
+    expect(
+      screen
+        .getByTestId("conversation-request")
+        .getAttribute("data-request-state"),
+    ).toBe("resolved");
+    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+  });
+
+  it("names the post a reply answers above the reply, and lands the list on it when clicked", async () => {
+    const user = userEvent.setup();
+    const scrollToMessage = vi.fn<(messageId: string) => void>();
+    const repliedPost = vi.fn<
+      (messageId: string) => { senderLabel: string; excerpt: string } | null
+    >(() => ({ senderLabel: "Tess Teammate", excerpt: "Please review" }));
+    renderRow(
+      { ...botRow(undefined), repliesTo: POST_ID },
+      { ...CHANNEL, scrollToMessage, repliedPost },
+    );
+
+    const line = screen.getByTestId("bot-replied-post");
+    expect(within(line).getByText("Tess Teammate")).toBeTruthy();
+    expect(within(line).getByText("Please review")).toBeTruthy();
+    expect(repliedPost).toHaveBeenCalledWith(POST_ID);
+    expect(scrollToMessage).not.toHaveBeenCalled();
+
+    await user.click(line);
+
+    expect(scrollToMessage).toHaveBeenCalledTimes(1);
+    expect(scrollToMessage).toHaveBeenCalledWith(POST_ID);
+  });
+
+  it("names the replied post without a jump where the list cannot scroll", () => {
+    renderRow(
+      { ...botRow(undefined), repliesTo: POST_ID },
+      {
+        ...CHANNEL,
+        repliedPost: () => ({ senderLabel: "Tess Teammate", excerpt: "Hi" }),
+      },
+    );
+
+    const line = screen.getByTestId("bot-replied-post");
+    expect(line.tagName).toBe("DIV");
+    expect(within(line).getByText("Tess Teammate")).toBeTruthy();
+  });
+
+  it("draws no replied-post line while the post it answers is not in the list", () => {
+    renderRow(
+      { ...botRow(undefined), repliesTo: POST_ID },
+      { ...CHANNEL, repliedPost: () => null },
+    );
+
+    expect(screen.getByTestId("bot-reply-row")).toBeTruthy();
+    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
+  });
+
+  it("draws no replied-post line on a bot row that answers no post", () => {
+    renderRow(botRow(undefined), {
+      ...CHANNEL,
+      repliedPost: () => ({ senderLabel: "Tess Teammate", excerpt: "Hi" }),
+    });
+
+    expect(screen.queryByTestId("bot-replied-post")).toBeNull();
+  });
+
+  it("gives a direct reply no thread line of its own", () => {
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "reply-row-1",
+        repliesTo: POST_ID,
+      },
+      {
+        ...CHANNEL,
+        openThread: vi.fn(),
+        openAnnouncementThread: vi.fn(),
+      },
+    );
+
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    expect(screen.queryByText("Reply in thread")).toBeNull();
+  });
+
+  it("posts the clicked option of a direct reply as a new post", async () => {
+    const user = userEvent.setup();
+    const chooseOption = vi.fn<(choice: string) => void>();
+    renderRow(
+      {
+        ...botRow(undefined),
+        repliesTo: POST_ID,
+        options: ["Ship it", "Hold"],
+      },
+      { ...CHANNEL, chooseOption },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Hold" }));
+
+    expect(chooseOption).toHaveBeenCalledTimes(1);
+    expect(chooseOption).toHaveBeenCalledWith("Hold");
+  });
+
+  it("disables a direct reply's options while a pick is being sent", () => {
+    renderRow(
+      {
+        ...botRow(undefined),
+        repliesTo: POST_ID,
+        options: ["Ship it", "Hold"],
+      },
+      CHANNEL,
+    );
+
+    const buttons = within(
+      screen.getByTestId("bot-reply-options"),
+    ).getAllByRole("button");
+    expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
+      true,
+    );
   });
 });
 
@@ -746,6 +950,47 @@ describe("useRenderedMessages bot rows", () => {
     expect(row !== undefined && "options" in row).toBe(false);
   });
 
+  it("carries a persisted assistant record's repliesTo onto its rendered row", () => {
+    const { result } = renderRows([
+      { ...assistantRecord("m-r", undefined), repliesTo: "post-7" },
+    ]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row?.repliesTo).toBe("post-7");
+  });
+
+  it("keeps the post a mid-turn record answers when the turn's records merge into one row", () => {
+    const inTurn = (
+      record: Extract<Message, { role: "assistant" }>,
+    ): Extract<Message, { role: "assistant" }> => ({
+      ...record,
+      turnId: "turn-1",
+    });
+    const { result } = renderRows([
+      inTurn(assistantRecord("m-1", undefined)),
+      inTurn({ ...assistantRecord("m-2", undefined), repliesTo: "post-7" }),
+      inTurn(assistantRecord("m-3", undefined)),
+    ]);
+
+    const rows = result.current.filter(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].repliesTo).toBe("post-7");
+  });
+
+  it("leaves the repliesTo key absent on an assistant row that answers no post", () => {
+    const { result } = renderRows([assistantRecord("m-plain", undefined)]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row).toBeDefined();
+    expect(row !== undefined && "repliesTo" in row).toBe(false);
+  });
+
   it("carries a user record's conversation request onto its rendered row", () => {
     const request: ConversationRequest = {
       requestId: "req-1",
@@ -782,6 +1027,7 @@ describe("<ChatEmptyState /> in a bot channel", () => {
     renderEmpty({
       botTitle: "Release Bot",
       scrollToMessage: vi.fn(),
+      repliedPost: null,
       threadLine: null,
       openThread: null,
       openAnnouncementThread: null,
