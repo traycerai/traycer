@@ -1,5 +1,11 @@
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -15,10 +21,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { useHostClient } from "@/lib/host/runtime";
 import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { useQueryClient } from "@tanstack/react-query";
-import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  useTeamPlanLinkCompleteMutation,
+  useTeamPlanLinkPollQuery,
+  useTeamPlanLinkStartMutation,
+} from "@/hooks/environment/team/use-plan-link-mutations";
 import { useOpenLink } from "@/lib/links/open-link";
 import {
   LINK_DEVICE_LINE,
@@ -51,15 +58,20 @@ import {
  * device code, polled. The local handoff: "Linking…", polled. Each answer
  * moves the dialog to its state; the lines are `provider-link-copy.ts`'s.
  *
- * The calls are direct requests, as the Secrets page's Add a secret makes
- * them: the pasted code is a one-time credential and reaches no query or
- * mutation cache, and closing the dialog drops it.
+ * The Personal calls are direct requests, as the Secrets page's Add a secret
+ * makes them: the pasted code is a one-time credential and reaches no query
+ * or mutation cache, and closing the dialog drops it. A team's link goes
+ * through `use-plan-link-mutations.ts`, which reads the code at dispatch for
+ * the same reason.
  */
 
 const DEVICE_POLL_MS = 5_000;
 const LINKING_POLL_MS = 2_000;
 
 const INTRO: LinkDialogState = { kind: "intro" };
+const STARTING: LinkDialogState = { kind: "starting" };
+
+type SignInState = Extract<LinkDialogState, { readonly kind: "sign_in" }>;
 
 export function ProviderLinkDialog(): ReactNode {
   const target = useProviderLinkDialogStore((state) => state.target);
@@ -68,23 +80,29 @@ export function ProviderLinkDialog(): ReactNode {
   if (target === null || (target.environmentId ?? null) !== environmentId)
     return null;
   // Keyed by the target, so a new target starts from the intro.
+  const key = `${environmentId}:${target.providerId}:${target.profileId ?? "new"}`;
   if (environmentId !== null)
     return (
       <TeamProviderLinkDialogFor
-        key={`${environmentId}:${target.providerId}:${target.profileId ?? "new"}`}
+        key={key}
         target={target}
         environmentId={environmentId}
         onClose={close}
       />
     );
-  return (
-    <ProviderLinkDialogFor
-      key={`${environmentId}:${target.providerId}:${target.profileId ?? "new"}`}
-      target={target}
-      onClose={close}
-      onLinked={null}
-    />
-  );
+  return <ProviderLinkDialogFor key={key} target={target} onClose={close} />;
+}
+
+/** The poll a state asks for: a device code and a local handoff settle late. */
+function pollOf(state: LinkDialogState): {
+  readonly linkId: string | null;
+  readonly intervalMs: number;
+} {
+  return {
+    linkId:
+      state.kind === "device" || state.kind === "linking" ? state.linkId : null,
+    intervalMs: state.kind === "device" ? DEVICE_POLL_MS : LINKING_POLL_MS,
+  };
 }
 
 function TeamProviderLinkDialogFor(props: {
@@ -92,30 +110,73 @@ function TeamProviderLinkDialogFor(props: {
   readonly environmentId: string;
   readonly onClose: () => void;
 }): ReactNode {
-  const queries = useQueryClient();
-  const environmentId = props.environmentId;
-  const onLinked = useCallback(
-    (hostId: string | null): void => {
-      void queries.invalidateQueries({
-        queryKey: hostQueryKeys.method(hostId, "environment.plans.list", {
-          environmentId,
-        }),
-      });
-      void queries.invalidateQueries({
-        queryKey: hostQueryKeys.method(
-          hostId,
-          "environment.configuration.items",
-          { environmentId },
-        ),
-      });
-    },
-    [queries, environmentId],
+  const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
+  const [state, setState] = useState<LinkDialogState>(INTRO);
+  const [code, setCode] = useState("");
+  // What `readCode` hands the complete mutation at dispatch.
+  const codeRef = useRef("");
+  const changeCode = (next: string): void => {
+    codeRef.current = next;
+    setCode(next);
+  };
+  const startLink = useTeamPlanLinkStartMutation(props.environmentId);
+  const completeLink = useTeamPlanLinkCompleteMutation(
+    props.environmentId,
+    () => codeRef.current.trim(),
   );
+  const poll = pollOf(state);
+  const pollAnswer = useTeamPlanLinkPollQuery(
+    props.environmentId,
+    poll.linkId,
+    poll.intervalMs,
+  );
+
+  const start = (linkTarget: ProviderLinkTarget): void => {
+    setTarget(linkTarget);
+    changeCode("");
+    const providerId = providerIdSchema.safeParse(linkTarget.providerId);
+    if (!providerId.success) {
+      setState({ kind: "not_offered" });
+      return;
+    }
+    setState(STARTING);
+    startLink.mutate(
+      { providerId: providerId.data, profileId: linkTarget.profileId },
+      {
+        onSuccess: (response) => setState(stateOfLinkStart(response)),
+        onError: (error) => setState(teamLinkError(error)),
+      },
+    );
+  };
+
+  const submitCode = (current: SignInState): void => {
+    completeLink.mutate(current.linkId, {
+      onSuccess: (response) => {
+        changeCode("");
+        setState((latest) => stateOfLinkComplete(latest, response));
+      },
+      onError: (error) => setState(teamLinkError(error)),
+    });
+  };
+
+  let shown = state;
+  if (startLink.isPending) shown = STARTING;
+  else if (poll.linkId !== null && pollAnswer.error !== null)
+    shown = teamLinkError(pollAnswer.error);
+  else if (poll.linkId !== null && pollAnswer.data !== undefined)
+    shown = stateOfLinkComplete(state, pollAnswer.data);
+
   return (
-    <ProviderLinkDialogFor
-      target={props.target}
+    <LinkDialogFrame
+      title="Link a plan"
+      state={shown}
+      target={target}
+      code={code}
+      submitting={completeLink.isPending}
+      onCodeChange={changeCode}
+      onStart={start}
+      onSubmitCode={submitCode}
       onClose={props.onClose}
-      onLinked={onLinked}
     />
   );
 }
@@ -123,35 +184,17 @@ function TeamProviderLinkDialogFor(props: {
 function ProviderLinkDialogFor(props: {
   readonly target: ProviderLinkTarget;
   readonly onClose: () => void;
-  readonly onLinked: ((hostId: string | null) => void) | null;
 }): ReactNode {
-  const hostClient = useHostClient();
-  const poolClient = usePoolTierHostClient(hostClient);
-  const environmentId = props.target.environmentId ?? null;
-  const client = environmentId === null ? hostClient : poolClient;
-  const onLinked = props.onLinked;
+  const client = useHostClient();
   const complete = useCallback(
-    async (linkId: string, code: string | null) => {
-      const hostId = client.getActiveHostId();
-      const method = "providers.linkComplete";
-      const request = { linkId, code, environmentId };
-      if (environmentId !== null) cloudVerdictPreflight(method)();
-      const response =
-        environmentId === null
-          ? await client.request(method, request)
-          : await client.requestWithSignalRequiringHostMethodVersion(
-              method,
-              request,
-              undefined,
-              { method, version: { major: 1, minor: 1 } },
-            );
-      if (response.state === "linked") onLinked?.(hostId);
-      return response;
-    },
-    [client, environmentId, onLinked],
+    (linkId: string, code: string | null) =>
+      client.request("providers.linkComplete", {
+        linkId,
+        code,
+        environmentId: null,
+      }),
+    [client],
   );
-  const openLink = useOpenLink();
-  const hostName = usePersonalHostName() ?? "this host";
   const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
   const [state, setState] = useState<LinkDialogState>(INTRO);
   const [code, setCode] = useState("");
@@ -162,7 +205,7 @@ function ProviderLinkDialogFor(props: {
 
   const start = async (linkTarget: ProviderLinkTarget): Promise<void> => {
     setTarget(linkTarget);
-    setState({ kind: "starting" });
+    setState(STARTING);
     setCode("");
     const providerId = providerIdSchema.safeParse(linkTarget.providerId);
     if (!providerId.success) {
@@ -170,47 +213,31 @@ function ProviderLinkDialogFor(props: {
       return;
     }
     try {
-      const method = "providers.link";
-      const request = {
+      const response = await client.request("providers.link", {
         providerId: providerId.data,
         profileId: linkTarget.profileId,
-        environmentId,
-      };
-      if (environmentId !== null) cloudVerdictPreflight(method)();
-      const response =
-        environmentId === null
-          ? await client.request(method, request)
-          : await client.requestWithSignalRequiringHostMethodVersion(
-              method,
-              request,
-              undefined,
-              { method, version: { major: 1, minor: 1 } },
-            );
+        environmentId: null,
+      });
       setState(stateOfLinkStart(response));
     } catch (error) {
-      setState(sourceLinkError(error, environmentId));
+      setState(stateOfLinkError(error));
     }
   };
 
-  const submitCode = async (
-    current: Extract<LinkDialogState, { readonly kind: "sign_in" }>,
-  ): Promise<void> => {
+  const submitCode = async (current: SignInState): Promise<void> => {
     setSubmitting(true);
     try {
       const response = await complete(current.linkId, code.trim());
       setCode("");
       setState((latest) => stateOfLinkComplete(latest, response));
     } catch (error) {
-      setState(sourceLinkError(error, environmentId));
+      setState(stateOfLinkError(error));
     } finally {
       setSubmitting(false);
     }
   };
 
-  // A device code and a local handoff are polled until they settle.
-  const pollLinkId =
-    state.kind === "device" || state.kind === "linking" ? state.linkId : null;
-  const pollMs = state.kind === "device" ? DEVICE_POLL_MS : LINKING_POLL_MS;
+  const { linkId: pollLinkId, intervalMs: pollMs } = pollOf(state);
   useEffect(() => {
     if (pollLinkId === null) return;
     let cancelled = false;
@@ -222,50 +249,75 @@ function ProviderLinkDialogFor(props: {
           setPollTick((tick) => tick + 1);
         })
         .catch((error: unknown) => {
-          if (!cancelled) setState(sourceLinkError(error, environmentId));
+          if (!cancelled) setState(stateOfLinkError(error));
         });
     }, pollMs);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [complete, environmentId, pollLinkId, pollMs, pollTick]);
+  }, [complete, pollLinkId, pollMs, pollTick]);
 
+  return (
+    <LinkDialogFrame
+      title="Link to your plan"
+      state={state}
+      target={target}
+      code={code}
+      submitting={submitting}
+      onCodeChange={setCode}
+      onStart={(linkTarget) => void start(linkTarget)}
+      onSubmitCode={(current) => void submitCode(current)}
+      onClose={props.onClose}
+    />
+  );
+}
+
+function LinkDialogFrame(props: {
+  readonly title: string;
+  readonly state: LinkDialogState;
+  readonly target: ProviderLinkTarget;
+  readonly code: string;
+  readonly submitting: boolean;
+  readonly onCodeChange: (code: string) => void;
+  readonly onStart: (target: ProviderLinkTarget) => void;
+  readonly onSubmitCode: (current: SignInState) => void;
+  readonly onClose: () => void;
+}): ReactNode {
+  const openLink = useOpenLink();
+  const hostName = usePersonalHostName() ?? "this host";
   const onOpenChange = (open: boolean): void => {
     if (!open) props.onClose();
   };
-
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
         layout="banded"
         className="flex max-h-[min(85dvh,36rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
         data-testid="provider-link-dialog"
-        data-state={state.kind}
+        data-state={props.state.kind}
       >
         <DialogHeader className="gap-1.5">
-          <DialogTitle>
-            {environmentId === null ? "Link to your plan" : "Link a plan"}
-          </DialogTitle>
+          <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>{LINK_INTRO}</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-5 text-ui-sm">
           <LinkBody
-            state={state}
+            state={props.state}
             hostName={hostName}
-            code={code}
-            onCodeChange={setCode}
+            code={props.code}
+            onCodeChange={props.onCodeChange}
             onOpenUrl={(url) => void openLink(url, "auth", null)}
           />
         </div>
         <DialogFooter>
           <LinkActions
-            state={state}
-            target={target}
-            code={code}
-            submitting={submitting}
-            onStart={(linkTarget) => void start(linkTarget)}
-            onSubmitCode={(current) => void submitCode(current)}
+            state={props.state}
+            target={props.target}
+            code={props.code}
+            submitting={props.submitting}
+            onStart={props.onStart}
+            onSubmitCode={props.onSubmitCode}
             onClose={props.onClose}
           />
         </DialogFooter>
@@ -537,14 +589,9 @@ function LinkActions(props: {
   }
 }
 
-function sourceLinkError(
-  error: unknown,
-  environmentId: string | null,
-): LinkDialogState {
-  if (
-    environmentId !== null &&
-    error instanceof HostMethodVersionUnsatisfiedError
-  )
+/** A team's link refused by a host older than `@1.1` says it needs an update. */
+function teamLinkError(error: unknown): LinkDialogState {
+  if (error instanceof HostMethodVersionUnsatisfiedError)
     return { kind: "failed", line: "Linking a plan needs an updated host." };
   return stateOfLinkError(error);
 }

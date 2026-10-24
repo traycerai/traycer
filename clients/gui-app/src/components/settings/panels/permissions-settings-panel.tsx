@@ -34,6 +34,7 @@ import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
 import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
 import { useRulesEdit } from "@/components/settings/panels/permissions/rules-edit-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   acknowledgeSettingsOpenIntent,
@@ -74,10 +75,36 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
 export function PermissionsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
   return source.kind === "pool" ? (
-    <TeamPermissions />
+    <TeamPermissionsUnlessMachineAsked />
   ) : (
     <HostPermissionsSettingsPanel />
   );
+}
+
+/**
+ * A team's Permissions, unless the open intent names a machine: a composer's
+ * "Permission settings…" asks for its run-target host's Judge, and a judge is
+ * that machine's, not the team's. The pick then moves to the machine's row
+ * before paint, as choosing it in the Environment dropdown would (its Local
+ * row, or this window's default row for this window's own machine), and the
+ * host page that mounts under that pick takes the intent.
+ */
+function TeamPermissionsUnlessMachineAsked(): ReactNode {
+  const intent = useSettingsOpenIntent("permissions");
+  const scope = usePersonalHostScope();
+  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const hostId = intent?.hostId ?? null;
+  const hostName =
+    scope.hosts.find((host) => host.hostId === hostId)?.name ?? hostId;
+  // Under a team pick the scope is this window's own machine.
+  const windowHostId = scope.hostId;
+  useLayoutEffect(() => {
+    if (hostId === null || hostName === null) return;
+    setPick(
+      hostId === windowHostId ? null : { kind: "local", hostId, hostName },
+    );
+  }, [hostId, hostName, windowHostId, setPick]);
+  return hostId === null ? <TeamPermissions /> : null;
 }
 
 function HostPermissionsSettingsPanel(): ReactNode {
