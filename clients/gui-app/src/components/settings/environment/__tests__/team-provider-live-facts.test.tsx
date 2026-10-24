@@ -192,16 +192,23 @@ describe("TeamProviderLiveFacts", () => {
     );
   });
 
-  it("says the host has not signed in the team's plan when only its ambient login is there", () => {
+  it("draws nothing for a linked plan with no profile of the same id on the host", () => {
+    // A copy the host received through profile sync has its own local id,
+    // and `providers.list` names only that one, so no claim about the plan
+    // can be made from here.
     reads.plans = [linkedPlan];
     reads.providers = [
-      claude([profile("ambient", "ambient", "authenticated")], "authenticated"),
+      claude(
+        [
+          profile("ambient", "ambient", "authenticated"),
+          profile("synced-copy", "managed", "authenticated"),
+        ],
+        "authenticated",
+      ),
     ];
     renderFacts();
 
     expect(reads.cards).toEqual([]);
-    expect(screen.getByRole("status").textContent).toBe(
-      "Studio hasn't signed in Acme's plan yet.",
-    );
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

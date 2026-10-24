@@ -78,7 +78,6 @@ export function TeamProviderLiveFacts(props: {
               state={state}
               linkedProfileIds={linkedProfileIds}
               teamName={name}
-              hostName={hostName}
             />
           </>
         )}
@@ -119,15 +118,18 @@ function linkedPlanProfileIds(
 /**
  * The limits of the team's linked plans as this host signs them in: each
  * linked plan is a managed profile on the host, read with that profile's own
- * eligibility. The host's ambient login is never a team plan's source; a host
- * without the plan's profile says so instead.
+ * eligibility. The host's ambient login is never a team plan's source.
+ *
+ * A linked plan with no profile of its id here draws nothing: a copy the host
+ * received through profile sync has a local id of its own, and
+ * `providers.list` names only that one, so nothing can be said about the
+ * plan from here.
  */
 function TeamPlanLimits(props: {
   readonly providerId: ProviderId;
   readonly state: ProviderCliState;
   readonly linkedProfileIds: readonly string[];
   readonly teamName: string;
-  readonly hostName: string;
 }): ReactNode {
   const eligibility = resolveRateLimitFetchEligibility(props.state);
   const profiles = props.state.profiles.filter(
@@ -139,12 +141,6 @@ function TeamPlanLimits(props: {
     return (
       <p role="status" className="text-ui-sm text-muted-foreground">
         Link a plan to {props.teamName} to see its rate limits.
-      </p>
-    );
-  if (profiles.length === 0)
-    return (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        {props.hostName} hasn't signed in {props.teamName}'s plan yet.
       </p>
     );
   return profiles.map((profile) => (
