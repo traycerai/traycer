@@ -7,7 +7,6 @@
  */
 import { useEffect, useRef, type ReactNode } from "react";
 import {
-  INCLUDING_MAIL_PASSWORD,
   RETROSPECTIVE_APPLIED_ON,
   RETROSPECTIVE_DISCLOSURE,
   RETROSPECTIVE_GOT_IT,
@@ -50,7 +49,6 @@ export type RetrospectivePageId = Extract<
   | "shell"
   | "fallback"
   | "permissions"
-  | "notifications"
   | "agents"
   | "secrets"
   | "agent-definitions"
@@ -63,7 +61,6 @@ export interface SharedInUseItem {
   readonly label: string;
   readonly names: readonly string[];
   readonly page: RetrospectivePageId;
-  readonly includesMailPassword: boolean;
 }
 
 export interface HeldRow {
@@ -265,7 +262,6 @@ function SharedInUseList(props: {
         <span key={item.id}>
           {index > 0 ? " · " : null}
           <SharedInUseLink item={item} />
-          {item.includesMailPassword ? `, ${INCLUDING_MAIL_PASSWORD}` : null}
         </span>
       ))}
     </span>

@@ -23,6 +23,10 @@ import {
 } from "@/lib/provider-ordering";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
+import {
+  catalogOpencodeLineParam,
+  useChatOpencodeLine,
+} from "@/hooks/harnesses/chat-opencode-line-context";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -472,15 +476,22 @@ export function useFallbackModelCatalogues(
     });
   }, [available, wantedKey]);
 
+  // The chat's OpenCode line, so a fallback tuple on `opencode` is named from
+  // the catalogue of the line the chat runs.
+  const opencodeLine = useChatOpencodeLine();
   const requests = useMemo(
     () =>
       harnessIds.map((harnessId) => ({
         method: "agent.gui.listModels" as const,
         // `null`: these cards name a tuple, not a workspace, and a
         // project-scoped catalogue would resolve the same slugs anyway.
-        params: { harnessId, workingDirectory: null },
+        params: {
+          harnessId,
+          workingDirectory: null,
+          ...catalogOpencodeLineParam(harnessId, opencodeLine),
+        },
       })),
-    [harnessIds],
+    [harnessIds, opencodeLine],
   );
 
   // `combine` projects to catalogue DATA rather than handing back the result

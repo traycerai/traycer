@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ToJSONSchemaParams } from "zod/v4/core";
 import type { UncheckedVersionedRpcRegistry } from "@traycer/protocol/framework/versioned-rpc-types";
 import type { UncheckedVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 
@@ -78,6 +79,89 @@ export type ProtocolSurface = {
   readonly stream: Readonly<Record<string, SurfaceMethod>>;
 };
 
+/**
+ * The JSON Schema form of the protocol's committed snapshots, of every released
+ * tag's `protocol-surface.json`, and of the tag dumps CI compares against is
+ * zod 4.4.3's. zod 4.5 and 4.6 changed three things in what the protocol's
+ * schemas emit, and `withCanonicalJsonSchemaOverride` puts each back:
+ *
+ * - An `anyOf` of bare `{ type }` branches becomes a `type` array
+ *   (`z.string().nullable()` reads `{ type: ["string", "null"] }`), and an
+ *   object intersection folds into one object. Both passes leave a node alone
+ *   when it carries a key beyond the ones they fold, so every node gets
+ *   `CANONICAL_STAMP`, which `removeCanonicalJsonSchemaStamp` deletes from the
+ *   result.
+ * - With `io: "input"`, `required` lists a `.catch()` or transform field,
+ *   although the parser still accepts a payload without it. The surface
+ *   checkers read input `required` as what a receiver accepts, so it again
+ *   lists exactly the keys whose schema has no `optin`.
+ * - `.startsWith()`, `.endsWith()` and `.includes()` add a `format` named after
+ *   the check, next to the `pattern` that already states it. It is dropped.
+ *
+ * Under zod 4.4.3 none of this changes the output. Here rather than in
+ * `json-schema-fingerprint.ts` because this module may import only zod.
+ */
+const CANONICAL_STAMP = "x-traycer-canonical";
+
+const CHECK_FORMATS: ReadonlySet<string> = new Set([
+  "starts_with",
+  "ends_with",
+  "includes",
+]);
+
+export function removeCanonicalJsonSchemaStamp(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      removeCanonicalJsonSchemaStamp(item);
+    }
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    Reflect.deleteProperty(value, CANONICAL_STAMP);
+    for (const item of Object.values(value)) {
+      removeCanonicalJsonSchemaStamp(item);
+    }
+  }
+}
+
+export function withCanonicalJsonSchemaOverride(
+  params: ToJSONSchemaParams,
+): ToJSONSchemaParams {
+  const override = params.override;
+  return {
+    ...params,
+    override: (context) => {
+      if (override !== undefined) {
+        override(context);
+      }
+      const json = context.jsonSchema;
+      const def = context.zodSchema._zod.def;
+      if (
+        params.io === "input" &&
+        def.type === "object" &&
+        json.properties !== undefined
+      ) {
+        const required = Object.keys(def.shape).filter(
+          (key) => def.shape[key]?._zod.optin === undefined,
+        );
+        if (required.length > 0) {
+          json.required = required;
+        } else {
+          delete json.required;
+        }
+      }
+      if (
+        def.type === "string" &&
+        typeof json.format === "string" &&
+        CHECK_FORMATS.has(json.format)
+      ) {
+        delete json.format;
+      }
+      json[CANONICAL_STAMP] = true;
+    },
+  };
+}
+
 function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(sortKeysDeep);
@@ -108,12 +192,14 @@ function serializeSchema(schema: z.ZodType): unknown {
   }
   try {
     // `io: "input"` - wire compatibility is about what a receiver ACCEPTS.
-    return sortKeysDeep(
-      (converter as (s: z.ZodType, opts: object) => unknown)(schema, {
-        unrepresentable: "any",
-        io: "input",
-      }),
+    const converted = (
+      converter as (s: z.ZodType, opts: ToJSONSchemaParams) => unknown
+    )(
+      schema,
+      withCanonicalJsonSchemaOverride({ unrepresentable: "any", io: "input" }),
     );
+    removeCanonicalJsonSchemaStamp(converted);
+    return sortKeysDeep(converted);
   } catch (error) {
     return { $unavailable: `toJSONSchema failed: ${String(error)}` };
   }

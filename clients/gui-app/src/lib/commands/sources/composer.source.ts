@@ -23,7 +23,7 @@ import {
   type ModelOption,
 } from "@/components/home/data/landing-options";
 import {
-  useGuiHarnessCatalogForClient,
+  useGuiHarnessCatalogForClientLine,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
@@ -316,10 +316,12 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   // provider on the focused composer's host. The subpages list what the host's
   // cache already holds: at least the focused composer's selected harness,
   // which its toolbar query warms on mount, growing as the user browses
-  // providers in that picker.
-  return useGuiHarnessCatalogForClient(
+  // providers in that picker. OpenCode's models are the focused chat's line,
+  // the entries its toolbar warms.
+  return useGuiHarnessCatalogForClientLine(
     entry === null ? defaultClient : entry.hostClient,
     null,
+    entry === null ? null : entry.opencodeLine,
     { enabled: true, subscribed: true, modelsFetch: "cached-only" },
   );
 }

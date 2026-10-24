@@ -45,6 +45,7 @@ import {
 } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   SystemTabModalHost,
@@ -264,7 +265,9 @@ function renderShell(): void {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ThemeProvider>
-          <RouterProvider router={buildRouter()} />
+          <HostRuntimeTestProvider>
+            <RouterProvider router={buildRouter()} />
+          </HostRuntimeTestProvider>
           <ThemeEditorHost />
         </ThemeProvider>
       </TooltipProvider>
@@ -564,19 +567,21 @@ describe("Rules edit through the system-tab modal shell", () => {
     const view = (open: boolean): ReactNode => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <Lifetime open={open} />
-          <DialogPrimitive.Root open={open}>
-            {open ? (
-              <SystemTabModalSurface
-                active={{ kind: "settings", section: "permissions" }}
-                editingTheme={false}
-                onClose={() => undefined}
-                onPromote={(onRejected) => {
-                  onRejected();
-                }}
-              />
-            ) : null}
-          </DialogPrimitive.Root>
+          <HostRuntimeTestProvider>
+            <Lifetime open={open} />
+            <DialogPrimitive.Root open={open}>
+              {open ? (
+                <SystemTabModalSurface
+                  active={{ kind: "settings", section: "permissions" }}
+                  editingTheme={false}
+                  onClose={() => undefined}
+                  onPromote={(onRejected) => {
+                    onRejected();
+                  }}
+                />
+              ) : null}
+            </DialogPrimitive.Root>
+          </HostRuntimeTestProvider>
         </TooltipProvider>
       </QueryClientProvider>
     );

@@ -18,10 +18,23 @@ const OLD_LAPTOP = { hostId: "old", name: "Old laptop" };
 
 const awaiting = environmentStatusFixture({
   principal: null,
+  planes: { records: "local", broker: "local", room: "local" },
   setup: { stage: "moving_settings", state: "awaiting_consent" },
 });
 const consentRecorded = environmentStatusFixture({
   principal: null,
+  planes: { records: "moved", broker: "local", room: "local" },
+  pendingUploads: [
+    {
+      uploadId: "u1",
+      kind: "secret",
+      key: "k",
+      os: "macos",
+      queuedAt: 1,
+      receipt: "pending",
+      code: null,
+    },
+  ],
   setup: { stage: "moving_settings", state: "running" },
   consent: { acceptedAt: 1, planHash: "hash" },
 });

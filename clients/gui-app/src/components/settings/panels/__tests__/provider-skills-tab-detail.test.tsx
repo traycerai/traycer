@@ -610,14 +610,12 @@ describe("<ProviderSkillsTab /> skill detail", () => {
   it("keeps the skill dialog open and shows the host error when removal fails", () => {
     skillMocks.removeScopes = ["global"];
     skillMocks.mutate.mockImplementation(
-      (
-        _vars: unknown,
-        opts: { onError: (err: { message: string }) => void },
-      ) => {
-        opts.onError({
-          message:
+      (_vars: unknown, opts: { onError: (err: Error) => void }) => {
+        opts.onError(
+          new Error(
             'Cannot remove skill "find-skills": path is outside writable skill roots',
-        });
+          ),
+        );
       },
     );
     renderTab();

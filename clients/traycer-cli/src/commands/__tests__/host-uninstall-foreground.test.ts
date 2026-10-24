@@ -20,8 +20,8 @@ import type { buildHostUninstallCommand as BuildHostUninstallCommandType } from 
 // or the unconditional stop (`controller.stop`,
 // `commands/host-uninstall.ts:231-245` in the pre-fix numbering). Terminal
 // origin `--all` is UNCHANGED - it still stops that host. Bare
-// `host uninstall` (no `--all`) is OUT OF SCOPE for this guard and stays
-// unchanged either way.
+// `host uninstall` (no `--all`) also stops a running host, so it asks the
+// same guard.
 //
 // Design this suite targets (production not yet changed for THIS command -
 // verified by reading `../host-uninstall.ts` in full: `HostUninstallArgs` is
@@ -347,11 +347,10 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
     expect(result.exitCode).toBe(0);
   });
 
-  // Test 4 (control, GREEN): desktop origin, BARE `host uninstall` (no
-  // `--all`), live foreground run - out of scope for this guard, UNCHANGED:
-  // `uninstallHost` runs, but neither `uninstall` nor `stop` is ever called
-  // at all (the whole `--all` block is skipped), and nothing is refused.
-  it("(control) desktop-origin bare uninstall (no --all) over a live foreground run is unaffected - out of scope for this guard", async () => {
+  // Test 4: desktop origin, BARE `host uninstall` (no `--all`), live
+  // foreground run - the bare form stops a running host too, so it refuses
+  // the same way before any write.
+  it("desktop-origin bare uninstall (no --all) over a live foreground run refuses E_HOST_NOT_SERVICE_RUN before any write", async () => {
     await writeLiveForegroundRun();
 
     const { buildHostUninstallCommand } = await import("../host-uninstall");
@@ -362,12 +361,17 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
       force: false,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostUninstallCommand>[0]);
-    const result = await command(fakeCtx());
+    const caught: unknown = await command(fakeCtx()).then(
+      () => null,
+      (err: unknown) => err,
+    );
 
-    expect(mocks.uninstallHostMock).toHaveBeenCalledTimes(1);
     expect(mocks.uninstallMock).not.toHaveBeenCalled();
+    expect(mocks.uninstallHostMock).not.toHaveBeenCalled();
     expect(mocks.stopMock).not.toHaveBeenCalled();
-    expect(result.exitCode).toBe(0);
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
+    });
   });
 });
 

@@ -166,7 +166,7 @@ export function BotUnderTheHoodPanel(props: {
             <BotTranscriptPaused />
           ) : (
             <BotChatTranscript
-              key={sessionChatId ?? trunkChatId}
+              key={sessionChatId ?? undefined}
               botId={botId}
               chatId={sessionChatId ?? trunkChatId}
               hostId={hostId}

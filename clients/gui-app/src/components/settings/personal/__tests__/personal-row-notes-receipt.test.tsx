@@ -17,17 +17,29 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import type { HostRpcRegistry } from "@/lib/host";
+import {
+  HostRuntimeContext,
+  HostRuntimeProvider,
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -52,6 +64,58 @@ function RowNotesProbe(): ReactNode {
         <li key={key}>{`${key}: ${note}`}</li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The page under the host runtime Settings gives it: the real provider, and
+ * the scope's client re-provided the way a host-scoped panel does, so the
+ * page's own chip reads the same host the page does.
+ */
+function ScopedHostRuntime(props: {
+  readonly handlers: MockHandlerMap<HostRpcRegistry>;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <RunnerHostProvider
+      runnerHost={
+        new MockRunnerHost({
+          signInUrl: "https://auth.traycer.invalid/sign-in",
+          authnBaseUrl: "https://authn.traycer.invalid",
+          localHost: null,
+          hosts: [],
+          workspaceFolderPickerPaths: undefined,
+          hasLocalHost: undefined,
+          traycerCli: undefined,
+        })
+      }
+    >
+      <HostRuntimeProvider
+        registry={hostRpcRegistry}
+        messengerFactory={(args) =>
+          new MockHostMessenger<HostRpcRegistry>({
+            registry: args.registry,
+            requestId: () => "req-runtime",
+            handlers: props.handlers,
+          })
+        }
+        invalidator={null}
+        requestId={null}
+        remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+        fallback={null}
+      >
+        <ScopedBinding>{props.children}</ScopedBinding>
+      </HostRuntimeProvider>
+    </RunnerHostProvider>
+  );
+}
+
+function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
+  const binding = useScopedHostBinding(useHostScope());
+  return (
+    <HostRuntimeContext.Provider value={binding}>
+      {props.children}
+    </HostRuntimeContext.Provider>
   );
 }
 
@@ -84,11 +148,13 @@ function mountPageOver(first: EnvironmentStatusResponseV11): MountedPage {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <PersonalPageFrame section="shell">
-        <SettingsPanelShell title="Shell" description="How terminals start.">
-          <RowNotesProbe />
-        </SettingsPanelShell>
-      </PersonalPageFrame>
+      <ScopedHostRuntime handlers={handlers}>
+        <PersonalPageFrame section="shell">
+          <SettingsPanelShell title="Shell" description="How terminals start.">
+            <RowNotesProbe />
+          </SettingsPanelShell>
+        </PersonalPageFrame>
+      </ScopedHostRuntime>
     </QueryClientProvider>,
   );
   return {

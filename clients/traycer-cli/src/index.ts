@@ -2038,7 +2038,7 @@ function registerHostCommands(program: Command): void {
     host
       .command("uninstall")
       .description(
-        "Remove the installed and staged host bytes. By default nothing else is touched: the OS service stays registered and a running host keeps running. Use --all to deregister the service and stop the host as well.",
+        "Stop the running host, then remove the installed and staged host bytes. By default the OS service stays registered. Use --all to deregister the service as well.",
       )
       .option(
         "--all",
@@ -2046,7 +2046,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--force",
-        "With --all: stop the host even if it is not responding, then remove the install. Running terminal sessions and in-flight agent work are killed.",
+        "Stop the host even if it is not responding, then remove the install. Running terminal sessions and in-flight agent work are killed.",
       )
       .addHelpText(
         "after",
@@ -2058,10 +2058,10 @@ function registerHostCommands(program: Command): void {
           "           removal of the bytes can fail there while the record is still deleted -",
           "           check `removedInstallDir` in the result, and stop the host first if you",
           "           need the directory gone.",
-          "           The OS service stays REGISTERED and is not stopped, so a running host",
-          "           serves until it exits and the surviving registration then has no valid",
-          "           install to launch. Recover with 'traycer host install', or clean up with",
-          "           'traycer host service uninstall'.",
+          "           A running host is asked to stop first; a host that does not stop keeps",
+          "           its install and the command fails, naming --force. The OS service stays",
+          "           REGISTERED with no install to launch. Recover with 'traycer host install',",
+          "           or clean up with 'traycer host service uninstall'.",
           "  --all    Deregistration REQUESTED, the host asked to stand down, and the bytes",
           "           removed. No platform can verify a registration is actually GONE, so",
           "           this reports the request plus what the readback saw: a positive",
@@ -2084,25 +2084,12 @@ function registerHostCommands(program: Command): void {
         ].join("\n"),
       )
       .addOption(lifecycleOriginOption()),
-    // Refused inside the returned command so it flows through the runner's
-    // CliError handling. Without --all nothing is stopped, so a --force there
-    // would read as a forced stop while the bytes go from under a running host.
-    (opts) => (ctx) => {
-      if (opts.force === true && opts.all !== true) {
-        throw cliError({
-          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message:
-            "host uninstall: --force only applies with --all, which stops the host. Run 'traycer host uninstall --all --force' to stop it and remove the install.",
-          details: { all: false, force: true },
-          exitCode: 1,
-        });
-      }
-      return buildHostUninstallCommand({
+    (opts) =>
+      buildHostUninstallCommand({
         all: opts.all === true,
         force: opts.force === true,
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
-      })(ctx);
-    },
+      }),
   );
 
   withRunner(

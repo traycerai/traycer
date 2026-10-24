@@ -5,10 +5,13 @@ import {
   type ProviderCliCandidate,
   type ProviderCliState,
   type ProviderManagedInstallState,
+  type ProviderManagedLine,
   type ProviderNextRunBinary,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
+import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
@@ -283,6 +286,67 @@ function versionManagerPanelDataFor(args: {
 }
 
 /**
+ * The Managed line a plain `{ kind: "bundled" }` selection means on a host that
+ * offers more than one ("Managed, Traycer's default"). Every selection stored
+ * before the line existed is plain, so this is also the row those users see
+ * selected.
+ */
+const DEFAULT_MANAGED_LINE: OpencodeLine = 2;
+
+/**
+ * One Managed row per line, for a provider whose host lists `managedLines`
+ * (OpenCode): each line is its own pack, so each row carries its own install
+ * state, its own pack-preparing derivation and its own version menu. The
+ * default line comes first.
+ */
+type ManagedLineRow = {
+  readonly line: OpencodeLine;
+  readonly candidate: ProviderCliCandidate;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly packPreparing: ProviderPackPreparing | null;
+  readonly versionMenu: VersionManagerPanelData | null;
+};
+
+function managedLineRowsFor(args: {
+  readonly state: ProviderCliState;
+  readonly hostId: string | null;
+  readonly supportsVersionManager: boolean | null;
+}): readonly ManagedLineRow[] {
+  const lines: readonly ProviderManagedLine[] = args.state.managedLines ?? [];
+  return lines
+    .toSorted((left, right) => right.line - left.line)
+    .map((entry) => ({
+      line: entry.line,
+      candidate: entry.candidate,
+      managedInstallState: entry.managedInstallState,
+      packPreparing: providerPackPreparingForProvider({
+        ...args.state,
+        selected: { kind: "bundled", line: entry.line },
+      }),
+      versionMenu: versionManagerPanelDataFor({
+        hostId: args.hostId,
+        supportsVersionManager: args.supportsVersionManager,
+        packId: entry.packId,
+        managedVersions: entry.managedVersions,
+        managedVersionsUnavailable: entry.managedVersionsUnavailable,
+        // The provider-level macOS verdict describes the provider's own pack,
+        // which is line 1's.
+        macosRequirement: entry.line === 1 ? args.state.macosRequirement : null,
+      }),
+    }));
+}
+
+function isManagedLineSelected(
+  selection: ProviderSelection,
+  line: OpencodeLine,
+): boolean {
+  return (
+    selection.kind === "bundled" &&
+    (selection.line ?? DEFAULT_MANAGED_LINE) === line
+  );
+}
+
+/**
  * An empty candidate list means "nothing runnable was found on this machine",
  * not "nothing detected yet": the host only omits the bundled row for the
  * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
@@ -503,6 +567,11 @@ export function ProviderCliCandidatesSection({
   // absence: for the PATH-only providers (amp, cursor) this pane would tell
   // people to install a binary the in-flight probe is about to find, and offer
   // an install guide for a CLI they already have.
+  const managedLines = managedLineRowsFor({
+    state,
+    hostId,
+    supportsVersionManager,
+  });
   const candidateArea = candidateAreaFor({
     adding,
     probePending: state.availabilityPending,
@@ -517,6 +586,7 @@ export function ProviderCliCandidatesSection({
         macosRequirement={state.macosRequirement}
         table={{
           candidates: cliConfig.candidates,
+          managedLines,
           managedInstallState,
           packPreparing,
           nextRunBinary: state.nextRunBinary ?? null,
@@ -549,6 +619,12 @@ export function ProviderCliCandidatesSection({
           probeVersion: probe.data?.version ?? null,
         }}
       />
+      {managedLines.length === 0 ? null : (
+        <p className="mt-2 text-ui-xs text-muted-foreground">
+          New chats use the Managed line you pick; existing chats keep the line
+          they started on.
+        </p>
+      )}
       <AddCustomPathButton
         hidden={adding}
         heldReason={providerCustomCliPathHeldReason(providerId)}
@@ -560,6 +636,8 @@ export function ProviderCliCandidatesSection({
 
 type CandidateTableProps = {
   readonly candidates: readonly ProviderCliCandidate[];
+  /** Replaces the `bundled` candidate's single row when non-empty. */
+  readonly managedLines: readonly ManagedLineRow[];
   readonly managedInstallState: ProviderManagedInstallState | null;
   readonly packPreparing: ProviderPackPreparing | null;
   readonly nextRunBinary: ProviderNextRunBinary | null;
@@ -649,6 +727,7 @@ function MacosRequirementNotice({
 
 function CandidateTable({
   candidates,
+  managedLines,
   managedInstallState,
   packPreparing,
   nextRunBinary,
@@ -694,27 +773,58 @@ function CandidateTable({
         <span className={cn("text-right", TABLE_CELL_X)}>Version</span>
         <span />
       </div>
-      {candidates.map((candidate) => (
+      {managedLines.map((row) => (
         <CandidateRow
-          key={candidateKey(candidate)}
-          candidate={candidate}
-          managedInstallState={managedInstallState}
-          packPreparing={packPreparing}
+          key={`bundled:${String(row.line)}`}
+          candidate={row.candidate}
+          managedLine={row.line}
+          rowSelection={{ kind: "bundled", line: row.line }}
+          managedInstallState={row.managedInstallState}
+          packPreparing={row.packPreparing}
           nextRunBinary={nextRunBinary}
           advisory={advisory}
-          differingSessionCount={differingSessionCount}
+          // The running-session count is the provider's own pack's, line 1.
+          differingSessionCount={row.line === 1 ? differingSessionCount : 0}
           radioName={radioName}
           selection={selection}
-          selected={isSelected(selection, candidate)}
+          selected={isManagedLineSelected(selection, row.line)}
           busy={busy}
           onSelect={onSelect}
           onRetryPack={onRetryPack}
           retryingPack={retryingPack}
           onRemove={onRemove}
-          versionMenu={candidate.kind === "bundled" ? versionMenu : null}
+          versionMenu={row.versionMenu}
           versionMenuHostId={versionMenuHostId}
         />
       ))}
+      {candidates
+        .filter(
+          (candidate) =>
+            managedLines.length === 0 || candidate.kind !== "bundled",
+        )
+        .map((candidate) => (
+          <CandidateRow
+            key={candidateKey(candidate)}
+            candidate={candidate}
+            managedLine={null}
+            rowSelection={selectionFor(candidate)}
+            managedInstallState={managedInstallState}
+            packPreparing={packPreparing}
+            nextRunBinary={nextRunBinary}
+            advisory={advisory}
+            differingSessionCount={differingSessionCount}
+            radioName={radioName}
+            selection={selection}
+            selected={isSelected(selection, candidate)}
+            busy={busy}
+            onSelect={onSelect}
+            onRetryPack={onRetryPack}
+            retryingPack={retryingPack}
+            onRemove={onRemove}
+            versionMenu={candidate.kind === "bundled" ? versionMenu : null}
+            versionMenuHostId={versionMenuHostId}
+          />
+        ))}
       <CustomPathForm
         open={adding}
         draftPath={draftPath}
@@ -839,6 +949,8 @@ function AddCustomPathButton({
 
 function CandidateRow({
   candidate,
+  managedLine,
+  rowSelection,
   managedInstallState,
   packPreparing,
   nextRunBinary,
@@ -856,6 +968,10 @@ function CandidateRow({
   versionMenuHostId,
 }: {
   readonly candidate: ProviderCliCandidate;
+  /** The Managed line this row stands for, or null for every other row. */
+  readonly managedLine: OpencodeLine | null;
+  /** What picking this row's radio stores. */
+  readonly rowSelection: ProviderSelection;
   // Provider-level (not per-candidate - see that schema's comment), so only
   // meaningful for the bundled row; other candidates ignore it. Still the
   // source for `bundledPathLabel`, which asks a different question than the
@@ -880,6 +996,7 @@ function CandidateRow({
 }): ReactNode {
   const presentation = candidateRowPresentation({
     candidate,
+    managedLine,
     managedInstallState,
     packPreparing,
     nextRunBinary,
@@ -898,6 +1015,8 @@ function CandidateRow({
     >
       <CandidateSelectionControl
         candidate={candidate}
+        managedLine={managedLine}
+        rowSelection={rowSelection}
         radioName={radioName}
         selected={selected}
         busy={busy}
@@ -905,6 +1024,7 @@ function CandidateRow({
       />
       <CandidatePathCell
         candidate={candidate}
+        isDefaultLine={managedLine === DEFAULT_MANAGED_LINE}
         pathLabel={presentation.pathLabel}
         pathAdvisory={presentation.pathAdvisory}
       />
@@ -937,6 +1057,7 @@ type CandidateRowPresentation = {
 
 function candidateRowPresentation(args: {
   readonly candidate: ProviderCliCandidate;
+  readonly managedLine: OpencodeLine | null;
   readonly managedInstallState: ProviderManagedInstallState | null;
   readonly packPreparing: ProviderPackPreparing | null;
   readonly nextRunBinary: ProviderNextRunBinary | null;
@@ -953,7 +1074,7 @@ function candidateRowPresentation(args: {
       !providerPackBlocksExecution(args.packPreparing));
   return {
     pathLabel: isBundled
-      ? bundledPathLabel(args.managedInstallState)
+      ? managedRowLabel(args.managedLine, args.managedInstallState)
       : args.candidate.path,
     pathAdvisory:
       args.candidate.kind === "path" &&
@@ -985,12 +1106,16 @@ function candidateRowPresentation(args: {
 
 function CandidateSelectionControl({
   candidate,
+  managedLine,
+  rowSelection,
   radioName,
   selected,
   busy,
   onSelect,
 }: {
   readonly candidate: ProviderCliCandidate;
+  readonly managedLine: OpencodeLine | null;
+  readonly rowSelection: ProviderSelection;
   readonly radioName: string;
   readonly selected: boolean;
   readonly busy: boolean;
@@ -998,7 +1123,7 @@ function CandidateSelectionControl({
 }): ReactNode {
   const label =
     candidate.kind === "bundled"
-      ? "Select bundled binary"
+      ? `Select ${managedLine === null ? "bundled binary" : managedRowLabel(managedLine, null)}`
       : `Select ${candidate.path}`;
   return (
     // `min-h-6` sets the row's content floor. Vertical padding lives on the row
@@ -1013,7 +1138,7 @@ function CandidateSelectionControl({
         name={radioName}
         checked={selected}
         disabled={busy}
-        onChange={() => onSelect(selectionFor(candidate))}
+        onChange={() => onSelect(rowSelection)}
         className="size-3.5 cursor-pointer accent-primary"
       />
     </span>
@@ -1022,10 +1147,12 @@ function CandidateSelectionControl({
 
 function CandidatePathCell({
   candidate,
+  isDefaultLine,
   pathLabel,
   pathAdvisory,
 }: {
   readonly candidate: ProviderCliCandidate;
+  readonly isDefaultLine: boolean;
   readonly pathLabel: string;
   readonly pathAdvisory: string | null;
 }): ReactNode {
@@ -1034,13 +1161,15 @@ function CandidatePathCell({
     // not an identity, so it moved to the row's one status line where it takes
     // its turn behind an install failure or an install in flight.
     return (
-      <span
-        className={cn(
-          "min-w-0 truncate text-ui-sm text-foreground",
-          TABLE_CELL_X,
-        )}
-      >
-        {pathLabel}
+      <span className={cn("flex min-w-0 items-center gap-1.5", TABLE_CELL_X)}>
+        <span className="min-w-0 truncate text-ui-sm text-foreground">
+          {pathLabel}
+        </span>
+        {isDefaultLine ? (
+          <Badge variant="muted" size="xs">
+            Default
+          </Badge>
+        ) : null}
       </span>
     );
   }
@@ -1428,6 +1557,16 @@ function nextRunMatchesSelection(
     nextRunBinary.path !== null &&
     selection.path === nextRunBinary.path
   );
+}
+
+// The bundled row's label: its line on a provider that offers more than one
+// Managed line, else the single row's name.
+function managedRowLabel(
+  managedLine: OpencodeLine | null,
+  managedInstallState: ProviderManagedInstallState | null,
+): string {
+  if (managedLine !== null) return `Managed ${String(managedLine)}.x`;
+  return bundledPathLabel(managedInstallState);
 }
 
 // "Bundled" while this provider still ships the still-inline binary (no

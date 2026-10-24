@@ -94,7 +94,7 @@ const ALWAYS_STOPS: HostStopReachable = () => true;
  * stops anything. So are the `agent *-from-hook` commands, which run inside an
  * agent process and are supposed to die with the host.
  *
- * The four conditional entries, each traced to the branch that decides it.
+ * The three conditional entries, each traced to the branch that decides it.
  * They are Linux answers, which is all this map is ever asked for - the caller
  * has already returned on every other platform, and each of these forms is
  * refused outright on Windows anyway:
@@ -108,8 +108,6 @@ const ALWAYS_STOPS: HostStopReachable = () => true;
  *     reinstalls, so its register and start branches cannot be reached.
  *   - `host apply --no-service` (`service === false`) passes `lifecycle: null`
  *     to the commit, so there is no `beforeSwap` on any platform.
- *   - `host uninstall` stops only under `--all`; the default path removes bytes
- *     and deliberately "tears nothing down", leaving a running host serving.
  *
  * Everything else stops unconditionally, `host update` included: whether it
  * finds work to do is a question about STATE, and only options are consulted
@@ -133,7 +131,8 @@ export const HOST_STOPPING_COMMANDS: ReadonlyMap<string, HostStopReachable> =
     ["host install", (options) => options.serviceRegister !== false],
     ["host ensure", (options) => options.serviceRegister !== false],
     ["host apply", (options) => options.service !== false],
-    ["host uninstall", (options) => options.all === true],
+    // Both forms stop a running host before removing its bytes.
+    ["host uninstall", ALWAYS_STOPS],
   ]);
 
 /**

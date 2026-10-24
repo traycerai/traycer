@@ -13,7 +13,6 @@ import {
   LOCAL_ROW_SHARED_UNRECORDED,
 } from "@/components/settings/move/cohort-rows";
 import {
-  INCLUDING_MAIL_PASSWORD,
   RETROSPECTIVE_DISCLOSURE,
   RETROSPECTIVE_RECORD_LINE,
   retrospectiveEvidenceLine,
@@ -82,7 +81,6 @@ describe("copy a person reads", () => {
       SHARED_BY_EARLIER_VERSION_LINE,
       stoppedSharingLine(OCT_20),
       heldItemsLineText(3, "MacBook Pro"),
-      INCLUDING_MAIL_PASSWORD,
       RETROSPECTIVE_DISCLOSURE,
       RETROSPECTIVE_RECORD_LINE,
       retrospectiveTitle("MacBook Pro"),

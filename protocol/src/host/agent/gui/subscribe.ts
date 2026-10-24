@@ -6008,11 +6008,12 @@ const chatRecordSchemaPreAuto = lazySchema(() =>
 );
 
 // The chat record as every windowed line through `1.22` ships it: the live
-// record without `routing`, which first rides `1.23`. `1.13`-`1.22` include
+// record without `routing` and `opencodeLine`, which first ride `1.23` (the
+// line joined the unreleased lines above it in place). `1.13`-`1.22` include
 // lines the 1.5.1 tags shipped, so they must not follow `chatRecordSchema` by
 // reference (`released-baseline-compat.test.ts` catches the leak).
 const chatRecordSchemaPreRouting = lazySchema(() =>
-  chatRecordSchema.omit({ routing: true }),
+  chatRecordSchema.omit({ routing: true, opencodeLine: true }),
 );
 
 // Frozen windowed snapshot bound to `chat.subscribe@1.10`: provider fallback
@@ -8141,4 +8142,17 @@ export const chatSubscribeV135 = defineStreamRpcContract({
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * 1.36 has 1.35's frames. It ships with `providers.list@10.6`, so a send on
+ * it comes from a client that shows both Managed OpenCode rows, and a plain
+ * Managed selection there means OpenCode 2.
+ */
+export const chatSubscribeV136 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 36 } as const,
+  openRequestSchema: chatSubscribeV135.openRequestSchema,
+  serverFrameSchema: chatSubscribeV135.serverFrameSchema,
+  clientFrameSchema: chatSubscribeV135.clientFrameSchema,
 });

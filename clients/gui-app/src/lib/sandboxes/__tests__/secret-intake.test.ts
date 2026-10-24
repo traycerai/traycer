@@ -399,6 +399,7 @@ describe("secretCreateRequest", () => {
   it("shapes a brokered, consented PostgreSQL login", () => {
     const request = secretCreateRequest(validDatabaseForm());
     expect(request).toEqual({
+      environmentId: null,
       name: "PROD_DB",
       kind: "database",
       protocol: "postgres",

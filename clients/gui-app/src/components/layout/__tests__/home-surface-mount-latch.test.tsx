@@ -19,6 +19,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { NavigateOptions } from "@tanstack/react-router";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -100,14 +101,17 @@ function selectItem(activeItemId: string | null): void {
   });
 }
 
-/** The surface reads the browser-sessions plane through Query. */
+/** The surface reads the browser-sessions plane through Query, and its
+ * Getting started section reads the window's host runtime. */
 function renderHost() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <TopLevelTabHost />
+      <HostRuntimeTestProvider>
+        <TopLevelTabHost />
+      </HostRuntimeTestProvider>
     </QueryClientProvider>,
   );
 }

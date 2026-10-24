@@ -680,9 +680,9 @@ export const assistantMessageSchema = lazySchema(() =>
      */
     announcement: botAnnouncementSchema.optional(),
     /**
-     * The choices a bot's thread reply offers the person (Tracy Bots,
+     * The choices a bot reply offers the person (Tracy Bots,
      * decision 56), shown as clickable choices; a chosen one is posted as an
-     * ordinary thread message. Present only on a thread reply that asks;
+     * ordinary message on that surface. Present only on a bot reply that asks;
      * absent everywhere else. Optional and live line only, as `turnProfile`.
      */
     options: z.array(z.string().min(1)).min(1).optional(),

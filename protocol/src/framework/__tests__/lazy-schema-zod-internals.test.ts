@@ -2,16 +2,17 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
- * Canary for the zod 4.4.3 internals `lazySchema` reconstructs in place.
+ * Canary for the zod 4.6.7 internals `lazySchema` reconstructs in place.
  * Failures must name the new version so a bump cannot land silently.
  */
 
 const requireFromHere = createRequire(import.meta.url);
 
 function canaryMessage(version: string): string {
-  return `lazySchema relies on zod 4.4.3 internals; zod is now ${version}: re-verify protocol/src/framework/lazy-schema.ts`;
+  return `lazySchema relies on zod 4.6.7 internals; zod is now ${version}: re-verify protocol/src/framework/lazy-schema.ts`;
 }
 
 function readZodPackageVersion(): string {
@@ -52,13 +53,13 @@ const ZOD_CLASSES = [
   z.ZodLazy,
 ] as const;
 
-describe("lazySchema zod 4.4.3 internals canary", () => {
-  it("pins zod 4.4.3", () => {
+describe("lazySchema zod 4.6.7 internals canary", () => {
+  it("pins zod 4.6.7", () => {
     const version = readZodPackageVersion();
-    expect(version, canaryMessage(version)).toBe("4.4.3");
+    expect(version, canaryMessage(version)).toBe("4.6.7");
   });
 
-  it("_zod is an own non-enumerable bag of def, constr, traits and deferred", () => {
+  it("_zod is an own non-enumerable bag of def, constr and traits, with deferred released", () => {
     const version = readZodPackageVersion();
     const built = z.object({ a: z.string() });
     const descriptor = Object.getOwnPropertyDescriptor(built, "_zod");
@@ -76,8 +77,53 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     const traits = readZodField(built, "traits");
     expect(traits instanceof Set, canaryMessage(version)).toBe(true);
 
-    const deferred = readZodField(built, "deferred");
-    expect(Array.isArray(deferred), canaryMessage(version)).toBe(true);
+    expect(
+      Object.getOwnPropertyDescriptor(readZod(built), "deferred"),
+      canaryMessage(version),
+    ).toEqual({
+      value: undefined,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  });
+
+  it("lazily derived internals are accessors on the prototype of _zod", () => {
+    const version = readZodPackageVersion();
+    const internals = readZod(z.enum(["a", "b"]));
+    const prototype: unknown = Object.getPrototypeOf(internals);
+    expect(prototype, canaryMessage(version)).not.toBe(Object.prototype);
+    if (typeof prototype !== "object" || prototype === null) {
+      throw new Error(canaryMessage(version));
+    }
+    expect(
+      typeof Object.getOwnPropertyDescriptor(prototype, "pattern")?.get,
+      canaryMessage(version),
+    ).toBe("function");
+  });
+
+  it("materialising stand-ins installs nothing on Object.prototype", () => {
+    const version = readZodPackageVersion();
+    const before = Reflect.ownKeys(Object.prototype);
+    const schema = lazySchema(() =>
+      z.object({
+        kind: z.enum(["a", "b"]),
+        name: z.string().optional(),
+        tags: z.array(z.literal("x")).nullable(),
+        choice: z.union([z.number(), z.boolean()]),
+      }),
+    );
+    expect(
+      schema.parse({ kind: "a", tags: null, choice: 1 }),
+      canaryMessage(version),
+    ).toEqual({ kind: "a", tags: null, choice: 1 });
+    expect(
+      toCanonicalJsonSchema(schema, {}),
+      canaryMessage(version),
+    ).toBeTypeOf("object");
+    expect(Reflect.ownKeys(Object.prototype), canaryMessage(version)).toEqual(
+      before,
+    );
   });
 
   it("constr.init is a function", () => {
@@ -134,7 +180,10 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
       throw new Error(canaryMessage(version));
     }
     const traits = new Set<string>();
-    const internals = { def, constr, traits };
+    const internals: object = Object.create(
+      Object.getPrototypeOf(readZod(built)),
+    );
+    Object.assign(internals, { def, constr, traits });
     const inst: object = {};
     Object.setPrototypeOf(inst, Object.getPrototypeOf(built));
     Object.defineProperty(inst, "_zod", {
@@ -149,7 +198,7 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     expect(traits.has("ZodType"), canaryMessage(version)).toBe(true);
   });
 
-  it("eager _zod is non-configurable, non-writable, non-enumerable and _def is non-configurable", () => {
+  it("eager _zod is non-configurable, non-writable, non-enumerable and _def is a prototype getter", () => {
     const version = readZodPackageVersion();
     const built = z.object({ a: z.string() });
     const zodDesc = Object.getOwnPropertyDescriptor(built, "_zod");
@@ -157,9 +206,13 @@ describe("lazySchema zod 4.4.3 internals canary", () => {
     expect(zodDesc?.configurable, canaryMessage(version)).toBe(false);
     expect(zodDesc?.writable, canaryMessage(version)).toBe(false);
     expect(zodDesc?.enumerable, canaryMessage(version)).toBe(false);
-    const defDesc = Object.getOwnPropertyDescriptor(built, "_def");
-    expect(defDesc, canaryMessage(version)).toBeDefined();
-    expect(defDesc?.configurable, canaryMessage(version)).toBe(false);
+    expect(
+      Object.getOwnPropertyDescriptor(built, "_def"),
+      canaryMessage(version),
+    ).toBeUndefined();
+    expect(Reflect.get(built, "_def"), canaryMessage(version)).toBe(
+      readZodField(built, "def"),
+    );
   });
 
   it("globalThis.__zod_globalRegistry exists with has and get, and .describe() adds the clone", () => {

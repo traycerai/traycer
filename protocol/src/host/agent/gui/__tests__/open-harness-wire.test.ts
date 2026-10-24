@@ -13,6 +13,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import { agentSenderSchema } from "@traycer/protocol/persistence/epic/senders";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * `chat.subscribe@1.22` reopens the harness id on every leaf a client merely
@@ -50,7 +51,7 @@ describe("open-harness-wire: member sets", () => {
           )
           .optional(),
       }),
-      z.toJSONSchema(schema, { io: "input" }),
+      toCanonicalJsonSchema(schema, { io: "input" }),
     );
     const options = jsonSchema.anyOf ?? jsonSchema.oneOf ?? [];
     return options.map((option) => option.properties[key].const).sort();
@@ -76,7 +77,7 @@ describe("open-harness-wire: member sets", () => {
  * `$ref`s are followed (a reference already on the stack is not re-entered).
  */
 function closedHarnessIdPaths(schema: z.ZodType): readonly string[] {
-  const root = z.toJSONSchema(schema, { io: "output" });
+  const root = toCanonicalJsonSchema(schema, { io: "output" });
   const defs = isNode(root.$defs) ? root.$defs : {};
   const found = new Set<string>();
 

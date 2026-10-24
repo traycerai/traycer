@@ -18,6 +18,7 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -153,7 +154,9 @@ describe("SystemTabModalHost theme editor integration", () => {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ThemeProvider>
-            <RouterProvider router={router} />
+            <HostRuntimeTestProvider>
+              <RouterProvider router={router} />
+            </HostRuntimeTestProvider>
             <ThemeEditorHost />
           </ThemeProvider>
         </TooltipProvider>

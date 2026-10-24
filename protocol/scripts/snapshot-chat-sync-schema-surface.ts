@@ -18,6 +18,7 @@ import { chatHeadStorageSchema } from "@traycer/protocol/persistence/chat-sync/h
 import { chatShardStorageSchema } from "@traycer/protocol/persistence/chat-sync/shard";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
 import { z } from "zod";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 const chatHeadSchema = getRecordSchema(
   persistenceRecordRegistry,
@@ -42,12 +43,12 @@ const baseline = {
   // IO modes - which would freeze a "storage" surface requiring the internal
   // `residual` key and marking `core` optional. See `chat-sync/residual.ts`.
   head: {
-    storage: z.toJSONSchema(chatHeadStorageSchema, { io: "input" }),
-    domain: z.toJSONSchema(chatHeadSchema),
+    storage: toCanonicalJsonSchema(chatHeadStorageSchema, { io: "input" }),
+    domain: toCanonicalJsonSchema(chatHeadSchema, {}),
   },
   shard: {
-    storage: z.toJSONSchema(chatShardStorageSchema, { io: "input" }),
-    domain: z.toJSONSchema(chatShardSchema),
+    storage: toCanonicalJsonSchema(chatShardStorageSchema, { io: "input" }),
+    domain: toCanonicalJsonSchema(chatShardSchema, {}),
   },
 };
 

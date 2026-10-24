@@ -350,6 +350,7 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
         providerId: "codex",
         scope: "project",
         workspaceRoot: "/Users/dev/app",
+        environmentId: null,
         mutation: {
           action: "remove",
           name: FIND_SKILLS.name,
