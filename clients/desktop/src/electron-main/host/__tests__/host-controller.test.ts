@@ -7422,6 +7422,63 @@ describe("HostControllerStatus.lastEnsureFailure", () => {
       code: null,
     });
   });
+
+  it("a failed convergeReady logs the code and the Last Run Result with private paths and tokens scrubbed", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(electronLog.warn).mockClear();
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError(
+        "E_SERVICE_CONTROL_FAILED",
+        "Last Run Result: 0x80070005 reading C:\\Users\\anurag\\secret-host.json with Bearer startuptoken",
+      ),
+    );
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+    expect(outcome.kind).toBe("failed");
+
+    const call = vi
+      .mocked(electronLog.warn)
+      .mock.calls.find(([message]) =>
+        String(message).includes("host ensure failed"),
+      );
+    expect(call).toBeDefined();
+    const fields = call?.[1] as { code: string; message: string };
+    expect(fields.code).toBe("E_SERVICE_CONTROL_FAILED");
+    expect(fields.message).toContain("Last Run Result: 0x80070005");
+    expect(JSON.stringify(fields)).not.toContain("anurag");
+    expect(JSON.stringify(fields)).not.toContain("startuptoken");
+  });
+
+  it("a successful convergeReady logs no ensure failure", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(electronLog.warn).mockClear();
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+    expect(outcome.kind).toBe("ok");
+    expect(
+      vi
+        .mocked(electronLog.warn)
+        .mock.calls.some(([message]) =>
+          String(message).includes("host ensure failed"),
+        ),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

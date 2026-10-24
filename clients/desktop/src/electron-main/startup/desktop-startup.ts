@@ -908,6 +908,8 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const support = new DesktopSupportService({
     appName: appDisplayName,
     host,
+    readHostEnsureFailure: async () =>
+      (await hostController.getStatus()).lastEnsureFailure,
     authSession,
     hostLayout,
   });
