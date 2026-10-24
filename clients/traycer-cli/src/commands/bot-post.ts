@@ -60,14 +60,16 @@ export type BotReplyOutcome =
 
 /**
  * `traycer bot post <bot> <text>` - a top-level post in the bot's channel
- * (`bot.conversation.send` with no thread). Every post opens a request and a
- * thread the bot answers in; the command prints both ids and whether the post
+ * (`bot.conversation.send` with no thread). Every post opens a request and,
+ * unless the bot answers posts itself in the channel (reply mode `direct`), a
+ * thread the bot answers in; the command prints the ids and whether the post
  * reached the bot now (`written`) or waits for the bot's host to come back
  * (`queued`).
  *
- * `--wait <duration>` then follows the post until the thread's verdict
- * resolves its request, for at most that long: the channel for the post's
- * resolution, and the thread for the reply's text.
+ * `--wait <duration>` then follows the post until its request is resolved,
+ * for at most that long: the channel for the post's resolution, and the
+ * thread for the reply's text - or the channel again, where a bot that
+ * answers posts itself writes its reply.
  */
 export function buildBotPostCommand(opts: {
   readonly bot: string;
@@ -130,8 +132,8 @@ function sendToBot(opts: {
     const delivery = describeDelivery(sent.delivery);
     const sentLine =
       opts.threadId === null
-        ? `Posted to ${bot.title} (request ${sent.requestId}, thread ${sent.threadId}, ${delivery}).`
-        : `Replied in ${bot.title}'s thread ${sent.threadId} (request ${sent.requestId}, ${delivery}).`;
+        ? `Posted to ${bot.title} (request ${sent.requestId}, ${sent.threadId === null ? "answered in the channel" : `thread ${sent.threadId}`}, ${delivery}).`
+        : `Replied in ${bot.title}'s thread ${sent.threadId ?? opts.threadId} (request ${sent.requestId}, ${delivery}).`;
     const sentData = {
       botId: bot.botId,
       conversationId,
@@ -145,12 +147,12 @@ function sendToBot(opts: {
     }
     const { client } = await openLocalStreamClient();
     // A post's request is its row on the channel and its answer is on the
-    // thread it opened; a thread message's request and answer are both on
-    // the thread.
+    // thread it opened, or on the channel when the bot answers it there; a
+    // thread message's request and answer are both on the thread.
     const outcome = await waitForBotReply({
       client,
       botId: bot.botId,
-      requestChatId: opts.threadId === null ? conversationId : sent.threadId,
+      requestChatId: opts.threadId ?? conversationId,
       replyChatId: opts.threadId === null ? sent.threadId : null,
       requestId: sent.requestId,
       timeoutMs: waitMs,

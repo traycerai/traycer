@@ -2378,6 +2378,8 @@ interface AssistantTurnAccumulator {
   announcement: BotAnnouncement | null;
   /** The choices a bot's thread reply offers; `null` on every other turn. */
   options: ReadonlyArray<string> | null;
+  /** The member's post a bot's direct reply answers; `null` on every other turn. */
+  repliesTo: string | null;
   imageResolutionsByBlockId: Map<
     string,
     ReadonlyArray<AssistantMarkdownImageResolution>
@@ -2929,8 +2931,9 @@ function renderPersistedAssistantMessageTurn(
 }
 
 /**
- * A bot row's announcement and options, first non-null: the host writes them
- * on the one record a bot row is, and a sibling record never unsets them.
+ * A bot row's announcement, options and the post it answers, first non-null:
+ * the host writes them on the one record a bot row is, and a sibling record
+ * never unsets them.
  */
 function mergeBotRowFields(
   existing: AssistantTurnAccumulator,
@@ -2938,6 +2941,7 @@ function mergeBotRowFields(
 ): void {
   existing.announcement = existing.announcement ?? message.announcement ?? null;
   existing.options = existing.options ?? message.options ?? null;
+  existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
 }
 
 function addAssistantMessageToAccumulator(
@@ -3011,6 +3015,7 @@ function addAssistantMessageToAccumulator(
     costUsd: message.usage?.costUsd ?? null,
     announcement: message.announcement ?? null,
     options: message.options ?? null,
+    repliesTo: message.repliesTo ?? null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
@@ -3806,6 +3811,8 @@ function renderAssistantTurnSlice(
       : { announcement: input.acc.announcement }),
     // Only a bot's thread reply that asks carries them; absent everywhere else.
     ...(input.acc.options === null ? {} : { options: input.acc.options }),
+    // Only a bot's direct reply in its channel carries it; absent everywhere else.
+    ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
     // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
     // sender label to carry here.
@@ -4167,6 +4174,7 @@ function renderLiveAssistant(
     // never a streamed turn.
     announcement: null,
     options: null,
+    repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };

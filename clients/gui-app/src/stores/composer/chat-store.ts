@@ -764,6 +764,12 @@ export interface ChatMessage {
    */
   options?: ReadonlyArray<string>;
   /**
+   * The member's post a bot's direct reply answers, by its message id (Tracy
+   * Bots, reply mode `direct`), on the bot's row in its channel. Absent on
+   * every other row.
+   */
+  repliesTo?: string;
+  /**
    * The picture of the member who wrote this user row, in a bot
    * conversation whose member directory knows one. Absent on every other
    * row, and on a member with no picture.

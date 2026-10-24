@@ -10,7 +10,13 @@
  * drawn as the bot's, with no request to show.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
@@ -73,6 +79,11 @@ type ThreadTranscriptState = Pick<
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
+  toastFromHostError: vi.fn<(error: Error, fallback: string) => void>(),
+}));
+
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: mocks.toastFromHostError,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -225,6 +236,8 @@ const SEND_RESPONSE: BotConversationSendResponse = {
 };
 
 let sent: ReadonlyArray<BotConversationSendRequest>;
+/** What the host answers the next `bot.conversation.send` with. */
+let sendAnswer: () => Promise<BotConversationSendResponse>;
 
 /** The tab's host client, over a messenger whose `bot.conversation.send` records what it is asked. */
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
@@ -236,7 +249,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     handlers: {
       "bot.conversation.send": (params) => {
         sent = [...sent, params];
-        return SEND_RESPONSE;
+        return sendAnswer();
       },
     },
   });
@@ -290,6 +303,8 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 
 beforeEach(() => {
   sent = [];
+  sendAnswer = () => Promise.resolve(SEND_RESPONSE);
+  mocks.toastFromHostError.mockClear();
   mocks.client = hostClientRecordingSends();
 });
 
@@ -357,6 +372,54 @@ describe("<BotThreadPanel /> a listed thread", () => {
         announcementId: null,
       },
     ]);
+  });
+
+  it("offers no second pick while the first is still being sent, and offers the choices again once it lands", async () => {
+    const user = userEvent.setup();
+    let land: (response: BotConversationSendResponse) => void = () => {};
+    sendAnswer = () =>
+      new Promise<BotConversationSendResponse>((resolve) => {
+        land = resolve;
+      });
+    mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.click(within(group).getByRole("button", { name: "Hold" }));
+
+    await waitFor(() => {
+      expect(
+        within(group)
+          .getAllByRole("button")
+          .every((button) => button.hasAttribute("disabled")),
+      ).toBe(true);
+    });
+    await user.click(within(group).getByRole("button", { name: "Ship it" }));
+    expect(sent).toHaveLength(1);
+
+    land(SEND_RESPONSE);
+
+    await waitFor(() => {
+      expect(
+        within(group)
+          .getAllByRole("button")
+          .some((button) => button.hasAttribute("disabled")),
+      ).toBe(false);
+    });
+  });
+
+  it("tells the person when their pick could not be sent", async () => {
+    const user = userEvent.setup();
+    sendAnswer = () => Promise.reject(new Error("host refused the pick"));
+    mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
+
+    await user.click(screen.getByRole("button", { name: "Hold" }));
+
+    await waitFor(() => {
+      expect(mocks.toastFromHostError).toHaveBeenCalledTimes(1);
+    });
+    const [error, fallback] = mocks.toastFromHostError.mock.calls[0];
+    expect(error.message).toBe("host refused the pick");
+    expect(fallback).toBe("Couldn't send your choice.");
   });
 
   it("draws no choices under a reply that offers none", () => {

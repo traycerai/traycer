@@ -30,6 +30,14 @@ The switch in the provider's header reads **Enabled** or **Disabled**. Only enab
 
 At least one provider must stay enabled. A provider with managed profiles needs at least one enabled profile before you can turn it on.
 
+## Reset Unreadable Provider Settings
+
+If Traycer cannot read a provider's saved settings, a warning in **Providers** offers **Reset &lt;provider&gt; settings**. Use it when the warning prevents you from saving that provider's key, on/off switch, or CLI choice.
+
+Read the confirmation before resetting. Traycer keeps a copy of the settings file in the same folder, then resets only that provider. Its saved key, CLI choice, environment overrides, and launch arguments stop being used; other providers' settings are kept.
+
+After the reset, turn the provider on if needed and enter its key again if you use a stored key. Reapply any custom CLI choice, environment overrides, or launch arguments you still need. The result message names the backup. If it asks you to restart the host, restart the host selected in Settings to finish applying the reset.
+
 ## Provider Tabs
 
 Tabs depend on the provider. A provider opens on its first tab.

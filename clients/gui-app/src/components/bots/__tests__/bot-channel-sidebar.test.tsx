@@ -126,6 +126,7 @@ function bot(botId: string, environmentId: string, title: string): BotRecord {
     effort: null,
     profile: null,
     directive: null,
+    replyMode: "thread",
     appConversationChatId: null,
     trunkChatId: `trunk-${botId}`,
     boundHostId: null,

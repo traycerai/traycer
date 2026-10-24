@@ -346,6 +346,12 @@ function BotTabContent(props: {
     );
     return match?.label ?? snapshot.bot.environmentId;
   }, [environments.data, snapshot.bot.environmentId]);
+  // Only a personal environment's bot may answer posts itself; a list not
+  // read yet draws no reply-mode control.
+  const personal =
+    environments.data?.environments.find(
+      (environment) => environment.environmentId === snapshot.bot.environmentId,
+    )?.ownerKind === "user";
   const botList = useBotListQuery(client, true);
   const environmentBots = useMemo(
     () =>
@@ -455,7 +461,11 @@ function BotTabContent(props: {
             value="settings"
             className="flex min-h-0 flex-1 flex-col"
           >
-            <BotSettingsPanel bot={snapshot.bot} isMain={isMain} />
+            <BotSettingsPanel
+              bot={snapshot.bot}
+              isMain={isMain}
+              personal={personal}
+            />
           </TabsContent>
         </Tabs>
       </div>

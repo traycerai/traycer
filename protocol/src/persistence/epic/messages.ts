@@ -400,6 +400,13 @@ export const conversationRequestSchema = lazySchema(() =>
     requestId: z.string().min(1),
     resolvedAt: z.number().nullable(),
     resolvedByMessageId: z.string().nullable(),
+    /**
+     * `true` on a top-level post its bot answers itself, at the channel's
+     * top level (reply mode `direct`): no thread opens for it, and a member
+     * may open one by replying under it. Absent on every other row, a post
+     * whose thread opened with it included.
+     */
+    direct: z.literal(true).optional(),
   }),
 );
 export type ConversationRequest = z.infer<typeof conversationRequestSchema>;
@@ -679,6 +686,14 @@ export const assistantMessageSchema = lazySchema(() =>
      * absent everywhere else. Optional and live line only, as `turnProfile`.
      */
     options: z.array(z.string().min(1)).min(1).optional(),
+    /**
+     * The member's post a bot's direct reply answers, by its message id
+     * (Tracy Bots, reply mode `direct`). Present only on a bot reply at a
+     * channel's top level; absent everywhere else. Optional and live line
+     * only, as `turnProfile`. Not the agent sender's `inReplyTo`, which
+     * names an agent-to-agent message.
+     */
+    repliesTo: z.string().min(1).optional(),
   }),
 );
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;

@@ -15,6 +15,7 @@ import { BotMessageComposer } from "@/components/bots/bot-message-composer";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -169,22 +170,33 @@ function ListedThread(
   const { botId, hostId, botTitle, thread, anchorSenderLabel, resolveMember } =
     props;
   const client = useTabHostClient();
-  const { mutate: send } = useBotConversationSendMutation(client);
+  const { mutate: send, isPending: sending } =
+    useBotConversationSendMutation(client);
   const { threadId, conversationId } = thread;
-  // A reply's option, clicked, is the person's next message in the thread.
+  // A reply's option, clicked, is the person's next message in the thread:
+  // offered only while no earlier pick is still being sent, and a pick that
+  // fails says so.
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
-      chooseOption: (choice: string) =>
-        send({
-          botId,
-          conversationId,
-          text: choice,
-          threadId,
-          announcementId: null,
-        }),
+      chooseOption: sending
+        ? null
+        : (choice: string) =>
+            send(
+              {
+                botId,
+                conversationId,
+                text: choice,
+                threadId,
+                announcementId: null,
+              },
+              {
+                onError: (error) =>
+                  toastFromHostError(error, "Couldn't send your choice."),
+              },
+            ),
     }),
-    [botId, conversationId, send, threadId],
+    [botId, conversationId, send, sending, threadId],
   );
   return (
     <>

@@ -23,3 +23,44 @@ export function replyRowIdFor(
   }
   return null;
 }
+
+/** A post as the line above a direct reply names it. */
+export interface ChatBotRepliedPost {
+  readonly senderLabel: string;
+  /** The post's first line, cut. */
+  readonly excerpt: string;
+}
+
+/** Characters of a post's first line the line above a direct reply shows. */
+const REPLIED_POST_EXCERPT_MAX = 80;
+
+/**
+ * The post a bot's direct reply answers, as the reply's line names it (Tracy
+ * Bots, reply mode `direct`): its sender and its first line. `null` when no
+ * rendered row carries it.
+ */
+export function repliedPostOf(
+  messages: ReadonlyArray<ChatMessage>,
+  messageId: string,
+): ChatBotRepliedPost | null {
+  const post = messages.find(
+    (message) =>
+      message.role === "user" && message.persistentMessageId === messageId,
+  );
+  if (post === undefined) return null;
+  const text = post.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
+  const firstLine =
+    text
+      .split("\n")
+      .find((line) => line.trim().length > 0)
+      ?.trim() ?? "";
+  return {
+    senderLabel: post.senderLabel ?? "Member",
+    excerpt:
+      firstLine.length > REPLIED_POST_EXCERPT_MAX
+        ? `${firstLine.slice(0, REPLIED_POST_EXCERPT_MAX - 1)}…`
+        : firstLine,
+  };
+}
