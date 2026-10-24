@@ -18,7 +18,7 @@ import {
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
-  hostNotificationsListDowngradeV23ToV10,
+  hostNotificationsListDowngradeV24ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
@@ -354,7 +354,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("downgrades recent/unreadRecent onto all/unread and strips cursor kind", () => {
     expect(
-      hostNotificationsListDowngradeV23ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV24ToV10.downgradeRequest({
         filter: "recent",
         limit: 25,
         cursor: CHRONOLOGICAL_CURSOR,
@@ -371,7 +371,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
       },
     });
     expect(
-      hostNotificationsListDowngradeV23ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV24ToV10.downgradeRequest({
         filter: "unreadRecent",
         limit: 10,
       }),
@@ -383,7 +383,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("downgrades response cursors by stripping kind", () => {
     expect(
-      hostNotificationsListDowngradeV23ToV10.downgradeResponse({
+      hostNotificationsListDowngradeV24ToV10.downgradeResponse({
         entries: [STOPPED_ENTRY],
         nextCursor: CHRONOLOGICAL_CURSOR,
       }),
@@ -401,7 +401,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("rejects attention downgrade with a structured unsupported error", () => {
     expect(
-      hostNotificationsListDowngradeV23ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV24ToV10.downgradeRequest({
         filter: "attention",
         limit: 25,
         cursor: ATTENTION_CURSOR,
@@ -981,7 +981,7 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsListUpgradeV10ToV20);
     expect(
       hostRpcRegistry["host.notifications.list"][2].downgradePathsFromLatest[1],
-    ).toBe(hostNotificationsListDowngradeV23ToV10);
+    ).toBe(hostNotificationsListDowngradeV24ToV10);
   });
 
   it("REFUSES a local-home selector on the v1 bridge instead of widening it to whole-origin", () => {
@@ -993,7 +993,7 @@ describe("host.notifications registry membership", () => {
     // then paginated the wrong scope. Same treatment the `attention`
     // projection already gets one path up.
     expect(
-      hostNotificationsListDowngradeV23ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV24ToV10.downgradeRequest({
         filter: "recent",
         limit: 25,
         home: "local",
@@ -1012,7 +1012,7 @@ describe("host.notifications registry membership", () => {
     // The refusal above is scoped to the selector, not to the whole minor: a
     // caller that never asked for a partition keeps the released bridge.
     expect(
-      hostNotificationsListDowngradeV23ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV24ToV10.downgradeRequest({
         filter: "recent",
         limit: 25,
       }),

@@ -9,13 +9,11 @@ import type {
   EnvironmentReviewEntry,
   LocalOverrideTarget,
 } from "@traycer/protocol/host/environment-schemas";
-import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import {
   keepLocalTarget,
   keepLocalText,
   keptUndoFailedText,
   noticeText,
-  REVIEW_LINK_LABEL,
   reviewText,
   undoRefusalText,
 } from "@/components/settings/host-scope/host-access-model";
@@ -30,13 +28,13 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
-import { personalReviewUrl } from "@/lib/sandboxes/secrets-dashboard";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 
 /**
  * Under a Personal page's status line: its convergence notices ("LOG_LEVEL
  * from dev-box now applies everywhere.", with Undo and, on that host, "Keep
- * dev-box's value on dev-box") and its "needs you" rows, which are reviewed
- * in the dashboard. Nothing when the page has neither.
+ * dev-box's value on dev-box") and its "needs you" rows, which open Secrets.
+ * Nothing when the page has neither.
  */
 export function PersonalPageNotices(): ReactNode {
   const value = useContext(PersonalPageContext);
@@ -267,11 +265,17 @@ function ReviewRow(props: {
   return (
     <li className={ROW_CLASS} data-testid="personal-review-row">
       <span className="min-w-0 text-foreground">{reviewText(props.entry)}</span>
-      <DashboardLinkButton
-        page={personalReviewUrl}
-        label={REVIEW_LINK_LABEL}
-        testId="personal-review-link"
-      />
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="personal-review-link"
+        onClick={() => {
+          navigateToSettingsSection("secrets");
+        }}
+      >
+        Review
+      </Button>
     </li>
   );
 }

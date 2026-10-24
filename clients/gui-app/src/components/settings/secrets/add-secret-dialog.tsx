@@ -1,11 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
-import {
-  SANDBOX_SECRET_FORM_KINDS,
-  type SandboxSecretFormKind,
-} from "@traycer/protocol/host/secret-intake-catalogue";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -17,12 +13,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  useEnvironmentSecretsCreateMutation,
+  useEnvironmentSecretsVerifyCandidateMutation,
+} from "@/hooks/environment/team/use-secret-value-mutations";
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
+  DESKTOP_SECRET_KINDS,
   SECRET_KIND_LABEL,
-  SECRET_KIND_ON_THE_WEB,
-  isDesktopSecretKind,
+  type DesktopSecretKind,
   secretKindHint,
   secretKindUnsupportedReason,
 } from "@/lib/sandboxes/secret-intake-copy";
@@ -39,7 +39,9 @@ import {
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
+  SECRET_CUSTODY_SENTENCE,
   SECRET_SAVED_OFFLINE,
+  SECRETS_NEED_UPDATED_HOST,
   secretSaveConfirmationLines,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { cn } from "@/lib/utils";
@@ -47,14 +49,14 @@ import { cn } from "@/lib/utils";
 /**
  * Settings ▸ Personal ▸ Secrets ▸ Add a secret:
  * kind first, then the kind's form with Verify, then the confirmation of
- * where the value becomes readable. API keys, model provider keys and
- * database logins are added here; every other kind is listed and opens its
- * form on the web; a kind no protocol of which is brokered is greyed with
- * the catalogue's own line.
+ * where the value becomes readable. Only the kinds whose form lives in the
+ * app (API keys, model provider keys and database logins) are offered; SSH,
+ * the cloud and certificate kinds have no row. A kind no protocol of which
+ * is brokered is greyed with the catalogue's own line.
  *
- * The typed value lives in this component's state only: Verify and Save send
- * it by a direct request, so it reaches no query or mutation cache, and
- * closing the dialog drops it.
+ * The typed value lives in this component's state only: Verify and Save read
+ * it when their request is dispatched, so it reaches no query or mutation
+ * cache, and closing the dialog drops it.
  */
 
 type Step =
@@ -76,6 +78,9 @@ const NOTE_TONE: Readonly<Record<SecretVerifyLine["tone"], string>> = {
 };
 
 function errorText(error: unknown, fallback: string): string {
+  if (error instanceof HostMethodVersionUnsatisfiedError) {
+    return SECRETS_NEED_UPDATED_HOST;
+  }
   return error instanceof Error && error.message.length > 0
     ? error.message
     : fallback;
@@ -103,12 +108,11 @@ function createOutcomeNote(
 }
 
 function KindOption(props: {
-  readonly kind: SandboxSecretFormKind;
-  readonly onPick: (kind: SandboxSecretFormKind) => void;
+  readonly kind: DesktopSecretKind;
+  readonly onPick: (kind: DesktopSecretKind) => void;
 }): ReactNode {
   const { kind } = props;
   const unsupported = secretKindUnsupportedReason(kind);
-  const onTheWeb = unsupported === null && !isDesktopSecretKind(kind);
   return (
     <li>
       <button
@@ -124,14 +128,8 @@ function KindOption(props: {
         data-testid={`secret-kind-option-${kind}`}
         data-unsupported={unsupported === null ? undefined : "true"}
       >
-        <span className="flex items-center justify-between gap-2 text-ui-sm font-medium text-foreground">
+        <span className="text-ui-sm font-medium text-foreground">
           {SECRET_KIND_LABEL[kind]}
-          {onTheWeb ? (
-            <span className="flex shrink-0 items-center gap-1 text-ui-xs font-normal text-muted-foreground">
-              {SECRET_KIND_ON_THE_WEB}
-              <ExternalLink className="size-3" aria-hidden />
-            </span>
-          ) : null}
         </span>
         <span className="text-ui-xs text-muted-foreground">
           {unsupported ?? secretKindHint(kind)}
@@ -142,14 +140,14 @@ function KindOption(props: {
 }
 
 function KindPicker(props: {
-  readonly onPick: (kind: SandboxSecretFormKind) => void;
+  readonly onPick: (kind: DesktopSecretKind) => void;
 }): ReactNode {
   return (
     <ul
       className="grid grid-cols-1 gap-2 sm:grid-cols-2"
       data-testid="secret-kind-picker"
     >
-      {SANDBOX_SECRET_FORM_KINDS.map((kind) => (
+      {DESKTOP_SECRET_KINDS.map((kind) => (
         <KindOption key={kind} kind={kind} onPick={props.onPick} />
       ))}
     </ul>
@@ -185,15 +183,29 @@ function Busy(props: { readonly busy: boolean }): ReactNode {
 
 export function AddSecretDialog(props: {
   readonly open: boolean;
+  readonly initialKind?: DesktopSecretKind;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
-  /** A kind whose form lives on the web: open it there. */
-  readonly onOpenOnTheWeb: (kind: SandboxSecretFormKind) => void;
-  /** A secret was saved: re-read the list. */
-  readonly onSaved: () => void;
 }): ReactNode {
-  const [step, setStep] = useState<Step>(PICK);
-  const [busy, setBusy] = useState<"verify" | "save" | null>(null);
+  const initialStep: Step =
+    props.initialKind === undefined
+      ? PICK
+      : { kind: "form", form: initialSecretForm(props.initialKind) };
+  const [step, setStep] = useState<Step>(initialStep);
+  // The form a Verify or Save sends, read at dispatch.
+  const sentForm = useRef<SecretFormState | null>(null);
+  const readSentForm = (): SecretFormState => {
+    if (sentForm.current === null) throw new Error("Nothing to send.");
+    return sentForm.current;
+  };
+  const verifyCandidate = useEnvironmentSecretsVerifyCandidateMutation(
+    props.client,
+    () => secretVerifyCandidateRequest(readSentForm()),
+  );
+  const create = useEnvironmentSecretsCreateMutation(props.client, () =>
+    secretCreateRequest(readSentForm()),
+  );
+  const busy = verifyCandidate.isPending || create.isPending;
   const [verifyNote, setVerifyNote] = useState<SecretVerifyLine | null>(null);
   const [saveNote, setSaveNote] = useState<SecretVerifyLine | null>(null);
   // Which open of the dialog a check or save belongs to. A close ends the
@@ -205,19 +217,15 @@ export function AddSecretDialog(props: {
     if (open) return;
     openGeneration.current += 1;
     // Closing drops the typed value with the rest of the form.
-    setStep(PICK);
+    setStep(initialStep);
     setVerifyNote(null);
     setSaveNote(null);
-    setBusy(null);
+    verifyCandidate.reset();
+    create.reset();
     props.onOpenChange(false);
   };
 
-  const pick = (kind: SandboxSecretFormKind): void => {
-    if (!isDesktopSecretKind(kind)) {
-      props.onOpenOnTheWeb(kind);
-      close(false);
-      return;
-    }
+  const pick = (kind: DesktopSecretKind): void => {
     setStep({ kind: "form", form: initialSecretForm(kind) });
   };
 
@@ -228,13 +236,10 @@ export function AddSecretDialog(props: {
 
   const verify = async (form: SecretFormState): Promise<void> => {
     const sentFrom = openGeneration.current;
-    setBusy("verify");
     setVerifyNote(null);
+    sentForm.current = form;
     try {
-      const result = await props.client.request(
-        "environment.secrets.verify",
-        secretVerifyCandidateRequest(form),
-      );
+      const result = await verifyCandidate.mutateAsync();
       if (openGeneration.current !== sentFrom) return;
       setVerifyNote(secretVerifyLine(result, form.protocol, "dialog"));
     } catch (error) {
@@ -243,23 +248,18 @@ export function AddSecretDialog(props: {
         tone: "warning",
         text: errorText(error, "Couldn't check."),
       });
-    } finally {
-      if (openGeneration.current === sentFrom) setBusy(null);
     }
   };
 
   const save = async (form: SecretFormState): Promise<void> => {
     const sentFrom = openGeneration.current;
-    setBusy("save");
     setSaveNote(null);
+    sentForm.current = form;
     try {
-      const outcome = await props.client.request(
-        "environment.secrets.create",
-        secretCreateRequest(form),
-      );
+      // The mutation re-reads the list once the secret is saved, whichever
+      // open is showing.
+      const outcome = await create.mutateAsync();
       const note = createOutcomeNote(outcome);
-      // The list is re-read whichever open is showing: the secret is saved.
-      if (outcome.outcome !== "refused") props.onSaved();
       if (openGeneration.current !== sentFrom) return;
       if (note === null) {
         close(false);
@@ -272,8 +272,6 @@ export function AddSecretDialog(props: {
         tone: "warning",
         text: errorText(error, "Couldn't save this secret."),
       });
-    } finally {
-      if (openGeneration.current === sentFrom) setBusy(null);
     }
   };
 
@@ -297,6 +295,12 @@ export function AddSecretDialog(props: {
           {step.kind === "form" ? (
             <>
               <SecretIntakeFields state={step.form} onChange={changeForm} />
+              <p
+                className="max-w-[72ch] text-ui-xs text-muted-foreground"
+                data-testid="secret-custody-sentence"
+              >
+                {SECRET_CUSTODY_SENTENCE}
+              </p>
               <Note note={verifyNote} testId="secret-form-verify-line" />
               <FormProblem form={step.form} />
             </>
@@ -306,6 +310,9 @@ export function AddSecretDialog(props: {
               className="flex flex-col gap-2 text-ui-sm"
               data-testid="secret-save-confirmation"
             >
+              <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+                {SECRET_CUSTODY_SENTENCE}
+              </p>
               {secretSaveConfirmationLines(
                 step.form.name,
                 step.form.mode,
@@ -333,20 +340,18 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={
-                busy !== null || secretVerifyProblem(step.form) !== null
-              }
+              disabled={busy || secretVerifyProblem(step.form) !== null}
               onClick={() => void verify(step.form)}
               data-testid="secret-form-verify"
             >
               Verify
-              <Busy busy={busy === "verify"} />
+              <Busy busy={verifyCandidate.isPending} />
             </Button>
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy !== null || secretFormProblem(step.form) !== null}
+              disabled={busy || secretFormProblem(step.form) !== null}
               onClick={() => setStep({ kind: "confirm", form: step.form })}
               data-testid="secret-form-continue"
             >
@@ -375,7 +380,7 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() => {
                 setSaveNote(null);
                 setStep({ kind: "form", form: step.form });
@@ -387,12 +392,12 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() => void save(step.form)}
               data-testid="secret-save"
             >
               Save
-              <Busy busy={busy === "save"} />
+              <Busy busy={create.isPending} />
             </Button>
           </DialogFooter>
         ) : null}

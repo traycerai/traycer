@@ -5,7 +5,7 @@ import type {
   EnvironmentLocalOverridesResponse,
   EnvironmentNoticesResponse,
   EnvironmentReviewResponse,
-  EnvironmentStatusResponse,
+  EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -33,7 +33,7 @@ export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentStatusResponse> {
+): EnvironmentRead<EnvironmentStatusResponseV11> {
   const supported = useHostMethodSupport(hostId, "environment.status");
   const query = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
@@ -54,7 +54,7 @@ export function useEnvironmentStatusRead(
  */
 function useRereadOnRevision(
   hostId: string | null,
-  status: EnvironmentStatusResponse | null,
+  status: EnvironmentStatusResponseV11 | null,
 ): void {
   const queryClient = useQueryClient();
   const seen = useRef<{

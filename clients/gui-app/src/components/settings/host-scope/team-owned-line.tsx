@@ -1,12 +1,9 @@
 import type { ReactNode } from "react";
-import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import { teamOwnedText } from "@/components/settings/host-scope/host-access-model";
-import { settingsDashboardUrl } from "@/lib/sandboxes/secrets-dashboard";
 
 /**
- * A team's host: its settings are the team's, read here and changed in the
- * dashboard. Drawn above the read-only page, outside its inert region, so it
- * and its link stay usable.
+ * A team's host: its settings are the team's, read here. Drawn above the
+ * read-only page, outside its inert region, so the line stays usable.
  */
 export function TeamOwnedLine(props: { readonly teamName: string }): ReactNode {
   return (
@@ -18,14 +15,6 @@ export function TeamOwnedLine(props: { readonly teamName: string }): ReactNode {
       <span className="min-w-0 max-w-[72ch]">
         {teamOwnedText(props.teamName)}
       </span>
-      {/* With no team name there is no team page to open. */}
-      {props.teamName === "" ? null : (
-        <DashboardLinkButton
-          page={(signInUrl) => settingsDashboardUrl(signInUrl, props.teamName)}
-          label="Open the dashboard"
-          testId="team-owned-dashboard-link"
-        />
-      )}
     </div>
   );
 }

@@ -104,7 +104,7 @@ function policyHost(first: TeamAnswer | null): PolicyHost {
     handlers: {
       "environment.status": () => environmentStatusFixture({}),
       "environment.setup.attempts": () => ({ attempts: [] }),
-      "environment.secrets.list": () => ({ secrets: [] }),
+      "environment.secrets.list": () => ({ removed: [], secrets: [] }),
       "autoPolicy.get": () => {
         reads += 1;
         return policyAnswer(current);

@@ -4,9 +4,14 @@ import {
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
+  validateVersionedRpcRegistry,
   type MethodVersionRegistry,
   type SchemaVersion,
 } from "@traycer/protocol/framework/index";
+import {
+  upgradeRequestToVersion,
+  upgradeResponseToVersion,
+} from "@traycer/protocol/framework/versioned-rpc";
 import {
   configEnvSetUpgradeV10ToV11,
   configEnvSetV10,
@@ -71,6 +76,23 @@ function isEnvironmentMethodName(name: string): name is EnvironmentMethodName {
 const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
   isEnvironmentMethodName,
 );
+
+/** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
+const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
+  "providers.link",
+  "providers.linkComplete",
+  "environment.secrets.list",
+  "environment.secrets.create",
+  "environment.secrets.verify",
+  "environment.secrets.replaceValue",
+  "environment.secrets.versions",
+  "environment.secrets.undo",
+  "environment.secrets.destroy",
+  "environment.secrets.rotation",
+  "environment.secrets.consent",
+  "environment.status",
+  "environment.review",
+]);
 
 const JWT_SHAPED_GRANT =
   "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyIiwiaG9zdCI6ImgxIn0.c2lnbmF0dXJl";
@@ -200,14 +222,15 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, latestMinor 0", () => {
+  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, with @1.0 alone or @1.0 and @1.1", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
     expect(shapes).toEqual(
-      ENVIRONMENT_METHOD_NAMES.map(
-        (name) =>
-          `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
+      ENVIRONMENT_METHOD_NAMES.map((name) =>
+        ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
+          ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
+          : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
       ),
     );
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
@@ -1677,6 +1700,643 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
         outcome: "refused",
         code: "",
       }),
+    ).toBe(false);
+  });
+});
+
+// ── (f) the redesign's @1.1 MINORs, upgraded through the registry ───────────
+
+const ONE_ZERO = { major: 1, minor: 0 } as const;
+const ONE_ONE = { major: 1, minor: 1 } as const;
+
+const STATUS_V10 = {
+  principal: { kind: "team", teamName: "acme" },
+  reachability: "connected",
+  bindingGeneration: 2,
+  desiredRevision: 5,
+  receivedRevision: 5,
+  appliedRevision: 4,
+  receiptAgeMs: 1200,
+  items: [],
+  pendingUploads: [],
+  setup: { stage: "applying", state: "running" },
+  remoteAccess: "on",
+};
+
+const REVIEW_ENTRY = {
+  entryId: "e1",
+  reason: "needs_grant",
+  kind: "variable",
+  key: "API_KEY",
+  os: "any",
+  hostId: null,
+  heldAt: 1_700_000_000_000,
+};
+
+describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to exactly their defaults", () => {
+  it("upgrades a status answer with no consent, every plane moved, no return from a team and not stopped", () => {
+    const v10 =
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[0].contract.responseSchema.parse(STATUS_V10);
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["environment.status"],
+      ONE_ZERO,
+      ONE_ONE,
+      v10,
+    );
+    expect(upgraded).toEqual({
+      ...v10,
+      consent: null,
+      planes: { records: "moved", broker: "moved", room: "moved" },
+      returnedFromTeam: null,
+      stoppedAt: null,
+    });
+    // The upgrade lands on a value the @1.1 contract itself accepts.
+    expect(
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[1].contract.responseSchema.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+
+  it("leaves the status request untouched", () => {
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["environment.status"],
+        ONE_ZERO,
+        ONE_ONE,
+        {},
+      ),
+    ).toEqual({});
+  });
+
+  it("parses a status answer that names the move's consent, a stopped plane and a stop time", () => {
+    const answer = {
+      ...STATUS_V10,
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+      consent: { acceptedAt: 1_700_000_000_000, planHash: "h1" },
+      planes: {
+        records: "local",
+        broker: "shared_unrecorded",
+        room: "stopped",
+      },
+      returnedFromTeam: { at: 1_700_000_000_001 },
+      stoppedAt: 1_700_000_000_002,
+    };
+    expect(
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[1].contract.responseSchema.parse(answer),
+    ).toEqual(answer);
+    expect(
+      hostRpcRegistry[
+        "environment.status"
+      ][1].versions[1].contract.responseSchema.safeParse({
+        ...answer,
+        planes: { ...answer.planes, room: "elsewhere" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("upgrades a review answer as a sheet never shown, never acknowledged, with no evidence", () => {
+    const v10 = hostRpcRegistry[
+      "environment.review"
+    ][1].versions[0].contract.responseSchema.parse({ entries: [REVIEW_ENTRY] });
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["environment.review"],
+      ONE_ZERO,
+      ONE_ONE,
+      v10,
+    );
+    expect(upgraded).toEqual({
+      entries: [REVIEW_ENTRY],
+      shownAt: null,
+      acknowledgedAt: null,
+      evidence: { version: null, at: null },
+    });
+    expect(
+      hostRpcRegistry[
+        "environment.review"
+      ][1].versions[1].contract.responseSchema.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+});
+
+describe("environment.review.heldApply and environment.review.record", () => {
+  const heldApply =
+    hostRpcRegistry["environment.review.heldApply"][1].versions[0].contract;
+  const record =
+    hostRpcRegistry["environment.review.record"][1].versions[0].contract;
+  const secretArm = {
+    heldId: "held-1",
+    choice: "secret",
+    kind: "api_key",
+    protocol: "https",
+    hosts: ["api.example.com"],
+    port: null,
+    portOverride: false,
+    swapSites: ["header"],
+    plaintextConsent: { disclosureVersion: 1 },
+  };
+
+  it("registers both off the released floor with unsupported degrade, major 1", () => {
+    for (const method of [
+      "environment.review.heldApply",
+      "environment.review.record",
+    ] as const) {
+      expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
+      expect(releasedMethodNames).not.toContain(method);
+      expect(registryShapeOf(hostRpcRegistry[method])).toBe(
+        "degrade=unsupported majors=1 latestMinor=0 minors=0",
+      );
+    }
+  });
+
+  it("takes the secret arm's binding when the choice is secret, and refuses the choice without it", () => {
+    expect(heldApply.requestSchema.parse(secretArm)).toEqual(secretArm);
+    expect(
+      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "secret" }),
+    ).toBe(false);
+    for (const bad of [
+      { ...secretArm, hosts: [] },
+      { ...secretArm, swapSites: [] },
+      { ...secretArm, swapSites: ["cookie"] },
+      { ...secretArm, port: 0 },
+      { ...secretArm, protocol: "gopher" },
+      { ...secretArm, kind: "pgp" },
+    ]) {
+      expect(accepts(heldApply.requestSchema, bad)).toBe(false);
+    }
+  });
+
+  it("takes only the held id for the plain choices, dropping a binding sent with them", () => {
+    for (const choice of ["variable", "stays", "discard", "approve"] as const) {
+      expect(
+        heldApply.requestSchema.parse({ heldId: "held-1", choice }),
+      ).toEqual({ heldId: "held-1", choice });
+    }
+    expect(
+      heldApply.requestSchema.parse({
+        ...secretArm,
+        choice: "variable",
+      }),
+    ).toEqual({ heldId: "held-1", choice: "variable" });
+    expect(
+      accepts(heldApply.requestSchema, { heldId: "", choice: "variable" }),
+    ).toBe(false);
+    expect(
+      accepts(heldApply.requestSchema, { heldId: "held-1", choice: "keep" }),
+    ).toBe(false);
+  });
+
+  it("answers applied, gone or forbidden, and nothing carrying the held value", () => {
+    for (const outcome of ["applied", "gone", "forbidden"] as const) {
+      expect(heldApply.responseSchema.parse({ outcome })).toEqual({ outcome });
+    }
+    expect(
+      heldApply.responseSchema.parse({
+        outcome: "applied",
+        value: "sk-live-1",
+      }),
+    ).toEqual({ outcome: "applied" });
+    expect(accepts(heldApply.responseSchema, { outcome: "pending" })).toBe(
+      false,
+    );
+  });
+
+  it("records a shown or acknowledged sheet, and answers recorded or not_shared", () => {
+    for (const event of ["shown", "acknowledged"] as const) {
+      expect(record.requestSchema.parse({ event })).toEqual({ event });
+    }
+    expect(accepts(record.requestSchema, { event: "dismissed" })).toBe(false);
+    expect(accepts(record.requestSchema, {})).toBe(false);
+    for (const outcome of ["recorded", "not_shared"] as const) {
+      expect(record.responseSchema.parse({ outcome })).toEqual({ outcome });
+    }
+    expect(accepts(record.responseSchema, { outcome: "ignored" })).toBe(false);
+  });
+});
+
+describe("environment.secrets.* @1.1 requests gain environmentId: null through the registry", () => {
+  const cases: ReadonlyArray<{
+    readonly method: string;
+    readonly request: Record<string, unknown>;
+    readonly upgrade: (request: unknown) => unknown;
+    readonly v11: z.ZodType;
+  }> = [
+    {
+      method: "environment.secrets.list",
+      request: {},
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.list"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsListRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsListRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.create",
+      request: { ...databaseBinding, ...createOptions },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.create"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsCreateRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsCreateRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.verify",
+      request: { target: "secret", secretId: "s1" },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.verify"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsVerifyRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsVerifyRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.replaceValue",
+      request: { secretId: "s1", value: "v", expectedVersionId: "ver1" },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.replaceValue"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsReplaceValueRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsReplaceValueRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.versions",
+      request: { secretId: "s1" },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.versions"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsVersionsRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsVersionsRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.undo",
+      request: { secretId: "s1", versionId: "ver1", regrant: false },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.undo"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsUndoRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsUndoRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.destroy",
+      request: { secretId: "s1", versionId: "ver1" },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.destroy"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsDestroyRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsDestroyRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.rotation",
+      request: { secretId: "s1" },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.rotation"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsRotationRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsRotationRequestSchemaV11,
+    },
+    {
+      method: "environment.secrets.consent",
+      request: {
+        secretId: "s1",
+        disclosure: "plaintext_gateway",
+        disclosureVersion: 1,
+        scope: "secret",
+      },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["environment.secrets.consent"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.environmentSecretsConsentRequestSchema.parse(request),
+        ),
+      v11: env.environmentSecretsConsentRequestSchemaV11,
+    },
+    {
+      method: "providers.link",
+      request: { providerId: "claude-code", profileId: null },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["providers.link"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.providersLinkRequestSchema.parse(request),
+        ),
+      v11: env.providersLinkRequestSchemaV11,
+    },
+    {
+      method: "providers.linkComplete",
+      request: { linkId: "l1", code: null },
+      upgrade: (request) =>
+        upgradeRequestToVersion(
+          hostRpcRegistry["providers.linkComplete"],
+          ONE_ZERO,
+          ONE_ONE,
+          env.providersLinkCompleteRequestSchema.parse(request),
+        ),
+      v11: env.providersLinkCompleteRequestSchemaV11,
+    },
+  ];
+
+  it.each(cases.map((c) => [c.method, c] as const))(
+    "%s: an @1.0 request upgrades to the same request plus environmentId: null, and the @1.1 schema accepts it",
+    (_method, wire) => {
+      const upgraded = wire.upgrade(wire.request);
+      // Same request, one key added: the @1.0 request is a subset of the result.
+      expect(upgraded).toMatchObject(wire.request);
+      expect(Object.keys(upgraded as object).sort()).toEqual(
+        [...Object.keys(wire.request), "environmentId"].sort(),
+      );
+      expect(upgraded).toHaveProperty("environmentId", null);
+      expect(wire.v11.parse(upgraded)).toEqual(upgraded);
+      // The @1.1 schema also takes an addressed environment, and refuses an empty one.
+      expect(
+        accepts(wire.v11, { ...wire.request, environmentId: "env_team_1" }),
+      ).toBe(true);
+      expect(accepts(wire.v11, { ...wire.request, environmentId: "" })).toBe(
+        false,
+      );
+    },
+  );
+
+  it("covers every environment.secrets.* method and both link methods", () => {
+    expect(cases.map((c) => c.method).sort()).toEqual(
+      [
+        ...ENVIRONMENT_METHOD_NAMES.filter((name) =>
+          name.startsWith("environment.secrets."),
+        ),
+        "providers.link",
+        "providers.linkComplete",
+      ].sort(),
+    );
+  });
+
+  it("answers environment.secrets.versions with the removal that follows, null from an @1.0 host", () => {
+    const v10 = env.environmentSecretsVersionsResponseSchema.parse({
+      versions: [],
+    });
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.secrets.versions"],
+        ONE_ZERO,
+        ONE_ONE,
+        v10,
+      ),
+    ).toEqual({ versions: [], removal: null });
+    const removal = {
+      outcome: "cleanup_requested",
+      revokedAt: 1_700_000_000_000,
+      destroyedAt: null,
+      targets: [
+        {
+          target: "host",
+          hostId: "host-1",
+          hostName: "studio",
+          state: "requested",
+          at: 1_700_000_000_001,
+        },
+        {
+          target: "broker_current",
+          hostId: null,
+          hostName: null,
+          state: "confirmed",
+          at: 1_700_000_000_002,
+        },
+      ],
+    };
+    expect(
+      env.environmentSecretsVersionsResponseSchemaV11.parse({
+        versions: [],
+        removal,
+      }).removal,
+    ).toEqual(removal);
+    expect(
+      accepts(env.environmentSecretsVersionsResponseSchemaV11, {
+        versions: [],
+        removal: { ...removal, outcome: "vaporized" },
+      }),
+    ).toBe(false);
+  });
+
+  it("answers environment.secrets.list with no removed secrets from an @1.0 host, and the removed ones when it has them", () => {
+    const v10 = env.environmentSecretsListResponseSchema.parse({ secrets: [] });
+    expect(
+      upgradeResponseToVersion(
+        hostRpcRegistry["environment.secrets.list"],
+        ONE_ZERO,
+        ONE_ONE,
+        v10,
+      ),
+    ).toEqual({ secrets: [], removed: [] });
+    const removed = {
+      id: "s1",
+      name: "PROD_DB",
+      removal: {
+        outcome: "revoked",
+        revokedAt: 1,
+        destroyedAt: null,
+        targets: [],
+      },
+    };
+    expect(
+      env.environmentSecretsListResponseSchemaV11.parse({
+        secrets: [],
+        removed: [removed],
+      }).removed,
+    ).toEqual([removed]);
+    expect(
+      accepts(env.environmentSecretsListResponseSchemaV11, {
+        secrets: [],
+        removed: [{ ...removed, name: "" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+// ── (g) providers.nativeMutate@1.4 ──────────────────────────────────────────
+
+describe("providers.nativeMutate@1.3 to @1.4 fences an edit to its environment", () => {
+  const line = hostRpcRegistry["providers.nativeMutate"][1];
+  const legacyRequest = {
+    providerId: "claude-code",
+    mutation: {
+      kind: "mcp",
+      scope: "global",
+      workspaceRoot: null,
+      mutation: { action: "remove", name: "x" },
+    },
+    executableWriteGrant: null,
+  };
+  const mismatch = {
+    result: { ok: false, code: "environment_mismatch", detail: null },
+  };
+
+  it("upgrades a @1.3 request to an unfenced one: expectedEnvironmentId null", () => {
+    const v13 = line.versions[3].contract.requestSchema.parse(legacyRequest);
+    const upgraded = upgradeRequestToVersion(
+      hostRpcRegistry["providers.nativeMutate"],
+      { major: 1, minor: 3 },
+      { major: 1, minor: 4 },
+      v13,
+    );
+    expect(upgraded).toEqual({ ...v13, expectedEnvironmentId: null });
+    expect(line.versions[4].contract.requestSchema.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("carries a fence on @1.4 and refuses an empty one", () => {
+    const fenced = {
+      ...legacyRequest,
+      expectedEnvironmentId: "env_01J0000000000000000000002",
+    };
+    expect(
+      line.versions[4].contract.requestSchema.parse(fenced),
+    ).toHaveProperty("expectedEnvironmentId", "env_01J0000000000000000000002");
+    expect(
+      accepts(line.versions[4].contract.requestSchema, {
+        ...legacyRequest,
+        expectedEnvironmentId: "",
+      }),
+    ).toBe(false);
+  });
+
+  it("parses the environment_mismatch refusal on @1.4 and rejects it on @1.3", () => {
+    expect(line.versions[4].contract.responseSchema.parse(mismatch)).toEqual(
+      mismatch,
+    );
+    expect(accepts(line.versions[3].contract.responseSchema, mismatch)).toBe(
+      false,
+    );
+    // Every code @1.3 answers is still answered on @1.4.
+    const stillAnswered = {
+      result: { ok: false, code: "server_not_found", detail: "x" },
+    };
+    expect(
+      accepts(line.versions[3].contract.responseSchema, stillAnswered),
+    ).toBe(true);
+    expect(
+      accepts(line.versions[4].contract.responseSchema, stillAnswered),
+    ).toBe(true);
+  });
+});
+
+// ── (h) the growth gate ─────────────────────────────────────────────────────
+
+describe("responseGrowthProjectionGated on the minors that grow a response value", () => {
+  const gated: ReadonlyArray<readonly [string, MethodVersionRegistry, number]> =
+    [
+      ["environment.host.list", hostRpcRegistry["environment.host.list"], 1],
+      [
+        "environment.secrets.destroy",
+        hostRpcRegistry["environment.secrets.destroy"],
+        1,
+      ],
+      ["providers.nativeMutate", hostRpcRegistry["providers.nativeMutate"], 4],
+    ];
+
+  it.each(gated)(
+    "%s declares the gate on its grown minor and not on @1.0",
+    (_method, registry, minor) => {
+      expect(registry[1].versions[minor]).toHaveProperty(
+        "responseGrowthProjectionGated",
+        true,
+      );
+      expect(registry[1].versions[0]).not.toHaveProperty(
+        "responseGrowthProjectionGated",
+      );
+    },
+  );
+
+  it.each(gated)(
+    "%s: the registry validates with the gate and refuses to validate without it",
+    (method, registry, minor) => {
+      expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+      const line = registry[1];
+      const { responseGrowthProjectionGated: _gate, ...ungated } =
+        line.versions[minor];
+      const copy = {
+        [method]: {
+          degrade: { kind: "unsupported" },
+          1: {
+            ...line,
+            versions: { ...line.versions, [minor]: ungated },
+          },
+        },
+      };
+      expect(() => validateVersionedRpcRegistry(copy as never)).toThrow(
+        /responseGrowthProjectionGated/,
+      );
+    },
+  );
+
+  it("environment.secrets.destroy: revoked parses on @1.1 and is rejected on @1.0", () => {
+    const line = hostRpcRegistry["environment.secrets.destroy"][1];
+    expect(
+      line.versions[1].contract.responseSchema.parse({ outcome: "revoked" }),
+    ).toEqual({ outcome: "revoked" });
+    expect(
+      accepts(line.versions[0].contract.responseSchema, { outcome: "revoked" }),
+    ).toBe(false);
+    // The two outcomes @1.0 answers are untouched on @1.1.
+    for (const answer of [
+      { outcome: "destroyed", destroyedAt: 1 },
+      { outcome: "refused", code: "version_current" },
+    ]) {
+      expect(accepts(line.versions[0].contract.responseSchema, answer)).toBe(
+        true,
+      );
+      expect(accepts(line.versions[1].contract.responseSchema, answer)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("environment.host.list: a host with no known enroller or bind time parses on @1.1 and is rejected on @1.0", () => {
+    const line = hostRpcRegistry["environment.host.list"][1];
+    const host = {
+      hostId: "host-1",
+      hostLabel: null,
+      hostPlatform: null,
+      enrolledByUserId: null,
+      kind: "personal",
+      boundAt: null,
+    };
+    expect(
+      accepts(line.versions[1].contract.responseSchema, {
+        hosts: [
+          { ...host, reachable: true, lastReportedAt: null, applied: [] },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      accepts(line.versions[0].contract.responseSchema, { hosts: [host] }),
     ).toBe(false);
   });
 });

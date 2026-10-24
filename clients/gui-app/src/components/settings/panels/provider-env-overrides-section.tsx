@@ -1,3 +1,5 @@
+import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -89,6 +91,13 @@ export function ProviderEnvOverridesSection({
         namePlaceholder={envNamePlaceholder(providerId)}
         emptyLabel={`No variables for ${providerName}.`}
         staleRefusal={null}
+        renderDetails={(key) => (
+          <AppliedProviderItemDetails
+            kind="env_override"
+            itemKey={`${providerIdToGuiHarnessId(providerId)}:${key}`}
+            title={key}
+          />
+        )}
         onCommit={onCommit}
         onDelete={(key) => deleteOverride.mutate({ providerId, key })}
       />

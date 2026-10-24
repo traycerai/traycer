@@ -79,7 +79,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.secrets.list": () => ({ secrets: [] }),
+      "environment.secrets.list": () => ({ removed: [], secrets: [] }),
       "environment.secrets.verify": (request) => {
         verifyRequests.push(request);
         return state.verifyAnswer;

@@ -1079,7 +1079,7 @@ import {
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateV10,
   hostNotificationsIndicatorStateV11,
-  hostNotificationsListDowngradeV23ToV10,
+  hostNotificationsListDowngradeV24ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
   hostNotificationsListUpgradeV21ToV22,
@@ -1088,7 +1088,9 @@ import {
   hostNotificationsListV20,
   hostNotificationsListV21,
   hostNotificationsListV22,
+  hostNotificationsListUpgradeV23ToV24,
   hostNotificationsListV23,
+  hostNotificationsListV24,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkAllReadUpgradeV10ToV11,
   hostNotificationsMarkAllReadV11,
@@ -1101,10 +1103,12 @@ import {
   hostNotificationsFeedSubscribeV13,
   hostNotificationsFeedSubscribeV14,
   hostNotificationsFeedSubscribeV15,
+  hostNotificationsFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV13,
+  hostNotificationsCloudFeedSubscribeV14,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -1179,12 +1183,19 @@ import {
 import {
   environmentBindingReadV10,
   environmentHostBindV10,
+  environmentHostListUpgradeV10ToV11,
   environmentHostListV10,
+  environmentHostListV11,
   environmentHostReadV10,
+  environmentListUpgradeV10ToV11,
   environmentListV10,
+  environmentListV11,
+  environmentMembersUpgradeV10ToV11,
   environmentMembersV10,
+  environmentMembersV11,
   environmentSetMainBotV10,
 } from "@traycer/protocol/host/environment/contracts";
+import { ENVIRONMENT_REDESIGN_RPC_METHODS } from "@traycer/protocol/host/environment/redesign-rpc-methods";
 import {
   sessionImportRunV10,
   sessionImportRunV11,
@@ -1373,9 +1384,11 @@ import {
   providersNativeMutateRequestSchema,
   providersNativeMutateRequestSchemaV10Preimage,
   providersNativeMutateRequestSchemaV11,
+  providersNativeMutateRequestSchemaV14,
   providersNativeMutateResponseSchema,
   providersNativeMutateResponseSchemaV10Preimage,
   providersNativeMutateResponseSchemaV11Preimage,
+  providersNativeMutateResponseSchemaV14,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -4769,6 +4782,18 @@ export const providersNativeMutateV13 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
+/**
+ * `providers.nativeMutate@1.4`: `expectedEnvironmentId`, which fences a team
+ * configuration's edit to the host serving that environment, and the
+ * `environment_mismatch` refusal it answers otherwise.
+ */
+export const providersNativeMutateV14 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: providersNativeMutateRequestSchemaV14,
+  responseSchema: providersNativeMutateResponseSchemaV14,
+});
+
 export const providersNativeMutateUpgradeV10ToV11 = defineUpgradePath<
   typeof providersNativeMutateV10,
   typeof providersNativeMutateV11
@@ -4796,6 +4821,16 @@ export const providersNativeMutateUpgradeV12ToV13 = defineUpgradePath<
   from: { major: 1, minor: 2 },
   to: { major: 1, minor: 3 },
   upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
+  typeof providersNativeMutateV13,
+  typeof providersNativeMutateV14
+>({
+  from: { major: 1, minor: 3 },
+  to: { major: 1, minor: 4 },
+  upgradeRequest: (request) => ({ ...request, expectedEnvironmentId: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -6203,11 +6238,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "environment.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentListV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentListV11,
+          upgradeFromPreviousVersion: environmentListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6261,11 +6300,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "environment.host.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentHostListV10,
           upgradeFromPreviousVersion: null,
+        },
+        // `enrolledByUserId` and `boundAt` gain null, which `@1.0` cannot
+        // carry: the resolver leaves such rows out of a `@1.0` answer.
+        1: {
+          contract: environmentHostListV11,
+          upgradeFromPreviousVersion: environmentHostListUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -6276,11 +6322,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "environment.members": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentMembersV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentMembersV11,
+          upgradeFromPreviousVersion: environmentMembersUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -11970,7 +12020,7 @@ const HOST_RPC_NOTIFICATION_METHODS = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -12006,9 +12056,17 @@ const HOST_RPC_NOTIFICATION_METHODS = {
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV22ToV23,
           responseGrowthProjectionGated: true,
         },
+        // 2.4 adds the five environments-redesign kinds under the same
+        // projection gate. A new minor rather than a widening of 2.3 because
+        // 2.3 is on staging hosts.
+        4: {
+          contract: hostNotificationsListV24,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV23ToV24,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV23ToV10,
+        1: hostNotificationsListDowngradeV24ToV10,
       },
     },
   },
@@ -12327,7 +12385,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.nativeMutate": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: providersNativeMutateV10,
@@ -12345,6 +12403,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         3: {
           contract: providersNativeMutateV13,
           upgradeFromPreviousVersion: providersNativeMutateUpgradeV12ToV13,
+        },
+        // `environment_mismatch` is a code `@1.3` cannot carry: the host
+        // never answers it to a `@1.3` caller.
+        4: {
+          contract: providersNativeMutateV14,
+          upgradeFromPreviousVersion: providersNativeMutateUpgradeV13ToV14,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -13779,7 +13844,7 @@ type HostRpcNotificationMethodMap = {
       readonly downgradePathsFromLatest: Record<never, never>;
     };
     readonly 2: {
-      readonly latestMinor: 3;
+      readonly latestMinor: 4;
       readonly versions: {
         readonly 0: {
           readonly contract: typeof hostNotificationsListV20;
@@ -13799,9 +13864,13 @@ type HostRpcNotificationMethodMap = {
           readonly contract: typeof hostNotificationsListV23;
           readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV22ToV23;
         };
+        readonly 4: {
+          readonly contract: typeof hostNotificationsListV24;
+          readonly upgradeFromPreviousVersion: typeof hostNotificationsListUpgradeV23ToV24;
+        };
       };
       readonly downgradePathsFromLatest: {
-        readonly 1: typeof hostNotificationsListDowngradeV23ToV10;
+        readonly 1: typeof hostNotificationsListDowngradeV24ToV10;
       };
     };
   };
@@ -13861,7 +13930,24 @@ type HostRpcProfileMethods = typeof PROFILE_SYNC_LINK_RPC_METHODS;
 // The environment family, its own slot for the same reason.
 type HostRpcEnvironmentMethods = typeof ENVIRONMENT_RPC_METHODS;
 
+// The environments redesign's methods, a second environment slot.
+type HostRpcEnvironmentRedesignMethods =
+  typeof ENVIRONMENT_REDESIGN_RPC_METHODS;
+
 type DuplicateHostRpcMethodNames =
+  | Extract<
+      keyof HostRpcEnvironmentRedesignMethods,
+      | keyof HostRpcEnvironmentMethods
+      | keyof HostRpcProfileMethods
+      | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
+      | keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_NOTIFICATION_METHODS
+      | keyof typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION
+    >
   | Extract<
       keyof HostRpcEnvironmentMethods,
       | keyof HostRpcProfileMethods
@@ -13968,7 +14054,8 @@ type DuplicateHostRpcMethodNames =
 /**
  * The definition every consumer sees.
  *
- * Seven of the eight local literals and the profile sync family contribute
+ * Seven of the eight local literals, the profile sync family and the two
+ * environment families contribute
  * their own precise `typeof`. The
  * notification literal contributes `HostRpcNotificationMethodMap` instead:
  * its post-v1 minors carry the large protocol Zod unions that tip declaration
@@ -13987,6 +14074,7 @@ type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION &
   HostRpcProfileMethods &
   HostRpcEnvironmentMethods &
+  HostRpcEnvironmentRedesignMethods &
   typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION &
   typeof HOST_RPC_EDITING_REGISTRY_DEFINITION &
   typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
@@ -13999,6 +14087,7 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_DEFINITION,
   ...PROFILE_SYNC_LINK_RPC_METHODS,
   ...ENVIRONMENT_RPC_METHODS,
+  ...ENVIRONMENT_REDESIGN_RPC_METHODS,
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
@@ -14082,7 +14171,7 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   // on the negotiated minor rather than assuming tolerance.
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
@@ -14107,12 +14196,17 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         5: {
           contract: hostNotificationsFeedSubscribeV15,
         },
+        // `@1.4` and `@1.5` are on staging hosts, so the five
+        // environments-redesign arms ride `@1.6`, gated the same way.
+        6: {
+          contract: hostNotificationsFeedSubscribeV16,
+        },
       },
     },
   },
   "host.notifications.cloudFeed.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: hostNotificationsCloudFeedSubscribeV10,
@@ -14126,6 +14220,10 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         // The two secrets arms of the entry union; `@1.2` has shipped.
         3: {
           contract: hostNotificationsCloudFeedSubscribeV13,
+        },
+        // The five environments-redesign arms; `@1.3` is on staging hosts.
+        4: {
+          contract: hostNotificationsCloudFeedSubscribeV14,
         },
       },
     },

@@ -1,78 +1,72 @@
-import { Bot, Cookie, Palette, PanelsTopLeft } from "lucide-react";
+import { Coins, Download, KeyRound, Lock, SquarePen } from "lucide-react";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
+import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
+import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
 import {
-  useOnboardingStore,
-  onboardingCompletedCount,
-  onboardingGuideCount,
-} from "@/stores/onboarding/onboarding-store";
-import {
-  isSetupGuideAvailable,
-  setupGuideLength,
-  setupGuideStepsFor,
-  type SetupGuideId,
-} from "@/stores/onboarding/setup-guides";
-import { useRunnerHostOrNull } from "@/providers/use-runner-host";
-import { useHostBinding } from "@/lib/host";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
+  sandboxIsStagedInThisWindow,
+  useStagedSandboxInThisWindow,
+} from "@/lib/sandboxes/staged-sandbox-in-window";
+import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 
 const CARDS = [
   {
-    id: "tour",
-    icon: PanelsTopLeft,
-    row: GETTING_STARTED.definitions.productTour,
+    id: "provider",
+    icon: KeyRound,
+    row: GETTING_STARTED.definitions.provider,
+    action: "Open Providers",
   },
   {
-    id: "agents",
-    icon: Bot,
-    row: GETTING_STARTED.definitions.agentSelection,
+    id: "task",
+    icon: SquarePen,
+    row: GETTING_STARTED.definitions.task,
+    action: "Start a task",
   },
   {
-    id: "appearance",
-    icon: Palette,
-    row: GETTING_STARTED.definitions.appearanceAndLayout,
+    id: "secret",
+    icon: Lock,
+    row: GETTING_STARTED.definitions.secret,
+    action: "Open Secrets",
   },
   {
-    id: "cookies",
-    icon: Cookie,
-    row: GETTING_STARTED.definitions.browserSignIns,
+    id: "install",
+    icon: Download,
+    row: GETTING_STARTED.definitions.install,
+    action: "Download",
+  },
+  {
+    id: "credits",
+    icon: Coins,
+    row: GETTING_STARTED.definitions.credits,
+    action: "Add credits",
   },
 ] as const;
 
 export type GettingStartedCard = (typeof CARDS)[number];
 export type GettingStartedCardId = GettingStartedCard["id"];
 
-/**
- * The one unavailability that is a fact about the BUILD rather than a state the
- * user can leave. Named, because the surfaces have to tell the two apart: a
- * reason that can change keeps its card, this one does not earn a full card
- * everywhere.
- */
-const UNAVAILABLE_ON_THIS_SHELL = "Available in the desktop app";
-
-/**
- * What "Replay" replays on the installed app, which is not what the shared
- * definition says.
- *
- * The definition's "Your workspace, providers, and tasks." names the three acts,
- * and the installed app runs none of them - its tour is the welcome and then the
- * guided tour of the tasks over the real app. Overridden HERE rather than in the
- * definition because the definition is also the settings-search copy, which is
- * the desktop's and stays true there.
- */
-export const MOBILE_APP_TOUR_DESCRIPTION = "A quick tour of your tasks.";
-export const MOBILE_APP_TOUR_LABEL = "Guided tour";
+export interface GettingStartedFacts {
+  readonly providerSetUp: boolean;
+  readonly hasTask: boolean;
+  readonly hasSecret: boolean;
+  readonly hasSecondPersonalComputer: boolean;
+  readonly sandboxStaged: boolean;
+  readonly creditsAboveZero: boolean;
+}
 
 /** Everything a card prints, derived once so the markup only reads it. */
 export interface CardPresentation {
   readonly done: boolean;
-  readonly started: boolean;
-  /** Steps already completed, what the meter fills. */
-  readonly completed: number;
-  readonly total: number;
   readonly status: string;
   readonly action: string;
-  readonly unavailableReason: string | null;
 }
 
 export interface GettingStartedEntry {
@@ -80,107 +74,120 @@ export interface GettingStartedEntry {
   readonly presentation: CardPresentation;
 }
 
-function cardPresentation(
+function stepIsDone(
   id: GettingStartedCardId,
-  input: {
-    readonly completedAt: number | null;
-    readonly progress: Record<SetupGuideId, number>;
-    readonly shell: { readonly browserView: boolean };
-    readonly layoutEditor: boolean;
-    readonly hostBound: boolean;
-  },
+  facts: GettingStartedFacts,
+): boolean {
+  switch (id) {
+    case "provider":
+      return facts.providerSetUp;
+    case "task":
+      return facts.hasTask;
+    case "secret":
+      return facts.hasSecret;
+    case "install":
+      return facts.hasSecondPersonalComputer;
+    case "credits":
+      return facts.creditsAboveZero;
+  }
+}
+
+export function gettingStartedVisibleCards(
+  facts: GettingStartedFacts,
+): readonly GettingStartedCard[] {
+  return CARDS.filter((card) => card.id !== "credits" || facts.sandboxStaged);
+}
+
+/**
+ * True when every step the Guide group currently shows is done. E4 hides
+ * the group from this. Credits is in the count only while a sandbox is
+ * staged in this window.
+ */
+export function gettingStartedGuideIsComplete(
+  facts: GettingStartedFacts,
+): boolean {
+  return gettingStartedVisibleCards(facts).every((card) =>
+    stepIsDone(card.id, facts),
+  );
+}
+
+function cardPresentation(
+  card: GettingStartedCard,
+  facts: GettingStartedFacts,
 ): CardPresentation {
-  if (id === "tour") {
-    const done = input.completedAt !== null;
-    return {
-      done,
-      started: false,
-      completed: 0,
-      total: 0,
-      status: done ? "Complete" : "Not started",
-      action: done ? "Replay" : "Start guide",
-      unavailableReason: null,
-    };
-  }
-  // Stored progress counts the guide's whole step list, so "done" compares
-  // against that; the printed total counts only the steps this shell walks.
-  const length = setupGuideLength(id);
-  const total = setupGuideStepsFor(id, {
-    layoutEditor: input.layoutEditor,
-  }).length;
-  const step = input.progress[id];
-  const done = step === length;
-  const started = step >= 0;
-  let unavailableReason: string | null = null;
-  if (!isSetupGuideAvailable(id, input.shell))
-    unavailableReason = UNAVAILABLE_ON_THIS_SHELL;
-  else if (id === "cookies" && !input.hostBound)
-    unavailableReason = "Connect a host to continue";
-  let status = "Not started";
-  let action = "Start guide";
-  if (started) {
-    status = `Step ${Math.min(step + 1, total)} of ${total}`;
-    action = "Resume";
-  }
-  if (done) {
-    status = "Complete";
-    action = "Revisit";
-  }
+  const done = stepIsDone(card.id, facts);
   return {
     done,
-    started,
-    completed: Math.min(Math.max(0, step), total),
-    total,
-    status,
-    action,
-    unavailableReason,
+    status: done ? "Complete" : "Not started",
+    action: card.action,
   };
 }
 
-/**
- * A guide this shell cannot offer at all - browser sign-ins with no
- * `browserView` - as opposed to one that is merely blocked right now. It is
- * already out of the count (`onboardingGuideCount`), so dropping its card
- * changes nothing a surface counts - only what it draws.
- */
-export function isPermanentlyUnavailable(entry: GettingStartedEntry): boolean {
-  return entry.presentation.unavailableReason === UNAVAILABLE_ON_THIS_SHELL;
+function personalComputerCount(hosts: readonly HostListItem[] | null): number {
+  if (hosts === null) return 0;
+  return hosts.filter((host) => host.kind === "personal").length;
 }
 
-export const UNAVAILABLE_ON_THIS_SHELL_NOTE =
-  UNAVAILABLE_ON_THIS_SHELL.toLowerCase();
+export function useGettingStartedFacts(): GettingStartedFacts {
+  const client = useOptionalHostClient();
+  const hostId = useRequesterHostId(client);
+  const providers = useProvidersListForClient(client, {
+    enabled: client !== null,
+    subscribed: true,
+  });
+  const secretsSupported = useHostMethodSupport(
+    hostId,
+    "environment.secrets.list",
+  );
+  const secrets = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "environment.secrets.list",
+    params: { environmentId: null },
+    options: { enabled: secretsSupported === true },
+  });
+  const { tasks } = useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, {
+    enabled: true,
+  });
+  const hosts = useRegisteredHosts().data?.hosts ?? null;
+  const user = useAuthUser().data ?? null;
+  const staged = useStagedSandboxInThisWindow();
+  return {
+    providerSetUp:
+      providers.data !== undefined && providerSetUp(providers.data.providers),
+    hasTask: tasks.length > 0,
+    hasSecret: secrets.data?.secrets.some((secret) => !secret.revoked) === true,
+    hasSecondPersonalComputer: personalComputerCount(hosts) >= 2,
+    sandboxStaged: sandboxIsStagedInThisWindow(staged),
+    creditsAboveZero: (sandboxBalanceMc(user) ?? 0) > 0,
+  };
+}
+
+export function useGettingStartedGuideIsComplete(): boolean {
+  return gettingStartedGuideIsComplete(useGettingStartedFacts());
+}
 
 /**
- * The checklist as every surface reads it: one entry per card, plus the
- * "n of m" over the guides this shell can OFFER.
+ * The checklist as every surface reads it: one entry per visible card, plus
+ * the "n of m" over those cards.
  */
 export function useGettingStartedChecklist(): {
   readonly entries: readonly GettingStartedEntry[];
   readonly complete: number;
   readonly guideCount: number;
+  readonly allDone: boolean;
 } {
-  const completedAt = useOnboardingStore((state) => state.completedAt);
-  const progress = useOnboardingStore((state) => state.setupProgress);
-  const browserView = useRunnerHostOrNull()?.browserView ?? null;
-  const hostBinding = useHostBinding();
-  const availability = useSettingsAvailabilityContext();
-  const layoutEditor = isLayoutEditorAvailable(availability);
-  const shell = { browserView: browserView !== null };
-  const complete = useOnboardingStore((state) =>
-    onboardingCompletedCount(state, shell),
-  );
+  const facts = useGettingStartedFacts();
+  const cards = gettingStartedVisibleCards(facts);
+  const entries = cards.map((card) => ({
+    card,
+    presentation: cardPresentation(card, facts),
+  }));
+  const complete = entries.filter((entry) => entry.presentation.done).length;
   return {
-    entries: CARDS.map((card) => ({
-      card,
-      presentation: cardPresentation(card.id, {
-        completedAt,
-        progress,
-        shell,
-        layoutEditor,
-        hostBound: hostBinding !== null,
-      }),
-    })),
+    entries,
     complete,
-    guideCount: onboardingGuideCount(shell),
+    guideCount: cards.length,
+    allDone: gettingStartedGuideIsComplete(facts),
   };
 }
