@@ -12,10 +12,8 @@ import { buildProgramWithAgentRoles } from "../index";
 import * as cgroupRelocationModule from "../host/cgroup-relocation";
 import * as hostUninstallModule from "../commands/host-uninstall";
 
-// `host uninstall --force` is the forced STOP, and only `--all` stops a host.
-// Without `--all` it would read as a forced stop while the bytes go from under
-// a running host, so it is refused as an invalid argument before the command
-// is built (traycer#1563). The setup mirrors `cli-with-runner-relocation`:
+// `host uninstall --force` is the forced STOP, accepted with or without
+// `--all`: both forms stop a running host before removing the bytes. The setup mirrors `cli-with-runner-relocation`:
 // the relocation hook and the process terminator are stubbed so the real
 // runner runs from inside a Traycer host's cgroup too.
 
@@ -111,14 +109,16 @@ describe("host uninstall --force", () => {
     vi.restoreAllMocks();
   });
 
-  it("refuses --force without --all as an invalid argument and runs no uninstall", async () => {
+  it("accepts --force without --all and builds the command with force", async () => {
     await parseHostUninstall(["--force"]);
 
-    expect(stdout).toContain("E_INVALID_ARGUMENT");
-    expect(stdout).toContain("--force only applies with --all");
-    expect(exitMocks.calls).toEqual([1]);
-    // The refusal is raised before the uninstall command is built at all.
-    expect(buildSpy).not.toHaveBeenCalled();
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(buildSpy.mock.calls[0]?.[0]).toMatchObject({
+      all: false,
+      force: true,
+    });
+    expect(exitMocks.calls).toEqual([0]);
+    expect(stdout).not.toContain("E_INVALID_ARGUMENT");
   });
 
   it("still dispatches --all --force to the uninstall command", async () => {
@@ -166,7 +166,7 @@ describe("host uninstall --all help", () => {
   it("describes --force without naming a signal", () => {
     const description = optionDescription("--force");
     expect(description).not.toContain("SIGKILL");
-    expect(description).toContain("stop the host even if it is not responding");
+    expect(description).toContain("Stop the host even if it is not responding");
     expect(description).toContain(
       "Running terminal sessions and in-flight agent work are killed.",
     );
