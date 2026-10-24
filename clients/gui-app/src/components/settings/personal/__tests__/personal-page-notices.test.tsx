@@ -11,6 +11,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+// The configuration status chip reads the host runtime this suite does not
+// mount, and none of these cases is about it.
+vi.mock("@/components/settings/personal/page-chip", () => ({
+  PageChip: () => null,
+}));
+
 // The grant minter a write carries is read from the host binding. The client
 // is a REAL `HostClient` over an in-memory messenger (`buildAccessHost`): only
 // the host on the far side is faked.

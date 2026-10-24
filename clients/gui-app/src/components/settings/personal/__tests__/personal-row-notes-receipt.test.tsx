@@ -13,6 +13,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+// The configuration status chip reads the host runtime this suite does not
+// mount, and none of these cases is about it.
+vi.mock("@/components/settings/personal/page-chip", () => ({
+  PageChip: () => null,
+}));
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";

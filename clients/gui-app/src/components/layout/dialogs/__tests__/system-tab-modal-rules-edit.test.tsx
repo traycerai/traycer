@@ -84,6 +84,30 @@ vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: (): boolean => false,
   isMobileViewport: (): boolean => false,
 }));
+// The Personal page's chip reads host status through the host runtime, and
+// has its own suite; this one is about the Rules edit.
+vi.mock("@/components/settings/personal/page-chip", () => ({
+  PageChip: () => null,
+}));
+// The Team rows and the trigger's team label read the environment list
+// through the window's host client, and this suite mounts no host runtime.
+vi.mock("@/components/settings/environment/team-pick-label", () => ({
+  usePickedTeamLabel: () => null,
+}));
+vi.mock("@/components/settings/environment/team-rows", () => ({
+  TeamRows: () => null,
+}));
+// The sidebar's Guide group reads the Getting started facts through the host
+// runtime; that checklist has its own suite.
+vi.mock(
+  "@/components/onboarding/getting-started-checklist",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/onboarding/getting-started-checklist")
+    >()),
+    useGettingStartedGuideIsComplete: () => false,
+  }),
+);
 vi.mock("@/components/epics/history-modal-content", () => ({
   HistoryModalContent: () => <div data-testid="history-body" />,
 }));

@@ -29,12 +29,11 @@ import {
 } from "@/stores/auth/auth-store";
 
 const modelMock = vi.hoisted(() => ({ value: null as FocusModel | null }));
-// The Getting started section's "Set up Personal" group reads the window's
-// host through Query and has its own suite
-// (`onboarding/__tests__/set-up-personal-group.test.tsx`); this suite is about
+// The Getting started section reads the window's host through Query and has
+// its own suite (`home-getting-started-section.test.tsx`); this suite is about
 // the focus view, so it is stood in for here.
-vi.mock("@/components/onboarding/set-up-personal-group", () => ({
-  SetUpPersonalGroup: () => null,
+vi.mock("@/components/home-focus/home-getting-started-section", () => ({
+  HomeGettingStartedSection: () => null,
 }));
 vi.mock("@/hooks/home-focus/use-focus-model", () => ({
   useFocusModel: () => modelMock.value,

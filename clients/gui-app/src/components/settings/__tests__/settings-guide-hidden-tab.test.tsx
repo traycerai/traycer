@@ -79,6 +79,17 @@ vi.mock("@/components/epic-tabs/epic-surface", () => ({
 vi.mock("@/components/epics/history-surface", () => ({
   HistorySurface: () => null,
 }));
+// The sidebar's Guide group reads the Getting started facts through the host
+// runtime; that checklist has its own suite.
+vi.mock(
+  "@/components/onboarding/getting-started-checklist",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/onboarding/getting-started-checklist")
+    >()),
+    useGettingStartedGuideIsComplete: () => false,
+  }),
+);
 vi.mock("@/components/onboarding/onboarding-coachmark", () => ({
   OnboardingCoachmark: () => <div data-testid="guide-coachmark" />,
 }));
