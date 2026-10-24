@@ -78,6 +78,7 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   KEPT_UNTIL_YOU_DESTROY_IT,
+  SANDBOX_LIST_FAILED,
   sandboxShapeLabel,
   shortPriceLabel,
   wakeString,
@@ -594,7 +595,7 @@ function SandboxListGate(props: {
     return (
       <div className="flex flex-wrap items-center gap-2 px-5 py-6">
         <p className="text-ui-sm text-muted-foreground">
-          Couldn&apos;t load your sandboxes.
+          {SANDBOX_LIST_FAILED}
         </p>
         <Button
           type="button"

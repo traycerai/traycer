@@ -20,6 +20,7 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
+import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   closeSandboxDetails,
@@ -60,16 +61,33 @@ function SandboxDetailsBody(props: { readonly sandboxId: string }): ReactNode {
   const summary =
     list.data?.sandboxes.find((row) => row.id === props.sandboxId) ?? null;
   if (summary === null) {
+    // A failed read leaves no data either; it says so and offers Retry
+    // rather than loading for ever.
+    const failed = list.data === undefined && list.isError;
+    let description = "This sandbox is no longer listed: it was destroyed.";
+    if (failed) description = SANDBOX_LIST_FAILED;
+    else if (list.data === undefined) {
+      description = "Loading this sandbox's details…";
+    }
     return (
       <>
         <SheetHeader>
           <SheetTitle>Details</SheetTitle>
-          <SheetDescription>
-            {list.data === undefined
-              ? "Loading this sandbox's details…"
-              : "This sandbox is no longer listed: it was destroyed."}
-          </SheetDescription>
+          <SheetDescription>{description}</SheetDescription>
         </SheetHeader>
+        {failed ? (
+          <div className="px-4 pb-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={list.isFetching}
+              onClick={() => void list.refetch()}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
         <p className="px-4 text-ui-xs text-muted-foreground">
           {`Support reference ${props.sandboxId}`}
         </p>

@@ -10,7 +10,9 @@ import {
   sandboxRowMatches,
   sandboxSessionsLine,
   type SandboxRowAction,
+  sandboxTodayCost,
 } from "@/lib/sandboxes/sandbox-row-lines";
+import { LESS_THAN_A_CENT_SO_FAR } from "@/lib/sandboxes/sandbox-strings";
 
 const NOW = 1_791_100_000_000;
 
@@ -217,5 +219,18 @@ describe("sandboxSessionsLine and sandboxIdleRefusal", () => {
     expect(sandboxIdleRefusal(1)).toBe("At least 2 minutes.");
     expect(sandboxIdleRefusal(2)).toBeNull();
     expect(sandboxIdleRefusal(Number.NaN)).toBe("Enter a whole number.");
+  });
+});
+
+describe("sandboxTodayCost", () => {
+  const awake = sandboxSummaryFixture({ state: "awake" });
+
+  it("says less than a cent in the first minute after a wake, never $0.00", () => {
+    // $0.12 an hour for one minute is a fifth of a cent.
+    expect(sandboxTodayCost(awake, null, 60_000)).toBe(LESS_THAN_A_CENT_SO_FAR);
+  });
+
+  it("says the accrual once it reaches a cent", () => {
+    expect(sandboxTodayCost(awake, null, 30 * 60_000)).toBe("$0.06 so far");
   });
 });

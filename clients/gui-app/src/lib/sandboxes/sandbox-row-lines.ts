@@ -10,6 +10,7 @@ import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
   AGENT_SANDBOX,
   KEPT_UNTIL_YOU_DESTROY_IT,
+  LESS_THAN_A_CENT_SO_FAR,
   configurationLabel,
   costLine,
   formatSandboxDollars,
@@ -34,6 +35,8 @@ export const SANDBOX_MIN_IDLE_MINUTES = 2;
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+/** One cent in millicredits (a credit is a dollar, 1000 millicredits). */
+const MC_PER_CENT = 10;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
 
 /**
@@ -424,7 +427,8 @@ export function formatSandboxAge(at: number, now: number): string {
 
 /**
  * Today's cost: `$0.16 today`, or while nothing has posted yet the accrual
- * of this wake, `$0.09 so far`, never a rounded zero.
+ * of this wake, `$0.09 so far`, never a rounded zero: under a cent it reads
+ * `Less than $0.01 so far`.
  */
 export function sandboxTodayCost(
   summary: SandboxSummary,
@@ -441,6 +445,7 @@ export function sandboxTodayCost(
     return null;
   }
   const accrued = (summary.priceMcPerHour.awakeMc * awakeTodayMs) / MS_PER_HOUR;
+  if (accrued < MC_PER_CENT) return LESS_THAN_A_CENT_SO_FAR;
   return `${formatSandboxDollars(accrued)} so far`;
 }
 

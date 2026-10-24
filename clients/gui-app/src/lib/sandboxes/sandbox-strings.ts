@@ -463,6 +463,12 @@ export function hoverAwakeMinutes(minutes: number): string {
   return `${minutes} min awake`;
 }
 
+/** A wake's accrual while it is under a cent: never a rounded `$0.00`. */
+export const LESS_THAN_A_CENT_SO_FAR = "Less than $0.01 so far";
+
+/** The sandbox list could not be read; the page and the drawer offer Retry. */
+export const SANDBOX_LIST_FAILED = "Couldn't load your sandboxes.";
+
 /** Today's cost; an amount too small to post reads `so far`, never `$0.00`. */
 export function hoverTodayCost(mc: number): string {
   return mc < 5 ? "so far" : `${formatSandboxDollars(mc)} today`;
