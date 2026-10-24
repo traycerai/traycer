@@ -22,6 +22,7 @@ import type {
 } from "@/components/home/data/landing-options";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { FocusedComposerKind } from "@/lib/commands/types";
+import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 
 export interface ComposerControls {
   readonly setReasoning: (level: ReasoningLevel) => void;
@@ -54,6 +55,14 @@ export interface FocusedComposerEntry {
    * resolving (the subpages then list nothing rather than another host's).
    */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /**
+   * The OpenCode line of the chat this composer runs (`null` for a composer
+   * with no chat yet, which runs the host's default line). The palette renders
+   * outside the chat tile, so it cannot read the tile's line context; its
+   * subpages list this line's OpenCode models, the ones `selectModel` can
+   * commit to this chat.
+   */
+  readonly opencodeLine: OpencodeLine | null;
 }
 
 let registered: FocusedComposerEntry | null = null;
@@ -63,8 +72,14 @@ export function registerFocusedComposerControls(
   kind: FocusedComposerKind,
   controls: ComposerControls,
   hostClient: HostClient<HostRpcRegistry> | null,
+  opencodeLine: OpencodeLine | null,
 ): () => void {
-  const entry: FocusedComposerEntry = { kind, controls, hostClient };
+  const entry: FocusedComposerEntry = {
+    kind,
+    controls,
+    hostClient,
+    opencodeLine,
+  };
   registered = entry;
   notify();
   return () => {

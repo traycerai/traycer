@@ -55,6 +55,7 @@ import {
   visibleHostNotificationKinds,
   type HostNotificationEntryV21,
 } from "@traycer/protocol/host/notifications/contracts";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * The one-time compatibility cutover for `host.operation.finished`.
@@ -226,7 +227,7 @@ describe("released schemas stay frozen", () => {
 
   it("keeps the released contracts byte-identical to their frozen sources", () => {
     const dump = (schema: z.ZodType): unknown =>
-      z.toJSONSchema(schema, { unrepresentable: "any" });
+      toCanonicalJsonSchema(schema, { unrepresentable: "any" });
     // The `@1.0` feed and the `@1.1` feed share one open request and one
     // client frame union; only the server frame widens.
     expect(dump(hostNotificationsFeedSubscribeV10.openRequestSchema)).toEqual(

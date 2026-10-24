@@ -3,10 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Zod's `Symbol.hasInstance` answers by trait name, so a schema built by one
- * 4.4.3 copy is still `instanceof` another copy's classes. The helper relies
+ * zod copy is still `instanceof` another copy's classes. The helper relies
  * on that and has no copy-specific code; this file pins the zod behaviour for
  * a stand-in, not a helper-owned reconstruction path.
  */
@@ -68,7 +69,7 @@ function loadSecondZodCopy(): ZodCopy {
   };
 }
 
-describe("zod trait-based instanceof across distinct 4.4.3 copies", () => {
+describe("zod trait-based instanceof across distinct zod copies", () => {
   it("a stand-in built with copy B is instanceof copy A's class because traits match, which the helper relies on", () => {
     const copyB = loadSecondZodCopy();
     expect(copyB.ZodObject).not.toBe(z.ZodObject);
@@ -81,8 +82,8 @@ describe("zod trait-based instanceof across distinct 4.4.3 copies", () => {
       child: { a: "x" },
     });
 
-    expect(z.toJSONSchema(standInB)).toEqual(
-      z.toJSONSchema(z.object({ a: z.string() })),
+    expect(toCanonicalJsonSchema(standInB, {})).toEqual(
+      toCanonicalJsonSchema(z.object({ a: z.string() }), {}),
     );
   });
 });

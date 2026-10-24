@@ -758,8 +758,8 @@ export interface ChatMessage {
    */
   announcement?: BotAnnouncement;
   /**
-   * The choices a bot's thread reply offers the person (Tracy Bots, decision
-   * 56), each a button that posts it as their next message in the thread.
+   * The choices a bot reply offers the person (Tracy Bots, decision 56),
+   * each a button that posts it as their next message on that surface.
    * Absent on every other row.
    */
   options?: ReadonlyArray<string>;

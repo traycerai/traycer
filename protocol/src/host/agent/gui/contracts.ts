@@ -8,8 +8,10 @@ import {
   getGuiAgentPlanResponseSchema,
   listGuiAgentCommandsRequestSchema,
   listGuiAgentCommandsRequestSchemaV11,
+  listGuiAgentCommandsRequestSchemaV12,
   listGuiAgentCommandsResponseSchema,
   listGuiAgentModelsRequestSchema,
+  listGuiAgentModelsRequestSchemaV11,
   listGuiAgentModelsResponseSchema,
   listGuiHarnessesRequestSchema,
   listGuiHarnessesResponseSchema,
@@ -76,6 +78,7 @@ import {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -1393,6 +1396,27 @@ export const agentGuiListModelsV10 = defineRpcContract({
   responseSchema: listGuiAgentModelsResponseSchema,
 });
 
+/**
+ * `agent.gui.listModels@1.1`: the chat's OpenCode line, a new optional request
+ * key stripped for a host below it like `agent.gui.listCommands@1.2`'s.
+ */
+export const agentGuiListModelsV11 = defineRpcContract({
+  method: "agent.gui.listModels",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listGuiAgentModelsRequestSchemaV11,
+  responseSchema: listGuiAgentModelsResponseSchema,
+});
+
+export const agentGuiListModelsUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentGuiListModelsV10,
+  typeof agentGuiListModelsV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const agentGuiListCommandsV10 = defineRpcContract({
   method: "agent.gui.listCommands",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1414,6 +1438,28 @@ export const agentGuiListCommandsUpgradeV10ToV11 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 1, minor: 1 },
   upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `agent.gui.listCommands@1.2`: the chat's OpenCode line. A new optional
+ * request key, so a 1.2 call to a host below it is re-parsed onto that line's
+ * non-strict request, which strips it; such a host runs one OpenCode line.
+ */
+export const agentGuiListCommandsV12 = defineRpcContract({
+  method: "agent.gui.listCommands",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listGuiAgentCommandsRequestSchemaV12,
+  responseSchema: listGuiAgentCommandsResponseSchema,
+});
+
+export const agentGuiListCommandsUpgradeV11ToV12 = defineUpgradePath<
+  typeof agentGuiListCommandsV11,
+  typeof agentGuiListCommandsV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
 
@@ -1462,4 +1508,5 @@ export {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
 };

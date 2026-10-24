@@ -337,9 +337,8 @@ export function OrganizationProvider({
       wake: () => setRecoveries((seen) => seen + 1),
     });
     projectOrganizationToTabs(query.data, userId);
-    // No `scope` here: `command` is rebuilt from `hostId` and `userId`, so a
-    // scope change already re-runs this, and a dependency no test can
-    // distinguish is one that will be wrong later without anyone noticing.
+    // `command` changes with the host/account scope, so scope changes also
+    // re-run this effect.
   }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
@@ -535,18 +534,11 @@ function organizationFiltersChanged(
  * How many times one tab's draft group intent is sent before this provider
  * leaves it alone.
  *
- * The retry rides the thing that already proves the transport is alive: a
- * view frame. Frames are host snapshots, so while the connection is down
- * none arrive and no attempt is spent; when it comes back the fresh snapshot
- * IS the recovery event and the next attempt goes out on it. That is why
- * there is no timer and no backoff here - there is nothing to wait for that
- * the frame does not already say.
- *
- * The count is what stops a host that is reachable and REFUSING from being
- * asked on every frame. It resets when the stream transport is rebuilt, or
- * when the host or account changes, so a long-lived window that used up its
- * attempts on one bad connection gets them back on the next. An intent that
- * runs out stays in the layout, and the next launch picks it up.
+ * Relevant view/open changes or a transport recovery wake the sender; no
+ * timer retries a refusal. The count prevents repeated frames from spending
+ * unbounded attempts on a reachable host that keeps refusing. Recovery or a
+ * host/account scope change resets the count. An exhausted intent stays in
+ * the layout for a later recovery or launch.
  */
 const DRAFT_INTENT_MAX_ATTEMPTS = 3;
 

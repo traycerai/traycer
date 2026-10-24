@@ -43,6 +43,7 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 describe("fileChangeBlockSchema backward-compat", () => {
   it("parses a pre-compaction file_change block (no hashes/counts) via defaults", () => {
@@ -517,8 +518,14 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   };
 
   it("freezes delivery placement out of chat.subscribe 1.8 and includes it in 1.9", () => {
-    const frozen = z.toJSONSchema(chatSubscribeV18.serverFrameSchema);
-    const current = z.toJSONSchema(chatSubscribeV19.serverFrameSchema);
+    const frozen = toCanonicalJsonSchema(
+      chatSubscribeV18.serverFrameSchema,
+      {},
+    );
+    const current = toCanonicalJsonSchema(
+      chatSubscribeV19.serverFrameSchema,
+      {},
+    );
     expect(JSON.stringify(frozen)).not.toContain("deliveryPlacement");
     expect(JSON.stringify(current)).toContain("deliveryPlacement");
   });
@@ -865,9 +872,9 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     expect(() =>
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
     ).not.toThrow();
-    expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
+    expect(() => toCanonicalJsonSchema(contentBlockSchema, {})).not.toThrow();
     expect(() =>
-      z.toJSONSchema(contentBlockSchema, { io: "input" }),
+      toCanonicalJsonSchema(contentBlockSchema, { io: "input" }),
     ).not.toThrow();
   });
 });

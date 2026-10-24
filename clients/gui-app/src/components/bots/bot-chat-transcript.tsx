@@ -57,8 +57,8 @@ import {
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 
 /**
- * What a bot chat is to the person reading it: the bot's channel, whose
- * posts each open a thread, or one of those threads.
+ * What a bot chat is to the person reading it: the bot's channel or one of
+ * its threads.
  */
 export type BotTranscriptSurface =
   | {

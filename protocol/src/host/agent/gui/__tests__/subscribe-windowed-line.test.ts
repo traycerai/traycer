@@ -278,6 +278,10 @@ describe("the chat.subscribe@1.6 freeze", () => {
   // `routing` is the first: it arrived with `agent.configure@7.1`, and every
   // released `chat.subscribe` line freezes the record without it.
   //
+  // `opencodeLine` is the second: the OpenCode line a chat recorded when it
+  // first ran an opencode-family harness, with the same released-lines
+  // treatment.
+  //
   // Appending to it is the whole point: this is the tripwire
   // that makes a new chat-record field a deliberate decision about the released
   // wire shape rather than something that happens to it. When the assertion
@@ -287,7 +291,10 @@ describe("the chat.subscribe@1.6 freeze", () => {
   // Deliberately not a plain equality check against `chatSchema`: an equality
   // that can only ever be "fixed" by deleting it teaches the next person to
   // delete it, and then nothing watches this again.
-  const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = ["routing"];
+  const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = [
+    "routing",
+    "opencodeLine",
+  ];
 
   it("accounts for every live chatSchema field as either frozen into 1.6 or explicitly post-1.6", () => {
     const accountedFor = [

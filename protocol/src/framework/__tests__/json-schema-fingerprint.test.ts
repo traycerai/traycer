@@ -5,6 +5,7 @@ import {
   toUnknownKeyTree,
   findBreakingChange,
   rootAdditivityViolation,
+  toCanonicalJsonSchema,
   toJsonSchemaFingerprint,
 } from "../json-schema-fingerprint";
 
@@ -1268,5 +1269,96 @@ describe("findAdditivityViolation - second-round review hardening", () => {
         toUnknownKeyTree(nextSchema),
       ),
     ).not.toBeNull();
+  });
+});
+
+// The expected values are zod 4.4.3's own `z.toJSONSchema` output, the form
+// every committed snapshot and released surface is in. zod 4.6 emits each of
+// these differently.
+describe("toCanonicalJsonSchema keeps zod 4.4.3's form", () => {
+  const SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+
+  it("keeps a nullable, nested unions included, as anyOf arms", () => {
+    expect(
+      toCanonicalJsonSchema(
+        z.object({
+          a: z.string().nullable(),
+          b: z.union([z.string(), z.number()]).nullable(),
+        }),
+        {},
+      ),
+    ).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        a: { anyOf: [{ type: "string" }, { type: "null" }] },
+        b: {
+          anyOf: [
+            { anyOf: [{ type: "string" }, { type: "number" }] },
+            { type: "null" },
+          ],
+        },
+      },
+      required: ["a", "b"],
+      additionalProperties: false,
+    });
+  });
+
+  it("leaves a .catch() field out of input required, and keeps a transform's", () => {
+    expect(
+      toCanonicalJsonSchema(
+        z.object({
+          a: z.string().catch("x"),
+          b: z.string(),
+          c: z.string().transform((value) => value.length),
+        }),
+        { io: "input" },
+      ),
+    ).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        a: { default: "x", type: "string" },
+        b: { type: "string" },
+        c: { type: "string" },
+      },
+      required: ["b", "c"],
+    });
+  });
+
+  it("gives .startsWith() no format beside its pattern", () => {
+    expect(toCanonicalJsonSchema(z.string().startsWith("ui://"), {})).toEqual({
+      $schema: SCHEMA,
+      type: "string",
+      pattern: "^ui:\\/\\/.*",
+    });
+  });
+
+  it("keeps an object intersection as allOf", () => {
+    expect(
+      toCanonicalJsonSchema(
+        z.intersection(
+          z.object({ a: z.string() }),
+          z.object({ b: z.number() }),
+        ),
+        {},
+      ),
+    ).toEqual({
+      $schema: SCHEMA,
+      allOf: [
+        {
+          type: "object",
+          properties: { a: { type: "string" } },
+          required: ["a"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: { b: { type: "number" } },
+          required: ["b"],
+          additionalProperties: false,
+        },
+      ],
+    });
   });
 });

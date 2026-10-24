@@ -280,8 +280,7 @@ export function useCloseTabFlow(): CloseTabFlow {
  * whose discard the user then confirmed. They are never held: refusing those
  * would overrule the answer they just gave. A tab that was CLEAN at the
  * gesture was never asked about, so edits it gains later belong to no
- * answer at all - which is the case the single and group paths each missed,
- * in their own way, before this was one rule.
+ * answer at all.
  */
 function splitByUnsyncedEdits(
   tabs: readonly HeaderTab[],

@@ -43,15 +43,6 @@ function htmlTile(instanceId: string): EpicArtifactRef {
 }
 
 describe("an html tile's pinned version", () => {
-  it("survives serialization into the persisted tab and back", () => {
-    const pinned: EpicArtifactRef = {
-      ...htmlTile("inst-1"),
-      htmlVersion: PINNED,
-    };
-
-    expect(parseTileRef(serializeTileRef(pinned))).toEqual(pinned);
-  });
-
   it("keeps the pinned version's number, so a restart reopens the same numbered version", () => {
     const numbered: EpicArtifactRef = {
       ...htmlTile("inst-1"),
@@ -61,7 +52,7 @@ describe("an html tile's pinned version", () => {
     expect(parseTileRef(serializeTileRef(numbered))).toEqual(numbered);
   });
 
-  it("still restores a pin saved before versions were numbered", () => {
+  it("round-trips a pin saved before versions were numbered, without inventing a number", () => {
     const legacy: EpicArtifactRef = {
       ...htmlTile("inst-1"),
       htmlVersion: PINNED,

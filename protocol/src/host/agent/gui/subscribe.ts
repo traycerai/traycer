@@ -4012,7 +4012,7 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessV135 = [
 ];
 
 // Live shared frames use the current compaction outcome schema.
-const chatSubscribeSharedServerFrameSchemasOpenHarnessV136 = [
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV137 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV135,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
@@ -6018,11 +6018,12 @@ const chatRecordSchemaPreAuto = lazySchema(() =>
 );
 
 // The chat record as every windowed line through `1.22` ships it: the live
-// record without `routing`, which first rides `1.23`. `1.13`-`1.22` include
+// record without `routing` and `opencodeLine`, which first ride `1.23` (the
+// line joined the unreleased lines above it in place). `1.13`-`1.22` include
 // lines the 1.5.1 tags shipped, so they must not follow `chatRecordSchema` by
 // reference (`released-baseline-compat.test.ts` catches the leak).
 const chatRecordSchemaPreRouting = lazySchema(() =>
-  chatRecordSchema.omit({ routing: true }),
+  chatRecordSchema.omit({ routing: true, opencodeLine: true }),
 );
 
 // Frozen windowed snapshot bound to `chat.subscribe@1.10`: provider fallback
@@ -6323,7 +6324,7 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135 =
   );
 
 // The live snapshot carries the not-applied outcome flag.
-const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV136 =
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137 =
   lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
@@ -6463,7 +6464,7 @@ const chatSubscribeRangeServerFrameSchemaOpenHarness = lazySchema(() =>
   }),
 );
 
-const chatSubscribeRangeServerFrameSchemaOpenHarnessV136 = lazySchema(() =>
+const chatSubscribeRangeServerFrameSchemaOpenHarnessV137 = lazySchema(() =>
   z.object({
     kind: z.literal("range"),
     ...textFrameFields,
@@ -7100,7 +7101,7 @@ const chatSubscribeServerFrameSchemaV134 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.35: memory-curation queue, no not-applied outcome flag. */
+/** Frozen 1.35 and 1.36: memory-curation queue, no not-applied outcome flag. */
 const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135,
@@ -7118,7 +7119,7 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.36`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.37`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7128,17 +7129,17 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
  */
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV136,
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarnessV136,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
     chatSubscribeTurnStateChangedServerFrameSchemaV134,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV136,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV137,
   ]),
 );
 export type OpenChatSubscribeWindowedServerFrame = z.infer<
@@ -8222,11 +8223,24 @@ export const chatSubscribeV135 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
-/** 1.36 distinguishes an unsuccessful compaction that was not applied. */
+/**
+ * 1.36 has 1.35's frames. It ships with `providers.list@10.6`, so a send on
+ * it comes from a client that shows both Managed OpenCode rows, and a plain
+ * Managed selection there means OpenCode 2.
+ */
 export const chatSubscribeV136 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 36 } as const,
-  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  openRequestSchema: chatSubscribeV135.openRequestSchema,
+  serverFrameSchema: chatSubscribeV135.serverFrameSchema,
+  clientFrameSchema: chatSubscribeV135.clientFrameSchema,
+});
+
+/** 1.37 distinguishes an unsuccessful compaction that was not applied. */
+export const chatSubscribeV137 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 37 } as const,
+  openRequestSchema: chatSubscribeV136.openRequestSchema,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeV136.clientFrameSchema,
 });

@@ -4,13 +4,14 @@ import {
   chatSubscribeV134,
   chatSubscribeV135,
   chatSubscribeV136,
+  chatSubscribeV137,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * `chat.subscribe@1.36` lets an errored compaction say it was `notApplied`:
+ * `chat.subscribe@1.37` lets an errored compaction say it was `notApplied`:
  * the attempt was refused without anything failing. Every earlier line binds
- * the hand-frozen compaction event and block, so a peer below `1.36` drops the
+ * the hand-frozen compaction event and block, so a peer below `1.37` drops the
  * key as unknown and reads the same row as a plain failure, on all three
  * carriers: a `blockDelta` event, the snapshot tail and a `range` row.
  *
@@ -22,7 +23,7 @@ import {
 
 const line = hostStreamRpcRegistry["chat.subscribe"][1];
 const MINORS = Object.keys(line.versions).map(Number);
-const LIVE_MINOR = 36;
+const LIVE_MINOR = 37;
 const FIRST_WINDOWED_MINOR = 8;
 const FIRST_TASK_OVERDUE_MINOR = 27;
 const SEND_WOULD_QUEUE_MINOR = 34;
@@ -316,23 +317,24 @@ function parseFrame(
   return asRecord(result.data, "frame");
 }
 
-describe("chat.subscribe@1.36 registration", () => {
-  it("is the newest line, binds chatSubscribeV136 above the frozen 1.35 and the live windowed frame", () => {
+describe("chat.subscribe@1.37 registration", () => {
+  it("is the newest line, binds chatSubscribeV137 above 1.36 and the live windowed frame", () => {
     expect(line.latestMinor).toBe(LIVE_MINOR);
+    expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
-    expect(chatSubscribeV136.schemaVersion).toEqual({ major: 1, minor: 36 });
-    expect(chatSubscribeV136.serverFrameSchema).toBe(
+    expect(chatSubscribeV137.schemaVersion).toEqual({ major: 1, minor: 37 });
+    expect(chatSubscribeV137.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV135.serverFrameSchema).not.toBe(
-      chatSubscribeV136.serverFrameSchema,
+    expect(chatSubscribeV136.serverFrameSchema).not.toBe(
+      chatSubscribeV137.serverFrameSchema,
     );
   });
 
-  it("registers every minor from 1.0 through 1.36", () => {
+  it("registers every minor from 1.0 through 1.37", () => {
     expect([...MINORS].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 37 }, (_, minor) => minor),
+      Array.from({ length: 38 }, (_, minor) => minor),
     );
   });
 });
@@ -340,9 +342,9 @@ describe("chat.subscribe@1.36 registration", () => {
 describe.each(SURFACES)(
   "a compaction.errored outcome on a $name",
   (surface) => {
-    const { serverFrameSchema } = chatSubscribeV136;
+    const { serverFrameSchema } = chatSubscribeV137;
 
-    it("keeps notApplied: true exactly as sent on 1.36", () => {
+    it("keeps notApplied: true exactly as sent on 1.37", () => {
       const parsed = asRecord(
         serverFrameSchema.parse(surface.frame(LIVE_MINOR, true)),
         "frame",
@@ -350,7 +352,7 @@ describe.each(SURFACES)(
       expect(surface.compaction(parsed, LIVE_MINOR).notApplied).toBe(true);
     });
 
-    it("keeps an explicit false on 1.36", () => {
+    it("keeps an explicit false on 1.37", () => {
       const parsed = asRecord(
         serverFrameSchema.parse(surface.frame(LIVE_MINOR, false)),
         "frame",
@@ -358,7 +360,7 @@ describe.each(SURFACES)(
       expect(surface.compaction(parsed, LIVE_MINOR).notApplied).toBe(false);
     });
 
-    it("reads an absent flag as a plain failure on 1.36", () => {
+    it("reads an absent flag as a plain failure on 1.37", () => {
       const parsed = asRecord(
         serverFrameSchema.parse(surface.frame(LIVE_MINOR, undefined)),
         "frame",
@@ -372,7 +374,7 @@ describe.each(SURFACES)(
       }
     });
 
-    it("refuses a non-boolean flag on 1.36", () => {
+    it("refuses a non-boolean flag on 1.37", () => {
       const frame = surface.frame(LIVE_MINOR, undefined);
       const carrier = JSON.stringify(frame).replace(
         /"error":"Copilot did not apply this compaction\."/,
@@ -386,9 +388,9 @@ describe.each(SURFACES)(
 );
 
 describe("every frozen chat.subscribe line strips the compaction notApplied flag", () => {
-  it("covers 1.0 through 1.35", () => {
+  it("covers 1.0 through 1.36", () => {
     expect([...FROZEN_MINORS].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 36 }, (_, minor) => minor),
+      Array.from({ length: 37 }, (_, minor) => minor),
     );
   });
 
@@ -436,9 +438,12 @@ describe("the frozen windowed snapshot keeps its settings, queue and tail", () =
   );
 });
 
-describe("the live 1.36 snapshot keeps the retained boundaries", () => {
+describe("the live 1.37 snapshot keeps the retained boundaries", () => {
   it("carries both queue arms, sendWouldQueue and the flag together", () => {
-    const parsed = parseFrame(LIVE_MINOR, windowedSnapshotFrame(36, true));
+    const parsed = parseFrame(
+      LIVE_MINOR,
+      windowedSnapshotFrame(LIVE_MINOR, true),
+    );
     const snapshot = asRecord(parsed.snapshot, "snapshot");
     const kinds = itemKinds(
       asArray(asRecord(snapshot.queue, "queue").items, "items"),
@@ -460,7 +465,7 @@ describe("the live 1.36 snapshot keeps the retained boundaries", () => {
     expect(SURFACES[1].compaction(parsed, 35)).not.toHaveProperty("notApplied");
   });
 
-  it("1.34 refuses the memory-curation item that 1.35 and 1.36 accept", () => {
+  it("1.34 refuses the memory-curation item that 1.35, 1.36 and 1.37 accept", () => {
     const frame = windowedSnapshotFrame(LIVE_MINOR, undefined);
     expect(chatSubscribeV134.serverFrameSchema.safeParse(frame).success).toBe(
       false,
@@ -469,6 +474,9 @@ describe("the live 1.36 snapshot keeps the retained boundaries", () => {
       true,
     );
     expect(chatSubscribeV136.serverFrameSchema.safeParse(frame).success).toBe(
+      true,
+    );
+    expect(chatSubscribeV137.serverFrameSchema.safeParse(frame).success).toBe(
       true,
     );
   });

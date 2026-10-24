@@ -260,11 +260,11 @@ describe("chat.subscribe errored-compaction outcome on the live windowed consume
     [{ notApplied: true }, true],
     [{}, false],
   ])(
-    "delivers a range row's compaction flag from a negotiated 1.36 session (%j)",
+    "delivers a range row's compaction flag from a negotiated 1.37 session (%j)",
     (flag, expected) => {
       const { wsStreamClient, session } = stubClientAtVersion({
         major: 1,
-        minor: 36,
+        minor: 37,
       });
       const heard: unknown[] = [];
       const client = new ChatStreamClient({
@@ -290,10 +290,10 @@ describe("chat.subscribe errored-compaction outcome on the live windowed consume
     },
   );
 
-  it("delivers a compaction.errored delta's flag from a negotiated 1.36 session and leaves it absent when unsent", () => {
+  it("delivers a compaction.errored delta's flag from a negotiated 1.37 session and leaves it absent when unsent", () => {
     const { wsStreamClient, session } = stubClientAtVersion({
       major: 1,
-      minor: 36,
+      minor: 37,
     });
     const heard: unknown[] = [];
     const client = new ChatStreamClient({

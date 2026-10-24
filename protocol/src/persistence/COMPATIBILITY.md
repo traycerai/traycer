@@ -120,11 +120,12 @@ and defaults to `false` on the live persisted block. Missing input remains a
 failure; no reader infers the flag from an error message, and old rows are not
 rewritten. Started and completed events reset the live flag to `false`.
 
-The flag opens `chat.subscribe` 1.36 and chat-sync 1.11. Nondraft staging host
-and desktop 1.5.2-staging.134 already carried stream 1.35 and record 1.10, so
-those lines are frozen. Every older stream binds the pre-notApplied event and
-block leaves through its complete message, snapshot-tail and range paths,
-retaining that minor's settings, queue and accumulated-change vocabulary.
+The flag opens `chat.subscribe` 1.37 and chat-sync 1.11. The selected main's
+1.36 is the OpenCode client-line capability marker and aliases 1.35's frames;
+both retain their unchanged contracts. Every older stream through 1.36 binds
+the pre-notApplied event and block leaves through its complete message,
+snapshot-tail and range paths, retaining that minor's settings, queue,
+accumulated-change vocabulary and other capability semantics.
 
 Both persistence contracts were considered. Registered epic 4.0 still reaches
 the pre-HTML message/block chain, whose compaction leaf stays frozen without

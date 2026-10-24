@@ -11,10 +11,9 @@ const MESSAGE_MAX = 100_000;
 
 /**
  * Slack's message box, for a bot's channel and its threads (Tracy Bots): a
- * post at the channel's top level (`threadId: null`), which opens a thread
- * the bot answers in, a reply in a thread, or a reply under a question or
- * proposal (`announcementId`), which opens the thread hung off it. Enter
- * sends, Shift+Enter breaks the line.
+ * post at the channel's top level (`threadId: null`), a reply in a thread,
+ * or a reply under an announcement or direct post (`announcementId`), which
+ * opens the thread hung off it. Enter sends, Shift+Enter breaks the line.
  *
  * A send is a request to the bot, not a turn: there is no model to choose,
  * nothing to approve and nothing to attach, and the bot may be paused - the

@@ -20,6 +20,7 @@ import {
   validateVersionedStreamRpcRegistry,
   type UncheckedVersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Importing a registry module must not walk schemas. The `define*` factories
@@ -189,7 +190,7 @@ describe("importing a registry module walks no schema", () => {
 });
 
 describe("toStreamFieldJsonSchemaText", () => {
-  it("matches JSON.stringify(z.toJSONSchema(schema)) for representative schemas", async () => {
+  it("matches JSON.stringify(toCanonicalJsonSchema(schema, {})) for representative schemas", async () => {
     const { toStreamFieldJsonSchemaText } =
       await import("@traycer/protocol/framework/json-schema-fingerprint");
     const schemas: readonly z.ZodType[] = [
@@ -203,7 +204,7 @@ describe("toStreamFieldJsonSchemaText", () => {
     ];
     for (const schema of schemas) {
       expect(toStreamFieldJsonSchemaText(schema)).toBe(
-        JSON.stringify(z.toJSONSchema(schema)),
+        JSON.stringify(toCanonicalJsonSchema(schema, {})),
       );
     }
   });

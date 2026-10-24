@@ -271,9 +271,9 @@ function BotAnnouncementBody(props: {
 }
 
 /**
- * The choices a bot's thread reply offers (decision 56), as Slack draws an
- * app's buttons: a click posts the choice as the person's next message in
- * the thread. Shown, but not clickable, where nothing can post it.
+ * The choices a bot reply offers (decision 56), as Slack draws an app's
+ * buttons: a click posts the choice as the person's next message on this
+ * surface. Shown, but not clickable, where nothing can post it.
  */
 function ReplyOptions(props: {
   readonly options: ReadonlyArray<string>;

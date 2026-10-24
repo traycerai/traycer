@@ -15,7 +15,7 @@ import type {
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotConversationRecord } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -65,13 +65,17 @@ export function botRecord(overrides: Partial<BotRecord>): BotRecord {
 export function environmentDescriptor(
   environmentId: string,
   label: string,
-): EnvironmentDescriptor {
+): EnvironmentDescriptorV11 {
   return {
     environmentId,
     ownerKind: "organization",
     ownerId: `owner-${environmentId}`,
     roomId: `room-${environmentId}`,
     label,
+    effectiveRole: "owner",
+    kind: "team",
+    hostCount: 1,
+    providerHandle: null,
   };
 }
 

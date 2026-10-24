@@ -114,13 +114,12 @@ export type BotOpenThread = {
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
  * the top level, a line under each post that opens its thread, and the
- * thread panel beside the channel - over it on a narrow pane. The box under
- * the channel posts at the top level, which opens a thread the bot answers
- * in; the thread panel's box replies in that thread.
+ * thread panel beside the channel - over it on a narrow pane. The channel's
+ * box posts at the top level; the thread panel's box replies in its thread.
  *
  * Threads live on the bot's bound host, so they are listed only while this
- * tab is bound there (not paused). The list is polled while the channel is
- * on screen, so a reply count moves as the person watches. A thread with a
+ * tab is bound there (not paused). Subscription revisions refresh the list
+ * when its conversations change. A thread with a
  * reply the person has not read, among those they took part in, shows a dot
  * on its line; it is marked read once its panel is in front of the person,
  * which a verdict landing while they are elsewhere waits for.
