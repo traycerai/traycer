@@ -88,14 +88,14 @@ function detailsSubject(detail: EnvironmentNotificationDetail): DetailsSubject {
   }
   if (detail.kind === "environment_move_stalled") {
     return {
-      environmentId: detail.environmentId ?? "",
+      environmentId: detail.environmentId,
       kind: "move",
       key: detail.hostId,
     };
   }
   if (detail.kind === "environment_apply_failed") {
     return {
-      environmentId: detail.environmentId ?? "",
+      environmentId: detail.environmentId,
       kind: "chip",
       key: "",
     };
@@ -111,7 +111,7 @@ function detailsTitle(detail: EnvironmentNotificationDetail): string {
     return "Member details";
   }
   if (detail.kind === "environment_move_stalled") {
-    return "Move";
+    return "Move to Personal";
   }
   if (detail.kind === "environment_apply_failed") {
     return "Settings delivery";

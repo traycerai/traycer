@@ -6,9 +6,6 @@ import type { HostNotificationKind } from "@traycer/protocol/host/notifications/
  * and body. Parsed once where the row is built, from the row's own typed
  * payload. A payload this build cannot read has no detail and renders as
  * any other row.
- *
- * `environmentId` on move.stalled / apply.failed is null until E3p's second
- * commit puts it on those payloads; when the field is present it is kept.
  */
 export type EnvironmentNotificationDetail =
   | {
@@ -26,7 +23,7 @@ export type EnvironmentNotificationDetail =
     }
   | {
       readonly kind: "environment_move_stalled";
-      readonly environmentId: string | null;
+      readonly environmentId: string;
       readonly hostId: string;
       readonly hostName: string;
       readonly remaining: number;
@@ -34,7 +31,7 @@ export type EnvironmentNotificationDetail =
     }
   | {
       readonly kind: "environment_apply_failed";
-      readonly environmentId: string | null;
+      readonly environmentId: string;
       readonly hostId: string;
       readonly hostName: string;
       readonly itemKey: string;
@@ -73,7 +70,7 @@ export function environmentNotificationDetail(
   if (known.kind === "environment_move_stalled") {
     return {
       kind: "environment_move_stalled",
-      environmentId: extraEnvironmentId(known),
+      environmentId: known.environmentId,
       hostId: known.hostId,
       hostName: known.hostName,
       remaining: known.remaining,
@@ -83,7 +80,7 @@ export function environmentNotificationDetail(
   if (known.kind === "environment_apply_failed") {
     return {
       kind: "environment_apply_failed",
-      environmentId: extraEnvironmentId(known),
+      environmentId: known.environmentId,
       hostId: known.hostId,
       hostName: known.hostName,
       itemKey: known.itemKey,
@@ -99,11 +96,4 @@ export function environmentNotificationDetail(
     };
   }
   return null;
-}
-
-function extraEnvironmentId(known: object): string | null {
-  if (!("environmentId" in known)) return null;
-  const value = known.environmentId;
-  if (typeof value !== "string" || value.length === 0) return null;
-  return value;
 }
