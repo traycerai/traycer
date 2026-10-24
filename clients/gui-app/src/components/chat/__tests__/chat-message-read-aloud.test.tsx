@@ -294,6 +294,27 @@ describe("reply read-aloud button", () => {
   });
 });
 
+describe("reply read-aloud on a row that draws its reply", () => {
+  it("reads a details the reader opened before Play", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    const { container } = render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown="<details><summary>Summary</summary><p>Answer.</p></details>"
+      />,
+    );
+    const summary = container.querySelector("summary");
+    if (summary === null) throw new Error("the reply shows no summary");
+
+    fireEvent.click(summary);
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
+
+    expect(spokenText(synth)).toBe("Summary Answer.");
+  });
+});
+
 describe.each(READ_PATHS)(
   "reply read-aloud on %s reads what the reply shows",
   (_where, Reply) => {
@@ -484,6 +505,38 @@ describe.each(READ_PATHS)(
       act(() => synth.finishAll());
 
       expect(spokenText(synth)).toBe("Run this:");
+    });
+
+    it.each([
+      [
+        "a closed details reads only its summary",
+        "<details><summary>Summary</summary><p>Hidden answer.</p></details>\n\nAfter.",
+        "Summary After.",
+      ],
+      [
+        "an open details reads all of it",
+        "<details open><summary>Summary</summary><p>Shown answer.</p></details>\n\nAfter.",
+        "Summary Shown answer. After.",
+      ],
+      [
+        "a closed details hides an open one inside it",
+        "<details><summary>Outer</summary><details open><summary>Inner</summary><p>Body.</p></details></details>",
+        "Outer",
+      ],
+      [
+        "a hidden attribute, which the sanitized render drops, reads as shown",
+        "Before <span hidden>shown</span> after.",
+        "Before shown after.",
+      ],
+    ])("%s", (_label, markdown, said) => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      render(<Reply messageId="assistant:a" markdown={markdown} />);
+
+      fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+      act(() => synth.finishAll());
+
+      expect(spokenText(synth)).toBe(said);
     });
 
     it("skips a diagram", () => {

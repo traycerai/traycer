@@ -75,8 +75,9 @@ const BLOCK_SELECTOR = [
 /**
  * A reply's paragraphs as the reader sees them, read from the reply's own
  * rendered DOM when Play is pressed. Speech is the display by construction:
- * chips read their label, next steps their prose and option labels, and raw
- * HTML whatever the sanitized render kept on screen.
+ * chips read their label, next steps their prose and option labels, raw
+ * HTML whatever the sanitized render kept on screen, and a closed `<details>`
+ * only its summary.
  *
  * `turn` is the row's `[data-assistant-turn]` element; a subagent card's
  * conversation inside it renders through the same text segment, and is not
@@ -104,7 +105,7 @@ class ParagraphReader {
   }
 
   read(node: Node): void {
-    for (const child of node.childNodes) {
+    for (const child of shownChildren(node)) {
       if (child.nodeType === Node.TEXT_NODE) {
         this.current += child.textContent ?? "";
         continue;
@@ -120,6 +121,25 @@ class ParagraphReader {
       if (block) this.flush();
     }
   }
+}
+
+/**
+ * The children the reader sees. A closed `<details>` shows only its summary
+ * whatever its CSS says, so computed style cannot tell; its `open` attribute
+ * follows the reader's toggle.
+ */
+function shownChildren(node: Node): ReadonlyArray<Node> {
+  if (
+    node instanceof Element &&
+    node.tagName === "DETAILS" &&
+    !node.hasAttribute("open")
+  ) {
+    const summary = Array.from(node.children).find(
+      (child) => child.tagName === "SUMMARY",
+    );
+    return summary === undefined ? [] : [summary];
+  }
+  return Array.from(node.childNodes);
 }
 
 function shown(element: Element): boolean {

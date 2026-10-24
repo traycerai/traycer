@@ -1,6 +1,6 @@
 import { createLexSession } from "@tailmark/core";
 import { remarkDisableIndentedCode } from "@tailmark/react";
-import type { ElementContent, Root, RootContent } from "hast";
+import type { Element, ElementContent, Root, RootContent } from "hast";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -38,7 +38,8 @@ export type AgentLabelResolver = (referenceId: string) => string | null;
  * `AgentReferenceMarkdown` adds, then the assistant sanitize schema); an agent
  * or role reference reads the chip's label, or the id as written when it
  * resolves to nothing. Code blocks, diagrams and images are not read; raw
- * HTML reads whatever the sanitized render keeps.
+ * HTML reads whatever the sanitized render keeps, and a closed `<details>`
+ * only its summary.
  */
 export function spokenParagraphsFromReplyMarkdown(
   markdowns: ReadonlyArray<string>,
@@ -173,13 +174,28 @@ function spokenParagraphs(
       }
       const block = BLOCK_ELEMENTS.has(node.tagName);
       if (block) flush();
-      walk(node.children);
+      walk(shownChildren(node));
       if (block) flush();
     }
   };
   walk(tree.children);
   flush();
   return paragraphs;
+}
+
+/**
+ * The children the render shows: a `<details>` written without `open` shows
+ * only its summary. The rows this path stands in for may be unmounted, and a
+ * toggle there does not survive it, so the written state is what they draw.
+ */
+function shownChildren(node: Element): ReadonlyArray<ElementContent> {
+  if (node.tagName !== "details" || node.properties.open === true) {
+    return node.children;
+  }
+  const summary = node.children.find(
+    (child) => child.type === "element" && child.tagName === "summary",
+  );
+  return summary === undefined ? [] : [summary];
 }
 
 function agentReferenceId(
