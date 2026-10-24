@@ -1,7 +1,7 @@
 /**
  * The deep walker every Sentry scrubber in both repos runs over an
  * attacker-influenced or user-private payload (`extra`, `logentry.params`,
- * breadcrumb `data`, request `data`), and the stack-frame path walk.
+ * breadcrumb `data`, request `data`), and the stack-path walk.
  *
  * Detection is `./redaction`; the Sentry *policy* - which event fields get
  * walked, whether a breadcrumb is scrubbed at record time - stays with each
@@ -54,18 +54,46 @@ export interface SentryStacktraceHolder {
 }
 
 /**
- * Rewrites every frame's `filename`, `abs_path` and `module` with
- * `scrubPath`, in place (the SDK takes back the event it handed to
- * `beforeSend`). The SDK builds frames from the stack, so no string walk
- * reaches them, and an installed app's frames name its absolute install
- * folder, home folder included. `module` is derived from the path, and keeps
- * the whole path when the SDK cannot place the file under its base folder.
+ * An event's debug images. `type` and `debug_id` are read by Sentry's
+ * symbolication and pass through unchanged; the two file fields are paths.
  */
-export function scrubStackFramePathsInPlace(
-  exceptions: readonly SentryStacktraceHolder[] | undefined,
+export interface SentryDebugMeta {
+  images?:
+    | {
+        type?: string | undefined;
+        debug_id?: string | undefined;
+        code_file?: string | undefined;
+        /** `null` on a wasm image with no separate debug file. */
+        debug_file?: string | null | undefined;
+      }[]
+    | undefined;
+}
+
+/** The slice of an event whose stack-derived fields carry paths. */
+export interface SentryStackPaths {
+  exception?: { values?: SentryStacktraceHolder[] | undefined } | undefined;
+  debug_meta?: SentryDebugMeta | undefined;
+}
+
+/**
+ * Rewrites, in place (the SDK takes back the event it handed to
+ * `beforeSend`), every path the SDK builds from the stack: each frame's
+ * `filename`, `abs_path` and `module`, and each debug image's `code_file`
+ * and `debug_file`. No string walk reaches them, and an installed app's
+ * frames name its absolute install folder, home folder included. `module` is
+ * derived from the path, and keeps the whole path when the SDK cannot place
+ * the file under its base folder.
+ *
+ * Frames and images go through the one `scrubPath`: the SDK copies a debug-id
+ * frame's original path into its sourcemap image's `code_file` before
+ * `beforeSend` runs, and the image is matched to its frames by that path, so
+ * the two have to stay equal.
+ */
+export function scrubStackPathsInPlace(
+  event: SentryStackPaths,
   scrubPath: (value: string) => string,
 ): void {
-  for (const exception of exceptions ?? []) {
+  for (const exception of event.exception?.values ?? []) {
     for (const frame of exception.stacktrace?.frames ?? []) {
       if (frame.filename !== undefined) {
         frame.filename = scrubPath(frame.filename);
@@ -76,6 +104,14 @@ export function scrubStackFramePathsInPlace(
       if (frame.module !== undefined) {
         frame.module = scrubPath(frame.module);
       }
+    }
+  }
+  for (const image of event.debug_meta?.images ?? []) {
+    if (image.code_file !== undefined) {
+      image.code_file = scrubPath(image.code_file);
+    }
+    if (typeof image.debug_file === "string") {
+      image.debug_file = scrubPath(image.debug_file);
     }
   }
 }

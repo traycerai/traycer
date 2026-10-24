@@ -36,7 +36,8 @@ import {
   deepScrubSentryRecord,
   deepScrubSentryValue,
   isPlainRecord,
-  scrubStackFramePathsInPlace,
+  scrubStackPathsInPlace,
+  type SentryDebugMeta,
   type SentryStacktraceHolder,
 } from "@traycer/protocol/utils/text/sentry-scrub";
 
@@ -61,6 +62,7 @@ export interface ClientSentryEvent {
           | undefined;
       }
     | undefined;
+  debug_meta?: SentryDebugMeta | undefined;
   tags?: { [key: string]: unknown } | undefined;
   extra?: { [key: string]: unknown } | undefined;
   contexts?: { [key: string]: unknown } | undefined;
@@ -105,13 +107,10 @@ export function scrubSentryEventInPlace(event: ClientSentryEvent): void {
       exception.value = scrubClientText(exception.value);
     }
   }
-  // Only the home-folder name leaves a frame's path, and no length cap: the
-  // path is what Sentry shows and groups on, so it keeps one form per install
-  // path.
-  scrubStackFramePathsInPlace(
-    event.exception?.values,
-    redactHomeDirectoryNames,
-  );
+  // Only the home-folder name leaves a frame's or a debug image's path, and no
+  // length cap: the path is what Sentry shows, groups on and matches an image
+  // to its frames by, so it keeps one form per install path.
+  scrubStackPathsInPlace(event, redactHomeDirectoryNames);
   // Tags are indexed and searchable in the Sentry UI, which is exactly why a
   // caller reaches for one - and `setTag("url", …)` / a tag built from an
   // error string carries the same credentials `extra` does. The desktop's

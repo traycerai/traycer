@@ -183,6 +183,12 @@ describe("redactHomeDirectoryNames", () => {
     ["C:\\\\Users\\\\SyntheticUser\\\\x", "C:\\\\Users\\\\<redacted>\\\\x"],
     ["file:///Users/synthetic-user/x.js", "file:///Users/<redacted>/x.js"],
     ["/Users/Synthetic User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/Users/Synthetic  User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/Users/Synthetic\tUser/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    [
+      "C:\\Users\\Synthetic  User\\.traycer\\cli\\main.js",
+      "C:\\Users\\<redacted>\\.traycer\\cli\\main.js",
+    ],
     ["/home/synthetic-user", "/home/<redacted>"],
     ["open '/home/synthetic-user'", "open '/home/<redacted>'"],
     ["/var/home/synthetic-user/x", "/var/home/<redacted>/x"],

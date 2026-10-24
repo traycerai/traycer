@@ -428,13 +428,14 @@ const HOME_FOLDER_NAME_BARE = `${HOME_FOLDER_NAME_CHAR}+(?:'${HOME_FOLDER_NAME_C
 /**
  * The segment right after a `Users` (macOS, Windows) or `home` (Linux) path
  * segment, under either separator, and under doubled ones (a JSON-escaped
- * Windows path). Where a separator follows, the whole segment goes, spaces
- * included (a macOS full-name folder, `/Users/Mary Jane/...`); where none
- * does, only the bare name, so `/Users/name is missing` and
- * `'/home/name' failed, see /tmp/x` keep their prose.
+ * Windows path). Where a separator follows, the whole segment goes, with any
+ * run of spaces or tabs between its words (a macOS full-name folder,
+ * `/Users/Mary Jane/...`); where none does, only the bare name, so
+ * `/Users/name is missing` and `'/home/name' failed, see /tmp/x` keep their
+ * prose.
  */
 const HOME_FOLDER_NAME_PATTERN = new RegExp(
-  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)(${HOME_FOLDER_NAME_WORD}(?: ${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
+  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)(${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
   "gi",
 );
 
