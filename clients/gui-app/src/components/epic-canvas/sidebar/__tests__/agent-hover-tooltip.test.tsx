@@ -9,6 +9,10 @@ import {
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import {
+  listEpicTerminalDurableCreateJobsForEpic,
+  resetEpicTerminalDurableCreatesForTests,
+} from "@/lib/terminals/epic-terminal-durable-create-coordinator";
+import {
   hoverAlsoInTask,
   hoverTaskConfiguration,
   hoverTodayCost,
@@ -93,11 +97,6 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
-// The host answers with its default cwd: Open terminal is live.
-vi.mock(
-  "@/components/epic-canvas/sidebar/use-folderless-terminal-target",
-  () => ({ useOpenFolderlessEpicTerminal: () => () => undefined }),
-);
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method: string }) => {
     if (args.method === "host.status") {
@@ -241,6 +240,7 @@ function renderHover(overrides: HoverOverrides) {
 
 afterEach(() => {
   cleanup();
+  resetEpicTerminalDurableCreatesForTests();
   worktreeTooltipSpy.mockClear();
   h.sandboxes = [];
   h.taskHosts = { kind: "none" };
@@ -616,6 +616,30 @@ describe("AgentHoverTooltip host section", () => {
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
     ).toBeNull();
+  });
+
+  it("opens a terminal tile on a resting sandbox, whose create waits for the host's cwd", async () => {
+    h.sandboxes = [sandboxRow({ state: "suspended" })];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open terminal" }),
+    );
+    expect(h.openTile).toHaveBeenCalledTimes(1);
+    const [intent] = h.openTile.mock.calls[0] as [
+      { readonly node: { readonly type: string; readonly hostId: string } },
+    ];
+    expect(intent.node).toMatchObject({ type: "terminal", hostId: "host-sbx" });
+    expect(
+      listEpicTerminalDurableCreateJobsForEpic("epic-1").map((job) => [
+        job.hostId,
+        job.cwd,
+      ]),
+    ).toEqual([["host-sbx", ""]]);
   });
 
   it("says sessions are unknown rather than inventing a count when no status is held", () => {

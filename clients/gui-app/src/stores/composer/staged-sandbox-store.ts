@@ -101,11 +101,58 @@ export interface StagedSandbox {
    */
   readonly terminalLaunch: TerminalAgentLaunch | null;
   /**
-   * The stage was picked to open a folderless terminal on the sandbox (a
-   * resting row's Open terminal): the landing panel opens it on the handoff,
-   * once the sandbox is awake.
+   * A folderless terminal was asked for on the sandbox (a row's Open
+   * terminal, the landing panel's `+`): the landing panel opens it on the
+   * handoff, once the sandbox is awake. Cleared when it is asked for.
    */
   readonly openTerminal: boolean;
+  /**
+   * A send or a terminal agent's Start took the stage, so phase 2 resubmits
+   * the surface's draft. `false` while it is only staged, or when an explicit
+   * terminal ask started it alone: that handoff opens the terminal and sends
+   * nothing.
+   */
+  readonly sendTaken: boolean;
+}
+
+/**
+ * A refusal the server answered before anything was created. Any other
+ * failure may follow an accepted, billed create (an answer that never came,
+ * a sandbox that failed on its way up); so does any failure once a sandbox
+ * was accepted, such as one frozen for credits while it settles.
+ */
+export function refusedBeforeCreate(
+  failure: StagedSandboxFailure,
+  createdSandboxId: string | null,
+): boolean {
+  if (createdSandboxId !== null) return false;
+  switch (failure.kind) {
+    case "credits":
+    case "shape":
+    case "unavailable":
+    case "refused":
+      return true;
+    case "unverified":
+    case "failed":
+    case "settings":
+    case "timed-out":
+    case "no-provider":
+      return false;
+  }
+}
+
+/**
+ * Whether the stage's next action takes a new create key: it never started
+ * one, or the server refused that one before creating anything. Every other
+ * stage may have an accepted, billed create behind it, which the next action
+ * names again so the server answers with the same row.
+ */
+export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
+  if (stage.clientRequestId === null) return true;
+  return (
+    stage.failure !== null &&
+    refusedBeforeCreate(stage.failure, stage.createdSandboxId)
+  );
 }
 
 interface StagedSandboxStoreState {
@@ -118,10 +165,10 @@ interface StagedSandboxStoreState {
   /** Rewrites the staged target in place (the shape sheet's Use this shape). */
   readonly setTarget: (surfaceKey: string, target: StagedSandboxTarget) => void;
   /**
-   * Starts an action: a new `clientRequestId` when `fresh` (a send, or Retry
-   * creation after a terminal failure) or when the stage has none, else the
-   * one it holds (a repeat of the same send). Returns the id, `null` when
-   * nothing is staged.
+   * Starts an action: a new `clientRequestId` when `fresh`
+   * ({@link stagedCreateNeedsFreshKey}, or Retry creation after a terminal
+   * failure) or when the stage has none, else the one it holds. Returns the
+   * id, `null` when nothing is staged.
    */
   readonly begin: (
     surfaceKey: string,
@@ -142,6 +189,7 @@ interface StagedSandboxStoreState {
         | "failure"
         | "terminalLaunch"
         | "openTerminal"
+        | "sendTaken"
       >
     >,
   ) => void;
@@ -175,6 +223,7 @@ function freshStage(target: StagedSandboxTarget): StagedSandbox {
     failure: null,
     terminalLaunch: null,
     openTerminal: false,
+    sendTaken: false,
   };
 }
 
@@ -233,6 +282,11 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
         bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
           ...stage,
           phase: "staged",
+          // The key stays while a create may have been accepted, so the next
+          // send names it again rather than billing a second sandbox.
+          clientRequestId: stagedCreateNeedsFreshKey(stage)
+            ? null
+            : stage.clientRequestId,
           startedAt: null,
           stepAt: null,
           failure: null,

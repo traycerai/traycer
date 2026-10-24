@@ -291,16 +291,25 @@ export const USE_THIS_SHAPE = "Use this shape";
 
 // ── Refusals at send ──────────────────────────────────────────────────────
 
-/** Short for an hour, Personal: `Not enough credits. $1.20 more starts …`. */
-export function notEnoughCreditsLine(shortfallMc: number): string {
+/**
+ * Short for an hour, Personal: `Not enough credits. $1.20 more starts …`.
+ * `null` when the refusal named no amount: the line names none either.
+ */
+export function notEnoughCreditsLine(shortfallMc: number | null): string {
+  if (shortfallMc === null) {
+    return "Not enough credits to start this sandbox for an hour.";
+  }
   return `Not enough credits. ${formatSandboxDollarsRequired(shortfallMc)} more starts this sandbox for an hour.`;
 }
 
-/** Short for an hour on a team allowance. */
+/** Short for an hour on a team allowance; `null` names no amount. */
 export function teamAllowanceShortLine(
   teamName: string,
-  shortfallMc: number,
+  shortfallMc: number | null,
 ): string {
+  if (shortfallMc === null) {
+    return `Your ${teamName} allowance is too short to start this sandbox for an hour.`;
+  }
   const amount = formatSandboxDollarsRequired(shortfallMc);
   return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
 }

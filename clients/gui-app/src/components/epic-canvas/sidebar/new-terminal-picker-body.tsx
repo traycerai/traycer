@@ -15,14 +15,14 @@
  *
  * A picked New sandbox row stages a create (sandboxes redesign D9): the
  * folder list gives way to the consequences block, and `Open terminal`
- * creates the sandbox, settles with the setup line here, then launches
- * folderless on the new host once the pin resolves there.
+ * creates the sandbox and settles with the setup line here. The launch on
+ * the new host is the tab's (`NewTerminalStagedHandoff`), so it happens
+ * whether or not this popover is still open.
  */
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
@@ -130,7 +130,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   // the state update that unmounts this body, so each click would mint a
   // fresh terminal. This synchronous latch collapses one open->launch session
   // to a single terminal, whichever path launches it: Launch, the shortcut,
-  // or a staged sandbox's handoff.
+  // or the setup line's Open terminal.
   const hasLaunchedRef = useRef(false);
   const launchOnce = useCallback(
     (target: TerminalLaunchTarget) => {
@@ -300,14 +300,9 @@ function resolveFolderlessTerminalTarget(
   return { hostId, cwd };
 }
 
-function noopPrepareHandoff(): void {}
-
 /**
  * The staging of the terminal picker's New sandbox rows: the picker's
- * composer mode, and the send that creates the sandbox on `Open terminal`,
- * then launches folderless on it once the pin resolves there and its
- * directory is known. That directory is the sandbox's own, whatever workspace
- * rows the task binds on other hosts.
+ * composer mode, and the send that creates the sandbox on `Open terminal`.
  */
 function useTerminalStagedLaunch(input: {
   readonly epicId: string;
@@ -329,15 +324,6 @@ function useTerminalStagedLaunch(input: {
     memoryHostId: input.resolvedHostId,
     hosts: hostOptions.hosts,
   });
-  const sandboxTarget = useFolderlessTerminalTarget(
-    input.epicId,
-    staging?.stage?.createdHostId ?? null,
-  );
-  const launchOnSandbox = useCallback((): boolean => {
-    if (sandboxTarget === null) return false;
-    onLaunch(sandboxTarget);
-    return true;
-  }, [onLaunch, sandboxTarget]);
   // Opened from the line before the handoff, the terminal is the one this
   // stage was for: the stage ends so the handoff opens no second one.
   const stagedTerminal = useMemo(
@@ -352,10 +338,6 @@ function useTerminalStagedLaunch(input: {
   );
   const stagedSend = useStagedSandboxSend({
     surfaceKey,
-    resolvedHostId: input.resolvedHostId,
-    canSubmit: sandboxTarget !== null,
-    submit: launchOnSandbox,
-    prepareHandoff: noopPrepareHandoff,
     terminal: stagedTerminal,
     taskId: input.epicId,
     ownerId: null,

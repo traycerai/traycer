@@ -415,6 +415,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 // Nothing is staged in this suite: the staged send takes no submit.
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
 }));
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,

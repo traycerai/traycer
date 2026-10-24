@@ -27,6 +27,10 @@ import {
   SandboxSuspendDialog,
 } from "@/components/hosts/sandbox-confirm-dialogs";
 import { restingVerb } from "@/components/composer/use-sandbox-staging";
+import {
+  startStagedTerminal,
+  useStagedSandboxRunner,
+} from "@/components/composer/use-staged-sandbox-send";
 import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
@@ -44,6 +48,7 @@ import {
   type SandboxRowAction,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
+import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
@@ -79,6 +84,10 @@ export function SandboxRowActions(props: {
   const verb = useSandboxVerb(summary.id);
   const patch = useSandboxPatch(summary.id);
   const create = useSandboxCreate();
+  // One key per Retry until the server answers it: a press after an answer
+  // that never came reuses it, so the server joins the create it may have
+  // accepted instead of making a second sandbox.
+  const [retryKey, setRetryKey] = useState(() => uuidv4());
   const repair = useSandboxRepairGuestConfigurationOnHost(summary.hostId);
   const openLink = useOpenLink();
   const runnerHost = useRunnerHost();
@@ -113,27 +122,36 @@ export function SandboxRowActions(props: {
         null,
       ),
     retry: () =>
-      create.mutate({
-        request: {
-          os: summary.os,
-          cpus: summary.cpus,
-          memoryMb: summary.memoryMb,
-          diskMb: summary.diskMb,
-          region: summary.region,
-          displayName: summary.displayName,
-          idleMinutes: summary.idleMinutes,
-          burst: false,
-          createdByHostId: null,
-          createdByAgentId: null,
-          environmentId: summary.environmentId,
-          // The row's `null` is never; on a create `null` is the
-          // configuration's default and `0` is never.
-          destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
-          createdByTaskId: null,
-          clientRequestId: uuidv4(),
+      create.mutate(
+        {
+          request: {
+            os: summary.os,
+            cpus: summary.cpus,
+            memoryMb: summary.memoryMb,
+            diskMb: summary.diskMb,
+            region: summary.region,
+            displayName: summary.displayName,
+            idleMinutes: summary.idleMinutes,
+            burst: false,
+            createdByHostId: null,
+            createdByAgentId: null,
+            environmentId: summary.environmentId,
+            // The row's `null` is never; on a create `null` is the
+            // configuration's default and `0` is never.
+            destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
+            createdByTaskId: null,
+            clientRequestId: retryKey,
+          },
+          teamName:
+            configuration.kind === "team" ? configuration.teamName : null,
         },
-        teamName: configuration.kind === "team" ? configuration.teamName : null,
-      }),
+        {
+          onSuccess: () => setRetryKey(uuidv4()),
+          onError: (error) => {
+            if (createErrorNeedsFreshKey(error)) setRetryKey(uuidv4());
+          },
+        },
+      ),
     "retry-applying": () =>
       repair.mutate(
         {},
@@ -302,11 +320,12 @@ export function SandboxRowActions(props: {
 /**
  * `Open a tab` and `Open terminal`: points the landing composer (and the
  * terminal panel beside it, which follows the composer's host) at this
- * sandbox and leaves Settings for a new task. A resting sandbox wakes on the
- * first action there, never on this: it is staged to resume or start, which
- * replaces a New sandbox staged there before, so the next send never creates
- * one instead. `terminal` also opens a folderless terminal there: at once
- * for an awake sandbox, on the handoff for a resting one.
+ * sandbox and leaves Settings for a new task. A resting sandbox is staged to
+ * resume or start, which replaces a New sandbox staged there before, so the
+ * next send never creates one instead. `Open a tab` leaves the wake to the
+ * first action there. `Open terminal` IS that first action: an awake
+ * sandbox's folderless terminal opens at once, and a resting one wakes now,
+ * opening its terminal on the handoff with no message sent.
  */
 function useOpenSandboxOnLanding(): (
   summary: SandboxSummary,
@@ -316,14 +335,19 @@ function useOpenSandboxOnLanding(): (
   const surfaceKey = useComposerSurfaceHostKey();
   const { close } = useSystemTabModalActions();
   const navigate = useNavigate();
+  const runStaged = useStagedSandboxRunner();
   return (summary, configuration, intent) => {
     // Staged as the composer's picker stages it, so a dead lease's pin cannot
     // send to the fallback host; an awake one drops whatever was staged.
     const verb = summary.frozen ? null : restingVerb(summary.state);
+    // This ask replaces one an earlier row press left unserved.
+    useLandingPanelStore.getState().clearTerminalRequest();
     if (verb === null) {
       useStagedSandboxStore.getState().clear(surfaceKey);
       if (intent.terminal) {
-        useLandingPanelStore.getState().requestTerminal(summary.hostId);
+        useLandingPanelStore
+          .getState()
+          .requestTerminal(surfaceKey, summary.hostId);
       }
     } else {
       useStagedSandboxStore.getState().stage(surfaceKey, {
@@ -342,9 +366,12 @@ function useOpenSandboxOnLanding(): (
         verb,
       });
       if (intent.terminal) {
-        useStagedSandboxStore
-          .getState()
-          .report(surfaceKey, { openTerminal: true });
+        startStagedTerminal(surfaceKey, (fresh) =>
+          runStaged(surfaceKey, fresh, {
+            fallbackName: summary.displayName,
+            taskId: null,
+          }),
+        );
       }
     }
     useSurfaceHostSelectionStore

@@ -184,11 +184,8 @@ function SandboxRefusalLine(props: {
     case "credits":
       sentence =
         configuration.kind === "team"
-          ? teamAllowanceShortLine(
-              configuration.teamName,
-              failure.shortfallMc ?? 0,
-            )
-          : notEnoughCreditsLine(failure.shortfallMc ?? 0);
+          ? teamAllowanceShortLine(configuration.teamName, failure.shortfallMc)
+          : notEnoughCreditsLine(failure.shortfallMc);
       remedies = (
         <>
           <LineButton

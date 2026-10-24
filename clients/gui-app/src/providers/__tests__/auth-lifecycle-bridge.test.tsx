@@ -11,6 +11,7 @@ import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   openSandboxDetails,
   useSandboxDetailsStore,
@@ -336,6 +337,24 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("drops a terminal a sandbox row asked the landing panel for on user-switch", () => {
+    useLandingPanelStore
+      .getState()
+      .requestTerminal("landing:window-alice", "host-owned-by-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
   it("closes the Details drawer and resets the Sandboxes page on user-switch", () => {

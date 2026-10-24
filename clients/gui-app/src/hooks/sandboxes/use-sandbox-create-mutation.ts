@@ -4,6 +4,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   type SandboxCreateAccepted,
@@ -36,17 +37,25 @@ export interface SandboxCreateSubmit {
  * A refused create, carrying the server's refusal `code` and its `reason`
  * (`null` for a failure with none) so a caller can answer
  * `insufficient_credit` on a team pick with the capacity line rather than
- * only a toast.
+ * only a toast, and the `failure` itself (`null` when nothing was sent) so a
+ * Retry can tell a refusal from an answer that never came.
  */
 export class SandboxCreateError extends Error {
   readonly code: string | null;
   readonly reason: string | null;
+  readonly failure: SandboxControlFailure | null;
 
-  constructor(message: string, code: string | null, reason: string | null) {
+  constructor(
+    message: string,
+    code: string | null,
+    reason: string | null,
+    failure: SandboxControlFailure | null,
+  ) {
     super(message);
     this.name = "SandboxCreateError";
     this.code = code;
     this.reason = reason;
+    this.failure = failure;
   }
 }
 
@@ -89,6 +98,7 @@ export function useSandboxCreate(): UseMutationResult<
           "Sign in to create a sandbox.",
           null,
           null,
+          null,
         );
       }
       const result = await binding.auth.createSandbox(request);
@@ -99,6 +109,7 @@ export function useSandboxCreate(): UseMutationResult<
         sandboxCreateFailureMessage(result, teamName),
         result.kind === "refused" ? result.code : null,
         result.kind === "refused" ? result.reason : null,
+        result,
       );
     },
     onSuccess: (_accepted, { request }, context) => {

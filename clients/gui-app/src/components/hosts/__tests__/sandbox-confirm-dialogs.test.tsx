@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
+import type {
+  SandboxBatchResult,
+  SandboxDestroyBatchRequest,
+} from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 const mocks = vi.hoisted(() => ({
   report: { kind: "unknown" } as SandboxSessionReport,
   destroyMutate: vi.fn<(variables: undefined, options: object) => void>(),
+  batch: {
+    data: undefined as readonly SandboxBatchResult[] | undefined,
+    isPending: false,
+    mutate: vi.fn<(request: SandboxDestroyBatchRequest) => void>(),
+    reset: vi.fn(),
+  },
 }));
 
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
@@ -23,6 +33,9 @@ vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ isPending: false, mutate: vi.fn() }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-destroy-batch-mutation", () => ({
+  useSandboxDestroyBatch: () => mocks.batch,
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-destroy-mutation", () => ({
   useSandboxDestroy: () => ({
     isPending: false,
@@ -31,6 +44,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-destroy-mutation", () => ({
 }));
 
 import {
+  SandboxDestroyAllIdleDialog,
   SandboxDestroyDialog,
   SandboxStopDialog,
   SandboxSuspendDialog,
@@ -47,6 +61,8 @@ describe("sandbox confirm dialogs", () => {
   beforeEach(() => {
     mocks.report = { kind: "unknown" };
     mocks.destroyMutate.mockReset();
+    mocks.batch.data = undefined;
+    mocks.batch.mutate.mockReset();
   });
   afterEach(() => cleanup());
 
@@ -117,5 +133,38 @@ describe("sandbox confirm dialogs", () => {
       fireEvent.click(confirm);
       expect(mocks.destroyMutate).toHaveBeenCalledTimes(1);
     });
+  });
+  it("keeps the confirmed set in Destroy all idle once the list drops the destroyed rows", () => {
+    const targets = [
+      { sandboxId: "sbx-a", name: "box-a" },
+      { sandboxId: "sbx-b", name: "box-b" },
+    ];
+    const dialog = (live: typeof targets) => (
+      <SandboxDestroyAllIdleDialog targets={live} open onOpenChange={vi.fn()} />
+    );
+    const { rerender } = render(dialog(targets));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(mocks.batch.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ targets }),
+    );
+
+    // While the batch runs the list refetches without the destroyed row.
+    rerender(dialog([targets[1]]));
+    const card = screen.getByTestId("confirm-destructive-dialog").textContent;
+    expect(card).toContain("Destroy 2 idle agent sandboxes?");
+    expect(card).toContain("box-a");
+
+    mocks.batch.data = [
+      { ...targets[0], outcome: { kind: "destroyed" } },
+      { ...targets[1], outcome: { kind: "failed", message: "busy" } },
+    ];
+    rerender(dialog([]));
+    expect(
+      screen.getByTestId("confirm-destructive-dialog").textContent,
+    ).toContain("Destroy 2 idle agent sandboxes?");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(mocks.batch.mutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ targets }),
+    );
   });
 });

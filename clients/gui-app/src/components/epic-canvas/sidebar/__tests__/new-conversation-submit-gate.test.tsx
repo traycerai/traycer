@@ -27,7 +27,10 @@ import {
 import { createAppQueryClient } from "@/lib/query-client";
 import type { TaskHostGroup } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
-import type { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import type {
+  useStagedSandboxHandoff,
+  useStagedSandboxSend,
+} from "@/components/composer/use-staged-sandbox-send";
 import {
   composerMirrorLineSeen,
   useComposerMirrorLineSeenStore,
@@ -76,6 +79,7 @@ interface ToolbarMockState {
 }
 
 type StagedSendInput = Parameters<typeof useStagedSandboxSend>[0];
+type StagedHandoffInput = Parameters<typeof useStagedSandboxHandoff>[0];
 
 const testState = vi.hoisted(() => ({
   createChat: vi.fn<
@@ -106,6 +110,7 @@ const testState = vi.hoisted(() => ({
   toolbarStore: null as StoreApi<ToolbarMockState> | null,
   /** What the modal hands the staged send on its latest render. */
   stagedSendInput: null as StagedSendInput | null,
+  stagedHandoffInput: null as StagedHandoffInput | null,
 }));
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
@@ -129,6 +134,9 @@ vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: (input: StagedSendInput) => {
     testState.stagedSendInput = input;
     return { intercept: () => false, line: null };
+  },
+  useStagedSandboxHandoff: (input: StagedHandoffInput) => {
+    testState.stagedHandoffInput = input;
   },
 }));
 
@@ -496,6 +504,7 @@ afterEach(() => {
   testState.bodySnapshot = null;
   testState.editorDoc = null;
   testState.stagedSendInput = null;
+  testState.stagedHandoffInput = null;
   testState.toolbarStore?.setState(TOOLBAR_DEFAULTS, true);
   useAuthStore.setState({ profile: null });
   imageStoreMocks.sessionImageBytes.mockReset();
@@ -591,8 +600,8 @@ describe("NewConversationModalBody direct submit gate", () => {
     if (installEditor === null) throw new Error("expected ComposerBody seam");
     installEditor();
     const staged = () => {
-      const input = testState.stagedSendInput;
-      if (input === null) throw new Error("expected the staged send");
+      const input = testState.stagedHandoffInput;
+      if (input === null) throw new Error("expected the staged handoff");
       return input;
     };
     const toolbar = testState.toolbarStore;

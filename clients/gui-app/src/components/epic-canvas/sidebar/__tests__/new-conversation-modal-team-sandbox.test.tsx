@@ -13,8 +13,10 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +25,10 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
-import type { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import type {
+  useStagedSandboxHandoff,
+  useStagedSandboxSend,
+} from "@/components/composer/use-staged-sandbox-send";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
@@ -33,7 +38,12 @@ import { SurfacePresentationBoundary } from "@/components/layout/surface-present
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { createAppQueryClient } from "@/lib/query-client";
-import { NewConversationModalBody } from "../new-conversation-modal";
+import {
+  NewConversationModalBody,
+  NewConversationModalHost,
+} from "../new-conversation-modal";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 const UNAVAILABLE_COPY = "Not available on team sandboxes.";
@@ -77,6 +87,7 @@ function usablePlacement(): PlacementTargetShape {
 }
 
 type StagedSendInput = Parameters<typeof useStagedSandboxSend>[0];
+type StagedHandoffInput = Parameters<typeof useStagedSandboxHandoff>[0];
 
 const testState = vi.hoisted(() => ({
   /** Whether a sandbox is staged: the staged send then takes the Start. */
@@ -87,6 +98,7 @@ const testState = vi.hoisted(() => ({
   workspaceReady: true,
   /** What the modal hands the staged send on its latest render. */
   stagedSendInput: null as StagedSendInput | null,
+  stagedHandoffInput: null as StagedHandoffInput | null,
   /** The resolved host's catalog: `null` until it answers. */
   catalogHostId: null as string | null,
   /** The resolved host's `providers.list`, `undefined` until it answers. */
@@ -106,6 +118,8 @@ const testState = vi.hoisted(() => ({
     | ((launch: TerminalAgentLaunch, assembledFor: string | null) => void)
     | null,
   installEditor: null as (() => void) | null,
+  /** How many composer bodies mounted: one per editor instance. */
+  bodyMounts: 0,
   placement: ((): { current: PlacementTargetShape } => ({
     current: {
       resolvedHostId: "host-a",
@@ -136,7 +150,14 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
-      return React.createElement("div", null, props.topBanner);
+      React.useEffect(() => {
+        testState.bodyMounts += 1;
+      }, []);
+      return React.createElement(
+        "div",
+        { "data-testid": "composer-body-mock" },
+        props.topBanner,
+      );
     },
   };
 });
@@ -266,29 +287,50 @@ const stubHostClient = {
 // The staged send itself has its own suite: here it takes a send or a Start
 // only while `testState.staged` says a sandbox is staged, and keeps a Start's
 // launch on the stage as the real one does.
-vi.mock("@/components/composer/use-staged-sandbox-send", async () => {
-  const { useStagedSandboxStore } =
-    await import("@/stores/composer/staged-sandbox-store");
-  return {
-    useStagedSandboxSend: (input: StagedSendInput) => {
-      testState.stagedSendInput = input;
-      return {
-        intercept: (
-          _messageText: string,
-          terminalLaunch: TerminalAgentLaunch | null,
-        ): boolean => {
-          testState.intercepts += 1;
-          if (!testState.staged || input.surfaceKey === null) return false;
-          useStagedSandboxStore
-            .getState()
-            .report(input.surfaceKey, { terminalLaunch });
-          return true;
-        },
-        line: null,
-      };
-    },
-  };
-});
+vi.mock(
+  "@/components/composer/use-staged-sandbox-send",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/composer/use-staged-sandbox-send")
+      >();
+    const { useStagedSandboxStore } =
+      await import("@/stores/composer/staged-sandbox-store");
+    return {
+      // Phase 1 stands in for the run: the send is taken and the boot begins.
+      useStagedSandboxSend: (input: StagedSendInput) => {
+        testState.stagedSendInput = input;
+        return {
+          intercept: (
+            _messageText: string,
+            terminalLaunch: TerminalAgentLaunch | null,
+          ): boolean => {
+            testState.intercepts += 1;
+            if (!testState.staged || input.surfaceKey === null) return false;
+            const store = useStagedSandboxStore.getState();
+            // On the new host the resubmit is the surface's own send.
+            if (store.bySurface[input.surfaceKey]?.phase === "handoff") {
+              return false;
+            }
+            store.report(input.surfaceKey, {
+              ownerId: input.ownerId,
+              terminalLaunch,
+              sendTaken: true,
+            });
+            store.begin(input.surfaceKey, false, Date.now());
+            return true;
+          },
+          line: null,
+        };
+      },
+      // Phase 2 is the real one.
+      useStagedSandboxHandoff: (input: StagedHandoffInput) => {
+        testState.stagedHandoffInput = input;
+        actual.useStagedSandboxHandoff(input);
+      },
+    };
+  },
+);
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 
@@ -464,7 +506,10 @@ afterEach(() => {
   testState.intercepts = 0;
   testState.workspaceReady = true;
   testState.stagedSendInput = null;
+  testState.stagedHandoffInput = null;
+  testState.bodyMounts = 0;
   useStagedSandboxStore.setState({ bySurface: {} });
+  useNewConversationModalOpenStore.getState().close();
   testState.catalogHostId = null;
   testState.providers = undefined;
   gateState.blockedIds.clear();
@@ -581,8 +626,8 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       ],
     );
     renderModal();
-    const input = testState.stagedSendInput;
-    if (input === null) throw new Error("expected the staged send");
+    const input = testState.stagedHandoffInput;
+    if (input === null) throw new Error("expected the staged handoff");
 
     act(() => {
       input.prepareHandoff("sbx-host");
@@ -637,8 +682,8 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     view.unmount();
     renderModal();
     const staged = () => {
-      const input = testState.stagedSendInput;
-      if (input === null) throw new Error("expected the staged send");
+      const input = testState.stagedHandoffInput;
+      if (input === null) throw new Error("expected the staged handoff");
       return input;
     };
     // The new host's catalog has not answered: no launch yet.
@@ -673,5 +718,159 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
         profileId: null,
       }),
     );
+  });
+});
+
+describe("new-conversation modal host while a staged sandbox boots", () => {
+  const SURFACE = newConversationSurfaceKey("epic-1");
+
+  function host(active: boolean) {
+    return (
+      <SurfacePresentationBoundary visible focused>
+        <NewConversationModalHost
+          epicId="epic-1"
+          tabId="tab-1"
+          active={active}
+        />
+      </SurfacePresentationBoundary>
+    );
+  }
+
+  function renderHost(): RenderResult {
+    return render(host(true), { wrapper: QueryWrapper });
+  }
+
+  function setOpen(open: boolean): void {
+    act(() => {
+      if (open) {
+        useNewConversationModalOpenStore.getState().open({
+          epicId: "epic-1",
+          tabId: "tab-1",
+          placement: null,
+          parentId: null,
+          hostId: null,
+        });
+      } else {
+        useNewConversationModalOpenStore.getState().close();
+      }
+    });
+  }
+
+  /** Opens the modal, stages a sandbox and sends: the boot begins. */
+  function sendOnStagedSandbox(): void {
+    setOpen(true);
+    act(() => {
+      testState.installEditor?.();
+    });
+    testState.staged = true;
+    const surfaceKey = testState.stagedSendInput?.surfaceKey ?? null;
+    expect(surfaceKey).toBe(SURFACE);
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "existing",
+        hostId: "host-a",
+        sandboxId: "sbx-1",
+        name: "build-box",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      });
+    });
+    act(() => {
+      testState.bodySubmit?.();
+    });
+    expect(testState.createChat).not.toHaveBeenCalled();
+  }
+
+  function bodies(): HTMLElement[] {
+    return screen.queryAllByTestId("composer-body-mock");
+  }
+
+  it("sends from the closed modal once the sandbox is ready, then lets the body go", () => {
+    renderHost();
+    sendOnStagedSandbox();
+
+    setOpen(false);
+    expect(
+      screen.queryByTestId("epic-sidebar-new-conversation-modal"),
+    ).toBeNull();
+    // Kept, detached: one editor, owning nothing on screen.
+    expect(testState.bodyMounts).toBe(1);
+    expect(bodies()).toHaveLength(0);
+
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        createdHostId: "host-a",
+        phase: "handoff",
+      });
+    });
+    // The new host's catalog answers: the hidden body's resubmit runs.
+    act(() => {
+      testState.catalogHostId = "host-a";
+      testState.toolbarStore?.setState({
+        catalog: { hostId: "host-a", harnesses: [], modelsLoaded: true },
+      });
+    });
+
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
+    // Reopening now is a fresh body: the old one was released with the stage.
+    setOpen(true);
+    expect(testState.bodyMounts).toBe(2);
+  });
+
+  it("shows the same body again when reopened while the sandbox boots, and owns no shortcut while hidden", () => {
+    renderHost();
+    sendOnStagedSandbox();
+    setOpen(false);
+
+    // Cmd+Enter while hidden reaches no send.
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    expect(testState.intercepts).toBe(1);
+
+    setOpen(true);
+    expect(testState.bodyMounts).toBe(1);
+    const shown = bodies();
+    expect(shown).toHaveLength(1);
+    expect(
+      within(
+        screen.getByTestId("epic-sidebar-new-conversation-modal-body"),
+      ).getByTestId("composer-body-mock"),
+    ).toBe(shown[0]);
+  });
+
+  it("keeps the send through a tab switch, and releases the body when the stage is cleared", () => {
+    const view = renderHost();
+    sendOnStagedSandbox();
+
+    // The tab goes to the background: its modal closes, its send does not.
+    view.rerender(host(false));
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+    expect(testState.bodyMounts).toBe(1);
+    view.rerender(host(true));
+    setOpen(true);
+    expect(testState.bodyMounts).toBe(1);
+
+    // An account switch clears every stage: nothing is left to send.
+    setOpen(false);
+    act(() => {
+      useStagedSandboxStore.getState().clearAll();
+    });
+    setOpen(true);
+    expect(testState.bodyMounts).toBe(2);
+    expect(testState.createChat).not.toHaveBeenCalled();
+  });
+
+  it("shows a request filed for a background tab once the tab comes to the front", () => {
+    // Filed before the tab's session mounts in the background.
+    setOpen(true);
+    const view = render(host(false), { wrapper: QueryWrapper });
+    expect(
+      screen.queryByTestId("epic-sidebar-new-conversation-modal"),
+    ).toBeNull();
+
+    view.rerender(host(true));
+    expect(
+      screen.getByTestId("epic-sidebar-new-conversation-modal"),
+    ).toBeDefined();
   });
 });

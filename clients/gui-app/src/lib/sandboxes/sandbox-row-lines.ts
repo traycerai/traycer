@@ -675,7 +675,9 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
  * not part of it. A row between two states offers only Details (and Destroy
  * from a stuck suspend or stop, as the card always did). An agent's sandbox
  * has no Idle settings until it is kept: it destroys itself when idle, and
- * Keep applies the configuration's defaults.
+ * Keep applies the configuration's defaults. Nor does a failed one offer
+ * Retry: the row's create makes a kept sandbox, so retrying it would turn
+ * the agent's into one that never destroys itself.
  */
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
@@ -686,7 +688,7 @@ export function sandboxRowActions(input: {
   const actions = matrixRowActions(input);
   if (!input.summary.burst) return actions;
   return {
-    primary: actions.primary,
+    primary: actions.primary === "retry" ? null : actions.primary,
     menu: actions.menu.filter((action) => action !== "idle-settings"),
   };
 }

@@ -268,14 +268,42 @@ export function sandboxDetailsEntry(
   };
 }
 
-/** The rows every cached answer of one query family holds. */
-function cachedAnswers<T>(
+/**
+ * Refetches the signed-in user's queries of one family and returns what they
+ * answered: only answers newer than this read, so a failed refetch, or an
+ * earlier account's entry, never stands in for the control plane's word.
+ * `null` when the refetch failed or no query answered.
+ */
+async function freshAnswers<T>(
   context: DetailsProviderContext,
-  queryKey: readonly unknown[],
-): T[] {
-  return context.queryClient
-    .getQueriesData<T | null>({ queryKey })
-    .flatMap(([, data]) => (data === undefined || data === null ? [] : [data]));
+  family: readonly unknown[],
+  userId: string | null,
+): Promise<T[] | null> {
+  const startedAt = Date.now();
+  // The family's per-account keys end with the account service and the user.
+  const filters = {
+    queryKey: family,
+    predicate: (query: { readonly queryKey: readonly unknown[] }) =>
+      query.queryKey.length === family.length + 2 &&
+      query.queryKey.at(-1) === userId,
+  };
+  try {
+    await context.queryClient.refetchQueries(filters, { throwOnError: true });
+  } catch {
+    return null;
+  }
+  const answers = context.queryClient
+    .getQueryCache()
+    .findAll(filters)
+    .flatMap((query) => {
+      const data = context.queryClient.getQueryData<T | null>(query.queryKey);
+      return query.state.dataUpdatedAt < startedAt ||
+        data === undefined ||
+        data === null
+        ? []
+        : [data];
+    });
+  return answers.length === 0 ? null : answers;
 }
 
 /** Why the sandbox needs attention, or `null` when nothing does. */
@@ -335,26 +363,29 @@ function detailsHistory(entry: SandboxDetailsEntry): DetailsHistory {
 
 /**
  * The Settings Details drawer's `sandbox` provider, for the sandbox
- * `subject.key` names. Every load refetches the control plane's list and cost
- * ledger first, so a reader never sees a row the server no longer returns.
+ * `subject.key` names. Every load, an export's included, refetches the
+ * signed-in user's list and cost ledger first and reads only those answers,
+ * so a reader never sees a row the server no longer returns, or another
+ * account's.
  */
 export async function sandboxDetailsProvider(
   subject: DetailsSubject,
   context: DetailsProviderContext,
 ): Promise<DetailsEntry> {
-  await Promise.all([
-    context.queryClient.refetchQueries({
-      queryKey: sandboxQueryKeys.listAll(),
-    }),
-    context.queryClient.refetchQueries({
-      queryKey: sandboxQueryKeys.costsAll(),
-    }),
+  const viewerUserId = useAuthStore.getState().contextMetadata?.userId ?? null;
+  const [lists, costs] = await Promise.all([
+    freshAnswers<SandboxListResponse>(
+      context,
+      sandboxQueryKeys.listAll(),
+      viewerUserId,
+    ),
+    freshAnswers<UserSandboxCost>(
+      context,
+      sandboxQueryKeys.costsAll(),
+      viewerUserId,
+    ),
   ]);
-  const lists = cachedAnswers<SandboxListResponse>(
-    context,
-    sandboxQueryKeys.listAll(),
-  );
-  if (lists.length === 0) throw new Error(SANDBOX_LIST_FAILED);
+  if (lists === null) throw new Error(SANDBOX_LIST_FAILED);
   const summary = lists
     .flatMap((list) => list.sandboxes)
     .find((row) => row.id === subject.key);
@@ -363,12 +394,14 @@ export async function sandboxDetailsProvider(
   }
   const entry = sandboxDetailsEntry({
     summary,
+    // A ledger that did not answer leaves the cost history out rather than
+    // showing an earlier one.
     cost:
-      cachedAnswers<UserSandboxCost>(context, sandboxQueryKeys.costsAll())
-        .flatMap((costs) => costs.sandboxes)
+      (costs ?? [])
+        .flatMap((answer) => answer.sandboxes)
         .find((cost) => cost.sandboxId === summary.id) ?? null,
     wakeString: null,
-    viewerUserId: useAuthStore.getState().contextMetadata?.userId ?? null,
+    viewerUserId,
     // The configuration is not known here: an unnamed creator is left
     // unsaid rather than called "you".
     personal: false,

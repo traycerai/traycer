@@ -306,18 +306,21 @@ export function useSandboxStaging(input: {
 
   const composer = useMemo<HostSwitcherComposerMode>(() => {
     // The picker's own rule: an agent's burst sandbox and Automations are
-    // never offered, and a sandbox whose row has not answered is not either
-    // (it fails closed).
+    // never offered, a sandbox whose row has not answered is not either (it
+    // fails closed), and a teammate's team sandbox stays on the team's page.
+    const composerViewerId = viewerUserId.length === 0 ? null : viewerUserId;
     const inThisTask =
       task === null
         ? null
         : input.hosts.filter(
             (host) =>
               (task.hosts ?? []).some((row) => row.hostId === host.hostId) &&
-              hostOptionPickerGroup(host, false, null) !== "hidden",
+              hostOptionPickerGroup(host, false, {
+                userId: composerViewerId,
+              }) !== "hidden",
           );
     return {
-      viewerUserId: viewerUserId.length === 0 ? null : viewerUserId,
+      viewerUserId: composerViewerId,
       inThisTask,
       subLinesFor: (hostId) => {
         const host = input.hosts.find((option) => option.hostId === hostId);

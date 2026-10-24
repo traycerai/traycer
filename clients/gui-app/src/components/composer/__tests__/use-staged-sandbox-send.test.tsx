@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -17,6 +25,7 @@ import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-clie
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   stagedSandboxFallbackName,
+  useStagedSandboxHandoff,
   useStagedSandboxSend,
   type StagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
@@ -31,6 +40,7 @@ import type {
   StagedSandboxRunDeps,
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
 
 const mocks = vi.hoisted(() => ({
   runStagedSandbox: vi.fn<
@@ -102,6 +112,9 @@ vi.mock("@/lib/links/open-link", () => ({
 const SURFACE = "tab:epic-1";
 const NEW_HOST = "sbx-host";
 
+// A stable callback, as the surfaces pass one.
+const noPrepare = (): void => undefined;
+
 function stageCreated(
   step: StagedSandboxStep,
   failure: StagedSandboxFailure | null,
@@ -137,10 +150,6 @@ function Harness(props: {
 }) {
   const send = useStagedSandboxSend({
     surfaceKey: SURFACE,
-    resolvedHostId: "laptop",
-    canSubmit: false,
-    submit: () => false,
-    prepareHandoff: () => undefined,
     terminal: { epicId: "epic-1", open: props.openTerminal },
     taskId: "epic-1",
     ownerId: null,
@@ -285,6 +294,54 @@ describe("useStagedSandboxSend's setup line", () => {
   });
 });
 
+describe("useStagedSandboxSend's line after a refusal", () => {
+  /** A create the server refused before making anything. */
+  function stageRefused(failure: StagedSandboxFailure): void {
+    stageCreated("creating", failure);
+    useStagedSandboxStore.getState().report(SURFACE, {
+      createdSandboxId: null,
+      createdHostId: null,
+    });
+  }
+
+  it("retries a create refused for credits under a new key", () => {
+    stageRefused({ kind: "credits", shortfallMc: 120 });
+    mount(vi.fn());
+
+    fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
+
+    expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
+      SURFACE,
+      true,
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("retries a create whose answer never came under its own key", () => {
+    stageRefused({ kind: "unverified" });
+    mount(vi.fn());
+
+    fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
+
+    expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
+      SURFACE,
+      false,
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("names no amount when the refusal named no shortfall", () => {
+    stageRefused({ kind: "credits", shortfallMc: null });
+    mount(vi.fn());
+
+    const line = screen.getByTestId("sandbox-refusal-line").textContent;
+    expect(line).toContain(notEnoughCreditsLine(null));
+    expect(line).not.toContain("$0.00");
+  });
+});
+
 /** One landing draft's composer: the window's drafts share the surface. */
 function DraftComposer(props: {
   readonly draftId: string;
@@ -294,12 +351,16 @@ function DraftComposer(props: {
   const { onSend } = props;
   const send = useStagedSandboxSend({
     surfaceKey: SURFACE,
+    terminal: null,
+    taskId: null,
+    ownerId: props.draftId,
+  });
+  useStagedSandboxHandoff({
+    surfaceKey: SURFACE,
     resolvedHostId: NEW_HOST,
     canSubmit: true,
     submit: props.submit,
-    prepareHandoff: () => undefined,
-    terminal: null,
-    taskId: null,
+    prepareHandoff: noPrepare,
     ownerId: props.draftId,
   });
   useEffect(() => {
@@ -351,6 +412,10 @@ describe("useStagedSandboxSend's handoff", () => {
   });
 
   it("hands off the sending draft's action, not a Start another draft pressed while it booted", () => {
+    // The whole handoff in one millisecond: the resubmit must not wait on the
+    // clock moving.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_791_100_000_000);
+    onTestFinished(() => clock.mockRestore());
     useStagedSandboxStore.getState().stage(SURFACE, {
       kind: "existing",
       hostId: NEW_HOST,
@@ -418,6 +483,54 @@ describe("useStagedSandboxSend's handoff", () => {
   });
 });
 
+describe("useStagedSandboxSend on a boot a terminal ask started", () => {
+  it("hands off the first send made while it boots, without starting a second run", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useStagedSandboxStore.getState().report(SURFACE, { openTerminal: true });
+    useStagedSandboxStore.getState().begin(SURFACE, false, Date.now());
+    const submit = vi.fn(() => true);
+    let send: StagedSandboxSend | null = null;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DraftComposer
+          draftId="draft-a"
+          submit={submit}
+          onSend={(next) => {
+            send = next;
+          }}
+        />
+      </QueryClientProvider>,
+    );
+
+    let taken = false;
+    act(() => {
+      taken = send?.intercept("fix the login bug", null) ?? false;
+    });
+    expect(taken).toBe(true);
+    expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      ownerId: "draft-a",
+      sendTaken: true,
+      openTerminal: true,
+    });
+
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        createdHostId: NEW_HOST,
+        phase: "handoff",
+      });
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("useStagedSandboxSend's refused resubmit", () => {
   it("keeps the stage, the sandbox and the draft when the new host refuses, and says why", () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
@@ -433,12 +546,16 @@ describe("useStagedSandboxSend's refused resubmit", () => {
     function Refusing() {
       const result = useStagedSandboxSend({
         surfaceKey: SURFACE,
+        terminal: null,
+        taskId: null,
+        ownerId: null,
+      });
+      useStagedSandboxHandoff({
+        surfaceKey: SURFACE,
         resolvedHostId: NEW_HOST,
         canSubmit: true,
         submit,
-        prepareHandoff: () => undefined,
-        terminal: null,
-        taskId: null,
+        prepareHandoff: noPrepare,
         ownerId: null,
       });
       useEffect(() => {

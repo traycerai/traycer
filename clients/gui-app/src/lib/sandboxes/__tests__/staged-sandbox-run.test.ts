@@ -25,6 +25,7 @@ import {
   type StagedSandboxRunDeps,
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -239,6 +240,7 @@ beforeEach(() => {
   surfaceKey = `landing:test-${surfaceCount}`;
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
+  useLandingPanelStore.getState().resetForTests();
 });
 
 afterEach(() => {
@@ -476,6 +478,30 @@ describe("runStagedSandbox settling", () => {
     expect(directory.refreshes).toBeGreaterThan(0);
   });
 
+  it.each([
+    { sendTaken: false, request: NEW_HOST_ID, phase: null },
+    { sendTaken: true, request: null, phase: "handoff" },
+  ])(
+    "on a terminal ask, hands the terminal to the landing panel, sending nothing unless a send was taken ($sendTaken)",
+    async ({ sendTaken, request, phase }) => {
+      useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+      useStagedSandboxStore
+        .getState()
+        .report(surfaceKey, { openTerminal: true, sendTaken });
+      const { deps } = harness({}, true);
+
+      await run(false, deps);
+
+      expect(readStagedSandbox(surfaceKey)?.phase ?? null).toBe(phase);
+      expect(
+        useLandingPanelStore.getState().terminalRequest?.hostId ?? null,
+      ).toBe(request);
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[surfaceKey],
+      ).toBe(NEW_HOST_ID);
+    },
+  );
+
   it("keeps polling until the host is dialable, then hands off", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { directory, deps, clock } = harness(
@@ -669,7 +695,43 @@ describe("runStagedSandbox guards", () => {
     expect(auth.requests).toHaveLength(1);
   });
 
-  it("starts a new send while a cancelled send's create is still in flight", async () => {
+  it("takes up a cancelled send's create still in flight on the next send, instead of racing it with a second run", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({}, true);
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(auth, "createSandbox").mockImplementationOnce(async (request) => {
+      auth.requests.push(request);
+      await held;
+      return created;
+    });
+    const listReads = vi.spyOn(auth, "listSandboxes");
+
+    const cancelledSend = run(false, deps);
+    await vi.waitFor(() => {
+      expect(auth.requests).toHaveLength(1);
+    });
+    useStagedSandboxStore.getState().cancel(surfaceKey);
+    // The send's key rule: the create may have been accepted.
+    await run(false, deps);
+    expect(stageOf()).toMatchObject({
+      phase: "creating",
+      clientRequestId: auth.requests[0].clientRequestId,
+    });
+
+    release();
+    await cancelledSend;
+    expect(auth.requests).toHaveLength(1);
+    expect(listReads).toHaveBeenCalledTimes(1);
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      clientRequestId: auth.requests[0].clientRequestId,
+    });
+  });
+
+  it("starts a fresh create while a cancelled send's create is still in flight, when the stage asks for a new key", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness({}, true);
     let release = (): void => undefined;

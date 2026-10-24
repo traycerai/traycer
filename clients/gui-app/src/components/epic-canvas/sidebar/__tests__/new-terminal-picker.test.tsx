@@ -16,7 +16,15 @@ import type {
   WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { NewTerminalStagedHandoff } from "../new-terminal-staged-handoff";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   PaneSurfaceActivityContext,
@@ -56,13 +64,9 @@ const bindingsQuery = vi.hoisted(() => ({
   current: null as BindingsQueryStub | null,
 }));
 
-/** The staged sandbox, and what the picker hands its staged send. */
+/** The staged sandbox the picker's staging reads. */
 const staged = vi.hoisted(() => ({
   staging: null as object | null,
-  send: null as {
-    readonly canSubmit: boolean;
-    readonly submit: () => boolean;
-  } | null,
 }));
 
 /** The staged sandbox's host: dialable, with its own folderless cwd. */
@@ -85,15 +89,15 @@ vi.mock(
     useSandboxStaging: () => staged.staging,
   }),
 );
-vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
-  useStagedSandboxSend: (input: {
-    readonly canSubmit: boolean;
-    readonly submit: () => boolean;
-  }) => {
-    staged.send = input;
-    return { intercept: () => false, line: null };
-  },
-}));
+vi.mock(
+  "@/components/composer/use-staged-sandbox-send",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-staged-sandbox-send")
+    >()),
+    useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  }),
+);
 
 const SANDBOX_BINDINGS = {
   data: { rows: [], folderlessCwd: "/home/sandbox" },
@@ -289,7 +293,7 @@ describe("<NewTerminalPicker />", () => {
     useSurfaceHostSelectionStore.getState().resetForTests();
     stubLoadedBindings();
     staged.staging = null;
-    staged.send = null;
+    useStagedSandboxStore.setState({ bySurface: {} });
   });
 
   afterEach(() => {
@@ -301,28 +305,38 @@ describe("<NewTerminalPicker />", () => {
     resetEpicTerminalDurableCreatesForTests();
   });
 
-  it("hands a staged sandbox its own directory, not a workspace row on another host", () => {
-    // The task binds workspace rows on host-1 and host-2; the sandbox was
-    // created and handed off.
-    staged.staging = {
-      composer: null,
-      stage: { phase: "handoff", createdHostId: SANDBOX_HOST },
-      consequences: null,
-      sheet: null,
-    };
-    const tabId = openPicker();
-    const send = staged.send;
-    if (send === null) throw new Error("expected the staged send");
-
-    expect(send.canSubmit).toBe(true);
-    act(() => {
-      expect(send.submit()).toBe(true);
+  it("opens the staged sandbox's terminal in its own directory once it is ready, with the picker closed", () => {
+    // The task binds workspace rows on host-1 and host-2; the picker that
+    // staged the sandbox closed while it booted, and the run handed it off.
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    const surfaceKey = tabSurfaceKey("new-terminal", tabId);
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, {
+      kind: "existing",
+      hostId: SANDBOX_HOST,
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
     });
+    store.report(surfaceKey, {
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      sendTaken: true,
+    });
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(surfaceKey, SANDBOX_HOST);
+
+    renderWithClient(
+      <NewTerminalStagedHandoff epicId="epic-1" tabId={tabId} />,
+    );
 
     const launched = tabTiles(tabId).filter(
       (tile) => launchedTerminalCwd(tile) !== undefined,
     );
     expect(launched.map(launchedTerminalCwd)).toEqual(["/home/sandbox"]);
+    expect(readStagedSandbox(surfaceKey)).toBeNull();
   });
 
   it("opens a popover with the host section and workspace rows", () => {

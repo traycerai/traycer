@@ -94,6 +94,7 @@ vi.mock(
 );
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
 }));
 
 vi.mock("@/lib/composer/repointed-staging-toast", () => ({

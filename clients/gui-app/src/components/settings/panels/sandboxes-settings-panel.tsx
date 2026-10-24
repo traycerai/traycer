@@ -356,6 +356,27 @@ function todayFigures(input: {
   };
 }
 
+/**
+ * Scrolls the revealed row into view when it first shows, and on each later
+ * reveal (`reveals` counts them), not again on each refetch while the reader
+ * scrolls elsewhere.
+ */
+function useScrollRevealedRow(
+  highlighted: string | null,
+  shown: readonly SandboxSummary[],
+  reveals: number,
+): void {
+  const highlightedShown =
+    highlighted !== null && shown.some((row) => row.id === highlighted);
+  useEffect(() => {
+    if (highlighted === null || !highlightedShown) return;
+    const row = document.querySelector(
+      `[data-sandbox-row="${CSS.escape(highlighted)}"]`,
+    );
+    row?.scrollIntoView({ block: "center" });
+  }, [highlighted, highlightedShown, reveals]);
+}
+
 function SandboxListSection(props: {
   readonly configuration: SandboxPageConfiguration;
   readonly teamEnvironmentIds: ReadonlySet<string>;
@@ -380,23 +401,19 @@ function SandboxListSection(props: {
   // consumed so the same row can be asked for again.
   const reveal = props.revealSandboxId;
   const [revealed, setRevealed] = useState<string | null>(null);
+  // One scroll per reveal, even of the row revealed last time.
+  const [reveals, setReveals] = useState(0);
   if (reveal !== revealed) {
     setRevealed(reveal);
     if (reveal !== null) {
       setFilter(SANDBOX_ROW_FILTER_NONE);
       setHighlighted(reveal);
+      setReveals((count) => count + 1);
     }
   }
   useEffect(() => {
     if (reveal !== null) clearSandboxReveal();
   }, [reveal]);
-  useEffect(() => {
-    if (highlighted === null) return;
-    const row = document.querySelector(
-      `[data-sandbox-row="${CSS.escape(highlighted)}"]`,
-    );
-    row?.scrollIntoView({ block: "center" });
-  }, [highlighted, list.data]);
 
   const allRows = list.data?.sandboxes ?? null;
   const configurationRows = useMemo(() => {
@@ -419,6 +436,7 @@ function SandboxListSection(props: {
           ),
     [configurationRows, filter, viewerUserId],
   );
+  useScrollRevealedRow(highlighted, shown, reveals);
   const personalTodayMc = useMemo(() => {
     const data = costs.data ?? null;
     if (allRows === null || data === null) return 0;

@@ -83,10 +83,14 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
-import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import {
+  useStagedSandboxHandoff,
+  useStagedSandboxSend,
+} from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
   readStagedSandbox,
+  useStagedSandboxStore,
   useStagedTerminalLaunch,
 } from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
@@ -502,10 +506,17 @@ export function LandingComposer(props: LandingComposerProps) {
   const stagedSubmitRef = useRef<() => boolean>(() => false);
   const prepareSandboxHandoff = useCallback(
     (hostId: string): void => {
-      // The terminal a resting row's Open terminal staged, now that its
-      // sandbox is awake.
+      // A terminal asked for on the stage (a row's Open terminal, the
+      // panel's `+`) besides this send, now that its sandbox is awake. Asked
+      // once, so the mark is cleared: a composer that remounts mid-handoff
+      // prepares again.
       if (readStagedSandbox(composerSurfaceKey)?.openTerminal === true) {
-        useLandingPanelStore.getState().requestTerminal(hostId);
+        useLandingPanelStore
+          .getState()
+          .requestTerminal(composerSurfaceKey, hostId);
+        useStagedSandboxStore
+          .getState()
+          .report(composerSurfaceKey, { openTerminal: false });
       }
       const id = draftId ?? createdUnboundDraftIdRef.current;
       if (id === null) return;
@@ -531,7 +542,10 @@ export function LandingComposer(props: LandingComposerProps) {
     enabled: stagedTerminalLaunch !== null,
     subscribed: stagedTerminalLaunch !== null,
   });
-  const stagedSend = useStagedSandboxSend({
+  // The window's drafts share its pin and so its stage: the handoff is the
+  // sending draft's alone.
+  const stagedOwnerId = draftId ?? props.pendingCreateId;
+  useStagedSandboxHandoff({
     surfaceKey: composerSurfaceKey,
     resolvedHostId,
     canSubmit: stagedResubmitReady({
@@ -544,13 +558,15 @@ export function LandingComposer(props: LandingComposerProps) {
     }),
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
+    ownerId: stagedOwnerId,
+  });
+  const stagedSend = useStagedSandboxSend({
+    surfaceKey: composerSurfaceKey,
     // No epic before the send: the landing panel's terminals follow the
     // composer's host, which phase 2 pins to the new one.
     terminal: null,
     taskId: null,
-    // The window's drafts share its pin and so its stage: the handoff is the
-    // sending draft's alone.
-    ownerId: draftId ?? props.pendingCreateId,
+    ownerId: stagedOwnerId,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to

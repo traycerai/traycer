@@ -22,6 +22,15 @@ export type LandingPanelTitleSource = "default" | "manual";
  */
 export const UNBOUND_LANDING_PAGE_ID = "unbound-landing-page";
 
+/** {@link LandingPanelStoreState.terminalRequest}. */
+export interface LandingTerminalRequest {
+  /** The composer surface whose pin the host was asked through. */
+  readonly surfaceKey: string;
+  readonly hostId: string;
+  /** The start page it is for; `null` until the panel binds it. */
+  readonly landingPageId: string | null;
+}
+
 /** Which kind of surface a panel tab holds. The strip mixes both. */
 export type LandingPanelTabKind = "terminal" | "browser";
 
@@ -444,14 +453,28 @@ export interface LandingPanelStoreState {
    */
   readonly panelReveal: string | null;
   /**
-   * The host a folderless terminal was asked for from outside the panel (a
-   * sandbox row's Open terminal), or `null`. Not persisted. The panel opens
-   * it once that host is the one it targets and can start a terminal there,
-   * then clears it; a later ask replaces it.
+   * A folderless terminal asked for from outside the panel (a sandbox row's
+   * Open terminal), or `null`. Not persisted, and one-shot for the landing
+   * visit it was filed for: the panel binds it to the start page in front of
+   * the person, opens it there once it can, and drops it unserved when its
+   * surface is pinned to another host, when that host cannot start one, or
+   * when that page unmounts. A later ask replaces it.
    */
-  readonly terminalRequest: string | null;
-  readonly requestTerminal: (hostId: string) => void;
+  readonly terminalRequest: LandingTerminalRequest | null;
+  readonly requestTerminal: (surfaceKey: string, hostId: string) => void;
+  /**
+   * A surface's pin moved: a request asked through it for another host is
+   * one the person has moved on from.
+   */
+  readonly dropTerminalRequestOnSelection: (
+    surfaceKey: string,
+    hostId: string | null,
+  ) => void;
+  /** Binds the unbound request to the start page that will serve it. */
+  readonly bindTerminalRequest: (landingPageId: string) => void;
   readonly clearTerminalRequest: () => void;
+  /** Drops the request bound to a start page that unmounted unserved. */
+  readonly dropTerminalRequestForPage: (landingPageId: string) => void;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
   /**
    * Opens the panel to SHOW `instanceId` on each of `landingPageIds`, and
@@ -751,10 +774,34 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
       ...initialLandingPanelState(),
       panelReveal: null,
       terminalRequest: null,
-      requestTerminal: (hostId) => set({ terminalRequest: hostId }),
+      requestTerminal: (surfaceKey, hostId) =>
+        set({ terminalRequest: { surfaceKey, hostId, landingPageId: null } }),
+      dropTerminalRequestOnSelection: (surfaceKey, hostId) =>
+        set((state) =>
+          state.terminalRequest !== null &&
+          state.terminalRequest.surfaceKey === surfaceKey &&
+          state.terminalRequest.hostId !== hostId
+            ? { terminalRequest: null }
+            : state,
+        ),
+      bindTerminalRequest: (landingPageId) =>
+        set((state) =>
+          state.terminalRequest === null ||
+          state.terminalRequest.landingPageId !== null
+            ? state
+            : {
+                terminalRequest: { ...state.terminalRequest, landingPageId },
+              },
+        ),
       clearTerminalRequest: () =>
         set((state) =>
           state.terminalRequest === null ? state : { terminalRequest: null },
+        ),
+      dropTerminalRequestForPage: (landingPageId) =>
+        set((state) =>
+          state.terminalRequest?.landingPageId === landingPageId
+            ? { terminalRequest: null }
+            : state,
         ),
       setPanelOpen: (landingPageId, panelOpen) =>
         set((state) =>

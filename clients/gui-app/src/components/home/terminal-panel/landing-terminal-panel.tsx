@@ -30,6 +30,8 @@ import {
   registerLeaderScope,
 } from "@/lib/keybindings/leader-scope";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   pointerDragHandleAxisClassName,
   usePointerDragCommit,
@@ -126,6 +128,12 @@ import {
 } from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
 import { landingPaneAnchorDraftIds } from "./landing-pane-anchor-store";
+import {
+  stagedSandboxFallbackName,
+  startStagedTerminal,
+  useStagedSandboxRunner,
+} from "@/components/composer/use-staged-sandbox-send";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
   useLandingTerminalGesture,
@@ -955,6 +963,8 @@ export function LandingTerminalPanel(): ReactNode {
    * the strip again for one.
    */
   const deferredCreateRef = useRef<LandingDeferredTerminalCreate | null>(null);
+  const composerSurfaceKey = useComposerSurfaceHostKey();
+  const runStaged = useStagedSandboxRunner();
   const createTerminalTab = useCallback(
     (routing: LandingTerminalTarget): string | null => {
       if (routing.hostId === null || routing.availability !== "supported") {
@@ -990,6 +1000,21 @@ export function LandingTerminalPanel(): ReactNode {
   // set suppresses the open reconciliation's auto-spawn). If already open, it is
   // just a `+` - create against the effective target, never re-capturing.
   const revealAndCreateTerminal = useCallback(() => {
+    // A sandbox staged on the composer is where this terminal is wanted, and
+    // asking for one there is its first action: it is created or woken, and
+    // the terminal opens on the handoff. Never on the host the composer falls
+    // back to meanwhile, and no new-tab chooser is left waiting for it.
+    if (
+      startStagedTerminal(composerSurfaceKey, (fresh) =>
+        runStaged(composerSurfaceKey, fresh, {
+          fallbackName: stagedSandboxFallbackName(""),
+          taskId: null,
+        }),
+      )
+    ) {
+      dismissPlaceholder();
+      return;
+    }
     if (directoryRequestRef.current !== null) {
       if (panelOpen) return;
       replaceDirectoryRequest(null);
@@ -1039,10 +1064,13 @@ export function LandingTerminalPanel(): ReactNode {
   }, [
     capture,
     claimAskedRow,
+    composerSurfaceKey,
     createTerminalTab,
+    dismissPlaceholder,
     panelOpen,
     pending,
     replaceDirectoryRequest,
+    runStaged,
     setPanelOpen,
     target,
   ]);
@@ -1094,7 +1122,14 @@ export function LandingTerminalPanel(): ReactNode {
     [replaceDirectoryRequest, requestDirectoryPickerFocus, selectWorkspacePath],
   );
 
+  const targetHostId = target.hostId;
   const handleReconciliationError = useCallback(() => {
+    // The host's terminal list could not be fetched: it cannot be reached, so
+    // a terminal asked for on it from outside the panel is dropped unserved.
+    const terminalRequest = useLandingPanelStore.getState().terminalRequest;
+    if (terminalRequest !== null && terminalRequest.hostId === targetHostId) {
+      useLandingPanelStore.getState().clearTerminalRequest();
+    }
     const request = directoryRequestRef.current;
     if (request === null || request.selectedTarget === null) return;
     const ownsFocus = hasPrimaryFocusIntent(
@@ -1110,7 +1145,7 @@ export function LandingTerminalPanel(): ReactNode {
     if (ownsFocus) {
       requestDirectoryPickerFocus(request.key);
     }
-  }, [requestDirectoryPickerFocus, writeDirectoryRequest]);
+  }, [requestDirectoryPickerFocus, targetHostId, writeDirectoryRequest]);
 
   const activatePanelTab = useCallback(
     (instanceId: string) => {
@@ -1365,21 +1400,48 @@ export function LandingTerminalPanel(): ReactNode {
   }, [runReconciliationSettlement, surfaceActive]);
 
   // A folderless terminal asked for from outside the panel (a sandbox row's
-  // Open terminal). It waits until the panel targets that host and can start
-  // one there - the host awake, its authority ready, its home reconciled -
-  // which the reconciliation publishes whether or not the panel is open. Then
-  // it is shown as the sign-in terminal is: a REVEAL of the tab just added,
-  // across every start page with a pane, so the open is not settled as a
-  // gesture that would re-target the draft's folder.
+  // Open terminal, a staged sandbox's handoff), one-shot for the landing visit
+  // it was filed for. It waits while the panel targets another host: the ask
+  // pinned the composer to its host, and a pin moved elsewhere drops it
+  // (`setSelection`). A host that cannot start one (an old host, no home
+  // directory, unreachable) never will, so that drops it too. It is bound to
+  // the start page in front of the person, which drops it when it unmounts
+  // unserved (`LandingTerminalPaneAnchor`), and it is served there once the
+  // host can start one - its authority ready, its home reconciled, which the
+  // reconciliation publishes whether or not the panel is open. It is shown as
+  // the sign-in terminal is: a REVEAL of the tab just added, across every start
+  // page with a pane, so the open is not settled as a gesture that would
+  // re-target the draft's folder.
   const terminalRequest = useLandingPanelStore(
     (state) => state.terminalRequest,
   );
+  // The start page in front of the person. The panel stays hosted on the page
+  // it was on until a newly focused one registers its anchor, so binding waits
+  // for the two to agree: the request is for the page the person is looking at.
+  const focusedDraftId = useTabsStore((state) => {
+    const focused = selectHostFocusedRef(state);
+    return focused?.kind === "draft" ? focused.id : null;
+  });
   useEffect(() => {
     if (terminalRequest === null || !surfaceActive) return;
-    if (target.hostId !== terminalRequest) return;
     const store = useLandingPanelStore.getState();
     // Read live: a run with this render's values may already have served it.
     if (store.terminalRequest !== terminalRequest) return;
+    if (target.hostId !== terminalRequest.hostId) return;
+    if (
+      target.availability === "unsupported" ||
+      (reconciledContext?.hostId === target.hostId &&
+        reconciledContext.homeCwd === null)
+    ) {
+      store.clearTerminalRequest();
+      return;
+    }
+    if (terminalRequest.landingPageId === null) {
+      if (focusedDraftId !== null && focusedDraftId !== landingPageId) return;
+      store.bindTerminalRequest(landingPageId);
+      return;
+    }
+    if (terminalRequest.landingPageId !== landingPageId) return;
     const instanceId = createTerminalTab({
       ...target,
       launchWorkspacePath: null,
@@ -1395,7 +1457,9 @@ export function LandingTerminalPanel(): ReactNode {
     focusTerminalInstance(instanceId);
   }, [
     createTerminalTab,
+    focusedDraftId,
     landingPageId,
+    reconciledContext,
     surfaceActive,
     target,
     terminalRequest,

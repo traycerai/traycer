@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
+import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   readStagedSandbox,
@@ -15,7 +19,15 @@ const SURFACE = "landing:window-test";
 
 const mutation = () => ({ mutate: vi.fn(), isPending: false });
 const createMutate = vi.hoisted(() =>
-  vi.fn<(variables: { readonly request: SandboxCreateRequest }) => void>(),
+  vi.fn<
+    (
+      variables: { readonly request: SandboxCreateRequest },
+      callbacks: {
+        readonly onSuccess: () => void;
+        readonly onError: (error: Error) => void;
+      },
+    ) => void
+  >(),
 );
 
 vi.mock("@tanstack/react-router", () => ({
@@ -30,13 +42,31 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-patch-mutation", () => ({
   useSandboxPatch: () => mutation(),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-create-mutation", () => ({
-  useSandboxCreate: () => ({ mutate: createMutate, isPending: false }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-create-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-create-mutation")
+    >()),
+    useSandboxCreate: () => ({ mutate: createMutate, isPending: false }),
+  }),
+);
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
   () => ({ useSandboxRepairGuestConfigurationOnHost: () => mutation() }),
 );
+// The run is the network boundary: it creates or wakes the sandbox.
+const runStagedSandbox = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/sandboxes/staged-sandbox-run")
+  >()),
+  runStagedSandbox,
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({ auth: {}, directory: {} }),
+}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://example.test" }),
 }));
@@ -56,12 +86,21 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 
 beforeEach(() => {
   createMutate.mockClear();
+  runStagedSandbox.mockClear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
   useLandingPanelStore.getState().resetForTests();
 });
 
 afterEach(cleanup);
+
+function renderRow(element: ReactElement): void {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      {element}
+    </QueryClientProvider>,
+  );
+}
 
 describe("<SandboxRowActions />", () => {
   it("drops the landing composer's staged New sandbox when a row opens its own sandbox there", async () => {
@@ -80,7 +119,7 @@ describe("<SandboxRowActions />", () => {
       name: "",
       wakeString: null,
     });
-    render(
+    renderRow(
       <SandboxRowActions
         summary={sandboxSummaryFixture({
           id: "sbx-build",
@@ -109,7 +148,7 @@ describe("<SandboxRowActions />", () => {
   });
 
   it("stages a suspended sandbox to resume when a row opens it there, so the first send wakes it", async () => {
-    render(
+    renderRow(
       <SandboxRowActions
         summary={sandboxSummaryFixture({
           id: "sbx-build",
@@ -151,7 +190,9 @@ describe("<SandboxRowActions />", () => {
   ])(
     "asks the landing panel for a terminal on an awake sandbox from $item: $request",
     async ({ item, request }) => {
-      render(
+      // An earlier press's ask that was never served; this one replaces it.
+      useLandingPanelStore.getState().requestTerminal(SURFACE, "host-earlier");
+      renderRow(
         <SandboxRowActions
           summary={sandboxSummaryFixture({
             id: "sbx-build",
@@ -173,12 +214,15 @@ describe("<SandboxRowActions />", () => {
         await screen.findByRole("menuitem", { name: item }),
       );
 
-      expect(useLandingPanelStore.getState().terminalRequest).toBe(request);
+      expect(
+        useLandingPanelStore.getState().terminalRequest?.hostId ?? null,
+      ).toBe(request);
     },
   );
 
-  it("carries a suspended sandbox's Open terminal on its stage, so the terminal opens after the wake", async () => {
-    render(
+  it("wakes a suspended sandbox from Open terminal at once, marked to open its terminal and send nothing", async () => {
+    useLandingPanelStore.getState().requestTerminal(SURFACE, "host-earlier");
+    renderRow(
       <SandboxRowActions
         summary={sandboxSummaryFixture({
           id: "sbx-build",
@@ -203,7 +247,15 @@ describe("<SandboxRowActions />", () => {
     expect(readStagedSandbox(SURFACE)).toMatchObject({
       target: { kind: "existing", hostId: "host-build", verb: "resume" },
       openTerminal: true,
+      sendTaken: false,
     });
+    expect(runStagedSandbox).toHaveBeenCalledTimes(1);
+    expect(runStagedSandbox).toHaveBeenCalledWith(
+      SURFACE,
+      true,
+      { fallbackName: "build-box", taskId: null },
+      expect.anything(),
+    );
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
@@ -213,7 +265,7 @@ describe("<SandboxRowActions />", () => {
   ])(
     "retries a failed create with its resting period ($period rests for $sent)",
     async ({ period, sent }) => {
-      render(
+      renderRow(
         <SandboxRowActions
           summary={sandboxSummaryFixture({
             state: "failed",
@@ -233,4 +285,60 @@ describe("<SandboxRowActions />", () => {
       ).toBe(sent);
     },
   );
+
+  it("keeps Retry's key until the server refuses it before creating, or accepts it", async () => {
+    renderRow(
+      <SandboxRowActions
+        summary={sandboxSummaryFixture({ state: "failed" })}
+        configuration={{ kind: "personal" }}
+        unreachable={false}
+        frozenNeedsOwnCredits={false}
+      />,
+    );
+    const press = async (): Promise<{
+      readonly key: string | null;
+      readonly answer: {
+        readonly onSuccess: () => void;
+        readonly onError: (error: Error) => void;
+      };
+    }> => {
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+      const call = createMutate.mock.calls.at(-1);
+      if (call === undefined) throw new Error("expected a create");
+      return { key: call[0].request.clientRequestId, answer: call[1] };
+    };
+    const refusal = (failure: SandboxControlFailure) =>
+      new SandboxCreateError("no", null, null, failure);
+
+    const first = await press();
+    // The answer never came: the create may have been accepted.
+    act(() =>
+      first.answer.onError(
+        refusal({ kind: "network-error", detail: "timeout" }),
+      ),
+    );
+    const second = await press();
+    expect(second.key).toBe(first.key);
+
+    act(() =>
+      second.answer.onError(
+        refusal({
+          kind: "refused",
+          status: 402,
+          code: "insufficient_credit",
+          reason: null,
+          shortfallMc: 100,
+          newRateMcPerHour: null,
+          currentAwakeBurnMcPerHour: null,
+          message: null,
+        }),
+      ),
+    );
+    const third = await press();
+    expect(third.key).not.toBe(second.key);
+
+    act(() => third.answer.onSuccess());
+    const fourth = await press();
+    expect(fourth.key).not.toBe(third.key);
+  });
 });

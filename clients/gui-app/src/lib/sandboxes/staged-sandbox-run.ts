@@ -15,6 +15,7 @@ import {
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
 import type { AuthService } from "@/lib/auth/auth-service";
@@ -30,8 +31,10 @@ import {
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   readStagedSandbox,
+  refusedBeforeCreate,
   useStagedSandboxStore,
   type StagedSandboxFailure,
   type StagedSandboxStep,
@@ -83,10 +86,10 @@ const running = new Map<string, string>();
  * `handoff`; phase 2, the surface's own resubmit, runs from there.
  *
  * Owned by the store, not by a component: the composer may unmount, and the
- * stage, its idempotency key and the draft outlive it. A repeat of a send
- * (Keep waiting, Retry) reuses the key, so the server answers with the row it
- * already made; `fresh` (a send, or Retry creation after a terminal failure)
- * mints a new one.
+ * stage, its idempotency key and the draft outlive it. An action on a stage
+ * that may have an accepted create behind it reuses the key, so the server
+ * answers with the row it already made; `fresh` (`stagedCreateNeedsFreshKey`,
+ * or Retry creation after a terminal failure) mints a new one.
  */
 export async function runStagedSandbox(
   surfaceKey: string,
@@ -98,10 +101,15 @@ export async function runStagedSandbox(
   if (stage === null || stage.phase === "handoff") return;
   if (
     !fresh &&
-    stage.phase === "creating" &&
     stage.clientRequestId !== null &&
     running.get(surfaceKey) === stage.clientRequestId
   ) {
+    // The run this key drives is still on its way: a repeat joins it, and a
+    // send after Cancel takes it up again (it is current once more), rather
+    // than a second run racing it on the same key.
+    if (stage.phase !== "creating") {
+      useStagedSandboxStore.getState().begin(surfaceKey, false, deps.now());
+    }
     return;
   }
   const clientRequestId = useStagedSandboxStore
@@ -335,6 +343,20 @@ export function createFailure(
 }
 
 /**
+ * The stage's key rule for a create sent outside a stage (a row's Retry): a
+ * fresh key only after a refusal answered before anything was created, or
+ * when nothing was sent. Any other error may follow an accepted create, so
+ * the next press reuses the key and the server joins that create.
+ */
+export function createErrorNeedsFreshKey(error: Error): boolean {
+  if (!(error instanceof SandboxCreateError)) return false;
+  return (
+    error.failure === null ||
+    refusedBeforeCreate(createFailure(error.failure, null), null)
+  );
+}
+
+/**
  * Waits for the sandbox to be ready for the handoff, reporting each step:
  * booting until awake, applying until the settings verdict, delivering once
  * the host is connected. A failed row, settings that did not apply, or the
@@ -444,9 +466,17 @@ export function settleVerdict(
 
 /**
  * Phase 2's start: the surface is pinned to the new host and the stage moves
- * to `handoff`; the surface resubmits once its placement resolves there.
+ * to `handoff`; the surface resubmits once its placement resolves there. A
+ * stage only an explicit terminal ask started has nothing to resubmit: its
+ * terminal is asked of the landing panel and the stage ends here.
  */
 function handOff(surfaceKey: string, hostId: string): void {
   useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, hostId);
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage !== null && stage.openTerminal && !stage.sendTaken) {
+    useLandingPanelStore.getState().requestTerminal(surfaceKey, hostId);
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    return;
+  }
   useStagedSandboxStore.getState().report(surfaceKey, { phase: "handoff" });
 }

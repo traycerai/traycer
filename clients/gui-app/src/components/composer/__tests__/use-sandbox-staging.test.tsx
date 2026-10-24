@@ -372,7 +372,7 @@ describe("useSandboxStaging New rows", () => {
 });
 
 describe("useSandboxStaging In this task", () => {
-  it("lists the task's hosts but never an agent's burst sandbox or Automations", () => {
+  it("lists the task's hosts but never an agent's burst sandbox, Automations, or a teammate's team sandbox", () => {
     const burst = sandboxHost(
       "box-burst",
       {
@@ -398,8 +398,22 @@ describe("useSandboxStaging In this task", () => {
       },
       null,
     );
+    // The Yours and Started groups' rule: a teammate's team sandbox stays on
+    // the team's page, even when the task ran on it.
+    const teammates = sandboxHost(
+      "team-box",
+      {
+        state: "awake",
+        summary: sandboxSummaryFixture({
+          id: "sbx-team-box",
+          hostId: "team-box",
+          createdBy: { userId: "u2", displayName: "Grace" },
+        }),
+      },
+      teamOwnedItem(),
+    );
     const task: SandboxStagingTask = {
-      hosts: [AWAKE, burst, automations].map((host) => ({
+      hosts: [AWAKE, burst, automations, teammates].map((host) => ({
         hostId: host.hostId,
         label: host.name,
         principal: { kind: "user", id: "u1" },
@@ -412,7 +426,7 @@ describe("useSandboxStaging In this task", () => {
       const result = useSandboxStaging({
         surface: { surfaceKey: SURFACE, task },
         memoryHostId: MEMORY_HOST,
-        hosts: [LAPTOP, AWAKE, burst, automations],
+        hosts: [LAPTOP, AWAKE, burst, automations, teammates],
       });
       useEffect(() => {
         latest = result;

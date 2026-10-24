@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   readStagedSandbox,
+  stagedCreateNeedsFreshKey,
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -119,11 +120,10 @@ describe("staged sandbox store", () => {
     ).toBeNull();
   });
 
-  it("cancel returns to staged keeping the target", () => {
+  it("cancel returns to staged keeping the target, and the key of a create that may have been accepted", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
     const id = store.begin(SURFACE, false, 1_000);
-    store.report(SURFACE, { failure: { kind: "unavailable" } });
 
     store.cancel(SURFACE);
 
@@ -134,7 +134,40 @@ describe("staged sandbox store", () => {
       failure: null,
       target: NEW_TARGET,
     });
+    expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(false);
     expect(store.begin(SURFACE, false, 5_000)).toBe(id);
+  });
+
+  it.each([
+    { failure: { kind: "unavailable" } as const, keeps: false },
+    { failure: { kind: "credits", shortfallMc: 120 } as const, keeps: false },
+    { failure: { kind: "unverified" } as const, keeps: true },
+  ])(
+    "cancel after a $failure.kind failure keeps the key: $keeps",
+    ({ failure, keeps }) => {
+      const store = useStagedSandboxStore.getState();
+      store.stage(SURFACE, NEW_TARGET);
+      const id = store.begin(SURFACE, false, 1_000);
+      store.report(SURFACE, { failure });
+
+      expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(!keeps);
+      store.cancel(SURFACE);
+
+      expect(stageOf(SURFACE).clientRequestId).toBe(keeps ? id : null);
+    },
+  );
+
+  it("needs a fresh key after a refusal only while no sandbox was accepted", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, NEW_TARGET);
+    store.begin(SURFACE, false, 1_000);
+    // Accepted, then frozen for credits on its way up.
+    store.report(SURFACE, {
+      createdSandboxId: "sbx-9",
+      failure: { kind: "credits", shortfallMc: null },
+    });
+
+    expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(false);
   });
 
   it("keeps a stage in memory only, so a reload starts with nothing staged", () => {

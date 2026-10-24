@@ -115,6 +115,7 @@ vi.mock(
 );
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {

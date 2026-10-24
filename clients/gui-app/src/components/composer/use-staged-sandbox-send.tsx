@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ReactNode,
@@ -27,41 +28,17 @@ import {
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
-import { runStagedSandbox } from "@/lib/sandboxes/staged-sandbox-run";
+import {
+  runStagedSandbox,
+  type StagedRunRequest,
+} from "@/lib/sandboxes/staged-sandbox-run";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readStagedSandbox,
+  stagedCreateNeedsFreshKey,
   useStagedSandbox,
   useStagedSandboxStore,
-  type StagedSandboxFailure,
 } from "@/stores/composer/staged-sandbox-store";
-
-/**
- * A refusal the server answered before anything was created. Any other
- * failure may follow an accepted, billed create (an answer that never came,
- * a sandbox that failed on its way up), so a send repeats that create; so
- * does any failure once a sandbox was accepted, such as one frozen for
- * credits while it settles.
- */
-function refusedBeforeCreate(
-  failure: StagedSandboxFailure,
-  createdSandboxId: string | null,
-): boolean {
-  if (createdSandboxId !== null) return false;
-  switch (failure.kind) {
-    case "credits":
-    case "shape":
-    case "unavailable":
-    case "refused":
-      return true;
-    case "unverified":
-    case "failed":
-    case "settings":
-    case "timed-out":
-    case "no-provider":
-      return false;
-  }
-}
 
 /** A sandbox's name when the shape sheet set none: the message's first words. */
 const FALLBACK_NAME_WORDS = 4;
@@ -98,15 +75,70 @@ export interface StagedSandboxSend {
   readonly line: ReactNode;
 }
 
+/** Starts phase 1 of a surface's stage: its create or wake, then the wait. */
+export type StagedSandboxRunner = (
+  surfaceKey: string,
+  fresh: boolean,
+  request: StagedRunRequest,
+) => void;
+
+/**
+ * Runs `runStagedSandbox` with this window's account and host directory. The
+ * run is owned by the store, so the caller may unmount while it goes on.
+ */
+export function useStagedSandboxRunner(): StagedSandboxRunner {
+  const binding = useHostBinding();
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  return useCallback(
+    (surfaceKey, fresh, request) => {
+      if (binding === null) return;
+      void runStagedSandbox(surfaceKey, fresh, request, {
+        auth: binding.auth,
+        directory: binding.directory,
+        queryClient,
+        userId,
+        wake: (hostId) =>
+          startSandboxWake(queryClient, binding, hostId).then(
+            (outcome) => outcome !== null && outcome.kind === "awake",
+          ),
+        now: Date.now,
+        sleep: (ms) =>
+          new Promise((resolve) => {
+            setTimeout(resolve, ms);
+          }),
+      });
+    },
+    [binding, queryClient, userId],
+  );
+}
+
+/**
+ * An explicit terminal ask on a surface's stage (a Settings row's Open
+ * terminal, the landing panel's `+`) is a first action, as a send is: the
+ * stage is marked to open a folderless terminal on its sandbox once it is
+ * awake, and its create or wake starts when none is running. `false` when
+ * nothing is staged, or the stage is in its handoff (the surface is already
+ * on the sandbox): the caller then opens its terminal as it would anyway.
+ */
+export function startStagedTerminal(
+  surfaceKey: string,
+  start: (fresh: boolean) => void,
+): boolean {
+  const current = readStagedSandbox(surfaceKey);
+  if (current === null || current.phase === "handoff") return false;
+  useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
+  if (current.phase === "staged" || current.failure !== null) {
+    start(stagedCreateNeedsFreshKey(current));
+  }
+  return true;
+}
+
 /**
  * The send side of a staged sandbox (sandboxes plan D1, the critique's
  * two-phase handoff). Phase 1 creates or wakes the staged sandbox and waits
- * until it is ready, then pins the surface to it (`runStagedSandbox`). Phase
- * 2 runs here: once the surface's placement resolves to the new host, the
- * surface's own `submit` runs again, so the create, the by-hash upload and
- * the backstop run on the new host's client as for any host; then the stage
- * clears. `prepareHandoff` runs once before that resubmit (the landing
- * composer resets its workspace to the new host's empty one).
+ * until it is ready, then pins the surface to it (`runStagedSandbox`); phase
+ * 2 is {@link useStagedSandboxHandoff}'s.
  *
  * `surfaceKey` `null` stages nothing (a request that named its host).
  *
@@ -115,10 +147,6 @@ export interface StagedSandboxSend {
  */
 export function useStagedSandboxSend(input: {
   readonly surfaceKey: string | null;
-  readonly resolvedHostId: string | null;
-  readonly canSubmit: boolean;
-  readonly submit: () => boolean;
-  readonly prepareHandoff: (hostId: string) => void;
   readonly terminal: StagedSandboxTerminal | null;
   /** The task the surface is in, which the create names; `null` on landing. */
   readonly taskId: string | null;
@@ -128,55 +156,25 @@ export function useStagedSandboxSend(input: {
    */
   readonly ownerId: string | null;
 }): StagedSandboxSend {
-  const {
-    surfaceKey,
-    resolvedHostId,
-    canSubmit,
-    submit,
-    prepareHandoff,
-    terminal,
-    taskId,
-    ownerId,
-  } = input;
-  const binding = useHostBinding();
-  const queryClient = useQueryClient();
+  const { surfaceKey, terminal, taskId, ownerId } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const user = useAuthUser().data ?? null;
-  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
   const messageTextRef = useRef("");
   // The name the create falls back to, for the line to show meanwhile.
   const [fallbackName, setFallbackName] = useState(FALLBACK_NAME);
+  const runner = useStagedSandboxRunner();
 
   const run = useCallback(
     (fresh: boolean): void => {
-      if (surfaceKey === null || binding === null) return;
-      void runStagedSandbox(
-        surfaceKey,
-        fresh,
-        {
-          fallbackName: stagedSandboxFallbackName(messageTextRef.current),
-          taskId,
-        },
-        {
-          auth: binding.auth,
-          directory: binding.directory,
-          queryClient,
-          userId,
-          wake: (hostId) =>
-            startSandboxWake(queryClient, binding, hostId).then(
-              (outcome) => outcome !== null && outcome.kind === "awake",
-            ),
-          now: Date.now,
-          sleep: (ms) =>
-            new Promise((resolve) => {
-              setTimeout(resolve, ms);
-            }),
-        },
-      );
+      if (surfaceKey === null) return;
+      runner(surfaceKey, fresh, {
+        fallbackName: stagedSandboxFallbackName(messageTextRef.current),
+        taskId,
+      });
     },
-    [binding, queryClient, surfaceKey, taskId, userId],
+    [runner, surfaceKey, taskId],
   );
   const newHost = useNewHostActions(
     surfaceKey,
@@ -204,73 +202,24 @@ export function useStagedSandboxSend(input: {
       // A first action that stopped short leaves a stage like any other: the
       // send runs it again. The action it hands off is the owner's alone; one
       // in flight takes any other send and records nothing, and the chip says
-      // it is busy.
+      // it is busy. A boot only a terminal ask started has no send yet: this
+      // one is handed off with it.
       if (current.phase === "staged" || current.failure !== null) {
         messageTextRef.current = messageText;
         setFallbackName(stagedSandboxFallbackName(messageText));
         useStagedSandboxStore
           .getState()
-          .report(surfaceKey, { ownerId, terminalLaunch });
-        // A send is a new create, with its own idempotency key, unless the
-        // last one may have been accepted: then it repeats that one, as Retry
-        // does.
-        run(
-          current.failure === null ||
-            refusedBeforeCreate(current.failure, current.createdSandboxId),
-        );
+          .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
+        run(stagedCreateNeedsFreshKey(current));
+      } else if (!current.sendTaken) {
+        useStagedSandboxStore
+          .getState()
+          .report(surfaceKey, { ownerId, terminalLaunch, sendTaken: true });
       }
       return true;
     },
     [ownerId, run, surfaceKey],
   );
-
-  // Phase 2: the resubmit on the new host, once per handoff.
-  const handedOffRef = useRef<string | null>(null);
-  const preparedRef = useRef<string | null>(null);
-  const handoffHostId =
-    stage !== null && stage.phase === "handoff" && stage.ownerId === ownerId
-      ? stage.createdHostId
-      : null;
-  const handoffStepAt = stage === null ? null : stage.stepAt;
-  useEffect(() => {
-    if (surfaceKey === null || handoffHostId === null) {
-      // No handoff now: a later one to the same host runs again.
-      preparedRef.current = null;
-      handedOffRef.current = null;
-      return;
-    }
-    if (resolvedHostId !== handoffHostId) return;
-    const key = `${surfaceKey}\u0000${handoffHostId}`;
-    if (preparedRef.current !== key) {
-      preparedRef.current = key;
-      prepareHandoff(handoffHostId);
-      // A render with the prepared draft, whatever `prepareHandoff` changed,
-      // so the resubmit below reads it.
-      useStagedSandboxStore
-        .getState()
-        .report(surfaceKey, { stepAt: Date.now() });
-      return;
-    }
-    if (handedOffRef.current === key || !canSubmit) return;
-    handedOffRef.current = key;
-    if (submit()) {
-      useStagedSandboxStore.getState().clear(surfaceKey);
-      return;
-    }
-    // Refused on the new host (no agent it can run): the sandbox stays
-    // awake, the draft stays, and the line says why with what to do next.
-    useStagedSandboxStore
-      .getState()
-      .report(surfaceKey, { failure: { kind: "no-provider" } });
-  }, [
-    canSubmit,
-    handoffHostId,
-    handoffStepAt,
-    prepareHandoff,
-    resolvedHostId,
-    submit,
-    surfaceKey,
-  ]);
 
   const facts = useMemo(() => {
     if (stage === null) return null;
@@ -331,7 +280,7 @@ export function useStagedSandboxSend(input: {
           onChooseAnotherHost: () =>
             useStagedSandboxStore.getState().clear(surfaceKey),
           onRetryCreation: () => run(true),
-          onRetry: () => run(false),
+          onRetry: () => run(stagedCreateNeedsFreshKey(stage)),
           onChangeShape: () => {
             useStagedSandboxStore.getState().cancel(surfaceKey);
             openStagedShapeSheet(surfaceKey);
@@ -348,6 +297,85 @@ export function useStagedSandboxSend(input: {
     );
 
   return { intercept, line };
+}
+
+/**
+ * Phase 2 of a staged sandbox: once the surface's placement resolves to the
+ * new host, the surface's own `submit` runs again, so the create, the by-hash
+ * upload and the backstop run on the new host's client as for any host; then
+ * the stage clears. `prepareHandoff` runs once before that resubmit (the
+ * landing composer resets its workspace to the new host's empty one).
+ *
+ * Mounted by whatever outlives the sending surface: the composer itself, or
+ * a tab-level owner where the surface is a popover.
+ */
+export function useStagedSandboxHandoff(input: {
+  readonly surfaceKey: string | null;
+  readonly resolvedHostId: string | null;
+  readonly canSubmit: boolean;
+  readonly submit: () => boolean;
+  readonly prepareHandoff: (hostId: string) => void;
+  readonly ownerId: string | null;
+}): void {
+  const {
+    surfaceKey,
+    resolvedHostId,
+    canSubmit,
+    submit,
+    prepareHandoff,
+    ownerId,
+  } = input;
+  const stage = useStagedSandbox(surfaceKey ?? "");
+  // Once per handoff.
+  const handedOffRef = useRef<string | null>(null);
+  const preparedRef = useRef<string | null>(null);
+  // Counts preparations, so the effect runs again on the render that holds
+  // the prepared draft (a timestamp can repeat within a millisecond).
+  const [preparations, markPrepared] = useReducer(
+    (count: number) => count + 1,
+    0,
+  );
+  const handoffHostId =
+    stage !== null && stage.phase === "handoff" && stage.ownerId === ownerId
+      ? stage.createdHostId
+      : null;
+  useEffect(() => {
+    if (surfaceKey === null || handoffHostId === null) {
+      // No handoff now: a later one to the same host runs again.
+      preparedRef.current = null;
+      handedOffRef.current = null;
+      return;
+    }
+    if (resolvedHostId !== handoffHostId) return;
+    const key = `${surfaceKey}\u0000${handoffHostId}`;
+    if (preparedRef.current !== key) {
+      preparedRef.current = key;
+      prepareHandoff(handoffHostId);
+      // A render with the prepared draft, whatever `prepareHandoff` changed,
+      // so the resubmit below reads it.
+      markPrepared();
+      return;
+    }
+    if (handedOffRef.current === key || !canSubmit) return;
+    handedOffRef.current = key;
+    if (submit()) {
+      useStagedSandboxStore.getState().clear(surfaceKey);
+      return;
+    }
+    // Refused on the new host (no agent it can run): the sandbox stays
+    // awake, the draft stays, and the line says why with what to do next.
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { failure: { kind: "no-provider" } });
+  }, [
+    canSubmit,
+    handoffHostId,
+    preparations,
+    prepareHandoff,
+    resolvedHostId,
+    submit,
+    surfaceKey,
+  ]);
 }
 
 /** Where the surface opens a terminal on the new host, in its epic. */

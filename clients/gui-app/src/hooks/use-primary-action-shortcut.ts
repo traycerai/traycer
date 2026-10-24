@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { createContext, use, useEffect, useLayoutEffect, useRef } from "react";
+
+/**
+ * Whether the surface below may own the keyboard. `false` for a surface kept
+ * mounted while it is not shown (a modal body finishing a staged sandbox's
+ * send after the modal closed): it keeps its data live and owns no shortcut.
+ */
+export const KeyboardOwnerContext = createContext(true);
 
 type PrimaryActionGetter = () => () => void;
 
@@ -53,13 +60,14 @@ export function usePrimaryActionShortcut(
   active: boolean,
   action: () => void,
 ): void {
+  const owns = use(KeyboardOwnerContext) && active;
   const actionRef = useRef(action);
   useLayoutEffect(() => {
     actionRef.current = action;
   }, [action]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!owns) return;
     const getter: PrimaryActionGetter = () => actionRef.current;
     ownerStack.push(getter);
     installListener();
@@ -68,5 +76,5 @@ export function usePrimaryActionShortcut(
       if (index >= 0) ownerStack.splice(index, 1);
       if (ownerStack.length === 0) removeListener();
     };
-  }, [active]);
+  }, [owns]);
 }

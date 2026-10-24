@@ -1,13 +1,15 @@
 import "@/components/settings/details/environment-details-providers";
 import { QueryClient, queryOptions } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
+import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const NOW = 1_791_100_000_000;
 
@@ -119,18 +121,23 @@ describe("sandboxDetailsEntry", () => {
  * `answers`, as the control plane would.
  */
 async function listedOnce(
-  answers: readonly SandboxListResponse[],
+  answers: readonly (SandboxListResponse | Error)[],
+  userId: string,
 ): Promise<QueryClient> {
-  const queryClient = new QueryClient();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   let read = 0;
   const nextAnswer = (): Promise<SandboxListResponse> => {
     const answer = answers[Math.min(read, answers.length - 1)];
     read += 1;
-    return Promise.resolve(answer);
+    return answer instanceof Error
+      ? Promise.reject(answer)
+      : Promise.resolve(answer);
   };
   await queryClient.prefetchQuery(
     queryOptions({
-      queryKey: sandboxQueryKeys.list({}, "u-me"),
+      queryKey: sandboxQueryKeys.list({}, userId),
       queryFn: nextAnswer,
     }),
   );
@@ -152,6 +159,16 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
 }
 
 describe("the Settings Details drawer's sandbox provider", () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-me", username: "me" },
+    });
+  });
+  afterEach(() => {
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  });
+
   it("gives the drawer the sandbox's state, its host and its timed history", async () => {
     const summary = sandboxSummaryFixture({
       id: "sbx-1",
@@ -162,7 +179,7 @@ describe("the Settings Details drawer's sandbox provider", () => {
       keptBy: { userId: "u-priya", displayName: "Priya" },
       guestConfigFailureReason: "could not write /home/dev/.ssh/id_rsa",
     });
-    const queryClient = await listedOnce([{ sandboxes: [summary] }]);
+    const queryClient = await listedOnce([{ sandboxes: [summary] }], "u-me");
 
     const entry = await loadSandboxDetails(queryClient, "sbx-1");
 
@@ -191,13 +208,37 @@ describe("the Settings Details drawer's sandbox provider", () => {
 
   it("refuses a sandbox the control plane no longer lists, though a stale answer held it", async () => {
     const summary = sandboxSummaryFixture({ id: "sbx-1" });
-    const queryClient = await listedOnce([
-      { sandboxes: [summary] },
-      { sandboxes: [] },
-    ]);
+    const queryClient = await listedOnce(
+      [{ sandboxes: [summary] }, { sandboxes: [] }],
+      "u-me",
+    );
 
     await expect(loadSandboxDetails(queryClient, "sbx-1")).rejects.toThrow(
       "no longer listed",
+    );
+  });
+
+  it("says the list could not be read rather than showing the row an earlier read held", async () => {
+    const summary = sandboxSummaryFixture({ id: "sbx-1" });
+    const queryClient = await listedOnce(
+      [{ sandboxes: [summary] }, new Error("offline")],
+      "u-me",
+    );
+
+    await expect(loadSandboxDetails(queryClient, "sbx-1")).rejects.toThrow(
+      SANDBOX_LIST_FAILED,
+    );
+  });
+
+  it("never reads another account's list", async () => {
+    const summary = sandboxSummaryFixture({ id: "sbx-1" });
+    const queryClient = await listedOnce(
+      [{ sandboxes: [summary] }],
+      "u-earlier",
+    );
+
+    await expect(loadSandboxDetails(queryClient, "sbx-1")).rejects.toThrow(
+      SANDBOX_LIST_FAILED,
     );
   });
 });

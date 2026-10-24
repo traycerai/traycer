@@ -17,7 +17,10 @@ import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-co
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 const DIRTY_CONTENT: JsonContent = {
@@ -569,7 +572,7 @@ describe("LandingComposer direct submit gate", () => {
     });
   });
 
-  it("opens the terminal a resting row's Open terminal staged once its sandbox is awake, not before", () => {
+  it("opens the terminal a resting row's Open terminal staged once its sandbox is awake, not before, and once", () => {
     useLandingPanelStore.getState().resetForTests();
     const store = useStagedSandboxStore.getState();
     store.stage("landing:window-test", {
@@ -581,7 +584,7 @@ describe("LandingComposer direct submit gate", () => {
       verb: "resume",
     });
     store.report("landing:window-test", { openTerminal: true });
-    render(
+    const view = render(
       <LandingComposer
         draftId={null}
         pendingCreateId={null}
@@ -612,7 +615,25 @@ describe("LandingComposer direct submit gate", () => {
       });
     });
 
-    expect(useLandingPanelStore.getState().terminalRequest).toBe("host-test");
+    expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
+      "host-test",
+    );
+
+    // The panel serves it; a composer that remounts mid-handoff asks for none.
+    act(() => {
+      useLandingPanelStore.getState().clearTerminalRequest();
+    });
+    expect(readStagedSandbox("landing:window-test")?.phase).toBe("handoff");
+    view.unmount();
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
   it("waits for the new sandbox's agent pack before launching a staged Start there", () => {

@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -392,6 +400,46 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(
       Array.from(targets.querySelectorAll("li")).map((li) => li.textContent),
     ).toEqual(["idle-a", "idle-c"]);
+  });
+
+  it("scrolls a revealed row into view once per reveal, not again on each refetch", () => {
+    const scrolled: string[] = [];
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(function record(this: Element) {
+        scrolled.push(this.getAttribute("data-sandbox-row") ?? "");
+      });
+    onTestFinished(() => scrollIntoView.mockRestore());
+    let open: (sandboxId: string) => void = () => undefined;
+    function Opener() {
+      open = useOpenSandboxesPage();
+      return null;
+    }
+    const page = (
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>
+    );
+    mocks.sandboxes = [row("box-a", { burst: false })];
+    const { rerender } = render(page);
+
+    act(() => open("box-a"));
+    expect(scrolled).toEqual(["box-a"]);
+
+    // A refetch answers with a new list while the reader scrolls elsewhere.
+    mocks.sandboxes = [row("box-a", { burst: false })];
+    rerender(
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>,
+    );
+    expect(scrolled).toEqual(["box-a"]);
+
+    // Asked for again, it scrolls again.
+    act(() => open("box-a"));
+    expect(scrolled).toEqual(["box-a", "box-a"]);
   });
 
   it("reveals a notification's team row on its team once a list that had not answered settles", () => {

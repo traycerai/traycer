@@ -822,7 +822,8 @@ function batchOutcomeLine(result: SandboxBatchResult): string {
 /**
  * `Destroy all idle`: the enumerated filtered rows, by count and name. The
  * batch is exactly these targets; each reports its own outcome, and a retry
- * never widens the set.
+ * never widens the set. Once confirmed, the title, the list and a retry read
+ * the confirmed set, not the list, which drops each row as it is destroyed.
  */
 export function SandboxDestroyAllIdleDialog(props: {
   readonly targets: readonly SandboxBatchTarget[];
@@ -831,14 +832,20 @@ export function SandboxDestroyAllIdleDialog(props: {
 }): ReactNode {
   const batch = useSandboxDestroyBatch();
   const results = batch.data ?? null;
-  const count = props.targets.length;
+  const [confirmed, setConfirmed] = useState<
+    readonly SandboxBatchTarget[] | null
+  >(null);
+  const count = (confirmed ?? props.targets).length;
   return (
     <ConfirmDestructiveDialog
       blockedReason={count === 0 ? "" : null}
       open={props.open}
       dismissableWhilePending
       onOpenChange={(next) => {
-        if (!next) batch.reset();
+        if (!next) {
+          batch.reset();
+          setConfirmed(null);
+        }
         props.onOpenChange(next);
       }}
       title={`Destroy ${count} idle agent ${count === 1 ? "sandbox" : "sandboxes"}?`}
@@ -847,22 +854,18 @@ export function SandboxDestroyAllIdleDialog(props: {
       actionLabel={results === null ? "Destroy all idle" : "Retry"}
       isPending={batch.isPending}
       // A retry repeats the confirmed set, whatever the list holds since.
-      onConfirm={() =>
-        batch.mutate({
-          targets:
-            results === null
-              ? props.targets
-              : results.map(({ sandboxId, name }) => ({ sandboxId, name })),
-          startedBy: signedInUserId(),
-        })
-      }
+      onConfirm={() => {
+        const targets = confirmed ?? props.targets;
+        setConfirmed(targets);
+        batch.mutate({ targets, startedBy: signedInUserId() });
+      }}
     >
       <ul
         className="mx-5 mb-4 flex max-h-[30vh] list-none flex-col gap-1 overflow-y-auto p-0 text-ui-sm"
         data-testid="sandbox-destroy-all-idle-targets"
       >
         {results === null
-          ? props.targets.map((target) => (
+          ? (confirmed ?? props.targets).map((target) => (
               <li key={target.sandboxId} className="wrap-anywhere">
                 {target.name}
               </li>

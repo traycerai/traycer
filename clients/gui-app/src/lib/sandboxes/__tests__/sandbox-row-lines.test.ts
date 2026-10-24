@@ -113,6 +113,15 @@ const MATRIX: readonly MatrixCase[] = [
     menu: ["destroy"],
   },
   {
+    // Its Retry would create a kept sandbox in place of the agent's.
+    name: "failed agent",
+    summary: { state: "failed", burst: true },
+    unreachable: false,
+    frozenNeedsOwnCredits: false,
+    primary: null,
+    menu: ["destroy"],
+  },
+  {
     name: "awake but unreachable",
     summary: { state: "awake" },
     unreachable: true,
