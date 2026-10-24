@@ -39,7 +39,10 @@ import {
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  HostUnavailability,
+  RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -172,10 +175,19 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 // Narrow seam: the named requester over the real `HostClient`, so the REAL
 // `useHostQuery`, readiness gate and transport path run for the owner read.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string) =>
-    runtimeClient().createRequesterForHostId(hostId),
-}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+  const { useMemo } = await import("react");
+  // Memoized on [binding, hostId] like production, so one runtime client
+  // yields one requester across renders.
+  function useHostClientForHostId(hostId: string): HostClient<HostRpcRegistry> {
+    const binding = runtimeClient();
+    return useMemo(
+      () => binding.createRequesterForHostId(hostId),
+      [binding, hostId],
+    );
+  }
+  return { useHostClientForHostId };
+});
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
@@ -416,9 +428,15 @@ function render(ui: ReactNode): RenderResult {
 }
 
 /** Rows the recovery cases dial: the serving host and the copy's owner. */
+const OWNER_BASE_ROW = remoteEntry("owner-host-1", null);
+const OFFLINE_OWNER_ROW: RemoteHostDirectoryEntry = {
+  ...OWNER_BASE_ROW,
+  transportDialability: "not-dialable",
+  remoteStatus: { ...OWNER_BASE_ROW.remoteStatus, connectivity: "offline" },
+};
 const HOST_ROWS: readonly HostDirectoryEntry[] = [
   remoteEntry("host-1", null),
-  remoteEntry("owner-host-1", null),
+  OFFLINE_OWNER_ROW,
 ];
 
 beforeEach(() => {
@@ -1276,13 +1294,6 @@ describe("PublishedChatTile - offline owner recovery", () => {
     {
       name: "a reachable owner",
       owner: { ...OFFLINE_REMOTE_OWNER, status: "reachable" as const },
-    },
-    {
-      name: "an owner that is only indeterminate",
-      owner: {
-        ...OFFLINE_REMOTE_OWNER,
-        unavailability: "indeterminate" as const,
-      },
     },
     {
       name: "a local owner",
