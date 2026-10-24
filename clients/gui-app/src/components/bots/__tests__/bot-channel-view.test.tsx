@@ -190,7 +190,10 @@ function PostStub(props: {
   );
 }
 
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotOpenThread,
+} from "@/components/bots/bot-channel-view";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -235,21 +238,27 @@ function indicator(
 
 interface MountOptions {
   readonly paused: boolean;
+  /** A member's post whose thread is open; `null` for none. */
   readonly openThreadPostId: string | null;
 }
 
+const QUESTION_1: BotOpenThread = {
+  anchorMessageId: "question-1",
+  announcement: true,
+};
+
 function mount(options: MountOptions): {
-  readonly onOpenThread: Mock<(id: string | null) => void>;
+  readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   readonly onOpenUnderTheHood: Mock<(id: string) => void>;
   /** Renders the same view again, reading the mocks' current state. */
   readonly rerender: () => void;
-  /** Renders the view again with the host's open-thread selection changed. */
-  readonly reopen: (openThreadPostId: string | null) => void;
+  /** Renders the view again with the tab's open-thread selection changed. */
+  readonly reopen: (openThread: BotOpenThread | null) => void;
 } {
-  const onOpenThread = vi.fn<(id: string | null) => void>();
+  const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
   const queryClient = new QueryClient();
-  const tree = (openThreadPostId: string | null): ReactNode => (
+  const tree = (openThread: BotOpenThread | null): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
@@ -260,7 +269,7 @@ function mount(options: MountOptions): {
             appConversationChatId={mocks.state.appConversationChatId}
             paused={options.paused}
             resolveMember={resolveMember}
-            openThreadPostId={openThreadPostId}
+            openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenUnderTheHood={onOpenUnderTheHood}
           />
@@ -268,14 +277,17 @@ function mount(options: MountOptions): {
       </TooltipProvider>
     </QueryClientProvider>
   );
-  let current = options.openThreadPostId;
+  let current: BotOpenThread | null =
+    options.openThreadPostId === null
+      ? null
+      : { anchorMessageId: options.openThreadPostId, announcement: false };
   const result = render(tree(current));
   return {
     onOpenThread,
     onOpenUnderTheHood,
     rerender: () => result.rerender(tree(current)),
-    reopen: (openThreadPostId) => {
-      current = openThreadPostId;
+    reopen: (openThread) => {
+      current = openThread;
       result.rerender(tree(current));
     },
   };
@@ -426,7 +438,10 @@ describe("<BotChannelView /> channel", () => {
     await user.click(screen.getByTestId("stub-open-post-a"));
 
     expect(onOpenThread).toHaveBeenCalledTimes(1);
-    expect(onOpenThread).toHaveBeenCalledWith("post-a");
+    expect(onOpenThread).toHaveBeenCalledWith({
+      anchorMessageId: "post-a",
+      announcement: false,
+    });
   });
 
   it("opens a question's thread by its message id, and shows a box that starts it while none is listed", async () => {
@@ -441,9 +456,9 @@ describe("<BotChannelView /> channel", () => {
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
 
     expect(onOpenThread).toHaveBeenCalledTimes(1);
-    expect(onOpenThread).toHaveBeenCalledWith("question-1");
+    expect(onOpenThread).toHaveBeenCalledWith(QUESTION_1);
 
-    reopen("question-1");
+    reopen(QUESTION_1);
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
@@ -461,13 +476,13 @@ describe("<BotChannelView /> channel", () => {
     mocks.postIds = ["question-1"];
     const { reopen } = mount({ paused: false, openThreadPostId: null });
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
-    reopen("question-1");
+    reopen(QUESTION_1);
     expect(screen.getByTestId("bot-thread-unopened")).toBeTruthy();
 
     mocks.state.threads = [
       thread("thread-q", "question-1", { replyCount: 1, lastReplyAt: 7_000 }),
     ];
-    reopen("question-1");
+    reopen(QUESTION_1);
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-q");
@@ -475,6 +490,29 @@ describe("<BotChannelView /> channel", () => {
     const composer = within(panel).getByTestId("stub-bot-thread-composer");
     expect(composer.getAttribute("data-thread-id")).toBe("thread-q");
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
+  });
+
+  it("shows the box that starts a question's thread when the view mounts again with it open, as after a switch between the tab's views", async () => {
+    const user = userEvent.setup();
+    mocks.postIds = ["question-1"];
+    const first = mount({ paused: false, openThreadPostId: null });
+    await user.click(screen.getByTestId("stub-open-announcement-question-1"));
+    const opened = first.onOpenThread.mock.calls.at(-1)?.[0] ?? null;
+    // The tab holds what was opened; the view itself is unmounted and mounted
+    // fresh, so nothing it remembered survives.
+    cleanup();
+
+    const again = mount({ paused: false, openThreadPostId: null });
+    again.reopen(opened);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    expect(
+      within(panel)
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-announcement-id"),
+    ).toBe("question-1");
   });
 
   it("posts at the channel's top level, not under an announcement", () => {
