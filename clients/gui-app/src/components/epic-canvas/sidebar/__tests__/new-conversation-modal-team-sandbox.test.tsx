@@ -620,7 +620,13 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
     act(() => {
       testState.catalogHostId = "host-a";
       testState.providers = [{ providerId: "claude-code", profiles: [] }];
-      testState.toolbarStore?.setState({});
+      testState.toolbarStore?.setState({
+        catalog: {
+          hostId: "host-a",
+          harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsLoaded: true,
+        },
+      });
     });
     expect(staged().canSubmit).toBe(true);
     let launched = false;

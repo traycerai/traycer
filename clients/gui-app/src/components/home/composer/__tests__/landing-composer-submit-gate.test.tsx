@@ -499,7 +499,13 @@ describe("LandingComposer direct submit gate", () => {
     act(() => {
       testState.catalogHostId = "host-test";
       testState.providers = [{ providerId: "claude-code", profiles: [] }];
-      testState.toolbarStore?.setState({});
+      testState.toolbarStore?.setState({
+        catalog: {
+          hostId: "host-test",
+          harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsLoaded: true,
+        },
+      });
       useStagedSandboxStore.getState().report("landing:window-test", {
         phase: "handoff",
         createdHostId: "host-test",
@@ -515,6 +521,77 @@ describe("LandingComposer direct submit gate", () => {
       profileId: null,
     });
   });
+
+  it.each([
+    ["is unavailable", { available: false, modes: ["gui", "tui"] }],
+    ["runs only in chat", { available: true, modes: ["gui"] }],
+  ] as const)(
+    "launches no staged Start on a sandbox whose only harness %s",
+    (_label, harness) => {
+      useStagedSandboxStore.getState().stage("landing:window-test", {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: null,
+        },
+        name: "",
+        wakeString: null,
+      });
+      render(
+        <LandingComposer
+          draftId={null}
+          pendingCreateId={null}
+          initialSettings={null}
+          workspaceControls={() => null}
+        />,
+      );
+      const start = testState.startTerminal;
+      if (start === null) throw new Error("expected ComposerBody seam");
+      act(() => {
+        start(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: null,
+            profileId: null,
+          },
+          "host-test",
+        );
+      });
+
+      act(() => {
+        testState.catalogHostId = "host-test";
+        testState.providers = [{ providerId: "claude-code", profiles: [] }];
+        // Set outright: an earlier `setState` copied the catalog getter's
+        // value into the store, so it no longer reads `testState`.
+        testState.toolbarStore?.setState({
+          catalog: {
+            hostId: "host-test",
+            harnesses: [{ id: "claude", ...harness }],
+            modelsLoaded: true,
+          },
+        });
+        useStagedSandboxStore.getState().report("landing:window-test", {
+          phase: "handoff",
+          createdHostId: "host-test",
+        });
+      });
+
+      // Nothing runs there: the line says the sandbox cannot run an agent.
+      expect(testState.selectTerminalAgent).not.toHaveBeenCalled();
+      expect(
+        useStagedSandboxStore.getState().bySurface["landing:window-test"]
+          ?.failure,
+      ).toEqual({ kind: "no-provider" });
+    },
+  );
 
   it("lets a staged sandbox take a send though this host's workspace folder is unresolved", () => {
     // The sandbox starts empty: the chip reads Empty sandbox and the

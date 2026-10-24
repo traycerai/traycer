@@ -37,15 +37,21 @@ export function stagedResubmitReady(input: {
  * and the host's defaults where it does not. The captured profile and
  * arguments are kept for the same harness, the profile only where the host
  * offers it (else its own login). `null` when the host offers no terminal
- * agent.
+ * agent: the selected harness is not in its catalog, is unavailable there, or
+ * cannot run in a terminal, as the terminal panel's Start reads it.
  */
 export function stagedTerminalLaunchOnHost(
   captured: TerminalAgentLaunch,
-  toolbar: Pick<ComposerToolbarState, "selection" | "reasoning">,
+  toolbar: Pick<ComposerToolbarState, "selection" | "reasoning" | "catalog">,
   providers: HostProviders | undefined,
 ): TerminalAgentLaunch | null {
   const { harnessId, modelSlug } = toolbar.selection;
   if (!isTuiHarnessId(harnessId)) return null;
+  const harness = toolbar.catalog.harnesses?.find(
+    (option) => option.id === harnessId,
+  );
+  if (harness === undefined || !harness.available) return null;
+  if (!harness.modes.includes("tui")) return null;
   const sameHarness = harnessId === captured.harnessId;
   const providerId = TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
   const profiles = providers?.find(
