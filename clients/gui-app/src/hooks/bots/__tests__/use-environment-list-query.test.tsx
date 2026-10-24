@@ -10,7 +10,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 
 // `environment.list` is the ACCOUNT's data under a host key. An account switch
@@ -25,7 +25,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatViewerId: () => viewer.current,
 }));
 
-function listFor(label: string): EnvironmentListResponse {
+function listFor(label: string): EnvironmentListResponseV11 {
   return {
     environments: [
       {
@@ -34,6 +34,10 @@ function listFor(label: string): EnvironmentListResponse {
         ownerId: label,
         roomId: `room-${label}`,
         label,
+        effectiveRole: "owner",
+        kind: "personal",
+        hostCount: 0,
+        providerHandle: null,
       },
     ],
   };

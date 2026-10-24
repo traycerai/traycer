@@ -10,10 +10,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostMock.binding };
 });
 
-// What a dashboard link asks the app to open.
-const openLinkMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => openLinkMock,
+// Where the Review button asks Settings to go.
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -43,8 +43,6 @@ import {
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
   buildAccessHost,
-  DASHBOARD_ORIGIN,
-  dashboardRunnerHost,
   noticeFixture,
   type AccessHost,
   type AccessHostState,
@@ -62,7 +60,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   hostMock.binding = null;
-  openLinkMock.mockReset();
+  navigateToSettingsSectionMock.mockReset();
   window.localStorage.clear();
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: {},
@@ -384,18 +382,15 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
         overrides: [variableOverride("LOG_LEVEL", "debug")],
       },
     );
-    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
+    renderTab(host, READY);
 
     const line = await screen.findByTestId("team-owned-line");
     expect(
-      within(line).getByText(
-        "These settings belong to Acme. Change them in the dashboard.",
-      ),
+      within(line).getByText("These settings belong to Acme."),
     ).toBeTruthy();
     expect(line.closest("[inert]")).toBeNull();
-    expect(
-      within(line).getByRole("button", { name: "Open the dashboard" }),
-    ).toBeTruthy();
+    expect(within(line).queryByRole("button")).toBeNull();
+    expect(within(line).queryByRole("link")).toBeNull();
 
     for (const testId of [
       "remote-access-section",
@@ -408,67 +403,15 @@ describe("<HostOverviewAccessTab /> on a team's host", () => {
     }
   });
 
-  it("opens the dashboard from the team line", async () => {
-    const host = hostWith(
-      { principal: { kind: "team", teamName: "acme-labs" } },
-      {},
-    );
-    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open the dashboard" }),
-    );
-
-    expect(openLinkMock).toHaveBeenCalledTimes(1);
-    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
-      `${DASHBOARD_ORIGIN}/team/acme-labs/environment/providers`,
-    );
-    expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
-  });
-
-  it("encodes the team name as one path segment in the dashboard link", async () => {
-    const host = hostWith(
-      { principal: { kind: "team", teamName: "a/b?c#d" } },
-      {},
-    );
-    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Open the dashboard" }),
-    );
-
-    expect(openLinkMock).toHaveBeenCalledTimes(1);
-    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
-      `${DASHBOARD_ORIGIN}/team/a%2Fb%3Fc%23d/environment/providers`,
-    );
-    expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
-  });
-
-  it("names no team and offers no dashboard link when the host reports no team name", async () => {
+  it("names no team when the host reports no team name", async () => {
     const host = hostWith({ principal: { kind: "team", teamName: "" } }, {});
-    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
+    renderTab(host, READY);
 
     const line = await screen.findByTestId("team-owned-line");
 
     expect(
       within(line).getByText("These settings belong to your team."),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Open the dashboard" }),
-    ).toBeNull();
-  });
-
-  it("offers no dashboard button without a shell to name the dashboard", async () => {
-    const host = hostWith(
-      { principal: { kind: "team", teamName: "Acme" } },
-      {},
-    );
-    renderTab(host, READY);
-
-    expect(await screen.findByTestId("team-owned-line")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Open the dashboard" }),
-    ).toBeNull();
   });
 
   it("shows no team line, and nothing inert, on the person's own host", async () => {
@@ -836,26 +779,7 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
     expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
   });
 
-  it("opens the dashboard's review page", async () => {
-    const host = hostWith(
-      { setup: SETUP_DONE },
-      { notices: [noticeFixture({ source: "migration" })] },
-    );
-    renderTab(host, { ...READY, runnerHost: dashboardRunnerHost() });
-    const notice = await screen.findByTestId("moved-to-personal-notice");
-
-    fireEvent.click(
-      within(notice).getByRole("button", { name: "Review in the dashboard" }),
-    );
-
-    expect(openLinkMock).toHaveBeenCalledTimes(1);
-    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
-      `${DASHBOARD_ORIGIN}/environments/personal/review`,
-    );
-    expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
-  });
-
-  it("offers no review button without a shell to name the dashboard", async () => {
+  it("sends Review to the Secrets page", async () => {
     const host = hostWith(
       { setup: SETUP_DONE },
       { notices: [noticeFixture({ source: "migration" })] },
@@ -863,8 +787,9 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
     renderTab(host, READY);
     const notice = await screen.findByTestId("moved-to-personal-notice");
 
-    expect(
-      within(notice).queryByRole("button", { name: "Review in the dashboard" }),
-    ).toBeNull();
+    fireEvent.click(within(notice).getByRole("button", { name: "Review" }));
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
   });
 });

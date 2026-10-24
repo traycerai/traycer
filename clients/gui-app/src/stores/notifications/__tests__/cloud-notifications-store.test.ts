@@ -13,6 +13,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
+  HostNotificationsCloudFeedRowV14,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -585,6 +586,43 @@ describe("cloud notifications store", () => {
       summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
     });
     expect(useCloudNotificationsStore.getState().rows).toEqual({});
+    close();
+  });
+
+  it("lands a snapshot carrying an environments-redesign kind instead of rejecting the feed", () => {
+    const client = new ControlledWsStreamClient();
+    const close = openCloudNotificationsStream(
+      reconnectEngine,
+      client,
+      null,
+      null,
+    );
+    const base = cloudRow("entry-stalled", 4, "host-a");
+    const row: HostNotificationsCloudFeedRowV14 = {
+      ...base,
+      coalesceKey: "environment.move.stalled:host-a",
+      entry: {
+        ...base.entry,
+        kind: "environment.move.stalled",
+        severity: "failure",
+        outcome: "errored",
+      },
+    };
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 4,
+      rows: [row],
+      summary,
+    });
+
+    const state = useCloudNotificationsStore.getState();
+    expect(state.rows).toEqual({
+      [cloudNotificationFeedId("entry-stalled")]: row,
+    });
+    expect(state.connectionState).toBe("connected");
     close();
   });
 

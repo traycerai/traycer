@@ -32,7 +32,6 @@ import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog"
 import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
 import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
 import { AutomationsHostEntry } from "@/components/hosts/automations-host-entry";
-import { SecretsDashboardLink } from "@/components/providers/secrets-dashboard-link";
 import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { Button } from "@/components/ui/button";
@@ -48,6 +47,12 @@ import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { EnvironmentPicker } from "@/components/settings/environment-picker";
+import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
+import { MoveSheet } from "@/components/settings/move-sheet";
+import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
+import { environmentSectionShown } from "@/lib/settings-environment-pages";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 export type SettingsSidebarMode =
@@ -97,6 +102,13 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // `switchToSettingsSection` walks this list to resolve that digit back to a
   // section.
   const sections = visibleSettingsSections();
+  // A Local row hides the pages only a cloud configuration has.
+  const environmentPick = useEnvironmentPick();
+  // The Guide group leaves the rail once every Getting started step is done.
+  const guideComplete = useGettingStartedGuideIsComplete();
+  const groups = guideComplete
+    ? SETTINGS_SECTION_GROUPS.filter((group) => group.id !== "guide")
+    : SETTINGS_SECTION_GROUPS;
   // The host picker below shows a live dot and a health word per row, so this
   // is a liveness surface and opts into the registry poll. It is also the ONE
   // place in Settings that has to: the picker is mounted for as long as any
@@ -127,11 +139,17 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           names the section every row belongs to. */}
       {searching
         ? null
-        : SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
+        : groups.map((group, groupIndex) => (
             <Fragment key={group.id}>
               {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
               {group.id !== "guide" ? (
                 <SettingsSidebarGroupHeader label={group.label} />
+              ) : null}
+              {group.id === "personal" ? (
+                <SettingsSidebarEnvironmentPicker
+                  scope={scope}
+                  mode={props.mode}
+                />
               ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker scope={scope} />
@@ -147,7 +165,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 )}
               >
                 {sections.map((section, index) =>
-                  section.group === group.id ? (
+                  section.group === group.id &&
+                  (group.id !== "personal" ||
+                    environmentSectionShown(environmentPick, section.id)) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}
@@ -166,7 +186,44 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           down a dialog that is open. */}
       <AddHostDialog />
       <SandboxCreateDialog />
+      <MoveSheet />
     </aside>
+  );
+}
+
+/**
+ * The Environment dropdown, between the "Environment" heading and the pages
+ * it governs. The section on screen comes from the mode: the modal names it,
+ * the routed surface has it in its path.
+ */
+function SettingsSidebarEnvironmentPicker(props: {
+  readonly scope: HostScope;
+  readonly mode: SettingsSidebarMode;
+}): ReactNode {
+  return (
+    <div className="mb-1 px-1">
+      {props.mode.kind === "modal" ? (
+        <EnvironmentPicker
+          scope={props.scope}
+          activeSection={props.mode.activeSection}
+        />
+      ) : (
+        <RoutedEnvironmentPicker scope={props.scope} />
+      )}
+    </div>
+  );
+}
+
+function RoutedEnvironmentPicker(props: {
+  readonly scope: HostScope;
+}): ReactNode {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const activeSection =
+    visibleSettingsSections().find((section) =>
+      isSectionPathname(pathname, section.id),
+    )?.id ?? null;
+  return (
+    <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
   );
 }
 
@@ -265,16 +322,7 @@ function SettingsSidebarHostPicker(props: {
       {signedIn && sandboxesUnavailable === null ? (
         <AutomationsHostEntry />
       ) : null}
-      {/* Where a sandbox's secrets, coding-CLI connections and GitHub access
-          are managed: the account's dashboard page, since a sandbox never
-          takes a credential from this app. Offered wherever a sandbox can be
-          created. */}
-      {signedIn && sandboxesUnavailable === null ? (
-        <SecretsDashboardLink
-          testId="settings-secrets-and-github"
-          className="justify-start"
-        />
-      ) : null}
+      {signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
       {/* The host list's balance banner: the two-hour and thirty-minute
           warnings for the account's awake sandboxes. Nothing for a user with
           none. */}

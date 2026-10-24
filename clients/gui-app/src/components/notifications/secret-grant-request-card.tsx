@@ -2,7 +2,6 @@ import { useState, type ReactNode } from "react";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { SecretsDashboardLink } from "@/components/providers/secrets-dashboard-link";
 import {
   useSecretRequestDecide,
   type SecretRequestDecideOutcome,
@@ -16,6 +15,7 @@ import {
   secretRequestStatusLine,
   type SecretsNotificationDetail,
 } from "@/lib/notifications/secrets-notification-detail";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 
 type GrantRequestDetail = Extract<
   SecretsNotificationDetail,
@@ -187,10 +187,17 @@ function SecretGrantOutcomeLine(props: {
           There is no secret stored for this destination yet, so there is
           nothing to grant.
         </p>
-        <SecretsDashboardLink
-          testId="secret-grant-request-open-secrets"
-          className={undefined}
-        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="secret-grant-request-open-secrets"
+          onClick={() => {
+            navigateToSettingsSection("secrets");
+          }}
+        >
+          Secrets
+        </Button>
       </div>
     );
   }

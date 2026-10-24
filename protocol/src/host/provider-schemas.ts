@@ -42,6 +42,7 @@ import {
   nativeListResultSchemaV101Preimage,
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
+  nativeMutationResultSchemaV14,
   nativeMutationResultSchemaV10Preimage,
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
@@ -4086,6 +4087,21 @@ export type ProvidersNativeMutateRequest = z.infer<
 >;
 
 /**
+ * `providers.nativeMutate@1.4` request: `@1.3` plus `expectedEnvironmentId`,
+ * the environment the caller is editing. Null writes wherever this host
+ * writes; an id is refused with `environment_mismatch` unless this host
+ * serves that environment when it writes.
+ */
+export const providersNativeMutateRequestSchemaV14 = lazySchema(() =>
+  providersNativeMutateRequestSchema.extend({
+    expectedEnvironmentId: z.string().min(1).nullable().default(null),
+  }),
+);
+export type ProvidersNativeMutateRequestV14 = z.infer<
+  typeof providersNativeMutateRequestSchemaV14
+>;
+
+/**
  * `providers.nativeMutate@1.0` response. Returns only the mutated native
  * collection: the old `setEnabled` carrier also echoed the full
  * `ProviderCliState`, but no client ever read it on the native arm, and
@@ -4104,6 +4120,14 @@ export const providersNativeMutateResponseSchemaV11Preimage = lazySchema(() =>
 );
 export type ProvidersNativeMutateResponse = z.infer<
   typeof providersNativeMutateResponseSchema
+>;
+
+/** `providers.nativeMutate@1.4` response: the result may be `environment_mismatch`. */
+export const providersNativeMutateResponseSchemaV14 = lazySchema(() =>
+  z.object({ result: nativeMutationResultSchemaV14 }),
+);
+export type ProvidersNativeMutateResponseV14 = z.infer<
+  typeof providersNativeMutateResponseSchemaV14
 >;
 
 // ── Model providers (optional capability channel) ──────────────────────────

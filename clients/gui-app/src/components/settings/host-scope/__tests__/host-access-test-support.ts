@@ -4,7 +4,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
-  EnvironmentStatusResponse,
+  EnvironmentStatusResponseV11,
   EnvironmentWriteOutcome,
   HostRemoteAccessSetResponse,
   LocalOverride,
@@ -45,7 +45,7 @@ export const ACCESS_METHODS: readonly string[] = [
 ];
 
 export interface AccessHostState {
-  status: EnvironmentStatusResponse;
+  status: EnvironmentStatusResponseV11;
   /** The host cannot answer `environment.status` (it is down). */
   failStatus: boolean;
   notices: EnvironmentNotice[];
@@ -129,7 +129,12 @@ export function buildAccessHostOn(
       },
       "environment.review": () => {
         reads.review += 1;
-        return { entries: [...state.review] };
+        return {
+          entries: [...state.review],
+          shownAt: null,
+          acknowledgedAt: null,
+          evidence: { version: null, at: null },
+        };
       },
       "environment.localOverrides": () => ({ overrides: [...state.overrides] }),
       "providers.list": () => ({

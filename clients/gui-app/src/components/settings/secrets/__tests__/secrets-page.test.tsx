@@ -1,10 +1,3 @@
-// What a link asks the app to open. The call is awaited with `.catch`, so it
-// answers a promise.
-const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => openLinkMock,
-}));
-
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -14,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentSecret,
@@ -23,17 +16,12 @@ import type {
   EnvironmentSecretsVerifyRequest,
   SecretVerifyResult,
 } from "@traycer/protocol/host/environment-schemas";
-import {
-  DASHBOARD_ORIGIN,
-  dashboardRunnerHost,
-} from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { OpenLink } from "@/lib/links/open-link";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
-  SECRETS_EMPTY_TEXT,
   SECRET_READABLE_WHERE,
   SECRET_REVOKED_LABEL,
 } from "@/lib/sandboxes/secrets-page-copy";
@@ -102,7 +90,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       "environment.secrets.list": () => {
         reads.list += 1;
         if (state.listError !== null) throw state.listError;
-        return { secrets: [...state.secrets] };
+        return { removed: [], secrets: [...state.secrets] };
       },
       "environment.secrets.verify": (request) => {
         verifyRequests.push(request);
@@ -137,13 +125,8 @@ function renderPage(host: SecretsHost): QueryClient {
   return queryClient;
 }
 
-beforeEach(() => {
-  openLinkMock.mockResolvedValue(undefined);
-});
-
 afterEach(() => {
   cleanup();
-  openLinkMock.mockReset();
 });
 
 async function openAddDialog(): Promise<void> {
@@ -239,7 +222,9 @@ describe("the secrets list", () => {
     renderPage(buildSecretsHost({ secrets: [] }));
 
     const empty = await screen.findByTestId("secrets-empty");
-    expect(empty.textContent).toBe(SECRETS_EMPTY_TEXT);
+    expect(empty.textContent).toBe(
+      "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.",
+    );
     expect(screen.queryByTestId("secret-row")).toBeNull();
     expect(screen.getByTestId("secrets-add")).toBeTruthy();
   });
@@ -271,7 +256,7 @@ describe("a row's Verify", () => {
       "Nothing answered on that port. Check the port this secret is set to.",
     );
     expect(host.verifyRequests).toEqual([
-      { target: "secret", secretId: "sec-1" },
+      { target: "secret", secretId: "sec-1", environmentId: null },
     ]);
   });
 
@@ -290,47 +275,40 @@ describe("a row's Verify", () => {
 });
 
 describe("the add dialog's kind picker", () => {
-  it("greys the kinds no protocol of which is brokered, with the table's line", async () => {
+  it("offers only the API key, provider and database kinds", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
     await openAddDialog();
 
-    for (const kind of ["broker", "mail", "rdp"]) {
-      const option = buttonOf(`secret-kind-option-${kind}`);
-      expect(option.disabled, kind).toBe(true);
-      expect(option.getAttribute("data-unsupported"), kind).toBe("true");
-      expect(option.textContent, kind).toContain("is not brokered in v1.");
+    const picker = screen.getByTestId("secret-kind-picker");
+    const offered = within(picker)
+      .getAllByRole("button")
+      .map((option) => option.getAttribute("data-testid"));
+    expect(offered.sort()).toEqual([
+      "secret-kind-option-api_key",
+      "secret-kind-option-database",
+      "secret-kind-option-provider",
+    ]);
+    for (const option of within(picker).getAllByRole("button")) {
+      expect((option as HTMLButtonElement).disabled).toBe(false);
     }
-    expect(buttonOf("secret-kind-option-mail").textContent).toContain(
-      "Mail (SMTP, IMAP and POP3) is not brokered in v1.",
-    );
-    for (const kind of ["api_key", "database", "provider", "ssh", "aws"]) {
-      const option = buttonOf(`secret-kind-option-${kind}`);
-      expect(option.disabled, kind).toBe(false);
-      expect(option.getAttribute("data-unsupported"), kind).toBeNull();
+    for (const kind of ["ssh", "aws", "broker", "mail", "rdp"]) {
+      expect(
+        screen.queryByTestId(`secret-kind-option-${kind}`),
+        kind,
+      ).toBeNull();
     }
   });
 
-  it("opens the dashboard's add dialog for a kind set up on the web, and closes", async () => {
-    const host = buildSecretsHost({ secrets: [] });
-    renderPage(host);
-    await openAddDialog();
+  it("says who holds the value on the form, and the add dialog names no web handoff", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openApiKeyForm();
 
-    fireEvent.click(screen.getByTestId("secret-kind-option-ssh"));
-
-    await waitFor(() => {
-      expect(openLinkMock).toHaveBeenCalledTimes(1);
-    });
-    const [url, kind, event] = openLinkMock.mock.calls[0];
-    expect(url).toBe(
-      `${DASHBOARD_ORIGIN}/environments/personal/secrets?add=ssh`,
+    expect(screen.getByTestId("secret-custody-sentence").textContent).toBe(
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it through the broker.",
     );
-    expect(url).toContain("?add=ssh");
-    expect(kind).toBe("account");
-    expect(event).toBeNull();
-    await waitFor(() => {
-      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
-    });
-    expect(host.createRequests).toEqual([]);
+    expect(screen.getByTestId("add-secret-dialog").textContent).not.toMatch(
+      /on the web|dashboard/i,
+    );
   });
 
   it("opens a database form on PostgreSQL with the plaintext notice", async () => {
@@ -436,6 +414,7 @@ describe("saving a secret", () => {
         exportPolicy: null,
         sandboxesByDefault: true,
         plaintextConsent: null,
+        environmentId: null,
       },
     ]);
     await waitFor(() => {
