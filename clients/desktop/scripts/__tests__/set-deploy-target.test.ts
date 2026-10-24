@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -105,6 +106,52 @@ function createFixture(component: "desktop" | "cli"): Fixture {
   writeFileSync(targetInputPath, JSON.stringify(stamp()), "utf8");
   const stampPath = join(projectDir, ".release-target-stamp.json");
   return { root, projectDir, configPath, targetInputPath, stampPath };
+}
+
+const IAP_AUDIENCE = "audience-fixture.apps.googleusercontent.example";
+/** Service-account-shaped, but a fixture: it signs nothing. */
+const IAP_KEY_FIXTURE = JSON.stringify({
+  client_email: "signer@fixture.iam.example",
+  private_key:
+    "-----BEGIN FIXTURE-----\nnot-a-real-key\n-----END FIXTURE-----\n",
+});
+
+function iapKeyPath(fixture: Fixture): string {
+  return join(
+    fixture.projectDir,
+    "resources",
+    "keys",
+    "iap-service-account.json",
+  );
+}
+
+function withIapAudience(fixture: Fixture): void {
+  const input = stamp() as { cloud: Record<string, unknown> };
+  input.cloud.iapAudience = IAP_AUDIENCE;
+  writeFileSync(fixture.targetInputPath, JSON.stringify(input), "utf8");
+}
+
+/** `run`, with the IAP key set to `key`, or removed from the environment. */
+function runWithIapKey(
+  fixture: Fixture,
+  args: readonly string[],
+  key: string | undefined,
+) {
+  const saved = process.env.TRAYCER_IAP_SA_KEY;
+  if (key === undefined) {
+    Reflect.deleteProperty(process.env, "TRAYCER_IAP_SA_KEY");
+  } else {
+    process.env.TRAYCER_IAP_SA_KEY = key;
+  }
+  try {
+    return run(fixture, args);
+  } finally {
+    if (saved === undefined) {
+      Reflect.deleteProperty(process.env, "TRAYCER_IAP_SA_KEY");
+    } else {
+      process.env.TRAYCER_IAP_SA_KEY = saved;
+    }
+  }
 }
 
 function run(fixture: Fixture, args: readonly string[]) {
@@ -245,5 +292,97 @@ describe("set-deploy-target scripts", () => {
     expect(restored.status).toBe(0);
     expect(readFileSync(fixture.configPath, "utf8")).toBe(original);
     expect(existsSync(fixture.targetInputPath)).toBe(true);
+  });
+});
+
+describe("set-deploy-target IAP service-account key", () => {
+  const stagingArgs = (fixture: Fixture) => [
+    "--target=staging",
+    `--target-input=${fixture.targetInputPath}`,
+  ];
+
+  it("stamps the audience and writes the key, owner-only, for a staging target behind IAP", () => {
+    const fixture = createFixture("desktop");
+    withIapAudience(fixture);
+
+    const result = runWithIapKey(
+      fixture,
+      stagingArgs(fixture),
+      IAP_KEY_FIXTURE,
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(fixture.configPath, "utf8")).toContain(
+      `iapAudience: "${IAP_AUDIENCE}"`,
+    );
+    expect(readFileSync(iapKeyPath(fixture), "utf8")).toBe(IAP_KEY_FIXTURE);
+    expect(statSync(iapKeyPath(fixture)).mode & 0o777).toBe(0o600);
+  });
+
+  it("exits 2 without echoing the key when it is absent or not a service-account key", () => {
+    const fixture = createFixture("desktop");
+    withIapAudience(fixture);
+    const secret = "secret-marker-fixture";
+
+    const absent = runWithIapKey(fixture, stagingArgs(fixture), undefined);
+    const notJson = runWithIapKey(fixture, stagingArgs(fixture), secret);
+    const wrongShape = runWithIapKey(
+      fixture,
+      stagingArgs(fixture),
+      JSON.stringify({ note: secret }),
+    );
+
+    expect(absent.status).toBe(2);
+    expect(absent.stderr).toContain("TRAYCER_IAP_SA_KEY");
+    expect(notJson.status).toBe(2);
+    expect(wrongShape.status).toBe(2);
+    expect(notJson.stderr + wrongShape.stderr).not.toContain(secret);
+    expect(existsSync(iapKeyPath(fixture))).toBe(false);
+  });
+
+  it("leaves a staging target without an audience unstamped and keyless", () => {
+    const fixture = createFixture("desktop");
+
+    const result = runWithIapKey(
+      fixture,
+      stagingArgs(fixture),
+      IAP_KEY_FIXTURE,
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(fixture.configPath, "utf8")).toContain(
+      'iapAudience: ""',
+    );
+    expect(existsSync(iapKeyPath(fixture))).toBe(false);
+  });
+
+  it("writes no key for production even when the variable is set, and removes a stale one", () => {
+    const fixture = createFixture("desktop");
+    mkdirSync(dirname(iapKeyPath(fixture)), { recursive: true });
+    writeFileSync(iapKeyPath(fixture), "stale-fixture", "utf8");
+
+    const result = runWithIapKey(
+      fixture,
+      ["--target=production"],
+      IAP_KEY_FIXTURE,
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(fixture.configPath, "utf8")).toContain(
+      'iapAudience: ""',
+    );
+    expect(existsSync(iapKeyPath(fixture))).toBe(false);
+  });
+
+  it("removes the key on --restore", () => {
+    const fixture = createFixture("desktop");
+    withIapAudience(fixture);
+    runWithIapKey(fixture, stagingArgs(fixture), IAP_KEY_FIXTURE);
+    expect(existsSync(iapKeyPath(fixture))).toBe(true);
+
+    const restored = runWithIapKey(fixture, ["--restore"], undefined);
+
+    expect(restored.status).toBe(0);
+    expect(existsSync(iapKeyPath(fixture))).toBe(false);
   });
 });

@@ -473,6 +473,16 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
       );
     }
   }
+  // Optional: only a target fronted by Google IAP carries it. The desktop
+  // bakes it as the audience of the `Proxy-Authorization` token its main
+  // process mints, and a staging build that carries it must also package the
+  // IAP key (`set-deploy-target.cjs`).
+  if ("iapAudience" in stamp.cloud) {
+    requireString(
+      stamp.cloud.iapAudience,
+      "client target stamp.cloud.iapAudience",
+    );
+  }
   if (component === "desktop") {
     // `releaseChannel` is the one stamped value the updater compares against a
     // LITERAL rather than merely carrying: `effectiveChannelMode()` returns

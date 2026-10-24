@@ -59,6 +59,12 @@ const bakedConfig = {
   // stamps the target's value from the client target stamp's
   // `cloud.traycerServerBaseUrl`.
   serverBaseUrl: "https://server.traycer.ai",
+  // The Google IAP audience in front of a staging traycer-server, which the
+  // main process mints its `Proxy-Authorization` token for
+  // (`electron-main/auth/iap-proxy-token.ts`). Empty means not behind IAP:
+  // source, dev and production. The deploy script stamps a staging target's
+  // value from the client target stamp's `cloud.iapAudience`.
+  iapAudience: "",
   cloudUiBaseUrl: "https://traycer.ai",
   // Remote Host Support (ticket T14): the relay worker's WebSocket attach
   // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own

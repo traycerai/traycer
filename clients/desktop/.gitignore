@@ -16,3 +16,6 @@ resources/cli/*/
 .tmp-*/
 .release-target-stamp.json
 resources/bundle/.release-target-uninstall-host-autostart.nsh
+# The staging IAP service-account key, written from the release secret by
+# scripts/set-deploy-target.cjs. Never committed.
+resources/keys/
