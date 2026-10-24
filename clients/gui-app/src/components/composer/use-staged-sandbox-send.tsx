@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { SandboxSetupLine } from "@/components/composer/sandbox-setup-line";
 import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
@@ -79,9 +80,14 @@ export interface StagedSandboxSend {
    * Called first by the surface's submit. `true` when the stage took the
    * send (phase 1 started, or is already running): the surface submits
    * nothing and keeps the draft. `false` when nothing is staged, or the stage
-   * is in its handoff and the surface's own submit should run.
+   * is in its handoff and the surface's own submit should run. A taken
+   * terminal agent's Start passes its launch, which the stage keeps for
+   * phase 2; a send passes `null`.
    */
-  readonly intercept: (messageText: string) => boolean;
+  readonly intercept: (
+    messageText: string,
+    terminalLaunch: TerminalAgentLaunch | null,
+  ) => boolean;
   /** The setup line, above the draft. */
   readonly line: ReactNode;
 }
@@ -173,7 +179,10 @@ export function useStagedSandboxSend(input: {
   );
 
   const intercept = useCallback(
-    (messageText: string): boolean => {
+    (
+      messageText: string,
+      terminalLaunch: TerminalAgentLaunch | null,
+    ): boolean => {
       if (surfaceKey === null) return false;
       const current = readStagedSandbox(surfaceKey);
       if (current === null) return false;
@@ -185,6 +194,7 @@ export function useStagedSandboxSend(input: {
         }
         return false;
       }
+      useStagedSandboxStore.getState().report(surfaceKey, { terminalLaunch });
       // A first action that stopped short leaves a stage like any other: the
       // send runs it again.
       if (current.phase === "staged" || current.failure !== null) {

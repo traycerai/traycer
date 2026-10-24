@@ -417,8 +417,11 @@ function ShapeSheetForm(props: {
         <span>
           {idleAndRestingLine(
             Number(form.idleMinutes),
-            shape?.destroyAfterRestingMinutes ??
-              props.initialShape.destroyAfterRestingMinutes,
+            // A cleared period is never, the form's own `null`; only a form
+            // that does not parse shows the shape it opened with.
+            shape === null
+              ? props.initialShape.destroyAfterRestingMinutes
+              : shape.destroyAfterRestingMinutes,
           )}
         </span>
         <Button

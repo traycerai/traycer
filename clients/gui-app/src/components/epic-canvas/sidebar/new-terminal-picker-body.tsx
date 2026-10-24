@@ -147,7 +147,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     onLaunch: launchOnce,
   });
   const handleLaunch = useCallback(() => {
-    if (stagedSend.intercept("terminal")) return;
+    if (stagedSend.intercept("terminal", null)) return;
     if (launchTarget !== null) launchOnce(launchTarget);
   }, [launchOnce, launchTarget, stagedSend]);
   usePrimaryActionShortcut(true, handleLaunch);

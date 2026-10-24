@@ -28,6 +28,7 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -259,13 +260,30 @@ const stubHostClient = {
   getRequestContextUserId: () => null,
 };
 // The staged send itself has its own suite: here it takes a send or a Start
-// only while `testState.staged` says a sandbox is staged.
-vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
-  useStagedSandboxSend: (input: StagedSendInput) => {
-    testState.stagedSendInput = input;
-    return { intercept: () => testState.staged, line: null };
-  },
-}));
+// only while `testState.staged` says a sandbox is staged, and keeps a Start's
+// launch on the stage as the real one does.
+vi.mock("@/components/composer/use-staged-sandbox-send", async () => {
+  const { useStagedSandboxStore } =
+    await import("@/stores/composer/staged-sandbox-store");
+  return {
+    useStagedSandboxSend: (input: StagedSendInput) => {
+      testState.stagedSendInput = input;
+      return {
+        intercept: (
+          _messageText: string,
+          terminalLaunch: TerminalAgentLaunch | null,
+        ): boolean => {
+          if (!testState.staged || input.surfaceKey === null) return false;
+          useStagedSandboxStore
+            .getState()
+            .report(input.surfaceKey, { terminalLaunch });
+          return true;
+        },
+        line: null,
+      };
+    },
+  };
+});
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 
@@ -439,6 +457,7 @@ afterEach(() => {
   testState.bodyStartTerminal = null;
   testState.staged = false;
   testState.stagedSendInput = null;
+  useStagedSandboxStore.setState({ bySurface: {} });
   testState.catalogHostId = null;
   testState.providers = undefined;
   gateState.blockedIds.clear();
@@ -506,12 +525,29 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
 });
 
 describe("new-conversation modal's terminal Start on a staged sandbox", () => {
-  it("creates no terminal agent here, then launches it on the new host with what that host offers", () => {
+  it("creates no terminal agent here, then launches it on the new host with what that host offers, across a close and reopen", () => {
     useNewConversationModalStore
       .getState()
       .setComposerMode("epic-1", "terminal");
     testState.staged = true;
-    renderModal();
+    const view = renderModal();
+    const surfaceKey = testState.stagedSendInput?.surfaceKey ?? null;
+    if (surfaceKey === null) throw new Error("expected a staging surface");
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
     act(() => {
       testState.bodyStartTerminal?.(
         {
@@ -525,6 +561,10 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
       );
     });
     expect(testState.createTerminalAgent).not.toHaveBeenCalled();
+
+    // The modal closes while the sandbox boots, and opens again.
+    view.unmount();
+    renderModal();
     const staged = () => {
       const input = testState.stagedSendInput;
       if (input === null) throw new Error("expected the staged send");

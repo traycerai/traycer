@@ -146,6 +146,7 @@ import {
   useInTaskSandboxStagingSurface,
 } from "@/components/composer/use-sandbox-staging";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import { useStagedTerminalLaunch } from "@/stores/composer/staged-sandbox-store";
 import {
   stagedResubmitReady,
   stagedTerminalLaunchOnHost,
@@ -969,9 +970,11 @@ export function NewConversationModalBody(props: {
   // dispatch are declared.
   const stagedSubmitRef = useRef<() => boolean>(() => false);
   // A terminal agent's Start that a staged sandbox took: launched on the new
-  // host in phase 2, as the chat send resubmits there.
-  const [stagedTerminalLaunch, setStagedTerminalLaunch] =
-    useState<TerminalAgentLaunch | null>(null);
+  // host in phase 2, as the chat send resubmits there. The stage keeps it, so
+  // closing the modal while the sandbox boots does not drop it.
+  const stagedTerminalLaunch = useStagedTerminalLaunch(
+    stagingSurfaceKey(sandboxStaging),
+  );
   const stagedProviders = useProvidersListForClient(hostClient, {
     enabled: stagedTerminalLaunch !== null,
     subscribed: stagedTerminalLaunch !== null,
@@ -1519,8 +1522,7 @@ export function NewConversationModalBody(props: {
     const captured = editor.getJSON();
     // A staged sandbox takes the first send: it is created or woken, and
     // this submit runs again on it once it is ready. The draft stays.
-    setStagedTerminalLaunch(null);
-    if (stagedSend.intercept(composerDisplayPlainText(captured))) return;
+    if (stagedSend.intercept(composerDisplayPlainText(captured), null)) return;
     // The draft this submit is FOR. The editor stays editable across the reads
     // below and the create ends in `cleanupAfterSubmit`, which clears the draft
     // store and the editor - so without this, a sentence typed during the read
@@ -1813,7 +1815,6 @@ export function NewConversationModalBody(props: {
     // the machine the chip stopped showing are bytes the create's host never
     // received.
     submitTarget,
-    setStagedTerminalLaunch,
     setSubmitReentryTick,
     stagedSend,
     submitPreparedDraft,
@@ -1919,19 +1920,10 @@ export function NewConversationModalBody(props: {
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
       // A staged sandbox takes the Start as it takes a send.
-      if (stagedSend.intercept("terminal")) {
-        setStagedTerminalLaunch(launch);
-        return;
-      }
+      if (stagedSend.intercept("terminal", launch)) return;
       dispatchStartTerminal(launch);
     },
-    [
-      canMutate,
-      dispatchStartTerminal,
-      setStagedTerminalLaunch,
-      stagedSend,
-      workspaceCanStart,
-    ],
+    [canMutate, dispatchStartTerminal, stagedSend, workspaceCanStart],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
   // earlier) reads this render's resubmit, not the last one's. A chat send is
@@ -1949,7 +1941,6 @@ export function NewConversationModalBody(props: {
             return true;
           }
         : () => {
-            setStagedTerminalLaunch(null);
             const launch = stagedTerminalLaunchOnHost(
               stagedTerminalLaunch,
               toolbarStore.getState(),

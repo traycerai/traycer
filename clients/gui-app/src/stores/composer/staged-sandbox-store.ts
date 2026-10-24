@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { v4 as uuidv4 } from "uuid";
+import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
   StageConfiguration,
   StageShape,
@@ -93,6 +94,12 @@ export interface StagedSandbox {
   /** When `step` was last reported (epoch ms). */
   readonly stepAt: number | null;
   readonly failure: StagedSandboxFailure | null;
+  /**
+   * A terminal agent's Start the stage took, launched on the new host in
+   * phase 2 in place of a send; `null` when it took a send. Kept with the
+   * stage, so a composer that remounts meanwhile still launches it.
+   */
+  readonly terminalLaunch: TerminalAgentLaunch | null;
 }
 
 interface StagedSandboxStoreState {
@@ -127,6 +134,7 @@ interface StagedSandboxStoreState {
         | "step"
         | "stepAt"
         | "failure"
+        | "terminalLaunch"
       >
     >,
   ) => void;
@@ -158,6 +166,7 @@ function freshStage(target: StagedSandboxTarget): StagedSandbox {
     step: "creating",
     stepAt: null,
     failure: null,
+    terminalLaunch: null,
   };
 }
 
@@ -228,6 +237,17 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
 /** The stage a surface holds, or `null`. */
 export function useStagedSandbox(surfaceKey: string): StagedSandbox | null {
   return useStagedSandboxStore((s) => s.bySurface[surfaceKey] ?? null);
+}
+
+/** The terminal agent's Start a surface's stage took, or `null`. */
+export function useStagedTerminalLaunch(
+  surfaceKey: string | null,
+): TerminalAgentLaunch | null {
+  return useStagedSandboxStore((s) =>
+    surfaceKey === null
+      ? null
+      : (s.bySurface[surfaceKey]?.terminalLaunch ?? null),
+  );
 }
 
 export function readStagedSandbox(surfaceKey: string): StagedSandbox | null {

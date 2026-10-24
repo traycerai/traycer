@@ -227,7 +227,7 @@ describe("useStagedSandboxSend's setup line", () => {
     mount(vi.fn());
 
     act(() => {
-      latestSend?.intercept("fix the login bug");
+      latestSend?.intercept("fix the login bug", null);
       store.begin(SURFACE, false, Date.now() - 8_000);
     });
 
@@ -248,7 +248,7 @@ describe("useStagedSandboxSend's setup line", () => {
     mount(vi.fn());
 
     act(() => {
-      latestSend?.intercept("fix the login bug");
+      latestSend?.intercept("fix the login bug", null);
     });
 
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
@@ -314,7 +314,7 @@ describe("useStagedSandboxSend's handoff", () => {
     );
 
     act(() => {
-      sendA?.intercept("fix the login bug");
+      sendA?.intercept("fix the login bug", null);
       useStagedSandboxStore.getState().report(SURFACE, {
         createdHostId: NEW_HOST,
         phase: "handoff",
@@ -361,7 +361,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
     );
 
     act(() => {
-      send?.intercept("fix the login bug");
+      send?.intercept("fix the login bug", null);
       useStagedSandboxStore.getState().report(SURFACE, {
         createdSandboxId: "sbx-1",
         createdHostId: NEW_HOST,
@@ -382,7 +382,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
     // The person's next send is their own, on the host the surface is on.
     let taken = true;
     act(() => {
-      taken = send?.intercept("fix the login bug") ?? true;
+      taken = send?.intercept("fix the login bug", null) ?? true;
     });
     expect(taken).toBe(false);
     expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
@@ -418,14 +418,14 @@ async function sendAgainAfter(
   mount(vi.fn());
 
   act(() => {
-    latestSend?.intercept("first");
+    latestSend?.intercept("first", null);
   });
   await waitFor(() => {
     expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe(failure);
   });
   let intercepted = false;
   act(() => {
-    intercepted = latestSend?.intercept("second") ?? false;
+    intercepted = latestSend?.intercept("second", null) ?? false;
   });
   await waitFor(() => {
     expect(mocks.createSandbox).toHaveBeenCalledTimes(2);

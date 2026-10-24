@@ -87,6 +87,7 @@ import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-s
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import { useStagedTerminalLaunch } from "@/stores/composer/staged-sandbox-store";
 import {
   stagedResubmitReady,
   stagedTerminalLaunchOnHost,
@@ -505,8 +506,7 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   // A terminal agent's Start that a staged sandbox took: launched on the new
   // host in phase 2, as the chat send resubmits there.
-  const [stagedTerminalLaunch, setStagedTerminalLaunch] =
-    useState<TerminalAgentLaunch | null>(null);
+  const stagedTerminalLaunch = useStagedTerminalLaunch(composerSurfaceKey);
   // Phase 2 resubmits once the new host's catalog has answered, so the
   // selection holds its default model, or none when it offers no agent (the
   // line then says the sandbox is awake but cannot run one). A Start also
@@ -701,12 +701,12 @@ export function LandingComposer(props: LandingComposerProps) {
     // this submit runs again on it once it is ready. The draft stays. It
     // needs no model yet: a person with no host has no catalog to pick one
     // from, and the resubmit takes the new host's default.
-    setStagedTerminalLaunch(null);
     if (
       stagedSend.intercept(
         composerDisplayPlainText(
           editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
         ),
+        null,
       )
     ) {
       return false;
@@ -753,7 +753,6 @@ export function LandingComposer(props: LandingComposerProps) {
     pickerStore,
     raiseHostNotice,
     setComposerExpanded,
-    setStagedTerminalLaunch,
     stagedSend,
     teamSandboxHarnessBlockedFor,
     toolbarStore,
@@ -786,17 +785,13 @@ export function LandingComposer(props: LandingComposerProps) {
         return false;
       }
       // A staged sandbox takes the Start as it takes a send.
-      if (stagedSend.intercept("terminal")) {
-        setStagedTerminalLaunch(launch);
-        return false;
-      }
+      if (stagedSend.intercept("terminal", launch)) return false;
       return dispatchStartTerminal(launch);
     },
     [
       dispatchStartTerminal,
       isSubmitting,
       resolvedHostId,
-      setStagedTerminalLaunch,
       stagedSend,
       workspaceCanStart,
     ],
@@ -809,7 +804,6 @@ export function LandingComposer(props: LandingComposerProps) {
       stagedTerminalLaunch === null
         ? handleSubmit
         : () => {
-            setStagedTerminalLaunch(null);
             const launch = stagedTerminalLaunchOnHost(
               stagedTerminalLaunch,
               toolbarStore.getState(),
