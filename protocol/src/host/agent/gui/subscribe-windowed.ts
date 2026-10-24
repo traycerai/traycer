@@ -6,6 +6,7 @@ import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events"
 import {
   openChatEventSchema,
   openMessageSchema,
+  openMessageSchemaPreNotApplied,
   openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
   openMessageSchemaPreArtifact,
@@ -791,6 +792,18 @@ export const chatTranscriptWindowSchema = lazySchema(() =>
 );
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 
+/** Full pre-notApplied wire shape; keep field order and optionality frozen. */
+export const openChatTranscriptWindowSchemaPreNotApplied = lazySchema(() =>
+  z.object({
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()).optional(),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(openMessageSchemaPreNotApplied),
+    events: z.array(openChatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
+
 export const openChatTranscriptWindowSchemaPreHtml = lazySchema(() =>
   chatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchemaPreHtml),
@@ -1171,6 +1184,23 @@ export const chatRangeResponseSchemaPreMcpApp = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
     events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    reachedStart: z.boolean(),
+    reachedEnd: z.boolean(),
+    truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+  }),
+);
+
+/** Full pre-notApplied wire shape; keep field order and optionality frozen. */
+export const openChatRangeResponseSchemaPreNotApplied = lazySchema(() =>
+  z.object({
+    requestId: rangeRequestIdSchema,
+    epoch: z.number().int().nonnegative(),
+    fromOrdinal: z.number().int().nonnegative(),
+    rowIds: z.array(z.string()),
+    incompleteRowIds: z.array(z.string()).optional(),
+    messages: z.array(openMessageSchemaPreNotApplied),
+    events: z.array(openChatEventSchema),
     rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),

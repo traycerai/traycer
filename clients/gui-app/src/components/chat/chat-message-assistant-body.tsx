@@ -1399,6 +1399,7 @@ export function AssistantSegment({
       return (
         <CompactionSegment
           status={segment.status}
+          notApplied={segment.notApplied}
           trigger={segment.trigger}
           preTokens={segment.preTokens}
           postTokens={segment.postTokens}

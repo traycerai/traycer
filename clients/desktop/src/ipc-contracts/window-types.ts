@@ -5,6 +5,7 @@
  */
 
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
+import type { HostEnsureFailure } from "@traycer-clients/shared/platform/runner-host";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -342,6 +343,8 @@ export interface SupportHostSnapshot {
    * field. Absence must never render as "guaranteed".
    */
   readonly layer0: SupportHostLayer0Snapshot | null;
+  /** The controller's last ensure failure; null once a host answers or none occurred. */
+  readonly ensureFailure: HostEnsureFailure | null;
 }
 
 export interface SupportRuntimeVersions {

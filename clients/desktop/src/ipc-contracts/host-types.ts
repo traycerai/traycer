@@ -120,4 +120,5 @@ export type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";

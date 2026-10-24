@@ -208,6 +208,35 @@ export interface SandboxSummary {
    * before it.
    */
   readonly wakePayer: SandboxMember | null;
+  /**
+   * The member who kept a sandbox an agent created, turning it into one that
+   * waits for its owner (`burst` false); `null` on a row nobody kept and from
+   * a server before keep.
+   */
+  readonly keptBy: SandboxMember | null;
+  /**
+   * When the row last came to rest (suspended or stopped), epoch
+   * milliseconds: the start of the resting-destroy clock. Cleared on wake,
+   * kept through a failed wake, restarted by a thaw and by a changed resting
+   * period. `null` while not resting and from a server before the clock.
+   */
+  readonly restingSince: number | null;
+  /**
+   * Minutes the row may rest before the control plane destroys it; `null`
+   * means never, and is also what a server before the clock sends.
+   */
+  readonly destroyAfterRestingMinutes: number | null;
+  /**
+   * When the resting clock destroys the row (epoch milliseconds), as the
+   * server computes it from `restingSince` and the period; `null` while not
+   * resting, on a row that rests forever, and from a server before the clock.
+   */
+  readonly destroyAt: number | null;
+  /**
+   * The task an agent created the sandbox for; `null` on a row created from
+   * the GUI and from a server before the field.
+   */
+  readonly createdByTaskId: string | null;
 }
 
 /**
@@ -272,6 +301,16 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
     // Read as `null` when absent, so a server that predates them parses.
     createdBy: sandboxMemberSchema.nullable().default(null),
     wakePayer: sandboxMemberSchema.nullable().default(null),
+    keptBy: sandboxMemberSchema.nullable().default(null),
+    restingSince: z.number().nullable().default(null),
+    destroyAfterRestingMinutes: z
+      .number()
+      .int()
+      .nonnegative()
+      .nullable()
+      .default(null),
+    destroyAt: z.number().nullable().default(null),
+    createdByTaskId: z.string().min(1).nullable().default(null),
   }),
 );
 
@@ -408,11 +447,37 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
     }),
   );
 
+/**
+ * A region's awake rates per unit, in millicredits an hour: a shape costs
+ * `(cpus × vcpu + memory GB × memory + disk GB × disk) × multiplier`.
+ */
+export interface SandboxCataloguePricing {
+  readonly vcpuHourMillicredits: number;
+  readonly memoryGbHourMillicredits: number;
+  readonly diskGbHourMillicredits: number;
+  readonly multiplier: number;
+}
+
+export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
+  lazySchema(() =>
+    z.object({
+      vcpuHourMillicredits: z.number().nonnegative(),
+      memoryGbHourMillicredits: z.number().nonnegative(),
+      diskGbHourMillicredits: z.number().nonnegative(),
+      multiplier: z.number().positive(),
+    }),
+  );
+
 export interface SandboxCatalogueRegion {
   readonly id: string;
   readonly label: string;
   /** The price of the provider's SMALLEST shape here, for a "from" line. */
   readonly fromPriceMcPerHour: SandboxHourlyPrice;
+  /**
+   * The per-unit rates any shape here is priced from; `null` from a server
+   * that predates them, which leaves only the "from" price.
+   */
+  readonly pricing: SandboxCataloguePricing | null;
 }
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
@@ -421,6 +486,7 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       id: z.string().min(1),
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
+      pricing: sandboxCataloguePricingSchema.nullable().default(null),
     }),
   );
 
@@ -482,9 +548,6 @@ export const sandboxCatalogueSchema: z.ZodType<SandboxCatalogue> = lazySchema(
     }),
 );
 
-/** The longest idle period a create may set: one week, in minutes. */
-export const SANDBOX_MAX_IDLE_MINUTES = 7 * 24 * 60;
-
 /**
  * `POST /api/sandboxes` body. Every `null` takes the server's default:
  * `diskMb` the provider's default disk, `region` the provider's first priced
@@ -500,7 +563,10 @@ export interface SandboxCreateRequest {
   readonly region: string | null;
   /** 1 to 191 characters. */
   readonly displayName: string;
-  /** 1 to {@link SANDBOX_MAX_IDLE_MINUTES}, or `null` for the default. */
+  /**
+   * Two minutes or more, or `null` for the default. There is no upper
+   * bound; a period under the floor is refused, never clamped.
+   */
   readonly idleMinutes: number | null;
   readonly burst: boolean;
   readonly createdByHostId: string | null;
@@ -511,7 +577,47 @@ export interface SandboxCreateRequest {
    * what a server before environments always did.
    */
   readonly environmentId: string | null;
+  /**
+   * Minutes the sandbox may rest before it is destroyed; `0` means never, as
+   * on a patch, and `null` takes the configuration's default.
+   */
+  readonly destroyAfterRestingMinutes: number | null;
+  /** The task an agent creates the sandbox for; `null` from the GUI. */
+  readonly createdByTaskId: string | null;
+  /**
+   * The client's idempotency key for one send: a repeat create with the same
+   * id answers the row the first one made instead of creating a second
+   * sandbox. `null` when the caller does not retry.
+   */
+  readonly clientRequestId: string | null;
 }
+
+/**
+ * `PATCH /api/sandboxes/:id` body: rename the row and change its idle and
+ * resting periods. Each `null` leaves that setting unchanged. A changed
+ * resting period restarts the resting clock from the save. The answer is
+ * `200 { sandbox }`, or `sandbox_not_found`.
+ */
+export interface SandboxPatchRequest {
+  /** 1 to 191 characters, or `null` to keep the name. */
+  readonly displayName: string | null;
+  /** Two minutes or more, or `null` to keep the idle period. */
+  readonly idleMinutes: number | null;
+  /**
+   * Minutes the row may rest before it is destroyed; `0` means never (so
+   * `null` can keep meaning unchanged), or `null` to keep the period.
+   */
+  readonly destroyAfterRestingMinutes: number | null;
+}
+
+export const sandboxPatchRequestSchema: z.ZodType<SandboxPatchRequest> =
+  lazySchema(() =>
+    z.object({
+      displayName: z.string().min(1).max(191).nullable(),
+      idleMinutes: z.number().int().min(2).nullable(),
+      destroyAfterRestingMinutes: z.number().int().nonnegative().nullable(),
+    }),
+  );
 
 /** `202` body of `POST /api/sandboxes`: the row exists, in `creating`. */
 export interface SandboxCreateAccepted {
@@ -658,6 +764,11 @@ export interface SandboxCost {
   readonly pendingMillicredits: number;
   /** The ledger as a timeline, oldest first, over the latest charge rows. */
   readonly segments: readonly SandboxCostSegment[];
+  /**
+   * Today's (UTC day) charges plus the open segment's accrual up to now; `0`
+   * from a server before the field.
+   */
+  readonly todayMillicredits: number;
 }
 
 export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
@@ -673,6 +784,7 @@ export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
     }),
     pendingMillicredits: z.number().nonnegative(),
     segments: z.array(sandboxCostSegmentSchema),
+    todayMillicredits: z.number().nonnegative().default(0),
   }),
 );
 
@@ -681,6 +793,11 @@ export interface UserSandboxCost {
   readonly sandboxes: readonly SandboxCost[];
   /** The compute rates of the user's awake, unfrozen rows: the gate's burn. */
   readonly awakeBurnMillicreditsPerHour: number;
+  /**
+   * The viewer's own share of today's (UTC day) cost across the rows
+   * returned; `0` from a server before the field.
+   */
+  readonly todayYoursMillicredits: number;
 }
 
 export const userSandboxCostSchema: z.ZodType<UserSandboxCost> = lazySchema(
@@ -688,5 +805,6 @@ export const userSandboxCostSchema: z.ZodType<UserSandboxCost> = lazySchema(
     z.object({
       sandboxes: z.array(sandboxCostSchema),
       awakeBurnMillicreditsPerHour: z.number().nonnegative(),
+      todayYoursMillicredits: z.number().nonnegative().default(0),
     }),
 );

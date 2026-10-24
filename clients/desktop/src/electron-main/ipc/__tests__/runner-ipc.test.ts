@@ -701,6 +701,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.createSandbox,
           RunnerHostInvoke.destroySandbox,
+          RunnerHostInvoke.patchSandbox,
+          RunnerHostInvoke.keepSandbox,
           RunnerHostInvoke.runSandboxVerb,
           RunnerHostInvoke.getSandboxAutomation,
           RunnerHostInvoke.openSandboxAutomation,

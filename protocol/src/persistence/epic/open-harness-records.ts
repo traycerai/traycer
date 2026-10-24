@@ -37,6 +37,7 @@ import {
   autonomousResumeBlockSchema,
   commandBlockSchema,
   compactionBlockSchema,
+  compactionBlockSchemaPreNotApplied,
   errorBlockSchema,
   fileChangeBlockSchema,
   interviewBlockSchema,
@@ -156,7 +157,7 @@ export const openContentBlockSchemaPreHtml = lazySchema(() =>
     todoBlockSchema,
     openPlanBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     openSteerBlockSchema,
     interviewBlockSchema,
@@ -176,13 +177,34 @@ export const openContentBlockSchemaPreArtifact = lazySchema(() =>
     todoBlockSchema,
     openPlanBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     openSteerBlockSchema,
     interviewBlockSchema,
     artifactOperationBlockSchema,
   ]),
 );
+/** Open blocks before the not-applied outcome flag. */
+export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchemaPreNotApplied,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
 /**
  * The content-block union with its three harness-bearing members reopened.
  * Every other member is the live schema; a NEW member has to be added here,
@@ -227,7 +249,7 @@ export const openContentBlockSchemaPreDelivery = lazySchema(() =>
     todoBlockSchema,
     openPlanBlockSchema,
     errorBlockSchema,
-    compactionBlockSchema,
+    compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchema,
     openSteerBlockSchema,
     interviewBlockSchema,
@@ -292,6 +314,14 @@ export const openUserMessageSchemaPreConversation = lazySchema(() =>
     }),
 );
 
+/** Assistant rows carried by stream minors through 1.35. */
+export const openAssistantMessageSchemaPreNotApplied = lazySchema(() =>
+  assistantMessageSchema.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreNotApplied),
+  }),
+);
+
 export const openAssistantMessageSchema = lazySchema(() =>
   assistantMessageSchema.extend({
     sender: openAgentSenderSchema,
@@ -308,6 +338,14 @@ export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
   }),
 );
 
+/** Canvas-aware rows before the not-applied outcome flag. */
+export const openMessageSchemaPreNotApplied = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchema,
+    openAssistantMessageSchemaPreNotApplied,
+  ]),
+);
+
 export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
@@ -317,7 +355,7 @@ export const openMessageSchema = lazySchema(() =>
 export const openMessageSchemaPreCanvas = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchemaPreCanvas,
-    openAssistantMessageSchema,
+    openAssistantMessageSchemaPreNotApplied,
   ]),
 );
 export type OpenMessage = z.infer<typeof openMessageSchema>;

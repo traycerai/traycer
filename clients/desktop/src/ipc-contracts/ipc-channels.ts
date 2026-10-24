@@ -76,6 +76,8 @@ export const RunnerHostInvoke = {
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   createSandbox: "runnerHost:sandboxes:create",
   destroySandbox: "runnerHost:sandboxes:destroy",
+  patchSandbox: "runnerHost:sandboxes:patch",
+  keepSandbox: "runnerHost:sandboxes:keep",
   runSandboxVerb: "runnerHost:sandboxes:verb",
   getSandboxAutomation: "runnerHost:sandboxes:automation:get",
   openSandboxAutomation: "runnerHost:sandboxes:automation:open",

@@ -47,6 +47,9 @@ export interface ComposerBodyProps {
   readonly editorReadOnly: boolean;
   readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
+  /** A staged sandbox takes a terminal Start ahead of its handoff - see
+   *  `TerminalLaunchPanel`'s prop of the same name. */
+  readonly stagedAhead: boolean;
   readonly header: ReactNode;
   /**
    * Rendered between `header` and the composer card (`ComposerShell`) - the
@@ -129,6 +132,7 @@ export function ComposerBody({
   editorReadOnly,
   attachmentPending,
   workspaceDisabledHint,
+  stagedAhead,
   header,
   topBanner,
   toolbarLayout,
@@ -235,6 +239,7 @@ export function ComposerBody({
                       ? "Take over this draft to start a terminal agent"
                       : workspaceDisabledHint
                   }
+                  stagedAhead={stagedAhead}
                   hostId={hostId}
                   terminalLoginSurface={terminalLoginSurface}
                   onStart={onStartTerminal}

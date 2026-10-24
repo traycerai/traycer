@@ -34,7 +34,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () => mocks.binding,
 }));
 
-import { useTeamEnvironment } from "@/hooks/sandboxes/use-team-environment-query";
+import {
+  useTeamEnvironment,
+  useTeamEnvironmentIds,
+} from "@/hooks/sandboxes/use-team-environment-query";
 
 const OK_A: TeamEnvironmentFetchResult = {
   kind: "ok",
@@ -280,5 +283,30 @@ describe("useTeamEnvironment", () => {
     await Promise.resolve();
 
     expect(readsOf(spy, "team-a")).toBe(1);
+  });
+});
+
+describe("useTeamEnvironmentIds", () => {
+  it("is complete once every team answered with its environment or not-a-member, and not while a read failed", async () => {
+    scriptAnswers({
+      "team-a": [OK_A],
+      "team-b": [NOT_A_MEMBER],
+      "team-c": [FAILED, OK_B],
+    });
+    const teamIds = ["team-a", "team-b", "team-c"];
+    const { result } = renderHook(() => useTeamEnvironmentIds(teamIds), {
+      wrapper: clientWrapper(),
+    });
+    await waitFor(() => {
+      expect(result.current.byTeamId.get("team-a")).toBe("env-a");
+    });
+    expect(result.current.complete).toBe(false);
+
+    returnToWindow();
+
+    await waitFor(() => {
+      expect(result.current.complete).toBe(true);
+    });
+    expect(result.current.byTeamId.get("team-c")).toBe("env-b");
   });
 });

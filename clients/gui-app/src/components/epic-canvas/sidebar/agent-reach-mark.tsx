@@ -3,14 +3,17 @@ import { Unlink } from "lucide-react";
 import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
-import { TASK_HOST_UNREACHABLE_LINE } from "./task-host-groups-model";
+import {
+  reachSentence,
+  REACH_UNNAMED_HOSTS,
+} from "@/lib/sandboxes/sandbox-strings";
 
 /**
  * The reach mark on an Agents-tree row: the agent's host belongs to another
  * owner, so agents here cannot work with it. Decorative for assistive
  * technology, like the offline lock beside it: the row button's own
- * `aria-label` carries the same words, since a labelled button replaces its
- * subtree as the accessible name.
+ * `aria-label` already announces the reach restriction, since a labelled
+ * button replaces its subtree as the accessible name.
  */
 export function AgentReachMark(props: {
   readonly testId: string;
@@ -19,7 +22,7 @@ export function AgentReachMark(props: {
 }): ReactNode {
   return (
     <LazySidebarTooltipWrapper
-      label={TASK_HOST_UNREACHABLE_LINE}
+      label={reachSentence(REACH_UNNAMED_HOSTS)}
       side={props.side}
       sideOffset={undefined}
       align={props.align}
@@ -60,7 +63,7 @@ export function AgentReachHoverLine(): ReactNode {
       className="text-ui-xs text-muted-foreground"
       data-testid="agent-hover-reach-line"
     >
-      {TASK_HOST_UNREACHABLE_LINE}
+      {reachSentence(REACH_UNNAMED_HOSTS)}
     </span>
   );
 }

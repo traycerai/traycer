@@ -152,6 +152,14 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    patchSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    keepSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     runSandboxVerb: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -461,6 +469,7 @@ function buildFakeBridge(
           pid: null,
           hostId: null,
           layer0: null,
+          ensureFailure: null,
         },
         logs: [],
         links: [],

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { ServiceInstallArgs } from "../service-install";
+import { writeInstalledHostFixture } from "./service-install-host-fixture";
 
 // Plain install, no `--takeover`: the same ruling family as
 // `service-install-foreground.test.ts` and `service-start-foreground.test.ts`,
@@ -268,6 +269,11 @@ beforeEach(async () => {
   const { hostHomeDir } = await import("../../store/paths");
   expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
   rmSync(hostHomeDir("production"), { recursive: true, force: true });
+  // The registration starts the installed host, so the command refuses
+  // without a real install record and executable (`service-install-missing-host.test.ts`).
+  writeInstalledHostFixture(
+    (await import("../../store/paths")).hostInstallRecordPath("production"),
+  );
   mocks.installMock.mockReset();
   mocks.installMock.mockResolvedValue(undefined);
   mocks.hostStartAdoptionLabelMock.mockReset();

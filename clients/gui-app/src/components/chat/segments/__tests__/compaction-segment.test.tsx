@@ -11,6 +11,7 @@ describe("<CompactionSegment />", () => {
     render(
       <CompactionSegment
         status="completed"
+        notApplied={false}
         trigger="manual"
         preTokens={120000}
         postTokens={30000}
@@ -33,6 +34,7 @@ describe("<CompactionSegment />", () => {
     render(
       <CompactionSegment
         status="errored"
+        notApplied={false}
         trigger="manual"
         preTokens={120000}
         postTokens={null}
@@ -54,6 +56,7 @@ describe("<CompactionSegment />", () => {
     render(
       <CompactionSegment
         status="errored"
+        notApplied={false}
         trigger="auto"
         preTokens={null}
         postTokens={null}
@@ -73,6 +76,7 @@ describe("<CompactionSegment />", () => {
     render(
       <CompactionSegment
         status="errored"
+        notApplied={false}
         trigger="manual"
         preTokens={null}
         postTokens={null}
@@ -84,5 +88,23 @@ describe("<CompactionSegment />", () => {
     );
 
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("labels an unknown trigger's not-applied compaction like a manual one", () => {
+    render(
+      <CompactionSegment
+        status="errored"
+        notApplied
+        trigger={null}
+        preTokens={null}
+        postTokens={null}
+        durationMs={null}
+        summary={null}
+        error="Copilot did not apply this compaction."
+        findUnitId={null}
+      />,
+    );
+
+    expect(screen.getByText("Compaction not applied")).toBeDefined();
   });
 });

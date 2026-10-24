@@ -40,7 +40,11 @@ const FAILED: SandboxCostsFetchResult = {
   kind: "network-error",
   detail: "the request never completed (TypeError)",
 };
-const IDLE_COSTS = { sandboxes: [], awakeBurnMillicreditsPerHour: 0 };
+const IDLE_COSTS = {
+  sandboxes: [],
+  awakeBurnMillicreditsPerHour: 0,
+  todayYoursMillicredits: 0,
+};
 const IDLE: SandboxCostsFetchResult = { kind: "ok", costs: IDLE_COSTS };
 
 function wrapper() {

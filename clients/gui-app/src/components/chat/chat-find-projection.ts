@@ -647,6 +647,15 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
         normalizeSearchableText([segment.message, segment.code].join(" ")),
       ];
     case "compaction":
+      if (segment.status === "errored" && segment.notApplied) {
+        return [
+          normalizeSearchableText(
+            segment.trigger === "auto"
+              ? "Auto-compaction not applied"
+              : "Compaction not applied",
+          ),
+        ];
+      }
       return [
         normalizeSearchableText(
           [segment.summary ?? "", segment.error ?? "", segment.status].join(

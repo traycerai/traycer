@@ -5,7 +5,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -25,8 +24,6 @@ import {
 } from "@/components/hosts/sandbox-card-model";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
-import { useTeamWakeConfirmStore } from "@/stores/hosts/team-wake-confirm-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
 const mocks = vi.hoisted(() => ({
@@ -52,6 +49,14 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ sandboxControlUnavailableReason: null }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+// The destroy dialog reads the host's running-session count; this suite has no
+// host runtime.
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
 // The secrets section's live parts talk to the sandbox host itself; the card's
 // own suite has no host runtime, and they have their own tests.
 vi.mock("@/hooks/sandboxes/use-sandbox-egress-events", () => ({
@@ -83,6 +88,33 @@ vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: null }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: () => ({
+      configurations: [
+        { kind: "personal" },
+        {
+          kind: "team",
+          teamId: "team-acme",
+          teamName: "Acme",
+          environmentId: "env_team",
+        },
+      ],
+      teamEnvironmentIds: new Set(["env_team"]),
+      complete: true,
+    }),
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs, isError: false }),
 }));
@@ -94,8 +126,6 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 }));
 
 import { SandboxCard } from "@/components/hosts/sandbox-card";
-import type { SandboxCreateBelongsTo } from "@/components/hosts/sandbox-create-model";
-import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-dialog";
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 
 /**
@@ -121,23 +151,10 @@ const COST: SandboxCost = {
   },
   pendingMillicredits: 500,
   segments: [],
+  todayMillicredits: 0,
 };
 
-const TEAM_ID = "team-acme";
-
 function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
-  renderCardLikeThis(
-    sandbox,
-    teamOwned,
-    teamOwned ? { kind: "team", teamId: TEAM_ID } : { kind: "personal" },
-  );
-}
-
-function renderCardLikeThis(
-  sandbox: HostScopeSandbox,
-  teamOwned: boolean,
-  likeThis: SandboxCreateBelongsTo | null,
-): void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
@@ -147,10 +164,8 @@ function renderCardLikeThis(
         hostName="Host name"
         hostState="online"
         sandbox={{ ...sandbox, teamOwned }}
-        likeThis={likeThis}
         onDestroyed={null}
       />
-      <TeamWakeConfirmDialogHost />
     </QueryClientProvider>,
   );
 }
@@ -191,7 +206,6 @@ beforeEach(() => {
   mocks.toastSuccess.mockClear();
   mocks.toastInfo.mockClear();
   mocks.toastFromAuthError.mockClear();
-  useTeamWakeConfirmStore.setState({ pending: null });
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: VIEWER, username: "viewer" },
@@ -199,12 +213,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  useSandboxCreateDialogStore.setState({
-    open: false,
-    preselect: null,
-    workingHostTeamId: null,
-  });
-  useTeamWakeConfirmStore.setState({ pending: null });
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -334,7 +342,11 @@ describe("<SandboxCard /> frozen team destroy date", () => {
 
 describe("<SandboxCard /> team cost view", () => {
   it("mounts no cost view on a team card, and the personal view on a personal one", () => {
-    mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+    };
 
     renderCard(sandboxOf("awake", false, {}), true);
     expect(screen.queryByTestId("sandbox-card-cost")).toBeNull();
@@ -345,7 +357,11 @@ describe("<SandboxCard /> team cost view", () => {
   });
 
   it("mounts no cost view on a team pod either", () => {
-    mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+    };
     renderCard(
       sandboxOf("awake", false, { kind: "automation", environmentId: ENV }),
       true,
@@ -476,19 +492,18 @@ describe("<SandboxCard /> team destroy", () => {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
 
-  it("asks for the typed name on a team card that is not frozen, and says it ends others' sessions", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
+  it("asks for the typed name on a team card, and says it ends others' sessions", async () => {
+    renderCard(sandboxOf("suspended", false, { environmentId: ENV }), true);
     openDestroy();
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    expect(
-      within(dialog).getByTestId("sandbox-card-destroy-team"),
-    ).toBeDefined();
-    expect(text("sandbox-card-destroy-team")).toContain(
-      "other members' running agents",
+    expect(dialog.textContent).toContain(
+      "Destroying ends every running session, including other members' running agents.",
     );
-    const input = screen.getByTestId("sandbox-card-destroy-typed");
-    expect(input).toBeDefined();
+    expect(dialog.textContent).toContain(
+      "Affected members are told who destroyed it.",
+    );
+    expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
     expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
       true,
     );
@@ -496,11 +511,11 @@ describe("<SandboxCard /> team destroy", () => {
   });
 
   it("destroys only once the exact name is typed", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
+    renderCard(sandboxOf("suspended", false, { environmentId: ENV }), true);
     openDestroy();
     await screen.findByTestId("confirm-destructive-dialog");
 
-    const input = screen.getByTestId("sandbox-card-destroy-typed");
+    const input = screen.getByTestId("sandbox-confirm-destroy-typed");
     fireEvent.change(input, { target: { value: "build" } });
     expect(text("confirm-blocked-reason")).toBe(
       `Type ${NAME} below to destroy it.`,
@@ -525,44 +540,28 @@ describe("<SandboxCard /> team destroy", () => {
       true,
     );
     openDestroy();
-    await screen.findByTestId("confirm-destructive-dialog");
-    expect(screen.getByTestId("sandbox-card-destroy-typed")).toBeDefined();
-    expect(screen.getByTestId("sandbox-card-destroy-team")).toBeDefined();
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
+    expect(dialog.textContent).toContain(
+      "Affected members are told who destroyed it.",
+    );
   });
 
-  it("keeps a personal card's destroy as it was: no typed name, no team sentence", async () => {
+  it("asks for the name on a personal card as well, without the team sentences", async () => {
     renderCard(sandboxOf("suspended", false, {}), false);
     openDestroy();
-    await screen.findByTestId("confirm-destructive-dialog");
-    expect(screen.queryByTestId("sandbox-card-destroy-typed")).toBeNull();
-    expect(screen.queryByTestId("sandbox-card-destroy-team")).toBeNull();
-  });
-
-  it("words the typed field for a team card as its own, not as a frozen one", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
-    openDestroy();
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    expect(dialog.textContent).toContain("Type its name to confirm.");
-    expect(dialog.textContent).not.toContain("This sandbox is frozen.");
+    expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
+    expect(dialog.textContent).not.toContain("other members");
+    expect(dialog.textContent).not.toContain("Affected members");
   });
 });
 
-describe("<SandboxCard /> team wake confirm", () => {
-  function resume(): void {
-    fireEvent.click(screen.getByTestId("sandbox-card-resume"));
-  }
-
-  it("opens the confirm on Resume of a team card and calls no verb until Resume is pressed", async () => {
+describe("<SandboxCard /> waking a team sandbox", () => {
+  it("runs Resume at once on a team card: no confirm stands between the click and the verb", async () => {
     renderCard(sandboxOf("suspended", false, {}), true);
-    resume();
+    fireEvent.click(screen.getByTestId("sandbox-card-resume"));
 
-    const dialog = await screen.findByTestId("team-wake-confirm");
-    expect(dialog.textContent).toContain(
-      "Opening this resumes it on your bundle.",
-    );
-    expect(mocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("team-wake-confirm-resume"));
     await waitFor(() => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
     });
@@ -574,27 +573,13 @@ describe("<SandboxCard /> team wake confirm", () => {
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(`Resumed ${NAME}`);
     });
+    expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
   });
 
-  it("calls nothing on Cancel", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
-    resume();
-    await screen.findByTestId("team-wake-confirm");
-
-    fireEvent.click(screen.getByTestId("team-wake-confirm-cancel"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
-    });
-    expect(mocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
-  });
-
-  it("asks before a Start of a stopped team sandbox as well", async () => {
+  it("runs Start at once on a stopped team card", async () => {
     renderCard(sandboxOf("stopped", false, {}), true);
     fireEvent.click(screen.getByTestId("sandbox-card-start"));
 
-    await screen.findByTestId("team-wake-confirm");
-    expect(mocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("team-wake-confirm-resume"));
     await waitFor(() => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
@@ -602,37 +587,10 @@ describe("<SandboxCard /> team wake confirm", () => {
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
     });
-  });
-
-  it("calls the verb at once on a personal card's Resume, with no confirm", async () => {
-    renderCard(sandboxOf("suspended", false, {}), false);
-    resume();
-
-    await waitFor(() => {
-      expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
-    });
-    expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
-      "sbx_1",
-      "resume",
-      SANDBOX_VERB_FETCH_TIMEOUT_MS,
-    );
     expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
   });
 
-  it("does not ask for a team pod's Start: the pod runs on the team's free pool", async () => {
-    renderCard(
-      sandboxOf("released", false, { kind: "automation", environmentId: ENV }),
-      true,
-    );
-    fireEvent.click(screen.getByTestId("sandbox-card-start"));
-
-    await waitFor(() => {
-      expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
-  });
-
-  it("does not ask for a Suspend or a Stop of a team sandbox: only a wake bills", async () => {
+  it("runs Suspend at once on a team sandbox", async () => {
     renderCard(sandboxOf("awake", false, {}), true);
     fireEvent.click(screen.getByTestId("sandbox-card-suspend"));
 
@@ -643,66 +601,12 @@ describe("<SandboxCard /> team wake confirm", () => {
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
     });
-    expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
   });
 });
 
-describe("<SandboxCard /> New sandbox like this", () => {
-  function press(): void {
-    fireEvent.click(screen.getByTestId("sandbox-card-new-like-this"));
-  }
-
-  it("opens the create form with the team on a team card", () => {
-    renderCard(sandboxOf("awake", false, { environmentId: ENV }), true);
-    expect(useSandboxCreateDialogStore.getState().open).toBe(false);
-
-    press();
-
-    const store = useSandboxCreateDialogStore.getState();
-    expect(store.open).toBe(true);
-    expect(store.preselect).toEqual({ kind: "team", teamId: TEAM_ID });
-    expect(store.workingHostTeamId).toBeNull();
-  });
-
-  it("opens the create form on Personal for a personal card", () => {
-    renderCard(sandboxOf("awake", false, {}), false);
-
-    press();
-
-    const store = useSandboxCreateDialogStore.getState();
-    expect(store.open).toBe(true);
-    expect(store.preselect).toEqual({ kind: "personal" });
-    expect(store.workingHostTeamId).toBeNull();
-  });
-
-  it("is absent when the card cannot name its team yet, and the card's own actions stay", () => {
-    renderCardLikeThis(
-      sandboxOf("awake", false, { environmentId: ENV }),
-      true,
-      null,
-    );
-
-    expect(screen.queryByTestId("sandbox-card-new-like-this")).toBeNull();
-    expect(screen.getByTestId("sandbox-card-suspend")).toBeDefined();
-  });
-
-  it("is absent, with no footer, on a card with neither actions nor a team to offer", () => {
-    renderCardLikeThis(sandboxOf("creating", false, {}), true, null);
-
-    expect(screen.queryByTestId("sandbox-card-new-like-this")).toBeNull();
-  });
-
-  it("is offered on a card with no lifecycle actions", () => {
-    renderCard(sandboxOf("creating", false, {}), false);
-
-    expect(screen.getByTestId("sandbox-card-new-like-this")).toBeDefined();
-  });
-
-  it("is absent on a pod, which is the team's Automations host and not a sandbox a person creates", () => {
-    renderCard(
-      sandboxOf("awake", false, { kind: "automation", environmentId: ENV }),
-      true,
-    );
+describe("<SandboxCard /> footer", () => {
+  it("offers no New sandbox like this on a card with no lifecycle actions", () => {
+    renderCard(sandboxOf("creating", false, {}), true);
 
     expect(screen.queryByTestId("sandbox-card-new-like-this")).toBeNull();
   });
