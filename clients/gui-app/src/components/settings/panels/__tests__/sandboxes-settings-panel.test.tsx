@@ -50,6 +50,7 @@ const CATALOGUE: SandboxCatalogue = {
           id: "us-east",
           label: "US East",
           fromPriceMcPerHour: { awakeMc: 120, suspendedMc: 4, stoppedMc: 2 },
+          pricing: null,
         },
       ],
     },

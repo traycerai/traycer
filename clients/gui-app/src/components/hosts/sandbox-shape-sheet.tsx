@@ -42,6 +42,7 @@ import {
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  SANDBOXES_CANT_BE_CREATED,
   CHANGE_LABEL,
   SANDBOX_REGION_LABEL,
   USE_THIS_SHAPE,
@@ -162,7 +163,7 @@ function ShapeSheetBody(props: {
   if (shape === null) {
     return (
       <p className="text-ui-sm text-muted-foreground">
-        Sandboxes can&apos;t be created on this account right now.
+        {SANDBOXES_CANT_BE_CREATED}
       </p>
     );
   }

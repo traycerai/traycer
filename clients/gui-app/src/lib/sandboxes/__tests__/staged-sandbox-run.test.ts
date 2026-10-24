@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 import type {
   SandboxCreateRequest,
   SandboxSummary,
@@ -32,6 +33,7 @@ import {
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { authQueryKeys } from "@/lib/query-keys";
 
 const NEW_HOST_ID = "host-new";
 const SANDBOX_ID = "sbx_new";
@@ -202,6 +204,10 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
   const deps: StagedSandboxRunDeps = {
     auth,
     directory,
+    queryClient: new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    }),
+    userId: null,
     wake,
     now: () => clock.now,
     sleep: (ms) => {
@@ -214,7 +220,12 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
 }
 
 function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
-  return runStagedSandbox(surfaceKey, fresh, "fallback-box", deps);
+  return runStagedSandbox(
+    surfaceKey,
+    fresh,
+    { fallbackName: "fallback-box", taskId: null },
+    deps,
+  );
 }
 
 function stageOf() {
@@ -277,6 +288,20 @@ describe("runStagedSandbox creating", () => {
     expect(auth.requests[0].destroyAfterRestingMinutes).toBe(0);
   });
 
+  it("names the surface's task on a create made inside one", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({}, true);
+
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { fallbackName: "fallback-box", taskId: "epic-1" },
+      deps,
+    );
+
+    expect(auth.requests[0].createdByTaskId).toBe("epic-1");
+  });
+
   it("creates a team sandbox in the team's environment under the name the sheet set", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
     const { auth, deps } = harness({}, true);
@@ -324,6 +349,41 @@ describe("runStagedSandbox creating", () => {
     );
     expect(second).toBe(first);
     expect(third).not.toBe(first);
+  });
+});
+
+describe("runStagedSandbox through the query cache", () => {
+  it("leaves the row it waited on in the list every surface reads", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { deps } = harness({}, true);
+
+    await run(false, deps);
+
+    // The key holds the live AuthService, whose hash moves with the scripted
+    // auth's counters, so the list is found by its prefix.
+    expect(
+      deps.queryClient
+        .getQueriesData({ queryKey: ["auth", "registered-hosts", "sandboxes"] })
+        .map(([, data]) => data),
+    ).toEqual([
+      { sandboxes: [row({ state: "awake", guestConfigured: true })] },
+    ]);
+  });
+
+  it("refreshes the directory and the lists when the create is refused", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { directory, deps } = harness(
+      { createSandbox: () => refusal(502, "provider_failed") },
+      true,
+    );
+    const invalidate = vi.spyOn(deps.queryClient, "invalidateQueries");
+
+    await run(false, deps);
+
+    expect(directory.refreshes).toBe(1);
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: authQueryKeys.registeredHostsAll(),
+    });
   });
 });
 
@@ -595,6 +655,39 @@ describe("runStagedSandbox guards", () => {
     await Promise.all([run(false, deps), run(false, deps)]);
 
     expect(auth.requests).toHaveLength(1);
+  });
+
+  it("starts a new send while a cancelled send's create is still in flight", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({}, true);
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(auth, "createSandbox").mockImplementationOnce(async (request) => {
+      auth.requests.push(request);
+      await held;
+      return created;
+    });
+
+    const cancelledSend = run(false, deps);
+    await vi.waitFor(() => {
+      expect(auth.requests).toHaveLength(1);
+    });
+    useStagedSandboxStore.getState().cancel(surfaceKey);
+    await run(true, deps);
+
+    expect(auth.requests).toHaveLength(2);
+    expect(auth.requests[1].clientRequestId).not.toBe(
+      auth.requests[0].clientRequestId,
+    );
+    expect(stageOf().phase).toBe("handoff");
+    release();
+    await cancelledSend;
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      clientRequestId: auth.requests[1].clientRequestId,
+    });
   });
 });
 

@@ -11,6 +11,14 @@ import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  openSandboxDetails,
+  useSandboxDetailsStore,
+} from "@/stores/sandboxes/sandbox-details-store";
+import {
+  revealSandboxOnPage,
+  useSandboxesPageStore,
+} from "@/stores/sandboxes/sandboxes-page-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   createChatSessionStore,
@@ -306,8 +314,8 @@ describe("<EpicSessionLifecycleBridge />", () => {
   });
 
   it("drops every staged sandbox on user-switch", () => {
-    // Persisted per device: left standing, the next account would send into
-    // the outgoing account's team, or resubmit its create key.
+    // Left standing, the next account would send into the outgoing
+    // account's team, or resubmit its create key.
     useStagedSandboxStore.getState().stage("composer:w1", {
       kind: "existing",
       hostId: "host-owned-by-alice",
@@ -328,6 +336,27 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("closes the Details drawer and resets the Sandboxes page on user-switch", () => {
+    openSandboxDetails("sbx-alice");
+    revealSandboxOnPage({ kind: "team", teamId: "team-alice" }, "sbx-alice");
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useSandboxDetailsStore.getState().sandboxId).toBeNull();
+    expect(useSandboxesPageStore.getState()).toMatchObject({
+      configurationId: { kind: "personal" },
+      revealSandboxId: null,
+    });
   });
 
   it("drops the shared watch-host pick on sign-out", () => {

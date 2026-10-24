@@ -219,6 +219,10 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
+// Nothing is staged in this suite: the staged send takes no submit.
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+}));
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 

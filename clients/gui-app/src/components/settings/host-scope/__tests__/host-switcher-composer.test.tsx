@@ -96,12 +96,14 @@ function composerMode(
         label: "New Personal sandbox",
         subLine: "2 vCPU · 4 GB · $0.12/h · uses your credits",
         configurationName: "Personal",
+        disabled: false,
       },
       {
         configurationKey: "team-acme",
         label: "New Acme sandbox",
         subLine: "2 vCPU · 4 GB · $0.12/h · uses your Acme credits",
         configurationName: "Acme",
+        disabled: false,
       },
     ],
     rememberedConfigurationKey: null,
@@ -321,6 +323,7 @@ describe("<HostSwitcher /> composer mode groups", () => {
         label: `New ${configurationKey} sandbox`,
         subLine: "2 vCPU · 4 GB",
         configurationName: configurationKey,
+        disabled: false,
       }),
     );
     renderSwitcher({

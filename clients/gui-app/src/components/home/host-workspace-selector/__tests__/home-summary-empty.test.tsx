@@ -731,23 +731,24 @@ describe("landing workspace summary empty state", () => {
     queryClient.clear();
   });
 
-  it("reads Empty sandbox in the workspace slot while a sandbox is staged", () => {
+  it("reads Empty sandbox in the workspace slot while a sandbox is staged, keeping the host picker mounted", () => {
     const surfaceKey = "landing:window-test";
-    useStagedSandboxStore.getState().stage(surfaceKey, {
-      kind: "new",
-      configuration: { kind: "personal" },
-      shape: {
-        os: "linux",
-        cpus: 2,
-        memoryMb: 4096,
-        diskMb: null,
-        region: "us-east",
-        idleMinutes: 30,
-        destroyAfterRestingMinutes: 10_080,
-      },
-      name: "",
-      wakeString: null,
-    });
+    const stageSandbox = () =>
+      useStagedSandboxStore.getState().stage(surfaceKey, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "",
+        wakeString: null,
+      });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
@@ -772,10 +773,18 @@ describe("landing workspace summary empty state", () => {
       </QueryClientProvider>,
     );
 
+    const hostTrigger = screen.getByRole("button", { name: /^Host:/ });
+
+    act(() => {
+      stageSandbox();
+    });
+
     expect(
       screen.getByTestId("workspace-summary-empty-sandbox").textContent,
     ).toBe("Empty sandbox");
     expect(screen.queryByTestId("folder-add")).toBeNull();
+    // The picker that staged is the same element: its focus is not lost.
+    expect(screen.getByRole("button", { name: /^Host:/ })).toBe(hostTrigger);
 
     useStagedSandboxStore.setState({ bySurface: {} });
     queryClient.clear();

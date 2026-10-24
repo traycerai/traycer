@@ -15,6 +15,7 @@ import type { ComposerBodyProps } from "@/components/home/composer/composer-body
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
@@ -23,7 +24,9 @@ const DIRTY_CONTENT: JsonContent = {
 
 const testState = vi.hoisted(() => ({
   submit: vi.fn(),
+  selectTerminalAgent: vi.fn(() => null),
   bodySubmit: null as (() => void) | null,
+  startTerminal: null as ComposerBodyProps["onStartTerminal"] | null,
   installEditor: null as (() => void) | null,
   snapshot: null as (() => void) | null,
   ingesting: false,
@@ -41,6 +44,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   return {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
+      testState.startTerminal = props.onStartTerminal;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
@@ -132,7 +136,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
     submit: testState.submit,
-    selectTerminalAgent: vi.fn(),
+    selectTerminalAgent: testState.selectTerminalAgent,
     // `isSubmitting` now reads `actions.isPending` (the real hook's
     // `createEpic.isPending || terminalAgentCreate.isPending`) rather than a
     // permanently-false placeholder - mirror `testState.createPending` here
@@ -279,9 +283,33 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
   }),
 }));
 
+// The staged sandbox's send reads the account and the catalogue; this suite
+// has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: null }),
+}));
+
+vi.mock(
+  "@/hooks/host/use-composer-surface-host-pin",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/host/use-composer-surface-host-pin")
+    >()),
+    useComposerSurfaceHostKey: () => "landing:window-test",
+  }),
+);
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
+  // The staged send's terminal launcher reads the new host's row.
+  useHostDirectory: () => ({
+    findById: () => null,
+    onChange: () => ({ dispose: () => undefined }),
+  }),
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => null,
 }));
@@ -315,7 +343,10 @@ function render(ui: ReactElement): RenderResult {
 
 afterEach(() => {
   cleanup();
+  useStagedSandboxStore.setState({ bySurface: {} });
   testState.submit.mockClear();
+  testState.selectTerminalAgent.mockClear();
+  testState.startTerminal = null;
   testState.bodySubmit = null;
   testState.installEditor = null;
   testState.snapshot = null;
@@ -327,6 +358,48 @@ afterEach(() => {
 });
 
 describe("LandingComposer direct submit gate", () => {
+  it("lets a staged sandbox take a terminal agent's Start instead of launching it here", () => {
+    useStagedSandboxStore.getState().stage("landing:window-test", {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const start = testState.startTerminal;
+    if (start === null) throw new Error("expected ComposerBody seam");
+
+    const started = start(
+      {
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        terminalAgentArgs: null,
+        profileId: null,
+      },
+      "host-test",
+    );
+
+    expect(started).toBe(false);
+    expect(testState.selectTerminalAgent).not.toHaveBeenCalled();
+  });
+
   it("locks editor input, paste ingestion, and workspace controls during a submission", () => {
     testState.createPending = true;
     render(

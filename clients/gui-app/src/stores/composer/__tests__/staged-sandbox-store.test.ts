@@ -4,7 +4,6 @@ import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
-import { persistKey, STORE_KEYS } from "@/lib/persist";
 
 const SURFACE = "landing:window-1";
 
@@ -120,7 +119,7 @@ describe("staged sandbox store", () => {
     ).toBeNull();
   });
 
-  it("cancel returns to staged keeping the id and the target", () => {
+  it("cancel returns to staged keeping the target", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
     const id = store.begin(SURFACE, false, 1_000);
@@ -138,31 +137,11 @@ describe("staged sandbox store", () => {
     expect(store.begin(SURFACE, false, 5_000)).toBe(id);
   });
 
-  it("rehydrates a creating stage as staged with its id", async () => {
+  it("keeps a stage in memory only, so a reload starts with nothing staged", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const id = store.begin(SURFACE, false, 1_000);
-    store.report(SURFACE, { phase: "handoff", createdHostId: "host-9" });
-    const storageKey = persistKey(STORE_KEYS.stagedSandbox);
-    const written = localStorage.getItem(storageKey);
-    expect(written).not.toBeNull();
+    store.begin(SURFACE, false, 1_000);
 
-    // Emptying the store writes the empty state through; put back what the
-    // closed app left in storage, as a fresh load finds it.
-    useStagedSandboxStore.setState({ bySurface: {} });
-    if (written !== null) localStorage.setItem(storageKey, written);
-    await useStagedSandboxStore.persist.rehydrate();
-
-    expect(stageOf(SURFACE)).toMatchObject({
-      phase: "staged",
-      clientRequestId: id,
-      createdHostId: "host-9",
-      startedAt: null,
-      stepAt: null,
-      failure: null,
-    });
-    expect(useStagedSandboxStore.getState().begin(SURFACE, false, 9_000)).toBe(
-      id,
-    );
+    expect(localStorage.length).toBe(0);
   });
 });

@@ -3,9 +3,16 @@ import {
   consequenceClauses,
   type ConsequenceClause,
   consequencesShownSubject,
+  defaultStageShape,
   priceClause,
+  stagePrice,
   type ConsequencesInput,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import type {
+  SandboxCatalogue,
+  SandboxCataloguePricing,
+  SandboxOs,
+} from "@traycer/protocol/host/sandbox-control";
 
 const PERSONAL = { kind: "personal" } as const;
 const ACME = { kind: "team", teamId: "team-acme", teamName: "Acme" } as const;
@@ -129,5 +136,94 @@ describe("consequencesShownSubject", () => {
     expect(consequencesShownSubject(ACME, "private", 1)).not.toBe(base);
     expect(consequencesShownSubject(PERSONAL, "shared", 1)).not.toBe(base);
     expect(consequencesShownSubject(PERSONAL, "private", 2)).not.toBe(base);
+  });
+});
+
+function catalogue(
+  pricing: SandboxCataloguePricing | null,
+  os: SandboxOs,
+): SandboxCatalogue {
+  return {
+    providers: [
+      {
+        provider: "tensorlake",
+        os: [os],
+        shape: {
+          cpuMin: 1,
+          cpuMax: 16,
+          cpuStep: 1,
+          memoryPerCpuMinMb: 1024,
+          memoryPerCpuMaxMb: 8192,
+          memoryMinMb: 1024,
+          memoryMaxMb: 65536,
+          memoryStepMb: 512,
+          diskMinMb: 10240,
+          diskMaxMb: 102400,
+          diskDefaultMb: 20480,
+        },
+        suspendFidelity: "memory",
+        stoppedStorage: "snapshot",
+        wakeClass: "resume",
+        dockerInGuest: true,
+        creatable: true,
+        notCreatableReason: null,
+        regions: [
+          {
+            id: "us-east",
+            label: "US East",
+            fromPriceMcPerHour: { awakeMc: 80, suspendedMc: 4, stoppedMc: 2 },
+            pricing,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe("stagePrice", () => {
+  const STAGED = {
+    os: "linux",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: null,
+    region: "us-east",
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  } as const;
+
+  it("prices the staged shape exactly from the region's per-unit rates", () => {
+    const price = stagePrice(
+      catalogue(
+        {
+          vcpuHourMillicredits: 50,
+          memoryGbHourMillicredits: 25,
+          diskGbHourMillicredits: 0.5,
+          multiplier: 1.1,
+        },
+        "linux",
+      ),
+      STAGED,
+    );
+    // (2 × 50 + 4 × 25 + 20 × 0.5) × 1.1
+    expect(price).toEqual({ awakeMcPerHour: 231, exact: true });
+  });
+
+  it("quotes the smallest shape's price as a from price without the rates", () => {
+    expect(stagePrice(catalogue(null, "linux"), STAGED)).toEqual({
+      awakeMcPerHour: 80,
+      exact: false,
+    });
+  });
+});
+
+describe("defaultStageShape", () => {
+  it("stages Linux when it is offered, and Windows when only Windows is", () => {
+    expect(defaultStageShape(catalogue(null, "linux"))?.os).toBe("linux");
+    expect(defaultStageShape(catalogue(null, "windows"))).toMatchObject({
+      os: "windows",
+      cpus: 2,
+      memoryMb: 4096,
+      region: "us-east",
+    });
   });
 });

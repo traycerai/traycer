@@ -7,7 +7,11 @@ import { SANDBOX_REFUSAL_CODE_NOT_FOUND } from "@traycer/protocol/host/sandbox-c
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
-import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
+import {
+  authQueryKeys,
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
@@ -120,6 +124,9 @@ export function useSandboxDestroyBatch(): UseMutationResult<
       requestFleetRefresh(runnerHost);
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: sandboxQueryKeys.costsAll(),
       });
     },
     onError: (error, _variables, context) => {

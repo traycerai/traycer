@@ -10,6 +10,7 @@ function row(configurationKey: string): HostSwitcherNewRow {
     label: `New ${configurationKey} sandbox`,
     subLine: "2 vCPU · 4 GB",
     configurationName: configurationKey,
+    disabled: false,
   };
 }
 

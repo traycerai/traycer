@@ -11,7 +11,7 @@ import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-function teamEnvironmentQueryOptions(
+export function teamEnvironmentQueryOptions(
   auth: AuthService | null,
   userId: string | null,
   teamId: string | null,
@@ -62,8 +62,9 @@ export function useTeamEnvironment(
  * Every listed team's environment id, for a surface that sorts sandbox rows
  * by configuration (Settings › Sandboxes): a team's rows carry its
  * environment id, and Personal's are the rest. `complete` is false until
- * every team has answered, so a team pod is never filed under Personal while
- * its team is unread.
+ * every team has answered with its environment or with not-a-member, so a
+ * team pod is never filed under Personal while its team is unread or its
+ * read failed (a failed read is read again on focus).
  */
 export function useTeamEnvironmentIds(teamIds: readonly string[]): {
   readonly byTeamId: ReadonlyMap<string, string>;
@@ -81,12 +82,15 @@ export function useTeamEnvironmentIds(teamIds: readonly string[]): {
       let complete = true;
       results.forEach((result, index) => {
         const teamId = teamIds[index];
-        if (result.data === undefined) {
+        const answer = result.data;
+        if (answer === undefined) {
           complete = false;
           return;
         }
-        if (result.data.kind === "ok") {
-          byTeamId.set(teamId, result.data.environmentId);
+        if (answer.kind === "ok") {
+          byTeamId.set(teamId, answer.environmentId);
+        } else if (answer.kind !== "not-a-member") {
+          complete = false;
         }
       });
       return { byTeamId, complete };

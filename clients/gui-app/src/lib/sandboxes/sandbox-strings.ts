@@ -162,7 +162,7 @@ export const REACH_UNNAMED_HOSTS = "your hosts";
 
 /** The reach remedy on `This computer` in a task on a team host. */
 export function reachRemedyLine(teamName: string): string {
-  return `To work together, start this agent on an ${teamName} host.`;
+  return `To work together, start this agent on a host in ${teamName}.`;
 }
 
 /** The team clause. */
@@ -267,6 +267,10 @@ export function suspendedPickLabel(name: string): string {
 export function stoppedPickLabel(name: string): string {
   return `${name} · stopped, starts on send`;
 }
+
+/** No provider here can create a sandbox: the New rows and the shape sheet. */
+export const SANDBOXES_CANT_BE_CREATED =
+  "Sandboxes can't be created on this account right now.";
 
 /** The workspace slot of a sandbox that starts empty. */
 export const EMPTY_SANDBOX = "Empty sandbox";

@@ -264,6 +264,15 @@ describe("parseSandboxPatchRequest", () => {
     destroyAfterRestingMinutes: null,
   };
 
+  it("refuses what the protocol refuses: an idle period under 2, a name over 191", () => {
+    expect(() =>
+      parseSandboxPatchRequest({ ...VALID, idleMinutes: 1 }),
+    ).toThrow(/patchSandbox\.request\.idleMinutes/);
+    expect(() =>
+      parseSandboxPatchRequest({ ...VALID, displayName: "x".repeat(192) }),
+    ).toThrow(/patchSandbox\.request\.displayName/);
+  });
+
   it("returns a valid request unchanged, 0 kept as a resting period of never", () => {
     expect(parseSandboxPatchRequest(VALID)).toEqual(VALID);
     expect(

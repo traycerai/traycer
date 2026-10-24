@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
-import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import {
+  stagedSandboxFallbackName,
+  useStagedSandboxSend,
+  type StagedSandboxSend,
+} from "@/components/composer/use-staged-sandbox-send";
 import {
   useStagedSandboxStore,
   type StagedSandboxFailure,
@@ -104,9 +115,16 @@ function Harness(props: {
     submit: () => false,
     prepareHandoff: () => undefined,
     terminal: { epicId: "epic-1", open: props.openTerminal },
+    taskId: "epic-1",
+    ownerId: null,
   });
+  useEffect(() => {
+    latestSend = send;
+  }, [send]);
   return <>{send.line}</>;
 }
+
+let latestSend: StagedSandboxSend | null = null;
 
 function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
   render(
@@ -126,6 +144,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  latestSend = null;
 });
 
 describe("useStagedSandboxSend's setup line", () => {
@@ -154,8 +173,134 @@ describe("useStagedSandboxSend's setup line", () => {
     expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
       false,
-      expect.any(String),
+      expect.objectContaining({ taskId: "epic-1" }),
       expect.any(Object),
+    );
+  });
+
+  it("names the sandbox the send creates and counts as a stopwatch", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "",
+      wakeString: null,
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("fix the login bug");
+      store.begin(SURFACE, false, Date.now() - 8_000);
+    });
+
+    expect(
+      screen.getByTestId("sandbox-setup-line-toggle").textContent,
+    ).toContain("Starting sandbox·fix-the-login-bug·0:08");
+  });
+
+  it("starts each send under its own idempotency key", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("fix the login bug");
+    });
+
+    expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
+      SURFACE,
+      true,
+      expect.objectContaining({ taskId: "epic-1" }),
+      expect.any(Object),
+    );
+  });
+});
+
+/** One landing draft's composer: the window's drafts share the surface. */
+function DraftComposer(props: {
+  readonly draftId: string;
+  readonly submit: () => boolean;
+  readonly onSend: (send: StagedSandboxSend) => void;
+}) {
+  const { onSend } = props;
+  const send = useStagedSandboxSend({
+    surfaceKey: SURFACE,
+    resolvedHostId: NEW_HOST,
+    canSubmit: true,
+    submit: props.submit,
+    prepareHandoff: () => undefined,
+    terminal: null,
+    taskId: null,
+    ownerId: props.draftId,
+  });
+  useEffect(() => {
+    onSend(send);
+  }, [onSend, send]);
+  return null;
+}
+
+describe("useStagedSandboxSend's handoff", () => {
+  it("resubmits only the draft that sent, though every draft shares the stage", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    const submitA = vi.fn(() => true);
+    const submitB = vi.fn(() => true);
+    let sendA: StagedSandboxSend | null = null;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DraftComposer
+          draftId="draft-a"
+          submit={submitA}
+          onSend={(send) => {
+            sendA = send;
+          }}
+        />
+        <DraftComposer
+          draftId="draft-b"
+          submit={submitB}
+          onSend={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      sendA?.intercept("fix the login bug");
+      useStagedSandboxStore.getState().report(SURFACE, {
+        createdHostId: NEW_HOST,
+        phase: "handoff",
+      });
+    });
+
+    expect(submitA).toHaveBeenCalledTimes(1);
+    expect(submitB).not.toHaveBeenCalled();
+  });
+});
+
+describe("stagedSandboxFallbackName", () => {
+  it("keeps a name from a long first word within the create's 191 characters", () => {
+    expect(stagedSandboxFallbackName(`${"a".repeat(300)} fix`)).toBe(
+      "a".repeat(191),
     );
   });
 });

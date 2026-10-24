@@ -908,6 +908,7 @@ function HostSwitcherNewSandboxRow(props: {
       value={`new-sandbox:${row.configurationKey}`}
       keywords={["new sandbox", row.configurationName, row.label]}
       onSelect={() => props.onPick(row.configurationKey)}
+      disabled={row.disabled}
       data-testid={`host-switcher-new-sandbox-${row.configurationKey}`}
       data-checked={props.picked ? "true" : undefined}
       aria-current={props.picked ? "true" : undefined}
@@ -915,7 +916,7 @@ function HostSwitcherNewSandboxRow(props: {
       <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-ui-sm">{row.label}</span>
-        <span className="truncate text-ui-xs text-muted-foreground">
+        <span className="text-ui-xs text-muted-foreground wrap-break-word">
           {row.subLine}
         </span>
       </span>

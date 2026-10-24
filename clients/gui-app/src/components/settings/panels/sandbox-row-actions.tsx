@@ -107,29 +107,25 @@ export function SandboxRowActions(props: {
         null,
       ),
     retry: () =>
-      create.mutate(
-        {
-          request: {
-            os: summary.os,
-            cpus: summary.cpus,
-            memoryMb: summary.memoryMb,
-            diskMb: summary.diskMb,
-            region: summary.region,
-            displayName: summary.displayName,
-            idleMinutes: summary.idleMinutes,
-            burst: false,
-            createdByHostId: null,
-            createdByAgentId: null,
-            environmentId: summary.environmentId,
-            destroyAfterRestingMinutes: null,
-            createdByTaskId: null,
-            clientRequestId: uuidv4(),
-          },
-          teamName:
-            configuration.kind === "team" ? configuration.teamName : null,
+      create.mutate({
+        request: {
+          os: summary.os,
+          cpus: summary.cpus,
+          memoryMb: summary.memoryMb,
+          diskMb: summary.diskMb,
+          region: summary.region,
+          displayName: summary.displayName,
+          idleMinutes: summary.idleMinutes,
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+          environmentId: summary.environmentId,
+          destroyAfterRestingMinutes: null,
+          createdByTaskId: null,
+          clientRequestId: uuidv4(),
         },
-        { onSuccess: () => toast.info(`Starting ${summary.displayName}…`) },
-      ),
+        teamName: configuration.kind === "team" ? configuration.teamName : null,
+      }),
     "retry-applying": () =>
       repair.mutate(
         {},

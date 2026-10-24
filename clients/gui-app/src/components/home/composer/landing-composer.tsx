@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -496,15 +497,26 @@ export function LandingComposer(props: LandingComposerProps) {
     (): boolean => stagedSubmitRef.current(),
     [],
   );
+  // A terminal agent's Start that a staged sandbox took: launched on the new
+  // host in phase 2, as the chat send resubmits there.
+  const [stagedTerminalLaunch, setStagedTerminalLaunch] =
+    useState<TerminalAgentLaunch | null>(null);
   const stagedSend = useStagedSandboxSend({
     surfaceKey: composerSurfaceKey,
     resolvedHostId,
-    canSubmit,
+    canSubmit:
+      stagedTerminalLaunch === null
+        ? canSubmit
+        : workspaceCanStart && !isSubmitting,
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
     // No epic before the send: the landing panel's terminals follow the
     // composer's host, which phase 2 pins to the new one.
     terminal: null,
+    taskId: null,
+    // The window's drafts share its pin and so its stage: the handoff is the
+    // sending draft's alone.
+    ownerId: draftId ?? props.pendingCreateId,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
@@ -669,6 +681,7 @@ export function LandingComposer(props: LandingComposerProps) {
     if (toolbar.selection.modelSlug.length === 0) return false;
     // A staged sandbox takes the first send: it is created or woken, and
     // this submit runs again on it once it is ready. The draft stays.
+    setStagedTerminalLaunch(null);
     if (
       stagedSend.intercept(
         composerDisplayPlainText(
@@ -722,10 +735,6 @@ export function LandingComposer(props: LandingComposerProps) {
     teamSandboxHarnessBlockedFor,
     toolbarStore,
   ]);
-  useEffect(() => {
-    stagedSubmitRef.current = handleSubmit;
-  }, [handleSubmit]);
-
   const dispatchStartTerminal = useCallback(
     (launch: TerminalAgentLaunch): boolean => {
       const refusal = actions.selectTerminalAgent(
@@ -753,10 +762,32 @@ export function LandingComposer(props: LandingComposerProps) {
       if (assembledFor !== null && assembledFor !== resolvedHostId) {
         return false;
       }
+      // A staged sandbox takes the Start as it takes a send.
+      if (stagedSend.intercept("terminal")) {
+        setStagedTerminalLaunch(launch);
+        return false;
+      }
       return dispatchStartTerminal(launch);
     },
-    [dispatchStartTerminal, isSubmitting, resolvedHostId, workspaceCanStart],
+    [
+      dispatchStartTerminal,
+      isSubmitting,
+      resolvedHostId,
+      stagedSend,
+      workspaceCanStart,
+    ],
   );
+  // A layout effect, so the staged handoff's effect (a passive one, declared
+  // earlier) reads this render's submit, not the last one's.
+  useLayoutEffect(() => {
+    stagedSubmitRef.current =
+      stagedTerminalLaunch === null
+        ? handleSubmit
+        : () => {
+            setStagedTerminalLaunch(null);
+            return dispatchStartTerminal(stagedTerminalLaunch);
+          };
+  }, [dispatchStartTerminal, handleSubmit, stagedTerminalLaunch]);
 
   const handleRemoveImage = useCallback(
     (id: string) => {

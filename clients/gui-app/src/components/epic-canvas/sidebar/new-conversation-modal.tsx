@@ -971,6 +971,8 @@ export function NewConversationModalBody(props: {
     submit: submitOnSandbox,
     prepareHandoff: noopPrepareHandoff,
     terminal: stagedTerminal,
+    taskId: epicId,
+    ownerId: null,
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
@@ -1785,7 +1787,9 @@ export function NewConversationModalBody(props: {
     teamSandboxHarnessBlocked,
     toolbarStore,
   ]);
-  useEffect(() => {
+  // A layout effect, so the staged handoff's effect (a passive one, declared
+  // earlier) reads this render's submit, not the last one's.
+  useLayoutEffect(() => {
     stagedSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
   // The re-entry itself. Declared AFTER `handleSubmit` so it can name it

@@ -9,7 +9,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { useSandboxWakeString } from "@/hooks/sandboxes/use-sandbox-configurations";
+import {
+  sandboxConfigurationOf,
+  useSandboxConfigurations,
+  useSandboxWakeString,
+} from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -82,6 +86,7 @@ function SandboxDetailsSections(props: {
   const costs = useSandboxCosts();
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const configurations = useSandboxConfigurations();
   const now = useSampledNow();
   const entry = sandboxDetailsEntry({
     summary,
@@ -90,6 +95,12 @@ function SandboxDetailsSections(props: {
       null,
     wakeString: wake,
     viewerUserId,
+    // Personal only once every team answered: a team row from a server
+    // that names no creator is never the viewer's.
+    personal:
+      configurations.complete &&
+      sandboxConfigurationOf(summary, configurations.configurations)?.kind ===
+        "personal",
     now,
   });
   const clipboard = useClipboardCopy({

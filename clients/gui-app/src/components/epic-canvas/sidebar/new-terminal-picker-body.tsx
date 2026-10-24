@@ -125,25 +125,31 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     selectedRow,
   ]);
 
+  // A double-click on Launch fires the handler twice before React can flush
+  // the state update that unmounts this body, so each click would mint a
+  // fresh terminal. This synchronous latch collapses one open->launch session
+  // to a single terminal, whichever path launches it: Launch, the shortcut,
+  // or a staged sandbox's handoff.
+  const hasLaunchedRef = useRef(false);
+  const launchOnce = useCallback(
+    (target: TerminalLaunchTarget) => {
+      if (hasLaunchedRef.current) return;
+      hasLaunchedRef.current = true;
+      onLaunch(target);
+    },
+    [onLaunch],
+  );
   const { staging, stage, consequences, stagedSend } = useTerminalStagedLaunch({
     epicId,
     surfaceKey,
     resolvedHostId: pin.resolvedHostId,
     launchTarget,
-    onLaunch,
+    onLaunch: launchOnce,
   });
-
-  // A double-click on Launch fires the handler twice before React can flush
-  // the state update that unmounts this body, so each click would mint a
-  // fresh terminal. This synchronous latch collapses one open->launch session
-  // to a single terminal.
-  const hasLaunchedRef = useRef(false);
   const handleLaunch = useCallback(() => {
     if (stagedSend.intercept("terminal")) return;
-    if (hasLaunchedRef.current || launchTarget === null) return;
-    hasLaunchedRef.current = true;
-    onLaunch(launchTarget);
-  }, [launchTarget, onLaunch, stagedSend]);
+    if (launchTarget !== null) launchOnce(launchTarget);
+  }, [launchOnce, launchTarget, stagedSend]);
   usePrimaryActionShortcut(true, handleLaunch);
 
   let folderlessCwdStatus: ReactNode = null;
@@ -352,6 +358,8 @@ function useTerminalStagedLaunch(input: {
     submit: launchOnSandbox,
     prepareHandoff: noopPrepareHandoff,
     terminal: stagedTerminal,
+    taskId: input.epicId,
+    ownerId: null,
   });
   return {
     staging,

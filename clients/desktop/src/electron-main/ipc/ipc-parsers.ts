@@ -39,11 +39,12 @@ export {
 } from "../../ipc-contracts/window-state-parsers";
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
 import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
-import type {
-  SandboxAutomationOpenTarget,
-  SandboxCreateRequest,
-  SandboxLifecycleVerb,
-  SandboxPatchRequest,
+import {
+  sandboxPatchRequestSchema,
+  type SandboxAutomationOpenTarget,
+  type SandboxCreateRequest,
+  type SandboxLifecycleVerb,
+  type SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   SECRET_REQUEST_DECISIONS,
@@ -600,7 +601,7 @@ export function parseSandboxPatchRequest(value: unknown): SandboxPatchRequest {
     throw new Error("patchSandbox.request must be an object");
   }
   const obj = value as Record<string, unknown>;
-  return {
+  const request: SandboxPatchRequest = {
     displayName: nullOr(obj.displayName, (v) =>
       requireNonEmptyString(v, "patchSandbox.request.displayName"),
     ),
@@ -614,6 +615,16 @@ export function parseSandboxPatchRequest(value: unknown): SandboxPatchRequest {
       ),
     ),
   };
+  // The protocol's bounds too (an idle floor, the name's length), so this
+  // guard cannot drift from the contract it forwards.
+  const checked = sandboxPatchRequestSchema.safeParse(request);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `patchSandbox.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return request;
 }
 
 /**

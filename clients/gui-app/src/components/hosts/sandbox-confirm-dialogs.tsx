@@ -845,7 +845,14 @@ export function SandboxDestroyAllIdleDialog(props: {
       cascadeSummary={null}
       actionLabel={results === null ? "Destroy all idle" : "Retry"}
       isPending={batch.isPending}
-      onConfirm={() => batch.mutate(props.targets)}
+      // A retry repeats the confirmed set, whatever the list holds since.
+      onConfirm={() =>
+        batch.mutate(
+          results === null
+            ? props.targets
+            : results.map(({ sandboxId, name }) => ({ sandboxId, name })),
+        )
+      }
     >
       <ul
         className="mx-5 mb-4 flex max-h-[30vh] list-none flex-col gap-1 overflow-y-auto p-0 text-ui-sm"

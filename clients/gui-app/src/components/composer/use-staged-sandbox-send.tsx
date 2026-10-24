@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { SandboxSetupLine } from "@/components/composer/sandbox-setup-line";
 import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
@@ -8,17 +15,19 @@ import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { teamCannotCoverAnHour } from "@/components/hosts/sandbox-create-model";
 import { useHostBinding } from "@/lib/host";
 import {
   priceClause,
   stageBalanceMc,
-  stageNeedsCredits,
   stagePrice,
   stageProviderFor,
+  stageSmallestShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import { runStagedSandbox } from "@/lib/sandboxes/staged-sandbox-run";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readStagedSandbox,
   useStagedSandbox,
@@ -28,6 +37,8 @@ import {
 /** A sandbox's name when the shape sheet set none: the message's first words. */
 const FALLBACK_NAME_WORDS = 4;
 const FALLBACK_NAME = "sandbox";
+/** The create's longest `displayName`. */
+const FALLBACK_NAME_MAX_LENGTH = 191;
 
 export function stagedSandboxFallbackName(text: string): string {
   const slug = text
@@ -35,7 +46,9 @@ export function stagedSandboxFallbackName(text: string): string {
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length > 0)
     .slice(0, FALLBACK_NAME_WORDS)
-    .join("-");
+    .join("-")
+    .slice(0, FALLBACK_NAME_MAX_LENGTH)
+    .replace(/-+$/, "");
   return slug.length === 0 ? FALLBACK_NAME : slug;
 }
 
@@ -73,6 +86,13 @@ export function useStagedSandboxSend(input: {
   readonly submit: () => boolean;
   readonly prepareHandoff: (hostId: string) => void;
   readonly terminal: StagedSandboxTerminal | null;
+  /** The task the surface is in, which the create names; `null` on landing. */
+  readonly taskId: string | null;
+  /**
+   * The draft this composer holds, where the surface's stage is shared by
+   * several (landing): the handoff resubmits only the one that sent.
+   */
+  readonly ownerId: string | null;
 }): StagedSandboxSend {
   const {
     surfaceKey,
@@ -81,14 +101,19 @@ export function useStagedSandboxSend(input: {
     submit,
     prepareHandoff,
     terminal,
+    taskId,
+    ownerId,
   } = input;
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const stage = useStagedSandbox(surfaceKey ?? "");
   const user = useAuthUser().data ?? null;
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
   const messageTextRef = useRef("");
+  // The name the create falls back to, for the line to show meanwhile.
+  const [fallbackName, setFallbackName] = useState(FALLBACK_NAME);
 
   const run = useCallback(
     (fresh: boolean): void => {
@@ -96,10 +121,15 @@ export function useStagedSandboxSend(input: {
       void runStagedSandbox(
         surfaceKey,
         fresh,
-        stagedSandboxFallbackName(messageTextRef.current),
+        {
+          fallbackName: stagedSandboxFallbackName(messageTextRef.current),
+          taskId,
+        },
         {
           auth: binding.auth,
           directory: binding.directory,
+          queryClient,
+          userId,
           wake: (hostId) =>
             startSandboxWake(queryClient, binding, hostId).then(
               (outcome) => outcome !== null && outcome.kind === "awake",
@@ -112,7 +142,7 @@ export function useStagedSandboxSend(input: {
         },
       );
     },
-    [binding, queryClient, surfaceKey],
+    [binding, queryClient, surfaceKey, taskId, userId],
   );
   const newHost = useNewHostActions(
     stage?.createdHostId ?? null,
@@ -127,21 +157,31 @@ export function useStagedSandboxSend(input: {
       if (current === null || current.phase === "handoff") return false;
       if (current.phase === "staged") {
         messageTextRef.current = messageText;
-        run(false);
+        setFallbackName(stagedSandboxFallbackName(messageText));
+        useStagedSandboxStore.getState().report(surfaceKey, { ownerId });
+        // A send is a new create: its own idempotency key.
+        run(true);
       }
       return true;
     },
-    [run, surfaceKey],
+    [ownerId, run, surfaceKey],
   );
 
   // Phase 2: the resubmit on the new host, once per handoff.
   const handedOffRef = useRef<string | null>(null);
   const preparedRef = useRef<string | null>(null);
   const handoffHostId =
-    stage !== null && stage.phase === "handoff" ? stage.createdHostId : null;
+    stage !== null && stage.phase === "handoff" && stage.ownerId === ownerId
+      ? stage.createdHostId
+      : null;
   const handoffStepAt = stage === null ? null : stage.stepAt;
   useEffect(() => {
-    if (surfaceKey === null || handoffHostId === null) return;
+    if (surfaceKey === null || handoffHostId === null) {
+      // No handoff now: a later one to the same host runs again.
+      preparedRef.current = null;
+      handedOffRef.current = null;
+      return;
+    }
     if (resolvedHostId !== handoffHostId) return;
     const key = `${surfaceKey}\u0000${handoffHostId}`;
     if (preparedRef.current !== key) {
@@ -189,6 +229,7 @@ export function useStagedSandboxSend(input: {
     }
     const { shape, configuration } = stage.target;
     const price = stagePrice(catalogue, shape);
+    const smallest = stageSmallestShape(catalogue, shape);
     const region =
       stageProviderFor(catalogue, shape.os)?.regions.find(
         (candidate) => candidate.id === shape.region,
@@ -204,12 +245,15 @@ export function useStagedSandboxSend(input: {
       }).text,
       regionLabel: region === null ? shape.region : region.label,
       shapeLabel: sandboxShapeLabel(shape.cpus, shape.memoryMb),
-      // Only the smallest shape is priced: a larger staged shape has a
-      // smaller one the balance covers when it covers the smallest's hour.
+      // A larger staged shape has a smaller one the balance covers when it
+      // covers the smallest's hour.
       smallerShapeAffordable:
-        price !== null &&
-        !price.exact &&
-        !stageNeedsCredits(stageBalanceMc(user, configuration), price),
+        smallest !== null &&
+        !smallest.isStaged &&
+        !teamCannotCoverAnHour(
+          stageBalanceMc(user, configuration),
+          smallest.awakeMcPerHour,
+        ),
     };
   }, [catalogue, stage, user]);
 
@@ -217,6 +261,7 @@ export function useStagedSandboxSend(input: {
     surfaceKey === null || stage === null || facts === null ? null : (
       <SandboxSetupLine
         stage={stage}
+        name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
         facts={facts}
         actions={{
           onKeepWaiting: () => run(false),

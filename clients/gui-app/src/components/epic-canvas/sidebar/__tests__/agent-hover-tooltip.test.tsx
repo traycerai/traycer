@@ -93,6 +93,11 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
+// The host answers with its default cwd: Open terminal is live.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-folderless-terminal-target",
+  () => ({ useOpenFolderlessEpicTerminal: () => () => undefined }),
+);
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: { readonly method: string }) => {
     if (args.method === "host.status") {
@@ -189,6 +194,7 @@ vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
 
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SANDBOX_PUBLIC_STATE_LABEL } from "@/lib/sandboxes/sandbox-row-lines";
 
 const CLAIM: RoleClaim = {
   claimId: "claim-1",
@@ -591,6 +597,7 @@ describe("AgentHoverTooltip host section", () => {
     const text = screen.getByTestId("worktree-host-section").textContent;
     expect(text).toContain("Host");
     expect(text).toContain("build-box");
+    expect(text).toContain(SANDBOX_PUBLIC_STATE_LABEL.awake);
     expect(text).toContain("Acme");
     expect(text).toContain(shortPriceLabel(120));
     expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");
@@ -649,7 +656,7 @@ describe("AgentHoverTooltip host section", () => {
     // host section, not the worktree tooltip.
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
     await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
-    const card = await screen.findByTestId("agent-host-hover-agent-1");
+    const card = await screen.findByRole("dialog", { name: "Reviewer" });
     const text = card.textContent;
 
     expect(text).toContain("team-box");
@@ -678,7 +685,7 @@ describe("AgentHoverTooltip host section", () => {
     });
 
     await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
-    const text = (await screen.findByTestId("agent-host-hover-agent-1"))
+    const text = (await screen.findByRole("dialog", { name: "Reviewer" }))
       .textContent;
 
     expect(text).toContain(hoverTaskConfiguration(null));
@@ -707,7 +714,7 @@ describe("AgentHoverTooltip host section", () => {
 
     expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
     await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
-    const text = (await screen.findByTestId("agent-host-hover-agent-1"))
+    const text = (await screen.findByRole("dialog", { name: "Reviewer" }))
       .textContent;
 
     expect(text).toContain("build-box");
@@ -734,7 +741,7 @@ describe("AgentHoverTooltip host section", () => {
 
     await userEvent.unhover(trigger);
     await waitFor(() => {
-      expect(screen.queryByTestId("agent-host-hover-agent-1")).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Reviewer" })).toBeNull();
     });
     expect(screen.getByTestId("keep-dialog").textContent).toBe("sbx-1");
   });

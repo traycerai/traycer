@@ -580,6 +580,32 @@ describe("useSandboxDestroyBatch", () => {
     expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
     expect(outcomes).toEqual(["destroyed", "skipped"]);
   });
+
+  it("refreshes the lists and the cost view once the batch settles", async () => {
+    state.binding?.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: {
+        sandboxes: [
+          sandboxSummaryFixture({
+            id: "sbx_1",
+            burst: true,
+            state: "suspended",
+          }),
+        ],
+      },
+    });
+    const { wrapper, invalidate } = setup();
+    const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync([{ sandboxId: "sbx_1", name: "one" }]);
+    });
+
+    expect(invalidatedKeys(invalidate)).toEqual([
+      REGISTERED_HOSTS_KEY,
+      COSTS_KEY,
+    ]);
+  });
 });
 
 describe("useSandboxDestroy", () => {

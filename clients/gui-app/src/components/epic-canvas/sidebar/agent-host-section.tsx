@@ -37,12 +37,18 @@ import {
   OPEN_TERMINAL,
   reachSentence,
   REACH_UNNAMED_HOSTS,
-  sandboxShapeLabel,
   SESSIONS_UNKNOWN,
   shortPriceLabel,
   TASK_FILES,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
+import {
+  SANDBOX_DEFAULT_IDLE_MINUTES,
+  SANDBOX_PUBLIC_STATE_LABEL,
+  sandboxMemberName,
+  sandboxPublicState,
+  sandboxShapeLine,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
@@ -130,8 +136,7 @@ function memberName(
   member: SandboxMember | null,
   viewerUserId: string | null,
 ): string | null {
-  if (member === null) return null;
-  return member.userId === viewerUserId ? "you" : member.displayName;
+  return member === null ? null : sandboxMemberName(member, viewerUserId);
 }
 
 function AuthorizedHostSection(props: {
@@ -207,7 +212,7 @@ function HostHeading(props: {
         </Badge>
       )}
       <span className="text-muted-foreground">
-        {sandbox.frozen ? "frozen" : sandbox.state}
+        {SANDBOX_PUBLIC_STATE_LABEL[sandboxPublicState(sandbox)]}
         {props.awake && sandbox.priceMcPerHour !== null
           ? ` · ${shortPriceLabel(sandbox.priceMcPerHour.awakeMc)}`
           : ""}
@@ -328,7 +333,7 @@ function HostIdentity(props: {
   readonly payerName: string | null;
 }): ReactNode {
   const { sandbox } = props;
-  const shape = `${sandbox.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(sandbox.cpus, sandbox.memoryMb)}`;
+  const shape = sandboxShapeLine(sandbox);
   if (!sandbox.burst) {
     return hoverSandboxIdentity({
       shape,
@@ -362,7 +367,7 @@ function HostIdlePolicy(props: {
   )?.suspendFidelity;
   const wake = fidelity === undefined ? null : wakeString(fidelity);
   if (props.sandbox.frozen || props.sandbox.state === "destroyed") return null;
-  const idleMinutes = props.sandbox.idleMinutes ?? 30;
+  const idleMinutes = props.sandbox.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
   const policy = props.sandbox.burst
     ? burstIdleLine(idleMinutes)
     : idleAndRestingLine(idleMinutes, props.sandbox.destroyAfterRestingMinutes);

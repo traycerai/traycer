@@ -1,12 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
-import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
-import { formatClockDuration } from "@/lib/format-duration";
+import { formatStopwatch } from "@/lib/format-duration";
 import { useOpenLink } from "@/lib/links/open-link";
 import { STAGED_TAKING_LONGER_MS } from "@/lib/sandboxes/staged-sandbox-run";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
@@ -105,6 +104,8 @@ export interface SandboxSetupLineFacts {
  */
 export function SandboxSetupLine(props: {
   readonly stage: StagedSandbox;
+  /** The sandbox's name: the sheet's, else the one its create sends. */
+  readonly name: string;
   readonly facts: SandboxSetupLineFacts;
   readonly actions: SandboxSetupLineActions;
 }): ReactNode {
@@ -124,6 +125,7 @@ export function SandboxSetupLine(props: {
   return (
     <SandboxProgressLine
       stage={stage}
+      name={props.name}
       startedAt={stage.startedAt}
       facts={props.facts}
       actions={props.actions}
@@ -286,6 +288,7 @@ function SandboxRefusalLine(props: {
 
 function SandboxProgressLine(props: {
   readonly stage: StagedSandbox;
+  readonly name: string;
   readonly startedAt: number;
   readonly facts: SandboxSetupLineFacts;
   readonly actions: SandboxSetupLineActions;
@@ -293,7 +296,7 @@ function SandboxProgressLine(props: {
   const { stage } = props;
   const failure = stage.failure;
   const resuming = stage.target.kind === "existing";
-  const name = stage.target.name;
+  const name = props.name;
   const configuration = configurationLabel(
     stageConfigurationCopy(stage.target.configuration),
   );
@@ -323,7 +326,11 @@ function SandboxProgressLine(props: {
           onClick={() => setManualExpanded(!expanded)}
           className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <ProgressHead view={view} name={name} startedAt={props.startedAt} />
+          <ProgressHead
+            view={view}
+            name={name}
+            elapsedSeconds={elapsedSeconds}
+          />
           <ChevronIcon aria-hidden className="size-3 shrink-0" />
         </button>
         <span aria-hidden className="h-px flex-1 bg-border/60" />
@@ -378,7 +385,7 @@ function progressTitle(view: ProgressView, name: string): string {
 function ProgressHead(props: {
   readonly view: ProgressView;
   readonly name: string;
-  readonly startedAt: number;
+  readonly elapsedSeconds: number;
 }): ReactNode {
   const { failure } = props.view;
   const waiting = stillWaiting(failure);
@@ -405,7 +412,9 @@ function ProgressHead(props: {
       </span>
       {namesSandbox ? <HeadPart text={props.name} /> : null}
       {code === null ? null : <HeadPart text={code} />}
-      {waiting ? <LiveElapsed startedAt={props.startedAt} /> : null}
+      {waiting ? (
+        <HeadPart text={formatStopwatch(props.elapsedSeconds)} />
+      ) : null}
     </>
   );
 }
@@ -629,7 +638,7 @@ function TakingLongerDetail(props: {
     <p className="m-0">
       {takingLongerDetail(
         stepLabel(props.step, props.resuming, props.configuration),
-        formatClockDuration(age),
+        formatStopwatch(age),
       )}
     </p>
   );

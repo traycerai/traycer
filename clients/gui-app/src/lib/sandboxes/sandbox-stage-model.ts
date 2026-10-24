@@ -29,9 +29,8 @@ import {
 
 const MB_PER_GIB = 1024;
 
-/** The spec's default shape: Linux, 2 vCPU, 4 GB. */
+/** The spec's default shape: 2 vCPU, 4 GB. */
 const DEFAULT_SHAPE = {
-  os: "linux",
   cpus: 2,
   memoryMb: 4 * MB_PER_GIB,
 } as const;
@@ -112,16 +111,24 @@ export function stageProviderFor(
   );
 }
 
+/** Linux first; Windows when no provider can create Linux. */
+const STAGE_OS_PREFERENCE: readonly SandboxOs[] = ["linux", "windows"];
+
 /**
- * The shape a New row stages: Linux 2 vCPU / 4 GB in the provider's default
- * region, rounded into the catalogue's bounds; the provider's smallest shape
- * when that one is outside them. `null` when no provider can create Linux.
+ * The shape a New row stages: 2 vCPU / 4 GB of the first OS a provider can
+ * create (Linux, else Windows) in its default region, rounded into the
+ * catalogue's bounds; the provider's smallest shape when that one is outside
+ * them. `null` when no provider can create either.
  */
 export function defaultStageShape(
   catalogue: SandboxCatalogue,
 ): StageShape | null {
-  const provider = stageProviderFor(catalogue, DEFAULT_SHAPE.os);
-  if (provider === null) return null;
+  const offered = STAGE_OS_PREFERENCE.map((os) => ({
+    os,
+    provider: stageProviderFor(catalogue, os),
+  })).find((candidate) => candidate.provider !== null);
+  if (offered === undefined || offered.provider === null) return null;
+  const { os, provider } = offered;
   const bounds = provider.shape;
   const asked = roundSandboxShape(bounds, DEFAULT_SHAPE);
   const shape =
@@ -135,7 +142,7 @@ export function defaultStageShape(
           ),
         };
   return {
-    os: DEFAULT_SHAPE.os,
+    os,
     cpus: shape.cpus,
     memoryMb: shape.memoryMb,
     diskMb: null,
@@ -168,20 +175,21 @@ export function rememberedOrDefaultStageShape(
 }
 
 /**
- * The hourly price a stage is shown at. The catalogue prices only each
- * region's SMALLEST shape, so the figure is exact for that shape and a
- * lower bound (`exact: false`, read as "from") for any larger one; the
- * created sandbox's own rate is exact.
+ * The hourly price a stage is shown at: the shape's own, computed from the
+ * region's per-unit rates. A server without them prices only each region's
+ * SMALLEST shape, so the figure is then exact for that shape and a lower
+ * bound (`exact: false`, read as "from") for any larger one.
  */
 export interface StagePrice {
   readonly awakeMcPerHour: number;
   readonly exact: boolean;
 }
 
-export function stagePrice(
+/** The region's smallest shape: its price, and whether `shape` is it. */
+export function stageSmallestShape(
   catalogue: SandboxCatalogue,
   shape: StageShape,
-): StagePrice | null {
+): { readonly isStaged: boolean; readonly awakeMcPerHour: number } | null {
   const provider = stageProviderFor(catalogue, shape.os);
   if (provider === null) return null;
   const region =
@@ -193,9 +201,37 @@ export function stagePrice(
     bounds.cpuMin * bounds.memoryPerCpuMinMb,
   );
   return {
+    isStaged:
+      shape.cpus === bounds.cpuMin && shape.memoryMb === smallestMemoryMb,
     awakeMcPerHour: region.fromPriceMcPerHour.awakeMc,
-    exact: shape.cpus === bounds.cpuMin && shape.memoryMb === smallestMemoryMb,
   };
+}
+
+export function stagePrice(
+  catalogue: SandboxCatalogue,
+  shape: StageShape,
+): StagePrice | null {
+  const provider = stageProviderFor(catalogue, shape.os);
+  const region =
+    provider?.regions.find((candidate) => candidate.id === shape.region) ??
+    null;
+  const smallest = stageSmallestShape(catalogue, shape);
+  if (provider === null || region === null || smallest === null) return null;
+  const rates = region.pricing;
+  if (rates === null) {
+    return {
+      awakeMcPerHour: smallest.awakeMcPerHour,
+      exact: smallest.isStaged,
+    };
+  }
+  const bounds = provider.shape;
+  const diskMb = shape.diskMb ?? bounds.diskDefaultMb;
+  const perHour =
+    (shape.cpus * rates.vcpuHourMillicredits +
+      (shape.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits +
+      (diskMb / MB_PER_GIB) * rates.diskGbHourMillicredits) *
+    rates.multiplier;
+  return { awakeMcPerHour: Math.round(perHour), exact: true };
 }
 
 /**
@@ -212,9 +248,10 @@ export function stageBalanceMc(
 }
 
 /**
- * A zero or short balance: it cannot cover an hour of the region's smallest
- * shape. Unknown either side is not short; the server's gate stays the
- * authority at send.
+ * A zero or short balance: it cannot cover an hour at the stage's price
+ * (the region's smallest shape's, from a server without per-unit rates).
+ * Unknown either side is not short; the server's gate stays the authority
+ * at send.
  */
 export function stageNeedsCredits(
   balanceMc: number | null,

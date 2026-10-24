@@ -24,7 +24,10 @@ import {
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { StageShape } from "@/lib/sandboxes/sandbox-stage-model";
-import { WAKE_STRING_MEMORY } from "@/lib/sandboxes/sandbox-strings";
+import {
+  SANDBOXES_CANT_BE_CREATED,
+  WAKE_STRING_MEMORY,
+} from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
 import {
   readStagedSandbox,
@@ -78,6 +81,7 @@ const PROVIDER: SandboxCatalogueProvider = {
       id: "us-east",
       label: "US East",
       fromPriceMcPerHour: { awakeMc: 120, suspendedMc: 4, stoppedMc: 2 },
+      pricing: null,
     },
   ],
 };
@@ -297,6 +301,35 @@ describe("useSandboxStaging New rows", () => {
     act(() => composer.onPickNew("personal"));
 
     expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("offers the New rows disabled, saying why, when the catalogue offers nothing", () => {
+    mocks.catalogue = { providers: [] };
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]).toMatchObject({
+      disabled: true,
+      subLine: SANDBOXES_CANT_BE_CREATED,
+    });
+    act(() => composer.onPickNew("personal"));
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("drops the chip's spinner when the staged create is refused", () => {
+    const { composer } = mount([LAPTOP]);
+    act(() => composer.onPickNew("personal"));
+    act(() => {
+      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now());
+    });
+    expect(staging().composer.stagedBusy).toBe(true);
+
+    act(() => {
+      useStagedSandboxStore
+        .getState()
+        .report(SURFACE, { failure: { kind: "credits", shortfallMc: 120 } });
+    });
+
+    expect(staging().composer.stagedBusy).toBe(false);
   });
 
   it("reads the staged chip, and needs credits at a short balance", () => {

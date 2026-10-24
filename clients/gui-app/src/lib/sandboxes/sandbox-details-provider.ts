@@ -72,6 +72,11 @@ export interface SandboxDetailsInput {
   readonly cost: SandboxCost | null;
   readonly wakeString: string | null;
   readonly viewerUserId: string | null;
+  /**
+   * The sandbox is the viewer's Personal one, so a row naming no creator was
+   * started by them. Otherwise an unnamed creator is left unsaid.
+   */
+  readonly personal: boolean;
   readonly now: number;
 }
 
@@ -81,18 +86,38 @@ const SEGMENT_LABEL: Record<SandboxCostSegment["state"], string> = {
   stopped: "Stopped",
 };
 
-function memberOr(
-  member: SandboxSummary["createdBy"],
-  viewerUserId: string | null,
-  fallback: string,
-): string {
-  return member === null ? fallback : sandboxMemberName(member, viewerUserId);
+/** Who created the sandbox, or `null` when the row does not say. */
+function creatorName(input: SandboxDetailsInput): string | null {
+  const { summary } = input;
+  if (summary.createdBy !== null) {
+    return sandboxMemberName(summary.createdBy, input.viewerUserId);
+  }
+  return input.personal ? "you" : null;
 }
 
-function starter(summary: SandboxSummary, viewerUserId: string | null): string {
-  if (summary.kind === "automation") return "Automations";
-  if (summary.burst) return "An agent";
-  return memberOr(summary.createdBy, viewerUserId, "you");
+function starter(input: SandboxDetailsInput): string | null {
+  if (input.summary.kind === "automation") return "Automations";
+  if (input.summary.burst) return "An agent";
+  return creatorName(input);
+}
+
+/** Idle, then Resting; an agent's sandbox never rests, it destroys itself. */
+function idleRows(summary: SandboxSummary): SandboxDetailsRow[] {
+  const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
+  if (summary.burst) {
+    return [{ label: "Idle", value: `destroys itself after ${idle} idle min` }];
+  }
+  return [
+    { label: "Idle", value: `suspends after ${idle} idle min` },
+    {
+      label: "Resting",
+      value:
+        summary.destroyAfterRestingMinutes === null ||
+        summary.destroyAfterRestingMinutes === 0
+          ? KEPT_UNTIL_YOU_DESTROY_IT
+          : `destroyed after ${sandboxPeriodLabel(summary.destroyAfterRestingMinutes)}`,
+    },
+  ];
 }
 
 function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
@@ -121,28 +146,15 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
       value: sandboxMemberName(summary.wakePayer, viewerUserId),
     });
   }
-  rows.push({ label: "Started by", value: starter(summary, viewerUserId) });
+  const startedBy = starter(input);
+  if (startedBy !== null) rows.push({ label: "Started by", value: startedBy });
   if (summary.keptBy !== null) {
     rows.push({
       label: "Kept by",
       value: sandboxMemberName(summary.keptBy, viewerUserId),
     });
   }
-  const idle = summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES;
-  rows.push({
-    label: "Idle",
-    value: summary.burst
-      ? `destroys itself after ${idle} idle min`
-      : `suspends after ${idle} idle min`,
-  });
-  rows.push({
-    label: "Resting",
-    value:
-      summary.destroyAfterRestingMinutes === null ||
-      summary.destroyAfterRestingMinutes === 0
-        ? KEPT_UNTIL_YOU_DESTROY_IT
-        : `destroyed after ${sandboxPeriodLabel(summary.destroyAfterRestingMinutes)}`,
-  });
+  rows.push(...idleRows(summary));
   if (summary.destroyAt !== null) {
     rows.push({
       label: "Destroyed on",
@@ -170,14 +182,12 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
 
 function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   const { summary, cost, viewerUserId } = input;
+  const creator = creatorName(input);
+  let created = "";
+  if (summary.burst) created = "by an agent";
+  else if (creator !== null) created = `by ${creator}`;
   const events: SandboxDetailsEvent[] = [
-    {
-      at: summary.createdAt,
-      label: "Created",
-      value: summary.burst
-        ? "by an agent"
-        : `by ${memberOr(summary.createdBy, viewerUserId, "you")}`,
-    },
+    { at: summary.createdAt, label: "Created", value: created },
   ];
   for (const segment of cost?.segments ?? []) {
     events.push({

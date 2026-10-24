@@ -194,10 +194,7 @@ function AgentHoverTooltipContent(
       <HoverCard
         trigger={props.trigger}
         content={
-          <div
-            className="w-full max-w-md"
-            data-testid={`agent-host-hover-${nodeId}`}
-          >
+          <div className="w-full max-w-md">
             <div className="border-b border-border/70 px-3 py-2 text-ui-sm font-medium break-words">
               {nodeName}
             </div>

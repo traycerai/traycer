@@ -8,6 +8,8 @@ export interface HostSwitcherNewRow {
   readonly subLine: string;
   /** The configuration's name, for the collapsed group and the search. */
   readonly configurationName: string;
+  /** Nothing can be created: the sub-line says why, and a pick stages nothing. */
+  readonly disabled: boolean;
 }
 
 /**

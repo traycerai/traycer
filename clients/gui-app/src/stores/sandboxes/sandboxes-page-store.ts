@@ -20,11 +20,18 @@ interface SandboxesPageStore {
   readonly revealConfigurationPending: boolean;
 }
 
-export const useSandboxesPageStore = create<SandboxesPageStore>(() => ({
+const INITIAL: SandboxesPageStore = {
   configurationId: { kind: "personal" },
   revealSandboxId: null,
   revealConfigurationPending: false,
-}));
+};
+
+export const useSandboxesPageStore = create<SandboxesPageStore>(() => INITIAL);
+
+/** Back to Personal with nothing to reveal: the account changed. */
+export function resetSandboxesPage(): void {
+  useSandboxesPageStore.setState(INITIAL);
+}
 
 export function setSandboxesPageConfiguration(
   configurationId: SandboxesPageConfigurationId,

@@ -12,6 +12,7 @@ describe("sandboxDetailsEntry", () => {
       cost: null,
       wakeString: null,
       viewerUserId: null,
+      personal: true,
       now: NOW,
     }).export();
     expect(exported.sandboxId).toBe("sbx_support_42");
@@ -28,6 +29,7 @@ describe("sandboxDetailsEntry", () => {
       cost: null,
       wakeString: null,
       viewerUserId: null,
+      personal: true,
       now: NOW,
     });
     const kept = entry.history.find((event) => event.label === "Kept");
@@ -53,6 +55,7 @@ describe("sandboxDetailsEntry", () => {
         cost: null,
         wakeString: null,
         viewerUserId: null,
+        personal: true,
         now: NOW,
       }).export(),
     );
@@ -60,5 +63,46 @@ describe("sandboxDetailsEntry", () => {
     expect(json).not.toContain("sk-secret-value");
     expect(json).not.toContain("host-route-secret");
     expect(json).not.toMatch(/(^|[\s"])\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]/);
+  });
+
+  it("names no creator for a row that names none outside Personal", () => {
+    const summary = sandboxSummaryFixture({ createdBy: null, burst: false });
+    const entry = sandboxDetailsEntry({
+      summary,
+      cost: null,
+      wakeString: null,
+      viewerUserId: "u-me",
+      personal: false,
+      now: NOW,
+    });
+    expect(entry.export().status["Started by"]).toBeUndefined();
+    expect(
+      entry.history.find((event) => event.label === "Created")?.value,
+    ).toBe("");
+    const mine = sandboxDetailsEntry({
+      summary,
+      cost: null,
+      wakeString: null,
+      viewerUserId: "u-me",
+      personal: true,
+      now: NOW,
+    });
+    expect(mine.export().status["Started by"]).toBe("you");
+  });
+
+  it("gives an agent's sandbox no Resting row beside its self-destroying Idle row", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: true,
+        destroyAfterRestingMinutes: null,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: false,
+      now: NOW,
+    });
+    expect(entry.export().status.Idle).toMatch(/destroys itself/);
+    expect(entry.export().status.Resting).toBeUndefined();
   });
 });

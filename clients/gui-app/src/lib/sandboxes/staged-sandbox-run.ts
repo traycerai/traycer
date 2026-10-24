@@ -1,5 +1,13 @@
-import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  MutationObserver as QueryMutationObserver,
+  type QueryClient,
+} from "@tanstack/react-query";
+import type {
+  SandboxControlFailure,
+  SandboxCreateFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
@@ -7,9 +15,20 @@ import {
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
 import type { AuthService } from "@/lib/auth/auth-service";
 import type { HostDirectoryService } from "@/lib/host";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import {
+  authQueryKeys,
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys";
+import {
+  settledForStartingAccount,
+  signedInUserId,
+} from "@/lib/sandboxes/sandbox-account-fence";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import {
   readStagedSandbox,
@@ -33,6 +52,14 @@ export interface StagedSandboxRunDeps {
   readonly auth: AuthService;
   readonly directory: HostDirectoryService;
   /**
+   * The run's requests go through it: the list and the team's environment as
+   * the queries every surface reads, the create as a keyed mutation, so the
+   * cache sees each answer and the lists refresh when the create settles.
+   */
+  readonly queryClient: QueryClient;
+  /** The account signed in, which the list and environment keys carry. */
+  readonly userId: string | null;
+  /**
    * Wakes a resting sandbox, joining a wake already in flight
    * (`startSandboxWake`); resolves `true` once it is awake.
    */
@@ -41,8 +68,12 @@ export interface StagedSandboxRunDeps {
   readonly sleep: (ms: number) => Promise<void>;
 }
 
-/** Surfaces whose phase 1 is running in this window: one run per surface. */
-const running = new Set<string>();
+/**
+ * Each surface's live run in this window, by the `clientRequestId` it
+ * drives: a repeat of that send joins it, and a new send replaces it (the
+ * old run sees it is no longer current and stops).
+ */
+const running = new Map<string, string>();
 
 /**
  * Phase 1 of the composer's two-phase handoff (sandboxes plan D1): create the
@@ -52,35 +83,42 @@ const running = new Set<string>();
  * `handoff`; phase 2, the surface's own resubmit, runs from there.
  *
  * Owned by the store, not by a component: the composer may unmount, and the
- * stage, its idempotency key and the draft outlive it. A repeat (a reload,
- * Keep waiting, a second click) reuses the key, so the server answers with
- * the row it already made; `fresh` (Retry creation after a terminal failure)
+ * stage, its idempotency key and the draft outlive it. A repeat of a send
+ * (Keep waiting, Retry) reuses the key, so the server answers with the row it
+ * already made; `fresh` (a send, or Retry creation after a terminal failure)
  * mints a new one.
  */
 export async function runStagedSandbox(
   surfaceKey: string,
   fresh: boolean,
-  fallbackName: string,
+  request: StagedRunRequest,
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
-  if (running.has(surfaceKey)) return;
   const stage = readStagedSandbox(surfaceKey);
   if (stage === null || stage.phase === "handoff") return;
-  running.add(surfaceKey);
+  if (
+    !fresh &&
+    stage.phase === "creating" &&
+    stage.clientRequestId !== null &&
+    running.get(surfaceKey) === stage.clientRequestId
+  ) {
+    return;
+  }
+  const clientRequestId = useStagedSandboxStore
+    .getState()
+    .begin(surfaceKey, fresh, deps.now());
+  if (clientRequestId === null) return;
+  running.set(surfaceKey, clientRequestId);
   try {
-    const clientRequestId = useStagedSandboxStore
-      .getState()
-      .begin(surfaceKey, fresh, deps.now());
-    if (clientRequestId === null) return;
     const started = await startTarget(
-      { surfaceKey, clientRequestId, fallbackName },
+      { surfaceKey, clientRequestId, ...request },
       stage.target,
       deps,
     );
     if (started === null) return;
     await settle(surfaceKey, clientRequestId, started, deps);
   } finally {
-    running.delete(surfaceKey);
+    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
   }
 }
 
@@ -113,11 +151,18 @@ function fail(surfaceKey: string, failure: StagedSandboxFailure): void {
   useStagedSandboxStore.getState().report(surfaceKey, { failure });
 }
 
-/** Which run a step belongs to, and the name a create falls back to. */
-interface StagedRun {
+/** What the surface's send adds to the create. */
+export interface StagedRunRequest {
+  /** The name a create falls back to when the sheet set none. */
+  readonly fallbackName: string;
+  /** The task the surface is in; `null` on the landing composer. */
+  readonly taskId: string | null;
+}
+
+/** Which run a step belongs to, and what its create adds. */
+interface StagedRun extends StagedRunRequest {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
-  readonly fallbackName: string;
 }
 
 async function startTarget(
@@ -125,7 +170,7 @@ async function startTarget(
   target: StagedSandboxTarget,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const { surfaceKey, clientRequestId, fallbackName } = run;
+  const { surfaceKey, clientRequestId, fallbackName, taskId } = run;
   if (target.kind === "existing") {
     useStagedSandboxStore.getState().report(surfaceKey, {
       createdSandboxId: target.sandboxId,
@@ -141,7 +186,7 @@ async function startTarget(
     }
     return { sandboxId: target.sandboxId, hostId: target.hostId };
   }
-  const environmentId = await environmentIdFor(target, deps.auth);
+  const environmentId = await environmentIdFor(target, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   if (environmentId === undefined) {
     fail(surfaceKey, { kind: "unavailable" });
@@ -162,11 +207,12 @@ async function startTarget(
     // The shape's `null` is "never"; on a create `null` is the configuration's
     // default and `0` is never.
     destroyAfterRestingMinutes: target.shape.destroyAfterRestingMinutes ?? 0,
-    // The task does not exist yet: it is created on the new host in phase 2.
-    createdByTaskId: null,
+    // The surface's task; on the landing composer the task does not exist
+    // yet, since it is created on the new host in phase 2.
+    createdByTaskId: taskId,
     clientRequestId,
   };
-  const result = await deps.auth.createSandbox(request);
+  const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   if (result.kind !== "ok") {
     fail(
@@ -196,11 +242,63 @@ async function startTarget(
  */
 async function environmentIdFor(
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
-  auth: AuthService,
+  deps: StagedSandboxRunDeps,
 ): Promise<string | null | undefined> {
   if (target.configuration.kind === "personal") return null;
-  const answer = await auth.getTeamEnvironment(target.configuration.teamId);
-  return answer.kind === "ok" ? answer.environmentId : undefined;
+  const answer = await deps.queryClient
+    .fetchQuery(
+      teamEnvironmentQueryOptions(
+        deps.auth,
+        deps.userId,
+        target.configuration.teamId,
+        true,
+      ),
+    )
+    .catch(() => null);
+  return answer !== null && answer.kind === "ok"
+    ? answer.environmentId
+    : undefined;
+}
+
+/**
+ * The create, as the app's create mutation runs it (`useSandboxCreate`):
+ * keyed, and refreshing the directory and the lists once it settles, a
+ * refusal included, since a `502 provider_failed` leaves a `failed` row.
+ * The answer comes back as the fetch result; the line words a refusal.
+ */
+function createSandbox(
+  request: SandboxCreateRequest,
+  deps: StagedSandboxRunDeps,
+): Promise<SandboxCreateFetchResult> {
+  const { auth, directory, queryClient } = deps;
+  const context = { userId: signedInUserId() };
+  const observer = new QueryMutationObserver<SandboxCreateFetchResult>(
+    queryClient,
+    {
+      mutationKey: sandboxMutationKeys.create(deps.userId),
+      mutationFn: () => auth.createSandbox(request),
+      onSettled: (result) => {
+        if (!settledForStartingAccount(context)) return;
+        void directory.refresh();
+        void queryClient.invalidateQueries({
+          queryKey: authQueryKeys.registeredHostsAll(),
+        });
+        if (
+          result !== undefined &&
+          result.kind === "refused" &&
+          result.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND
+        ) {
+          void queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.teamEnvironmentAll(),
+          });
+        }
+      },
+    },
+  );
+  // Subscribed for the mutation's life, so the cache can collect it once it
+  // settles.
+  const unsubscribe = observer.subscribe(() => undefined);
+  return observer.mutate().finally(unsubscribe);
 }
 
 /** A refused create, as the line or the inline refusal says it. */
@@ -244,7 +342,7 @@ async function settle(
   const deadline = startedAt + STAGED_CREATE_BUDGET_MS;
   while (deps.now() < deadline) {
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    const row = await readRow(deps.auth, started.sandboxId);
+    const row = await readRow(deps, started.sandboxId);
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
     const verdict = row === undefined ? null : settleVerdict(row);
     if (verdict !== null && verdict.kind === "failure") {
@@ -277,12 +375,19 @@ async function settle(
  * nothing about the sandbox.
  */
 async function readRow(
-  auth: AuthService,
+  deps: StagedSandboxRunDeps,
   sandboxId: string,
 ): Promise<SandboxSummary | null | undefined> {
-  const result = await auth.listSandboxes();
-  if (result.kind !== "ok") return undefined;
-  return result.response.sandboxes.find((row) => row.id === sandboxId) ?? null;
+  // The list query every surface reads, read fresh: the Sandboxes page and
+  // the pickers see the new row as the wait does.
+  const response = await deps.queryClient
+    .fetchQuery({
+      ...sandboxListQueryOptions(deps.auth, deps.userId, true),
+      staleTime: 0,
+    })
+    .catch(() => undefined);
+  if (response === undefined || response === null) return undefined;
+  return response.sandboxes.find((row) => row.id === sandboxId) ?? null;
 }
 
 type SettleVerdict =

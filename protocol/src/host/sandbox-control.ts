@@ -447,11 +447,37 @@ export const sandboxShapeBoundsSchema: z.ZodType<SandboxShapeBounds> =
     }),
   );
 
+/**
+ * A region's awake rates per unit, in millicredits an hour: a shape costs
+ * `(cpus × vcpu + memory GB × memory + disk GB × disk) × multiplier`.
+ */
+export interface SandboxCataloguePricing {
+  readonly vcpuHourMillicredits: number;
+  readonly memoryGbHourMillicredits: number;
+  readonly diskGbHourMillicredits: number;
+  readonly multiplier: number;
+}
+
+export const sandboxCataloguePricingSchema: z.ZodType<SandboxCataloguePricing> =
+  lazySchema(() =>
+    z.object({
+      vcpuHourMillicredits: z.number().nonnegative(),
+      memoryGbHourMillicredits: z.number().nonnegative(),
+      diskGbHourMillicredits: z.number().nonnegative(),
+      multiplier: z.number().positive(),
+    }),
+  );
+
 export interface SandboxCatalogueRegion {
   readonly id: string;
   readonly label: string;
   /** The price of the provider's SMALLEST shape here, for a "from" line. */
   readonly fromPriceMcPerHour: SandboxHourlyPrice;
+  /**
+   * The per-unit rates any shape here is priced from; `null` from a server
+   * that predates them, which leaves only the "from" price.
+   */
+  readonly pricing: SandboxCataloguePricing | null;
 }
 
 export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
@@ -460,6 +486,7 @@ export const sandboxCatalogueRegionSchema: z.ZodType<SandboxCatalogueRegion> =
       id: z.string().min(1),
       label: z.string(),
       fromPriceMcPerHour: sandboxHourlyPriceSchema,
+      pricing: sandboxCataloguePricingSchema.nullable().default(null),
     }),
   );
 

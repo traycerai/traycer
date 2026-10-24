@@ -46,6 +46,7 @@ import {
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  SANDBOXES_CANT_BE_CREATED,
   NEEDS_CREDITS,
   configurationLabel,
   needsCreditsRow,
@@ -174,7 +175,10 @@ export interface SandboxStaging {
 
 interface NewRowFacts {
   readonly configuration: StageConfiguration;
+  /** `null` before the catalogue answers, or when it offers no shape. */
   readonly shape: StageShape | null;
+  /** The catalogue answered with nothing this account can create. */
+  readonly uncreatable: boolean;
   readonly price: StagePrice | null;
   readonly needsCredits: boolean;
 }
@@ -334,7 +338,9 @@ export function useSandboxStaging(input: {
           : stageConfigurationKey(stage.target.configuration),
       stagedLabel:
         stage === null ? null : stagedLabel(stage.target, stagedFacts),
-      stagedBusy: stage !== null && stage.phase !== "staged",
+      // Running, not settled: a refusal or a failure ends the wait.
+      stagedBusy:
+        stage !== null && stage.phase !== "staged" && stage.failure === null,
       onPickHost: (host) => {
         const target = restingTargetFor(host);
         if (target === null) {
@@ -454,6 +460,7 @@ function newRowFacts(input: {
     return {
       configuration,
       shape,
+      uncreatable: input.catalogue !== null && shape === null,
       price,
       needsCredits: stageNeedsCredits(
         stageBalanceMc(input.user, configuration),
@@ -472,6 +479,7 @@ function stagedNewFacts(
   return {
     configuration: target.configuration,
     shape: target.shape,
+    uncreatable: false,
     price,
     needsCredits: stageNeedsCredits(
       stageBalanceMc(user, target.configuration),
@@ -484,6 +492,15 @@ function stagedNewFacts(
 function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
   const copy = stageConfigurationCopy(facts.configuration);
   const head = newSandboxRowLabel(copy);
+  if (facts.uncreatable) {
+    return {
+      configurationKey: stageConfigurationKey(facts.configuration),
+      label: head,
+      subLine: SANDBOXES_CANT_BE_CREATED,
+      configurationName: configurationLabel(copy),
+      disabled: true,
+    };
+  }
   const parts: string[] = [];
   if (facts.shape !== null) {
     parts.push(sandboxShapeLabel(facts.shape.cpus, facts.shape.memoryMb));
@@ -497,6 +514,7 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
     label: facts.needsCredits ? `${head} · ${NEEDS_CREDITS}` : head,
     subLine: parts.join(" · "),
     configurationName: configurationLabel(copy),
+    disabled: false,
   };
 }
 

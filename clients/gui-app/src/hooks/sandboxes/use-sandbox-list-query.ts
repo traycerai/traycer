@@ -11,7 +11,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
-function sandboxListQueryOptions(
+export function sandboxListQueryOptions(
   auth: AuthService | null,
   userId: string | null,
   enabled: boolean,

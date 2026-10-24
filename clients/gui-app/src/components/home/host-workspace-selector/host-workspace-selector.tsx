@@ -639,7 +639,7 @@ export function ActiveHostWorkspaceControls(
           className="w-full max-w-full min-w-0"
         >
           <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-          <SandboxWorkspaceSlot staging={staging} hostSlot={null}>
+          <SandboxWorkspaceSlot staging={staging}>
             <HomeWorkspaceRows
               workspaceSource={workspaceSource}
               resolvedFolders={resolved.folders}
@@ -651,6 +651,7 @@ export function ActiveHostWorkspaceControls(
               seedIntentOverride={props.seedIntentOverride}
               restingMode="rows"
               hostSlot={null}
+              emptySandbox={false}
               disabled={disabled}
             />
           </SandboxWorkspaceSlot>
@@ -677,26 +678,25 @@ export function ActiveHostWorkspaceControls(
       surface="inline"
     />
   );
-  const rows = (
-    <HomeWorkspaceRows
-      workspaceSource={workspaceSource}
-      resolvedFolders={resolved.folders}
-      activeHostClient={activeHostClient}
-      activeHostId={activeHostId}
-      hostLabel={hostLabel}
-      stagingKey={props.stagingKey}
-      seedIntent={props.seedIntent}
-      seedIntentOverride={props.seedIntentOverride}
-      restingMode="summary"
-      hostSlot={deviceSelect}
-      disabled={disabled}
-    />
-  );
+  // The host switcher stays where it is while a sandbox is staged: only the
+  // workspace summary beside it reads `Empty sandbox`, so the picker that
+  // just staged keeps its trigger and focus.
   return (
     <>
-      <SandboxWorkspaceSlot staging={staging} hostSlot={deviceSelect}>
-        {rows}
-      </SandboxWorkspaceSlot>
+      <HomeWorkspaceRows
+        workspaceSource={workspaceSource}
+        resolvedFolders={resolved.folders}
+        activeHostClient={activeHostClient}
+        activeHostId={activeHostId}
+        hostLabel={hostLabel}
+        stagingKey={props.stagingKey}
+        seedIntent={props.seedIntent}
+        seedIntentOverride={props.seedIntentOverride}
+        restingMode="summary"
+        hostSlot={deviceSelect}
+        emptySandbox={staging !== null && staging.stage !== null}
+        disabled={disabled}
+      />
       <SandboxStagingExtras staging={staging} />
     </>
   );
@@ -709,35 +709,31 @@ function stagingComposer(
 }
 
 /**
- * The workspace slot: `Empty sandbox` while a sandbox is staged, since its
- * workspace is the new host's, which holds no folder until the agent or the
- * terminal fetches one; else the surface's own folder rows.
+ * The popover's workspace slot: `Empty sandbox` while a sandbox is staged,
+ * else the surface's own folder rows.
  */
 function SandboxWorkspaceSlot(props: {
   readonly staging: SandboxStaging | null;
-  readonly hostSlot: ReactNode;
   readonly children: ReactNode;
 }): ReactNode {
   if (props.staging === null || props.staging.stage === null) {
     return props.children;
   }
+  return <EmptySandboxSummary />;
+}
+
+/**
+ * A staged sandbox's workspace is the new host's, which holds no folder
+ * until the agent or the terminal fetches one.
+ */
+function EmptySandboxSummary(): ReactNode {
   return (
-    <div
-      className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
-      data-testid="home-workspace-summary-control"
+    <span
+      className="min-w-0 truncate px-1.5 py-1 text-ui-sm text-muted-foreground opacity-70"
+      data-testid="workspace-summary-empty-sandbox"
     >
-      {props.hostSlot === null ? null : (
-        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
-          {props.hostSlot}
-        </div>
-      )}
-      <span
-        className="min-w-0 truncate px-1.5 py-1 text-ui-sm text-muted-foreground opacity-70"
-        data-testid="workspace-summary-empty-sandbox"
-      >
-        {EMPTY_SANDBOX}
-      </span>
-    </div>
+      {EMPTY_SANDBOX}
+    </span>
   );
 }
 
@@ -788,6 +784,8 @@ function HomeWorkspaceRows(props: {
   readonly seedIntentOverride: SeedIntentOverride | null;
   readonly restingMode: "rows" | "summary";
   readonly hostSlot: ReactNode;
+  /** The summary reads `Empty sandbox`: a sandbox is staged. */
+  readonly emptySandbox: boolean;
   readonly disabled: boolean;
 }) {
   const {
@@ -1319,6 +1317,7 @@ function HomeWorkspaceRows(props: {
         <HomeWorkspaceSummaryControl
           items={items}
           hostSlot={props.hostSlot}
+          emptySandbox={props.emptySandbox}
           addFolderPending={addFolderPending}
           onAddFolder={addFolders}
           onEditEnvironment={handleEditEnvironment}
@@ -1366,6 +1365,7 @@ function HomeWorkspaceRows(props: {
 function HomeWorkspaceSummaryControl(props: {
   readonly items: ReadonlyArray<WorkspaceRunItem>;
   readonly hostSlot: ReactNode;
+  readonly emptySandbox: boolean;
   readonly addFolderPending: boolean;
   readonly onAddFolder: AddFolderHandler;
   readonly onEditEnvironment: (workspacePath: string) => void;
@@ -1395,32 +1395,38 @@ function HomeWorkspaceSummaryControl(props: {
           {props.hostSlot}
         </div>
       )}
-      <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
-        <WorkspaceFolderSummaryControl
-          onFirstTaskSetupComplete={
-            guidedSetup && props.items.length > 0 ? reviewWorkspace : undefined
-          }
-          items={props.items}
-          readOnly={false}
-          bindingResolved
-          addFolderPending={props.addFolderPending}
-          addFolderDisabled={props.disabled}
-          addFolderDisabledReason={null}
-          onAddFolder={props.onAddFolder}
-          onUpdate={null}
-          updateEnabled={false}
-          updatePending={false}
-          onDiscardStaged={null}
-          discardDisabled={false}
-          onEditEnvironment={props.onEditEnvironment}
-          refresh={props.refresh}
-          popoverTestId="home-workspace-rows-popover"
-          popoverSide="bottom"
-          recentWorkspaces={props.recentWorkspaces}
-          recentWorkspaceCount={props.recentWorkspaceCount}
-          moveToRecent={props.moveToRecent}
-        />
-      </div>
+      {props.emptySandbox ? (
+        <EmptySandboxSummary />
+      ) : (
+        <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
+          <WorkspaceFolderSummaryControl
+            onFirstTaskSetupComplete={
+              guidedSetup && props.items.length > 0
+                ? reviewWorkspace
+                : undefined
+            }
+            items={props.items}
+            readOnly={false}
+            bindingResolved
+            addFolderPending={props.addFolderPending}
+            addFolderDisabled={props.disabled}
+            addFolderDisabledReason={null}
+            onAddFolder={props.onAddFolder}
+            onUpdate={null}
+            updateEnabled={false}
+            updatePending={false}
+            onDiscardStaged={null}
+            discardDisabled={false}
+            onEditEnvironment={props.onEditEnvironment}
+            refresh={props.refresh}
+            popoverTestId="home-workspace-rows-popover"
+            popoverSide="bottom"
+            recentWorkspaces={props.recentWorkspaces}
+            recentWorkspaceCount={props.recentWorkspaceCount}
+            moveToRecent={props.moveToRecent}
+          />
+        </div>
+      )}
     </div>
   );
 }
