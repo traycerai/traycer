@@ -1,6 +1,7 @@
 /**
  * Project markdown down to the prose a reader would actually see, for one-line
- * previews and snippets.
+ * previews and snippets, and (`markdownToSpokenParagraphs`) for reading a reply
+ * aloud.
  *
  * A clamped preview that shows `## Heading` or `[docs](https://…/very/long)` is
  * showing the reader the source, not the message - the markers eat the budget
@@ -171,9 +172,9 @@ function blockText(token: unknown): string {
   switch (readString(token, "type")) {
     case "heading":
     case "paragraph":
-      return inlineText(readList(token, "tokens"));
+      return inlineText(readList(token, "tokens"), "alt");
     case "text":
-      return textOrChildren(token);
+      return textOrChildren(token, "alt");
     case "code":
       return codeLabel(token);
     case "blockquote":
@@ -181,7 +182,7 @@ function blockText(token: unknown): string {
     case "list":
       return listText(token);
     case "table":
-      return tableText(token);
+      return tableText(token, "alt");
     // Structural or invisible: a rule, a blank line, a link-reference
     // definition, and raw HTML all contribute no prose.
     case "hr":
@@ -190,7 +191,7 @@ function blockText(token: unknown): string {
     case "html":
       return "";
     default:
-      return inlineText(readList(token, "tokens"));
+      return inlineText(readList(token, "tokens"), "alt");
   }
 }
 
@@ -213,29 +214,32 @@ function listText(token: unknown): string {
   return joinParts(items, BLOCK_SEPARATOR);
 }
 
-function tableText(token: unknown): string {
+function tableText(token: unknown, images: ImageText): string {
   const rows = readList(token, "rows").flatMap((row) => toList(row));
   const cells = [...readList(token, "header"), ...rows].map((cell) =>
-    inlineText(readList(cell, "tokens")),
+    inlineText(readList(cell, "tokens"), images),
   );
   return joinParts(cells, " ");
 }
 
-function inlineText(tokens: ReadonlyArray<unknown>): string {
-  return tokens.map(inlineTokenText).join("");
+/** Whether an image reads as its alt text (a preview) or not at all (speech). */
+type ImageText = "alt" | "skip";
+
+function inlineText(tokens: ReadonlyArray<unknown>, images: ImageText): string {
+  return tokens.map((token) => inlineTokenText(token, images)).join("");
 }
 
-function inlineTokenText(token: unknown): string {
+function inlineTokenText(token: unknown, images: ImageText): string {
   switch (readString(token, "type")) {
     case "text":
-      return textOrChildren(token);
+      return textOrChildren(token, images);
     // The LABEL, never the target: a preview's whole budget can otherwise go to
     // one URL the reader cannot click anyway.
     case "link":
     case "strong":
     case "em":
     case "del":
-      return inlineText(readList(token, "tokens"));
+      return inlineText(readList(token, "tokens"), images);
     // LITERAL, both of them. CommonMark treats a character reference inside a
     // code span as text, so `` `&amp;` `` really does read `&amp;` - and an
     // `escape` token's text is already the resolved character.
@@ -244,13 +248,15 @@ function inlineTokenText(token: unknown): string {
       return readString(token, "text");
     // Alt text is the only part of an image that is prose.
     case "image":
-      return decodeCharacterReferences(readString(token, "text"));
+      return images === "alt"
+        ? decodeCharacterReferences(readString(token, "text"))
+        : "";
     case "br":
       return " ";
     case "html":
       return "";
     default:
-      return inlineText(readList(token, "tokens"));
+      return inlineText(readList(token, "tokens"), images);
   }
 }
 
@@ -258,10 +264,48 @@ function inlineTokenText(token: unknown): string {
  * A `text` token carries children only when it contains inline markup; when it
  * does, they are the authority, because `text` itself is the unparsed source.
  */
-function textOrChildren(token: unknown): string {
+function textOrChildren(token: unknown, images: ImageText): string {
   const children = readList(token, "tokens");
-  if (children.length > 0) return inlineText(children);
+  if (children.length > 0) return inlineText(children, images);
   // The leaf: this is where prose actually lands, so this is where character
   // references get resolved. Code spans reach their own branch and stay literal.
   return decodeCharacterReferences(readString(token, "text"));
+}
+
+/**
+ * The same parse, read aloud: one entry per paragraph, heading, list item or
+ * table, in order. Unlike a preview, nothing that is not prose is spoken - no
+ * code (not even a "Code" label), no link targets or definitions, no images,
+ * no raw HTML - wherever it sits, a fence inside a blockquote or a list item
+ * included.
+ */
+export function markdownToSpokenParagraphs(markdown: string): string[] {
+  return spokenBlocks(marked.lexer(markdown))
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter((paragraph) => paragraph.length > 0);
+}
+
+function spokenBlocks(tokens: ReadonlyArray<unknown>): string[] {
+  return tokens.flatMap((token): string[] => {
+    switch (readString(token, "type")) {
+      case "code":
+      case "hr":
+      case "space":
+      case "def":
+      case "html":
+        return [];
+      case "blockquote":
+        return spokenBlocks(readList(token, "tokens"));
+      case "list":
+        return readList(token, "items").flatMap((item) =>
+          spokenBlocks(readList(item, "tokens")),
+        );
+      case "table":
+        return [tableText(token, "skip")];
+      case "text":
+        return [textOrChildren(token, "skip")];
+      default:
+        return [inlineText(readList(token, "tokens"), "skip")];
+    }
+  });
 }

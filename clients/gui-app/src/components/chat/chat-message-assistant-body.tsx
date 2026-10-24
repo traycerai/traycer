@@ -758,7 +758,6 @@ function AssistantReplyReadAloudButton({ text }: { text: string }) {
       type="button"
       onClick={toggle}
       aria-label={reading ? "Stop reading" : "Read reply aloud"}
-      aria-pressed={reading}
       data-testid="assistant-reply-read-aloud"
       className={cn(
         "inline-flex size-6 shrink-0 items-center justify-center rounded-md",

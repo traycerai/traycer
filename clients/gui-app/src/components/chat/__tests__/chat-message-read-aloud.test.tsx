@@ -9,125 +9,36 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import {
+  LOCAL_VOICE,
+  NETWORK_VOICE,
+  createSynth,
+  installSpeech,
+  type FakeSynth,
+} from "@/components/chat/__tests__/fake-speech-synthesis";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { MessageSegment } from "@/stores/composer/chat-store";
-
-interface FakeVoice {
-  readonly name: string;
-  readonly lang: string;
-  readonly localService: boolean;
-  readonly default: boolean;
-  readonly voiceURI: string;
-}
-
-class FakeUtterance {
-  readonly text: string;
-  voice: FakeVoice | null = null;
-  lang = "";
-  onend: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(text: string) {
-    this.text = text;
-  }
-}
-
-interface FakeSynth {
-  voices: FakeVoice[];
-  readonly spoken: FakeUtterance[];
-  readonly speak: (utterance: FakeUtterance) => void;
-  readonly cancel: () => void;
-  readonly getVoices: () => FakeVoice[];
-  readonly addEventListener: (type: string, listener: () => void) => void;
-  readonly removeEventListener: (type: string, listener: () => void) => void;
-  readonly fireVoicesChanged: () => void;
-  readonly finishAll: () => void;
-}
-
-function voice(
-  name: string,
-  localService: boolean,
-  isDefault: boolean,
-): FakeVoice {
-  return {
-    name,
-    lang: "en-US",
-    localService,
-    default: isDefault,
-    voiceURI: name,
-  };
-}
-
-const LOCAL_VOICE = voice("Samantha", true, false);
-// Chrome lists its Google voices first and can mark one the default; they
-// synthesize on Google's servers and report `localService: false`.
-const NETWORK_VOICE = voice("Google US English", false, true);
-
-function createSynth(voices: FakeVoice[]): FakeSynth {
-  let queue: FakeUtterance[] = [];
-  const spoken: FakeUtterance[] = [];
-  const listeners = new Set<() => void>();
-  const synth: FakeSynth = {
-    voices,
-    spoken,
-    speak: vi.fn((utterance: FakeUtterance) => {
-      queue.push(utterance);
-      spoken.push(utterance);
-    }),
-    cancel: vi.fn(() => {
-      const interrupted = queue;
-      queue = [];
-      for (const utterance of interrupted) utterance.onerror?.();
-    }),
-    getVoices: () => synth.voices,
-    addEventListener: (type, listener) => {
-      if (type === "voiceschanged") listeners.add(listener);
-    },
-    removeEventListener: (type, listener) => {
-      if (type === "voiceschanged") listeners.delete(listener);
-    },
-    fireVoicesChanged: () => {
-      for (const listener of listeners) listener();
-    },
-    finishAll: () => {
-      const finished = queue;
-      queue = [];
-      for (const utterance of finished) utterance.onend?.();
-    },
-  };
-  return synth;
-}
-
-function installSpeech(synth: FakeSynth | null): void {
-  if (synth === null) {
-    Reflect.deleteProperty(window, "speechSynthesis");
-    Reflect.deleteProperty(window, "SpeechSynthesisUtterance");
-    return;
-  }
-  Object.defineProperty(window, "speechSynthesis", {
-    configurable: true,
-    writable: true,
-    value: synth,
-  });
-  Object.defineProperty(window, "SpeechSynthesisUtterance", {
-    configurable: true,
-    writable: true,
-    value: FakeUtterance,
-  });
-}
 
 function render(ui: ReactNode) {
   // A fenced code block's renderer reads the query client.
   const queryClient = new QueryClient();
-  return rtlRender(
+  const wrap = (content: ReactNode): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={0}>
         <ChatExpansionTestProviders tileInstanceId="read-aloud-test-tile">
-          {ui}
+          {content}
         </ChatExpansionTestProviders>
       </TooltipProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = rtlRender(wrap(ui));
+  return {
+    ...view,
+    rerenderWith: (next: ReactNode) => view.rerender(wrap(next)),
+  };
 }
 
 function textSegment(id: string, markdown: string): MessageSegment {
@@ -165,6 +76,10 @@ function FinishedReply(props: {
 
 function readAloudButtons(): HTMLElement[] {
   return screen.queryAllByTestId("assistant-reply-read-aloud");
+}
+
+function spokenText(synth: FakeSynth): string {
+  return synth.spoken.map((utterance) => utterance.text).join(" ");
 }
 
 beforeEach(() => {
@@ -220,12 +135,13 @@ describe("reply read-aloud button", () => {
       "Hello there.",
     ]);
     expect(button.getAttribute("aria-label")).toBe("Stop reading");
+    // The label names the action; a pressed state on top would be announced
+    // as "Stop reading, pressed".
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
 
-    const cancelsBeforeStop = vi.mocked(synth.cancel).mock.calls.length;
+    const cancelsBeforeStop = synth.cancelCount();
     fireEvent.click(button);
-    expect(vi.mocked(synth.cancel).mock.calls.length).toBe(
-      cancelsBeforeStop + 1,
-    );
+    expect(synth.cancelCount()).toBe(cancelsBeforeStop + 1);
     expect(button.getAttribute("aria-label")).toBe("Read reply aloud");
   });
 
@@ -244,6 +160,7 @@ describe("reply read-aloud button", () => {
     expect(button.getAttribute("aria-label")).toBe("Stop reading");
     act(() => synth.finishAll());
 
+    expect(spokenText(synth)).toBe("First paragraph. Second paragraph.");
     expect(button.getAttribute("aria-label")).toBe("Read reply aloud");
   });
 
@@ -273,13 +190,60 @@ describe("reply read-aloud button", () => {
       <FinishedReply messageId="assistant:a" markdown="Hello there." />,
     );
     fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
-    const cancelsBeforeUnmount = vi.mocked(synth.cancel).mock.calls.length;
+    const cancelsBeforeUnmount = synth.cancelCount();
 
     view.unmount();
 
-    expect(vi.mocked(synth.cancel).mock.calls.length).toBe(
-      cancelsBeforeUnmount + 1,
+    expect(synth.cancelCount()).toBe(cancelsBeforeUnmount + 1);
+  });
+
+  it.each([
+    ["its epic pane is put behind another", "pane"],
+    ["its canvas tab is put behind another", "tab"],
+  ] as const)(
+    "stops speaking when %s while the reply stays mounted",
+    (_label, surface) => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      const reply = (shown: boolean): ReactNode => (
+        <PaneVisibilityContext.Provider value={surface !== "pane" || shown}>
+          <TabBodySelectedContext.Provider value={surface !== "tab" || shown}>
+            <FinishedReply messageId="assistant:a" markdown={"One.\n\nTwo."} />
+          </TabBodySelectedContext.Provider>
+        </PaneVisibilityContext.Provider>
+      );
+      const view = render(reply(true));
+      const button = screen.getByTestId("assistant-reply-read-aloud");
+      fireEvent.click(button);
+      const cancelsBeforeHide = synth.cancelCount();
+
+      view.rerenderWith(reply(false));
+
+      expect(screen.getByTestId("assistant-reply-read-aloud")).toBe(button);
+      expect(synth.cancelCount()).toBe(cancelsBeforeHide + 1);
+      expect(button.getAttribute("aria-label")).toBe("Read reply aloud");
+    },
+  );
+
+  it("cancels the rest of the reply when one paragraph fails", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown={"One.\n\nTwo.\n\nThree."}
+      />,
     );
+    const button = screen.getByTestId("assistant-reply-read-aloud");
+    fireEvent.click(button);
+    const cancelsBeforeError = synth.cancelCount();
+
+    act(() => synth.failCurrent());
+    act(() => synth.finishAll());
+
+    expect(synth.cancelCount()).toBe(cancelsBeforeError + 1);
+    expect(spokenText(synth)).not.toContain("Three.");
+    expect(button.getAttribute("aria-label")).toBe("Read reply aloud");
   });
 
   it("reads the prose and skips code blocks and link targets", () => {
@@ -303,9 +267,67 @@ describe("reply read-aloud button", () => {
     );
 
     fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
 
-    const said = synth.spoken.map((utterance) => utterance.text).join(" ");
-    expect(said).toBe("Result Run this with bun and see the docs. Done.");
+    expect(spokenText(synth)).toBe(
+      "Result Run this with bun and see the docs. Done.",
+    );
+  });
+
+  it("reads a reference link's label, never its definition", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown={[
+          "See [docs][ref] for more.",
+          "",
+          "[ref]: https://example.com/private",
+        ].join("\n")}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
+
+    expect(spokenText(synth)).toBe("See docs for more.");
+  });
+
+  it("keeps angle brackets that are text, not markup", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown="It returns `Promise<void>` when x < 5 and y > 3."
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
+
+    expect(spokenText(synth)).toBe(
+      "It returns Promise<void> when x < 5 and y > 3.",
+    );
+  });
+
+  it("skips a fenced code block inside a blockquote", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown={["> Run this:", ">", "> ```sh", "> echo hello", "> ```"].join(
+          "\n",
+        )}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
+
+    expect(spokenText(synth)).toBe("Run this:");
   });
 });
 
@@ -321,8 +343,9 @@ describe("reply read-aloud: no audio or text leaves the device", () => {
     );
 
     fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    act(() => synth.finishAll());
 
-    expect(synth.spoken.length).toBeGreaterThan(0);
+    expect(synth.spoken).toHaveLength(3);
     for (const utterance of synth.spoken) {
       expect(utterance.voice).toBe(LOCAL_VOICE);
     }
@@ -339,6 +362,45 @@ describe("reply read-aloud: no audio or text leaves the device", () => {
     fireEvent.click(button);
 
     expect(synth.speak).not.toHaveBeenCalled();
+  });
+
+  it("cancels the reading when its on-device voice is removed during playback", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown={"One.\n\nTwo.\n\nThree."}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("assistant-reply-read-aloud"));
+    const cancelsBeforeRemoval = synth.cancelCount();
+
+    synth.voices = [NETWORK_VOICE];
+    act(() => synth.fireVoicesChanged());
+    act(() => synth.finishAll());
+
+    expect(synth.cancelCount()).toBe(cancelsBeforeRemoval + 1);
+    expect(spokenText(synth)).toBe("One.");
+  });
+
+  it("queues no further paragraph once the voice is gone, even with no voiceschanged event", () => {
+    const synth = createSynth([LOCAL_VOICE]);
+    installSpeech(synth);
+    render(
+      <FinishedReply
+        messageId="assistant:a"
+        markdown={"One.\n\nTwo.\n\nThree."}
+      />,
+    );
+    const button = screen.getByTestId("assistant-reply-read-aloud");
+    fireEvent.click(button);
+
+    synth.voices = [NETWORK_VOICE];
+    act(() => synth.finishCurrent());
+
+    expect(spokenText(synth)).toBe("One.");
+    expect(button.getAttribute("aria-label")).toBe("Read reply aloud");
   });
 
   it("opens no network request, socket or audio element while reading", () => {

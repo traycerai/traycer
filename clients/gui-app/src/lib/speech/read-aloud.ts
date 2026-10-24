@@ -5,11 +5,12 @@
  * on a server next to on-device ones (Chrome's "Google ..." voices, Edge's
  * "Online (Natural)" voices), report them with `localService: false`, and may
  * make one the default. So an utterance is only ever spoken with an on-device
- * voice assigned explicitly, and nothing is spoken when the device has none.
+ * voice assigned explicitly, the voice is looked up again before each
+ * paragraph is queued, and reading stops the moment that voice is gone.
  *
  * One reply plays at a time: the engine's queue is global, so starting a
  * reply cancels whatever is playing and the store below names the one reply
- * that owns the engine.
+ * that owns the engine, with the conversation it belongs to.
  */
 
 export function deviceSpeechSynthesis(): SpeechSynthesis | null {
@@ -35,45 +36,83 @@ export function pickOnDeviceVoice(
   );
 }
 
-/**
- * The reply's prose as paragraphs to speak: fenced code blocks, link targets,
- * images, HTML tags and markdown markers are dropped.
- */
-export function speakableParagraphs(markdown: string): string[] {
-  const withoutFences = markdown.replace(
-    /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\1[^\n]*$|(?![\s\S]))/gm,
-    "",
-  );
-  return withoutFences
-    .split(/\n\s*\n/)
-    .flatMap((block) =>
-      block.split(/\n(?= {0,3}(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>))/),
-    )
-    .map((block) =>
-      block
-        .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-        .replace(/<[^>]+>/g, "")
-        .replace(/^ {0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
-        .replace(/[`*_~|]/g, "")
-        .replace(/\s+/g, " ")
-        .trim(),
-    )
-    .filter((paragraph) => paragraph.length > 0);
-}
-
 interface ActiveReading {
   readonly ownerId: string;
+  readonly conversation: string;
   readonly run: number;
+  readonly voiceURI: string;
 }
 
 let active: ActiveReading | null = null;
 let runCounter = 0;
 const listeners = new Set<() => void>();
+let watchedSynth: SpeechSynthesis | null = null;
+
+function onDeviceVoiceFor(
+  synth: SpeechSynthesis,
+  reading: ActiveReading,
+): SpeechSynthesisVoice | null {
+  return (
+    synth
+      .getVoices()
+      .find(
+        (voice) => voice.localService && voice.voiceURI === reading.voiceURI,
+      ) ?? null
+  );
+}
+
+function onVoicesChanged(): void {
+  const synth = watchedSynth;
+  if (synth === null || active === null) return;
+  if (onDeviceVoiceFor(synth, active) === null) endRun(active.run);
+}
 
 function setActive(next: ActiveReading | null): void {
   active = next;
+  const synth = next === null ? null : deviceSpeechSynthesis();
+  if (watchedSynth !== synth) {
+    watchedSynth?.removeEventListener("voiceschanged", onVoicesChanged);
+    synth?.addEventListener("voiceschanged", onVoicesChanged);
+    watchedSynth = synth;
+  }
   for (const listener of listeners) listener();
+}
+
+/**
+ * Ends the run if it is still the current one, cancelling anything it queued.
+ * An engine fires a cancelled run's events late, so a stale run is a no-op.
+ */
+function endRun(run: number): void {
+  if (active?.run !== run) return;
+  setActive(null);
+  deviceSpeechSynthesis()?.cancel();
+}
+
+function speakParagraph(
+  synth: SpeechSynthesis,
+  run: number,
+  paragraphs: ReadonlyArray<string>,
+  index: number,
+): void {
+  if (active?.run !== run) return;
+  const voice = onDeviceVoiceFor(synth, active);
+  const paragraph = paragraphs.at(index);
+  if (voice === null || paragraph === undefined) {
+    endRun(run);
+    return;
+  }
+  const utterance = new SpeechSynthesisUtterance(paragraph);
+  utterance.voice = voice;
+  utterance.lang = voice.lang;
+  utterance.onend = () => {
+    if (index + 1 < paragraphs.length) {
+      speakParagraph(synth, run, paragraphs, index + 1);
+      return;
+    }
+    if (active?.run === run) setActive(null);
+  };
+  utterance.onerror = () => endRun(run);
+  synth.speak(utterance);
 }
 
 export function subscribeReadAloud(listener: () => void): () => void {
@@ -90,6 +129,7 @@ export function readingOwnerId(): string | null {
 /** Returns false, speaking nothing, when no on-device voice is available. */
 export function startReadingAloud(input: {
   readonly ownerId: string;
+  readonly conversation: string;
   readonly paragraphs: ReadonlyArray<string>;
   readonly preferredLanguage: string;
 }): boolean {
@@ -101,25 +141,23 @@ export function startReadingAloud(input: {
   synth.cancel();
   runCounter += 1;
   const run = runCounter;
-  // An engine fires the cancelled run's end or error events late; only the
-  // current run may clear the store.
-  const finish = (): void => {
-    if (active?.run === run) setActive(null);
-  };
-  setActive({ ownerId: input.ownerId, run });
-  input.paragraphs.forEach((paragraph, index) => {
-    const utterance = new SpeechSynthesisUtterance(paragraph);
-    utterance.voice = voice;
-    utterance.lang = voice.lang;
-    utterance.onerror = finish;
-    if (index === input.paragraphs.length - 1) utterance.onend = finish;
-    synth.speak(utterance);
+  setActive({
+    ownerId: input.ownerId,
+    conversation: input.conversation,
+    run,
+    voiceURI: voice.voiceURI,
   });
+  speakParagraph(synth, run, input.paragraphs, 0);
   return true;
 }
 
 export function stopReadingAloud(ownerId: string): void {
   if (active?.ownerId !== ownerId) return;
-  setActive(null);
-  deviceSpeechSynthesis()?.cancel();
+  endRun(active.run);
+}
+
+/** A new reply arrived in `conversation`: stop reading an older one there. */
+export function stopReadingInConversation(conversation: string): void {
+  if (active?.conversation !== conversation) return;
+  endRun(active.run);
 }
