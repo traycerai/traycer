@@ -34,7 +34,7 @@ export function useDetailsRecovery(): {
         });
       },
       onError: (error) =>
-        toastFromHostError(error, "Couldn't retry these settings."),
+        toastFromHostError(error, "Couldn't retry the setup script."),
     },
   });
   return {

@@ -503,8 +503,9 @@ describe("a secret's versions", () => {
       "destroyed",
     ]);
     expect(rows[0].textContent).toContain("Version 3");
+    // The current version leaves through the row's Remove, never from here.
     expect(within(rows[0]).queryByTestId("secret-version-undo")).toBeNull();
-    expect(within(rows[0]).getByTestId("secret-version-destroy")).toBeTruthy();
+    expect(within(rows[0]).queryByTestId("secret-version-destroy")).toBeNull();
     expect(within(rows[1]).getByTestId("secret-version-undo").textContent).toBe(
       "Undo",
     );
@@ -627,18 +628,19 @@ describe("a secret's versions", () => {
   });
 
   it("says the current value cannot be destroyed when the host refuses", async () => {
+    // An Undo landed between render and click: the replaced version is now current.
     const host = buildRotationHost({
       destroyAnswer: { outcome: "refused", code: "version_current" },
     });
     renderPage(host);
     const rows = await openVersions();
 
-    fireEvent.click(within(rows[0]).getByTestId("secret-version-destroy"));
+    fireEvent.click(within(rows[1]).getByTestId("secret-version-destroy"));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     fireEvent.click(within(dialog).getByTestId("confirm-action"));
 
     expect(
-      (await within(rows[0]).findByTestId("secret-version-note")).textContent,
+      (await within(rows[1]).findByTestId("secret-version-note")).textContent,
     ).toBe("This is the current value. Replace or revoke it first.");
   });
 });
