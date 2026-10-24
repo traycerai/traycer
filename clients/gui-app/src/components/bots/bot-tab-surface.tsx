@@ -37,7 +37,10 @@ import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bi
 import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotOpenThread,
+} from "@/components/bots/bot-channel-view";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
@@ -363,7 +366,7 @@ function BotTabContent(props: {
   );
   // Held here, above the views, so the open thread and the session shown
   // under the hood survive a switch between the channel's tabs.
-  const [openThreadPostId, setOpenThreadPostId] = useState<string | null>(null);
+  const [openThread, setOpenThread] = useState<BotOpenThread | null>(null);
   const [sessionChatId, setSessionChatId] = useState<string | null>(null);
   const openUnderTheHood = useCallback(
     (threadSessionChatId: string) => {
@@ -425,8 +428,8 @@ function BotTabContent(props: {
               appConversationChatId={snapshot.bot.appConversationChatId}
               paused={paused}
               resolveMember={resolveMember}
-              openThreadPostId={openThreadPostId}
-              onOpenThread={setOpenThreadPostId}
+              openThread={openThread}
+              onOpenThread={setOpenThread}
               onOpenUnderTheHood={openUnderTheHood}
             />
           </TabsContent>

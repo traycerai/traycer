@@ -7,6 +7,7 @@
  */
 import type { ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -123,6 +124,7 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
                 postId={postId}
                 threadLine={surface.threadLine}
                 openThread={surface.openThread}
+                openAnnouncementThread={surface.openAnnouncementThread}
               />
             ))
           : null}
@@ -134,6 +136,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
   BotMessageComposer: (props: {
     conversationId: string;
     threadId: string | null;
+    announcementId: string | null;
     placeholder: string;
     testId: string;
   }) => (
@@ -141,6 +144,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
       data-testid={`stub-${props.testId}`}
       data-conversation-id={props.conversationId}
       data-thread-id={props.threadId ?? "none"}
+      data-announcement-id={props.announcementId ?? "none"}
       data-placeholder={props.placeholder}
     />
   ),
@@ -150,9 +154,11 @@ function PostStub(props: {
   readonly postId: string;
   readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
   readonly openThread: ((postMessageId: string) => void) | null;
+  readonly openAnnouncementThread: ((announcementId: string) => void) | null;
 }): ReactNode {
   const line = props.threadLine(props.postId);
   const openThread = props.openThread;
+  const openAnnouncementThread = props.openAnnouncementThread;
   return (
     <div data-testid={`stub-post-${props.postId}`}>
       <span
@@ -173,11 +179,21 @@ function PostStub(props: {
           onClick={() => openThread(props.postId)}
         />
       )}
+      {openAnnouncementThread === null ? null : (
+        <button
+          type="button"
+          data-testid={`stub-open-announcement-${props.postId}`}
+          onClick={() => openAnnouncementThread(props.postId)}
+        />
+      )}
     </div>
   );
 }
 
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotOpenThread,
+} from "@/components/bots/bot-channel-view";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -222,39 +238,58 @@ function indicator(
 
 interface MountOptions {
   readonly paused: boolean;
+  /** A member's post whose thread is open; `null` for none. */
   readonly openThreadPostId: string | null;
 }
 
+const QUESTION_1: BotOpenThread = {
+  anchorMessageId: "question-1",
+  announcement: true,
+};
+
 function mount(options: MountOptions): {
-  readonly onOpenThread: Mock<(id: string | null) => void>;
+  readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   readonly onOpenUnderTheHood: Mock<(id: string) => void>;
   /** Renders the same view again, reading the mocks' current state. */
   readonly rerender: () => void;
+  /** Renders the view again with the tab's open-thread selection changed. */
+  readonly reopen: (openThread: BotOpenThread | null) => void;
 } {
-  const onOpenThread = vi.fn<(id: string | null) => void>();
+  const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
-  const tree = (): ReactNode => (
-    <TooltipProvider>
-      <ChatExpansionTestProviders tileInstanceId="tile-1">
-        <BotChannelView
-          botId={BOT_ID}
-          hostId={HOST_ID}
-          botTitle="Release Bot"
-          appConversationChatId={mocks.state.appConversationChatId}
-          paused={options.paused}
-          resolveMember={resolveMember}
-          openThreadPostId={options.openThreadPostId}
-          onOpenThread={onOpenThread}
-          onOpenUnderTheHood={onOpenUnderTheHood}
-        />
-      </ChatExpansionTestProviders>
-    </TooltipProvider>
+  const queryClient = new QueryClient();
+  const tree = (openThread: BotOpenThread | null): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ChatExpansionTestProviders tileInstanceId="tile-1">
+          <BotChannelView
+            botId={BOT_ID}
+            hostId={HOST_ID}
+            botTitle="Release Bot"
+            appConversationChatId={mocks.state.appConversationChatId}
+            paused={options.paused}
+            resolveMember={resolveMember}
+            openThread={openThread}
+            onOpenThread={onOpenThread}
+            onOpenUnderTheHood={onOpenUnderTheHood}
+          />
+        </ChatExpansionTestProviders>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
-  const result = render(tree());
+  let current: BotOpenThread | null =
+    options.openThreadPostId === null
+      ? null
+      : { anchorMessageId: options.openThreadPostId, announcement: false };
+  const result = render(tree(current));
   return {
     onOpenThread,
     onOpenUnderTheHood,
-    rerender: () => result.rerender(tree()),
+    rerender: () => result.rerender(tree(current)),
+    reopen: (openThread) => {
+      current = openThread;
+      result.rerender(tree(current));
+    },
   };
 }
 
@@ -403,7 +438,91 @@ describe("<BotChannelView /> channel", () => {
     await user.click(screen.getByTestId("stub-open-post-a"));
 
     expect(onOpenThread).toHaveBeenCalledTimes(1);
-    expect(onOpenThread).toHaveBeenCalledWith("post-a");
+    expect(onOpenThread).toHaveBeenCalledWith({
+      anchorMessageId: "post-a",
+      announcement: false,
+    });
+  });
+
+  it("opens a question's thread by its message id, and shows a box that starts it while none is listed", async () => {
+    const user = userEvent.setup();
+    mocks.postIds = ["question-1"];
+    const { onOpenThread, reopen } = mount({
+      paused: false,
+      openThreadPostId: null,
+    });
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+
+    await user.click(screen.getByTestId("stub-open-announcement-question-1"));
+
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
+    expect(onOpenThread).toHaveBeenCalledWith(QUESTION_1);
+
+    reopen(QUESTION_1);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    const composer = within(panel).getByTestId("stub-bot-thread-composer");
+    expect(composer.getAttribute("data-announcement-id")).toBe("question-1");
+    expect(composer.getAttribute("data-thread-id")).toBe("none");
+    expect(composer.getAttribute("data-conversation-id")).toBe(
+      "conversation-channel",
+    );
+  });
+
+  it("shows the question's thread, not the box that starts one, once the thread is listed", async () => {
+    const user = userEvent.setup();
+    mocks.postIds = ["question-1"];
+    const { reopen } = mount({ paused: false, openThreadPostId: null });
+    await user.click(screen.getByTestId("stub-open-announcement-question-1"));
+    reopen(QUESTION_1);
+    expect(screen.getByTestId("bot-thread-unopened")).toBeTruthy();
+
+    mocks.state.threads = [
+      thread("thread-q", "question-1", { replyCount: 1, lastReplyAt: 7_000 }),
+    ];
+    reopen(QUESTION_1);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-q");
+    expect(within(panel).queryByTestId("bot-thread-unopened")).toBeNull();
+    const composer = within(panel).getByTestId("stub-bot-thread-composer");
+    expect(composer.getAttribute("data-thread-id")).toBe("thread-q");
+    expect(composer.getAttribute("data-announcement-id")).toBe("none");
+  });
+
+  it("shows the box that starts a question's thread when the view mounts again with it open, as after a switch between the tab's views", async () => {
+    const user = userEvent.setup();
+    mocks.postIds = ["question-1"];
+    const first = mount({ paused: false, openThreadPostId: null });
+    await user.click(screen.getByTestId("stub-open-announcement-question-1"));
+    const opened = first.onOpenThread.mock.calls.at(-1)?.[0] ?? null;
+    // The tab holds what was opened; the view itself is unmounted and mounted
+    // fresh, so nothing it remembered survives.
+    cleanup();
+
+    const again = mount({ paused: false, openThreadPostId: null });
+    again.reopen(opened);
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("bot-thread-unopened")).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    expect(
+      within(panel)
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-announcement-id"),
+    ).toBe("question-1");
+  });
+
+  it("posts at the channel's top level, not under an announcement", () => {
+    mount({ paused: false, openThreadPostId: null });
+
+    expect(
+      screen
+        .getByTestId("stub-bot-channel-composer")
+        .getAttribute("data-announcement-id"),
+    ).toBe("none");
   });
 });
 
@@ -545,6 +664,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
     mount({ paused: false, openThreadPostId: "post-a" });
 
     expect(screen.queryByTestId("stub-open-post-a")).toBeNull();
+    expect(screen.queryByTestId("stub-open-announcement-post-a")).toBeNull();
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(screen.queryByTestId("bot-thread-loading")).toBeNull();
   });
@@ -569,5 +689,6 @@ describe("<BotChannelView /> thread list unavailable", () => {
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();
     expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
+    expect(within(panel).queryByTestId("bot-thread-unopened")).toBeNull();
   });
 });

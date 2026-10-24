@@ -27,7 +27,9 @@ import { TextSegment } from "./segments/text-segment";
  * the text. A member's message carries the state of the request it opened
  * and, in the channel, the line that opens its thread; the bot's row carries
  * the "APP" tag Slack puts beside an app's name, and an announcement its
- * kind on a coloured bar, as Slack draws an app's attachment.
+ * kind on a coloured bar, as Slack draws an app's attachment. A question or
+ * a proposal carries the line that opens the thread a member answers it in,
+ * and a thread reply that asks carries its options as buttons.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
@@ -37,24 +39,13 @@ export function ChatBotMessage(props: {
   const sentAt = message.sentAt ?? message.createdAt;
   const body = <BotMessageText message={message} />;
   if (message.role === "assistant") {
-    const announcement = message.announcement ?? null;
     return (
-      <BotMessageFrame
-        avatar={<BotAvatar />}
-        name={presentation.botTitle}
-        app
+      <BotRow
+        message={message}
+        presentation={presentation}
         sentAt={sentAt}
-        instanceId={message.id}
-        testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
-      >
-        {announcement === null ? (
-          body
-        ) : (
-          <BotAnnouncementBody announcement={announcement}>
-            {body}
-          </BotAnnouncementBody>
-        )}
-      </BotMessageFrame>
+        body={body}
+      />
     );
   }
   const name = message.senderLabel ?? "Member";
@@ -82,6 +73,57 @@ export function ChatBotMessage(props: {
       {postId === null || openThread === null ? null : (
         <ThreadLine line={threadLine} onOpen={() => openThread(postId)} />
       )}
+    </BotMessageFrame>
+  );
+}
+
+/**
+ * The bot's own row: a reply, or an announcement on its coloured bar; a
+ * reply's options, and the thread line under a question or proposal.
+ */
+function BotRow(props: {
+  readonly message: ChatMessageModel;
+  readonly presentation: ChatBotPresentation;
+  readonly sentAt: number;
+  readonly body: ReactNode;
+}): ReactElement {
+  const { message, presentation, sentAt, body } = props;
+  const announcement = message.announcement ?? null;
+  const announcementId = message.persistentMessageId;
+  const openAnnouncementThread = presentation.openAnnouncementThread;
+  const answerable =
+    announcement !== null &&
+    (announcement.kind === "question" || announcement.kind === "proposal") &&
+    announcementId !== null &&
+    openAnnouncementThread !== null;
+  return (
+    <BotMessageFrame
+      avatar={<BotAvatar />}
+      name={presentation.botTitle}
+      app
+      sentAt={sentAt}
+      instanceId={message.id}
+      testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
+    >
+      {announcement === null ? (
+        body
+      ) : (
+        <BotAnnouncementBody announcement={announcement}>
+          {body}
+        </BotAnnouncementBody>
+      )}
+      {message.options === undefined ? null : (
+        <ReplyOptions
+          options={message.options}
+          onChoose={presentation.chooseOption}
+        />
+      )}
+      {answerable ? (
+        <ThreadLine
+          line={presentation.threadLine?.(announcementId) ?? null}
+          onOpen={() => openAnnouncementThread(announcementId)}
+        />
+      ) : null}
     </BotMessageFrame>
   );
 }
@@ -179,6 +221,7 @@ const ANNOUNCEMENT_LABELS: Readonly<Record<BotAnnouncementKind, string>> = {
   automation: "Automation created",
   "bot-created": "New bot",
   policy: "Policy change",
+  question: "Question",
 };
 
 const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
@@ -186,6 +229,7 @@ const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
   automation: "border-l-success",
   "bot-created": "border-l-primary",
   policy: "border-l-warning",
+  question: "border-l-chart-2",
 };
 
 function BotAnnouncementBody(props: {
@@ -208,6 +252,40 @@ function BotAnnouncementBody(props: {
       {announcement.link === null ? null : (
         <AnnouncementLink link={announcement.link} />
       )}
+    </div>
+  );
+}
+
+/**
+ * The choices a bot's thread reply offers (decision 56), as Slack draws an
+ * app's buttons: a click posts the choice as the person's next message in
+ * the thread. Shown, but not clickable, where nothing can post it.
+ */
+function ReplyOptions(props: {
+  readonly options: ReadonlyArray<string>;
+  readonly onChoose: ((choice: string) => void) | null;
+}): ReactElement {
+  const { options, onChoose } = props;
+  return (
+    <div
+      className="mt-1 flex flex-wrap gap-1.5"
+      role="group"
+      aria-label="Choices"
+      data-testid="bot-reply-options"
+    >
+      {options.map((option) => (
+        <Button
+          key={option}
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={onChoose === null}
+          data-testid="bot-reply-option"
+          onClick={() => onChoose?.(option)}
+        >
+          {option}
+        </Button>
+      ))}
     </div>
   );
 }
