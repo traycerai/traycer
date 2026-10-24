@@ -28,6 +28,7 @@ import {
   chatSubscribeV135,
   chatSubscribeV136,
   chatSubscribeV137,
+  chatSubscribeV138,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedClientFrameSchemaPreSteerRestartConfirm,
   chatSubscribeWindowedClientFrameSchemaPreCanvas,
@@ -67,9 +68,11 @@ const PRE_KEY_LINES = [
 ] as const;
 
 describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.36", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.38", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(37);
+    expect(line.latestMinor).toBe(38);
+    expect(line.versions[38].contract).toBe(chatSubscribeV138);
+    expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
     expect(line.versions[34].contract).toBe(chatSubscribeV134);
@@ -112,12 +115,15 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     expect(chatSubscribeV131.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchemaPreCanvas,
     );
-    // 1.32 through 1.36 froze when 1.37 added the restart confirmation to
+    // 1.32 through 1.37 froze when 1.38 added the restart confirmation to
     // `queueSteerNow` above them.
     expect(chatSubscribeV132.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchemaPreSteerRestartConfirm,
     );
     expect(chatSubscribeV137.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchemaPreSteerRestartConfirm,
+    );
+    expect(chatSubscribeV138.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
     );
     expect(chatSubscribeV117.serverFrameSchema).not.toBe(
@@ -173,24 +179,31 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
       openChatSubscribeWindowedServerFrameSchema,
     );
     // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 froze when
-    // 1.35 added the memory-curation queue item above it; 1.35 binds the live
-    // windowed schema.
+    // 1.35 added the memory-curation queue item above it; 1.35 froze when
+    // 1.37 added the compaction `notApplied` flag above it; 1.36 aliases
+    // 1.35's frozen frames; 1.37 froze when 1.38 added the steer restart
+    // reasons to `actionAck`; 1.38 binds the live windowed schema.
     expect(chatSubscribeV133.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV134.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    // 1.35 and 1.36 froze when 1.37 added the steer restart reasons to
-    // `actionAck` above them; 1.37 binds the live windowed schema.
     expect(chatSubscribeV135.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
+    expect(chatSubscribeV136.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV137.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV138.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.36 carries 1.35's frames unchanged.
     expect(chatSubscribeV136.serverFrameSchema).toBe(
       chatSubscribeV135.serverFrameSchema,
-    );
-    expect(chatSubscribeV137.serverFrameSchema).toBe(
-      openChatSubscribeWindowedServerFrameSchema,
     );
   });
 

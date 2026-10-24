@@ -4,6 +4,9 @@ The single shared contract between Traycer clients (desktop · cli · gui-app) a
 the host. Every consumer lives in this monorepo today and resolves the contract
 straight from TypeScript source.
 
+For provider authentication evidence, status versions, Send gating and
+recovery, see [Provider authentication evidence](provider-auth.md).
+
 ## Build & consumption
 
 - **In-repo resolution is source-first.** `exports` point at the TypeScript

@@ -165,6 +165,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
@@ -240,6 +241,15 @@ export interface DesktopPreloadBridge {
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult>;
   destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult>;
@@ -1218,6 +1228,21 @@ export class DesktopRunnerHost implements IRunnerHost {
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult> {
     return this.bridge.destroySandbox(bearerToken, sandboxId);
+  }
+
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.patchSandbox(bearerToken, sandboxId, request);
+  }
+
+  keepSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.keepSandbox(bearerToken, sandboxId);
   }
 
   runSandboxVerb(

@@ -50,7 +50,7 @@ const CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR = 12;
  * unconfirmed restart only for a peer on this line, so a lower peer never
  * receives that code; the reasons are stripped for it all the same.
  */
-export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 37;
+export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 38;
 
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
@@ -442,17 +442,6 @@ export function projectChatClientFrameForVersion(
     throw new Error(
       "Message delivery acknowledgements require chat.subscribe@1.15 or newer",
     );
-  }
-  if (
-    frame.kind === "queueSteerNow" &&
-    (negotiated === null ||
-      negotiated.major !== 1 ||
-      negotiated.minor < CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR)
-  ) {
-    // A lower line restarts the turn whenever it must, so the confirmation
-    // has nothing to answer there.
-    const { restartConfirmed: _restartConfirmed, ...rest } = frame;
-    return rest;
   }
   if (supportsV17(negotiated)) {
     if (frame.kind !== "send" || supportsCanvasAnnotations(negotiated))

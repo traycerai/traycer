@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import { DESKTOP_RELEASE_CHANNEL } from "../../config";
 import { log } from "../app/logger";
+import { scrubSupportText } from "../app/support-scrubber";
 import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
   hasUnappliedPendingLoginItemRevision,
@@ -3908,8 +3909,8 @@ export class HostController {
    * that outcome's message and the CLI code `classifyEnsureLikeError` saw (or
    * `null` for a failure the CLI did not name), a deferral on another Windows
    * user's task does the same, and every other outcome - any other deferral,
-   * a busy host - leaves it as it was. Only the code reaches a log; the
-   * message is for the window.
+   * a busy host - leaves it as it was. Failure messages are scrubbed before
+   * logging; the window keeps the original message.
    */
   private recordEnsureOutcome(outcome: MutationOutcome<ConvergeReadyOk>): void {
     const code = this.ensureFailureCode;
@@ -3923,6 +3924,10 @@ export class HostController {
       outcome.kind === "installed-not-converged"
     ) {
       this.lastEnsureFailure = { message: outcome.message, code };
+      log.warn("[host-controller] host ensure failed", {
+        code,
+        message: scrubSupportText(outcome.message),
+      });
       return;
     }
     // A deferral is not a failure, but THIS one is the whole answer to "why

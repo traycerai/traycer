@@ -449,9 +449,9 @@ describe("hostOptionPickerGroup by directory kind", () => {
       entry: entryOf(kind),
     });
     for (const listsAgentSandboxes of [false, true]) {
-      for (const offersAutomations of [false, true]) {
+      for (const composerViewer of [null, { userId: "u" }]) {
         expect(
-          hostOptionPickerGroup(option, listsAgentSandboxes, offersAutomations),
+          hostOptionPickerGroup(option, listsAgentSandboxes, composerViewer),
         ).toBe(GROUP_BY_KIND[kind]);
       }
     }

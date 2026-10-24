@@ -132,6 +132,13 @@ describe("sandbox control plane mirror", () => {
       ],
     };
 
+    // Prevents a client failing on a region from a server before per-unit rates.
+    it("reads an older server's region with no per-unit pricing", () => {
+      const row = sandboxCatalogueSchema.parse({ providers: [OLDER_ROW] })
+        .providers[0];
+      expect(row?.regions[0]?.pricing).toBeNull();
+    });
+
     // Prevents a client failing on, or hiding, a catalogue from a server that predates the fields.
     it("reads an older server's row as creatable with no reason", () => {
       const row = sandboxCatalogueSchema.parse({ providers: [OLDER_ROW] })

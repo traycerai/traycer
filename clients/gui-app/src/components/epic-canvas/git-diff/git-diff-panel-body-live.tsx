@@ -585,7 +585,7 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection
                     surfaceKey={props.surfaceKey}
-                    offersAutomations={false}
+                    composer={null}
                   />
                 }
                 // Opening the switcher is a tap to pick a workspace, not to
@@ -814,7 +814,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection
                     surfaceKey={surfaceKey}
-                    offersAutomations={false}
+                    composer={null}
                   />
                 }
                 // Opening the switcher is a tap to pick a workspace, not to

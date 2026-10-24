@@ -1,11 +1,10 @@
-import { useId, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
 import type {
   SandboxCost,
   SandboxHourlyPrice,
-  SandboxLifecycleVerb,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -20,10 +19,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { SandboxRunwayWarningLine } from "@/components/hosts/sandbox-balance-banner";
+import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
+import { toastSandboxVerbOutcome } from "@/components/hosts/sandbox-confirm-model";
 import {
   formatSandboxDay,
   SANDBOX_CARD_ACTION_LABEL,
@@ -80,12 +78,6 @@ import {
 } from "@/lib/sandboxes/sandbox-egress-event-line";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
-import type { SandboxCreateBelongsTo } from "@/components/hosts/sandbox-create-model";
-import {
-  confirmTeamWake,
-  teamWakeAsks,
-} from "@/stores/hosts/team-wake-confirm-store";
 
 /**
  * The card a sandbox host shows above its identity card in Settings: its
@@ -98,10 +90,9 @@ import {
  * date and the balance, and offers only destroy, behind a typed
  * confirmation.
  *
- * A team sandbox says who created it and whose bundle the
- * running wake is on, asks before its Resume or Start bills the person, and
- * always asks for its name before a destroy. It has no personal cost view:
- * the cost read lists only the person's own sandboxes. A team pod says how
+ * A team sandbox says who created it and whose bundle the running wake is
+ * on, and always asks for its name before a destroy. It has no personal cost
+ * view: the cost read lists only the person's own sandboxes. A team pod says how
  * many more shells it has room for instead.
  */
 export function SandboxCard(props: {
@@ -109,12 +100,6 @@ export function SandboxCard(props: {
   /** The sandbox host's own health, which gates the secrets readiness line. */
   readonly hostState: HostHealthState;
   readonly sandbox: HostScopeSandbox;
-  /**
-   * What "New sandbox like this" preselects: this sandbox's owner, or `null`
-   * when it is a team's whose id has not been read yet, which offers no
-   * "like this" (it would open on Personal).
-   */
-  readonly likeThis: SandboxCreateBelongsTo | null;
   /**
    * Called once a destroy has settled (the sandbox is gone), for a row the
    * destroy removes from the host list; `null` when the row outlives it.
@@ -184,7 +169,6 @@ export function SandboxCard(props: {
           actions={actions}
           frozen={frozen}
           teamOwned={teamOwned}
-          likeThis={props.likeThis}
           onDestroyed={props.onDestroyed}
         />
       )}
@@ -859,57 +843,15 @@ function SandboxRepairAction(props: { readonly hostId: string }): ReactNode {
   );
 }
 
-const VERB_DONE_TOAST: Record<SandboxLifecycleVerb, string> = {
-  suspend: "Suspended",
-  resume: "Resumed",
-  stop: "Stopped",
-  start: "Started",
-};
-
-/**
- * The verb whose done word names the state the server's row reached, which
- * need not be the one pressed: a suspend whose purge found the guest
- * unreachable lands `stopped`.
- */
-function verbReached(
-  pressed: SandboxLifecycleVerb,
-  state: HostSandboxState | null,
-): SandboxLifecycleVerb {
-  switch (state) {
-    case "suspended":
-      return "suspend";
-    case "stopped":
-      return "stop";
-    default:
-      return pressed;
-  }
-}
-
-/** A `202`: the server's deadline passed with the row still moving. */
-const VERB_MOVING_TOAST: Record<SandboxLifecycleVerb, string> = {
-  suspend: "Suspending",
-  resume: "Resuming",
-  stop: "Stopping",
-  start: "Starting",
-};
-
-/**
- * The card's actions, then "New sandbox like this", which opens the create
- * form with this sandbox's owner preselected (its environment only, not its
- * shape). A pod offers no "like this": a pod is the team's Automations host,
- * not a sandbox a person creates.
- */
+/** The card's actions. A sandbox is created from the pickers, not here. */
 function SandboxCardFooter(props: {
   readonly summary: SandboxSummary;
   readonly actions: readonly SandboxCardAction[];
   readonly frozen: boolean;
   readonly teamOwned: boolean;
-  readonly likeThis: SandboxCreateBelongsTo | null;
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
-  const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
-  const likeThis = props.summary.kind === "automation" ? null : props.likeThis;
-  if (props.actions.length === 0 && likeThis === null) return null;
+  if (props.actions.length === 0) return null;
   return (
     <CardFooter className="flex flex-wrap gap-2">
       {props.actions.length === 0 ? null : (
@@ -920,17 +862,6 @@ function SandboxCardFooter(props: {
           teamOwned={props.teamOwned}
           onDestroyed={props.onDestroyed}
         />
-      )}
-      {likeThis === null ? null : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-testid="sandbox-card-new-like-this"
-          onClick={() => openCreateSandbox(likeThis, null)}
-        >
-          New sandbox like this
-        </Button>
       )}
     </CardFooter>
   );
@@ -945,7 +876,6 @@ function SandboxActions(props: {
 }): ReactNode {
   const { summary } = props;
   const verb = useSandboxVerb(summary.id);
-  const wakeAsks = teamWakeAsks(props.teamOwned, summary.kind, props.frozen);
   const pendingVerb = verb.isPending ? verb.variables : null;
   return (
     <>
@@ -956,10 +886,7 @@ function SandboxActions(props: {
           // land (the server refuses it only while the row is mid-transition).
           <SandboxDestroyAction
             key={action}
-            sandboxId={summary.id}
-            name={summary.displayName}
-            typedConfirmation={props.frozen || props.teamOwned}
-            teamOwned={props.teamOwned}
+            summary={summary}
             onDestroyed={props.onDestroyed}
           />
         ) : (
@@ -975,24 +902,15 @@ function SandboxActions(props: {
             onClick={() => {
               const run = (): void => {
                 verb.mutate(action, {
-                  onSuccess: (outcome) => {
-                    if (outcome.kind === "settled") {
-                      toast.success(
-                        `${VERB_DONE_TOAST[verbReached(action, outcome.state)]} ${summary.displayName}`,
-                      );
-                    } else if (outcome.kind === "moving") {
-                      toast.info(
-                        `${VERB_MOVING_TOAST[action]} ${summary.displayName}…`,
-                      );
-                    }
-                  },
+                  onSuccess: (outcome) =>
+                    toastSandboxVerbOutcome(
+                      action,
+                      outcome,
+                      summary.displayName,
+                    ),
                 });
               };
-              // Only a wake bills: Suspend and Stop never ask.
-              confirmTeamWake(
-                wakeAsks && (action === "resume" || action === "start"),
-                run,
-              );
+              run();
             }}
           >
             {pendingVerb === action ? (
@@ -1011,21 +929,11 @@ function SandboxActions(props: {
 }
 
 function SandboxDestroyAction(props: {
-  readonly sandboxId: string;
-  readonly name: string;
-  /**
-   * A frozen sandbox asks for its name to be typed (core flows, flow 5), and
-   * so does every team sandbox.
-   */
-  readonly typedConfirmation: boolean;
-  readonly teamOwned: boolean;
+  readonly summary: SandboxSummary;
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [typed, setTyped] = useState("");
-  const inputId = useId();
-  const destroy = useSandboxDestroy(props.sandboxId);
-  const mismatch = props.typedConfirmation && typed.trim() !== props.name;
+  const destroy = useSandboxDestroy(props.summary.id);
   return (
     <>
       <Button
@@ -1034,10 +942,7 @@ function SandboxDestroyAction(props: {
         size="sm"
         disabled={destroy.isPending}
         data-testid="sandbox-card-destroy"
-        onClick={() => {
-          setTyped("");
-          setConfirmOpen(true);
-        }}
+        onClick={() => setConfirmOpen(true)}
       >
         {destroy.isPending ? (
           <AgentSpinningDots
@@ -1048,77 +953,14 @@ function SandboxDestroyAction(props: {
         ) : null}
         Destroy
       </Button>
-      <ConfirmDestructiveDialog
-        blockedReason={typedConfirmationReason(
-          props.typedConfirmation,
-          typed,
-          props.name,
-        )}
+      <SandboxDestroyDialog
+        sandbox={props.summary}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title={`Destroy ${props.name}?`}
-        description={`${props.name} and its disk are deleted and can't be recovered. Code on a sandbox is not synced anywhere, so copy off anything you want to keep first.`}
-        cascadeSummary={null}
-        actionLabel="Destroy sandbox"
-        isPending={destroy.isPending}
-        onConfirm={() => {
-          if (mismatch) return;
-          destroy.mutate(undefined, {
-            onSuccess: (gone) => {
-              setConfirmOpen(false);
-              if (gone) {
-                toast.success(`Destroyed ${props.name}`);
-                props.onDestroyed?.();
-              } else {
-                toast.info(`Destroying ${props.name}…`);
-              }
-            },
-          });
-        }}
-      >
-        {props.teamOwned ? (
-          <p
-            className="px-5 pb-2 text-ui-sm text-muted-foreground"
-            data-testid="sandbox-card-destroy-team"
-          >
-            Destroying ends every session on it, including other members&apos;
-            running agents.
-          </p>
-        ) : null}
-        {props.typedConfirmation ? (
-          <div className="flex flex-col gap-1.5 px-5 pb-4">
-            <Label htmlFor={inputId}>
-              {props.teamOwned
-                ? "Type its name to confirm."
-                : "This sandbox is frozen. Type its name to confirm."}
-            </Label>
-            <Input
-              id={inputId}
-              value={typed}
-              autoComplete="off"
-              placeholder={props.name}
-              data-testid="sandbox-card-destroy-typed"
-              onChange={(event) => setTyped(event.target.value)}
-            />
-          </div>
-        ) : null}
-      </ConfirmDestructiveDialog>
+        onDestroyed={props.onDestroyed}
+      />
     </>
   );
-}
-
-/**
- * What the typed confirmation still needs: `null` once the name matches (or
- * when none is asked for), an empty reason while nothing is typed (confirm
- * disabled, no sentence), and the instruction once something is typed.
- */
-function typedConfirmationReason(
-  required: boolean,
-  typed: string,
-  name: string,
-): string | null {
-  if (!required || typed.trim() === name) return null;
-  return typed.length === 0 ? "" : `Type ${name} below to destroy it.`;
 }
 
 function stateBadgeVariant(

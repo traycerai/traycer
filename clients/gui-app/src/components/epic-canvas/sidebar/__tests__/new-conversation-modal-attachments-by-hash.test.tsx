@@ -44,6 +44,28 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: () => null,
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => null,
+  }),
+);
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),

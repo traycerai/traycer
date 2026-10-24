@@ -251,6 +251,8 @@ vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
   }),
 }));
 vi.mock("@/lib/host", () => ({
+  // The staged sandbox runner's binding; the run itself is stubbed below.
+  useHostBinding: () => ({ auth: {}, directory: {} }),
   useHostClient: () => mocks.defaultClient,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => mocks.defaultClient,
@@ -405,6 +407,23 @@ vi.mock("@/components/home/terminal-panel/landing-browser-tile", () => ({
     </div>
   ),
 }));
+// The run creates or wakes a staged sandbox: the network boundary.
+const runStagedSandbox = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/sandboxes/staged-sandbox-run")
+  >()),
+  runStagedSandbox,
+}));
+vi.mock(
+  "@/hooks/host/use-composer-surface-host-pin",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/host/use-composer-surface-host-pin")
+    >()),
+    useComposerSurfaceHostKey: () => COMPOSER_SURFACE,
+  }),
+);
 vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
   reconcileXtermHostAfterLayoutTransition:
     mocks.reconcileXtermHostAfterLayoutTransition,
@@ -417,8 +436,15 @@ import { useLandingPaneAnchorStore } from "@/components/home/terminal-panel/land
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
+/** The window's landing composer surface, which stages a sandbox. */
+const COMPOSER_SURFACE = "landing:window-test";
 
 function testLayout() {
   return landingPanelLayoutFor(
@@ -762,6 +788,9 @@ describe("<LandingTerminalPanel />", () => {
   beforeEach(() => {
     resetPrimaryFocusCoordinatorForTests();
     resetTerminalFocusRegistryForTests();
+    runStagedSandbox.mockClear();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    useSurfaceHostSelectionStore.getState().resetForTests();
     mocks.activeHostId = null;
     mocks.placementHostId = null;
     mocks.clientActiveHostId = null;
@@ -1837,6 +1866,238 @@ describe("<LandingTerminalPanel />", () => {
     expect(mocks.plainCreateAsync).not.toHaveBeenCalled();
     // Consumed by that one transition, so the next open is a real gesture.
     expect(state.panelReveal).toBeNull();
+  });
+
+  it("opens a requested terminal in the host's home into a CLOSED panel, whatever folder the draft has", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+
+    act(() => {
+      useLandingPanelStore
+        .getState()
+        .requestTerminal(COMPOSER_SURFACE, "host-a");
+    });
+
+    await waitFor(() => {
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
+    });
+    // Drain the open transition's settlement: a gesture would re-target the
+    // draft's folder and spawn a second shell there.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    const state = useLandingPanelStore.getState();
+    const terminals = landingTerminalTabs(state.tabs);
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ hostId: "host-a", cwd: "/Users/dev" });
+    expect(state.activeInstanceId).toBe(terminals[0]?.instanceId);
+    expect(landingPanelLayoutFor(state, TEST_LANDING_PAGE_ID).panelOpen).toBe(
+      true,
+    );
+    expect(state.terminalRequest).toBeNull();
+  });
+
+  it("holds a requested terminal for the newly focused start page while the panel is still hosted on the old one", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    // The row opened a new task: its start page is focused, but its anchor
+    // has not registered, so the panel is still hosted on this page.
+    seedTabsLayout(
+      [
+        PANEL_DRAFT_TAB,
+        {
+          kind: "tab",
+          id: "item-draft-new",
+          ref: { kind: "draft", id: "draft-new" },
+        },
+      ],
+      "item-draft-new",
+    );
+    render(panelUi());
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+    });
+
+    act(() => {
+      useLandingPanelStore
+        .getState()
+        .requestTerminal(COMPOSER_SURFACE, "host-a");
+    });
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    expect(useLandingPanelStore.getState().terminalRequest).toEqual({
+      surfaceKey: COMPOSER_SURFACE,
+      hostId: "host-a",
+      landingPageId: null,
+    });
+    expect(
+      landingTerminalTabs(useLandingPanelStore.getState().tabs),
+    ).toHaveLength(0);
+  });
+
+  it("holds a requested terminal while the panel targets another host, and drops it once the composer is pinned elsewhere", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().requestTerminal(COMPOSER_SURFACE, "host-b");
+    render(panelUi());
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+    });
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).not.toBeNull();
+
+    act(() => {
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(COMPOSER_SURFACE, "host-c");
+    });
+
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("starts a sandbox staged on the composer from Terminal in the chooser, and opens nothing on the host it falls back to", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await pickTerminalFromChooser();
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    expect(runStagedSandbox).toHaveBeenCalledTimes(1);
+    expect(runStagedSandbox).toHaveBeenCalledWith(
+      COMPOSER_SURFACE,
+      true,
+      expect.objectContaining({ taskId: null }),
+      expect.anything(),
+    );
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      openTerminal: true,
+      sendTaken: false,
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+    expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
+  });
+
+  it("asks for the terminal on a staged sandbox that is up with settings that did not apply, starting nothing", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    const staged = useStagedSandboxStore.getState();
+    staged.stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    staged.begin(COMPOSER_SURFACE, false, 1_000);
+    staged.report(COMPOSER_SURFACE, {
+      createdSandboxId: "sbx-1",
+      createdHostId: "host-sbx",
+      failure: { kind: "settings", code: "settings" },
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await pickTerminalFromChooser();
+
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[COMPOSER_SURFACE],
+    ).toBe("host-sbx");
+    expect(useLandingPanelStore.getState().terminalRequest).toMatchObject({
+      surfaceKey: COMPOSER_SURFACE,
+      hostId: "host-sbx",
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("drops a requested terminal unserved when its host has no home to start one in", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList(null);
+    mocks.freshProbeData = mocks.probeData;
+    useLandingPanelStore.getState().requestTerminal(COMPOSER_SURFACE, "host-a");
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+    });
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("holds a requested terminal through a terminal list that could not be read, and opens it once the host answers", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.queryClient.fetchQuery.mockImplementation(() =>
+      Promise.reject(new Error("host unreachable")),
+    );
+    useLandingPanelStore.getState().requestTerminal(COMPOSER_SURFACE, "host-a");
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+    });
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).not.toBeNull();
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
+
+    mocks.queryClient.fetchQuery.mockImplementation(() =>
+      Promise.resolve(mocks.probeData),
+    );
+    act(() => {
+      for (const listener of mocks.onChangeListeners) {
+        listener({
+          previousHostId: "host-a",
+          currentHostId: "host-a",
+          reason: "availability-recovered",
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 
   it("adopts a sign-in session another window started, from terminal.list, on a capable host whose projection cannot carry it", async () => {

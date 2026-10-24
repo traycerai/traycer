@@ -2,15 +2,23 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useHostReachability,
   resolvedHostLabel,
+  type HostReachability,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
 import {
@@ -82,7 +90,8 @@ import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-
  * offline owner readable - but "any host" is chosen once, at open, and recorded
  * on the ref; it must not follow the app's active host afterwards. Nothing here
  * binds the OWNING host, so the tab-host-for-life rule is not bent; the owner is
- * row metadata that the notice names and nothing addresses.
+ * row metadata that the notice names. A recovery read addresses that owner
+ * without changing the host serving the copy.
  *
  * ## The doc-replica fallback (unreachable-owner view, ticket 34A)
  *
@@ -159,6 +168,36 @@ function ownerHostIsServingHost(
   return ownerHostId.length > 0 && ownerHostId === servingHostId;
 }
 
+/** Gives a visible copy one owner dial on each activation, without polling. */
+function useOfflineOwnerRecoveryRead(
+  ownerHostId: string,
+  ownerReachability: HostReachability,
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "host.status">,
+  HostRpcError
+> {
+  const ownerClient = useHostClientForHostId(ownerHostId);
+  const bodyVisible = useTileBodyVisible();
+  // A stale cloud verdict otherwise parks every owner read behind the copy
+  // that only a ready owner session can retire. Give the visible tab one dial
+  // on each activation; the session's readiness subscription restores the live
+  // tile when it succeeds. Unfocused split panes are still visible.
+  const recoverOwner =
+    bodyVisible &&
+    ownerReachability.status === "unreachable" &&
+    ownerReachability.unavailability === "offline" &&
+    ownerReachability.hostKind === "remote";
+  return useHostQuery({
+    cacheKeyIdentity: ["offline-owner-recovery"],
+    client: recoverOwner ? ownerClient : null,
+    method: "host.status",
+    params: {},
+    // Share a request between copies for this owner, without polling or a
+    // second query retry after the transport's own bounded dial attempts.
+    options: { staleTime: 0, retry: false },
+  });
+}
+
 export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const { node } = props;
   // The TAB's client, not the app's. The ref records which host was chosen to
@@ -175,10 +214,11 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const servingHostId = useTabHostId();
   const servingReachability = useHostReachability(servingHostId);
   // The SAME reachability source the live dead-tile banner reads, so the two
-  // surfaces can never describe one host two ways. Only the label is used here:
-  // this tile is opened precisely because the owner is out of reach, and it
-  // stays readable if that host returns (the row then offers the live tab).
+  // surfaces can never describe one host two ways. This tile is opened
+  // precisely because the owner is out of reach, and it stays readable if that
+  // host returns (the row then offers the live tab).
   const ownerReachability = useHostReachability(node.ownerHostId);
+  useOfflineOwnerRecoveryRead(node.ownerHostId, ownerReachability);
   const identity = useMemo(
     () => ({
       taskId: node.taskId,

@@ -236,6 +236,8 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
       supportedServiceTiers: [],
       metadata: {},
     },
+    // No catalog answered: this suite stages no sandbox to hand off.
+    catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
     permission: "supervised",
     reasoning: "medium",
     serviceTier: "",
@@ -263,9 +265,23 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
+// The staged sandbox's send reads the account and the catalogue; this suite
+// has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: null }),
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
+  // The staged send's terminal launcher reads the new host's row.
+  useHostDirectory: () => ({
+    findById: () => null,
+    onChange: () => ({ dispose: () => undefined }),
+  }),
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => null,
 }));

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import {
   HostSwitcher,
+  type HostSwitcherComposerMode,
   type HostSwitcherSurface,
 } from "@/components/settings/host-scope/host-switcher";
 import {
@@ -53,10 +54,10 @@ interface HostSectionProps {
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
   /**
-   * Whether this picker offers the Automations host: only the new terminal
-   * picker. See `hostOptionPickerGroup`.
+   * The composer and new-terminal pickers' mode, where a pick only stages;
+   * `null` for the scoped tools. See `HostSwitcherComposerMode`.
    */
-  readonly offersAutomations: boolean;
+  readonly composer: HostSwitcherComposerMode | null;
 }
 
 interface WorkspaceHostSwitcherProps extends HostSectionProps {
@@ -102,7 +103,7 @@ export function WorkspaceHostSwitcher(
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists}
       updateViewForHost={null}
-      offersAutomations={props.offersAutomations}
+      composer={props.composer}
       environmentLabelForHost={null}
       disabled={props.disabled}
       keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}

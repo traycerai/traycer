@@ -364,12 +364,19 @@ function summarizeBlock(block: SnapshotContentBlock): BlockSummary {
         body: block.message,
         details: compact([block.code]),
       };
-    case "compaction":
+    case "compaction": {
+      let label = "Conversation compacted";
+      if (block.status === "errored") {
+        label = block.notApplied
+          ? "Compaction not applied"
+          : "Compaction failed";
+      }
       return {
-        label: "Conversation compacted",
+        label,
         body: null,
         details: compact([block.trigger]),
       };
+    }
     case "autonomous_resume":
       return { label: "Autonomous resume", body: null, details: NO_DETAILS };
     case "steer":

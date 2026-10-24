@@ -149,7 +149,7 @@ export function useChatQueueActions(
     readonly changed: ReadonlyArray<string>;
   } | null>(null);
   // A steer sent unconfirmed - the row's Steer button, or a queue edit's
-  // Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.37` refused because it
+  // Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.38` refused because it
   // would end the running turn. Taken from the store rather than read, so of
   // two tiles on one chat only the first opens the dialog. An older host
   // never refuses: it restarts the turn as it always did.

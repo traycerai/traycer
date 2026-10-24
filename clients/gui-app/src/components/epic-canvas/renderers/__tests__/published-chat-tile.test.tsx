@@ -1,10 +1,11 @@
 import {
   cleanup,
-  render,
+  render as renderWithoutQueryClient,
   screen,
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
@@ -35,6 +36,19 @@ import {
   remoteEntry,
   sandboxFacts,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  HostUnavailability,
+  RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type { HostReachabilityHostKind } from "@/hooks/agent/use-host-reachability";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
@@ -65,6 +79,9 @@ interface MockReplicaQueryResult {
 interface MockHostReachability {
   readonly status: "reachable" | "unreachable";
   readonly hostLabel: string;
+  /** Only the offline-owner recovery cases read these two. */
+  readonly unavailability?: HostUnavailability | null;
+  readonly hostKind?: HostReachabilityHostKind;
 }
 
 /**
@@ -136,10 +153,41 @@ vi.mock(
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: environments.list }),
 }));
+// The REAL host client over a recording messenger, so the owner recovery read
+// travels through the real `useHostQuery`, readiness gate and named requester.
+const runtime = vi.hoisted(
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+    messenger: MockHostMessenger<HostRpcRegistry> | null;
+  } => ({ client: null, messenger: null }),
+);
+
+function runtimeClient(): HostClient<HostRpcRegistry> {
+  if (runtime.client === null) {
+    throw new Error("test host client not configured");
+  }
+  return runtime.client;
+}
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useOptionalHostClient: () => null,
 }));
+// Narrow seam: the named requester over the real `HostClient`, so the REAL
+// `useHostQuery`, readiness gate and transport path run for the owner read.
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+  const { useMemo } = await import("react");
+  // Memoized on [binding, hostId] like production, so one runtime client
+  // yields one requester across renders.
+  function useHostClientForHostId(hostId: string): HostClient<HostRpcRegistry> {
+    const binding = runtimeClient();
+    return useMemo(
+      () => binding.createRequesterForHostId(hostId),
+      [binding, hostId],
+    );
+  }
+  return { useHostClientForHostId };
+});
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
@@ -367,7 +415,66 @@ function replicaNotFetched(): MockReplicaQueryResult {
   return { isPending: true, data: undefined };
 }
 
+let queryClient = new QueryClient();
+
+function render(ui: ReactNode): RenderResult {
+  return renderWithoutQueryClient(ui, {
+    wrapper: (props: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    ),
+  });
+}
+
+/** Rows the recovery cases dial: the serving host and the copy's owner. */
+const OWNER_BASE_ROW = remoteEntry("owner-host-1", null);
+const OFFLINE_OWNER_ROW: RemoteHostDirectoryEntry = {
+  ...OWNER_BASE_ROW,
+  transportDialability: "not-dialable",
+  remoteStatus: { ...OWNER_BASE_ROW.remoteStatus, connectivity: "offline" },
+};
+const HOST_ROWS: readonly HostDirectoryEntry[] = [
+  remoteEntry("host-1", null),
+  OFFLINE_OWNER_ROW,
+];
+
 beforeEach(() => {
+  queryClient = new QueryClient();
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "host.status": () => ({
+        ready: true,
+        hostVersion: "1.2.3",
+        protocolVersion: { major: 1, minor: 0 },
+        busy: false,
+        busySessionCount: 0,
+        updateProgress: null,
+        busyBreakdown: null,
+        updateOperation: null,
+        updateTransaction: null,
+        storeFormats: null,
+        install: null,
+        processMemory: null,
+        crossHostMessaging: null,
+      }),
+    },
+  });
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      HOST_ROWS.find((row) => row.hostId === hostId) ?? null,
+    messenger,
+  });
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  runtime.client = client;
+  runtime.messenger = messenger;
   mockUseHostReachability.mockReturnValue({
     status: "unreachable",
     hostLabel: "Ada's Mac",
@@ -376,6 +483,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
+  runtime.client?.dispose();
+  runtime.client = null;
+  runtime.messenger = null;
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
@@ -1092,5 +1203,118 @@ describe("PublishedChatTile - footer ownership", () => {
     environments.list = TEAM_ENVIRONMENTS;
 
     expect(renderFooter()).toContain("This chat's sandbox isn't available");
+  });
+});
+
+describe("PublishedChatTile - offline owner recovery", () => {
+  const OFFLINE_REMOTE_OWNER: MockHostReachability = {
+    status: "unreachable",
+    hostLabel: "Ada's Mac",
+    unavailability: "offline",
+    hostKind: "remote",
+  };
+
+  function statusCalls(): readonly { readonly hostId: string }[] {
+    if (runtime.messenger === null) {
+      throw new Error("test messenger not configured");
+    }
+    return runtime.messenger.calls
+      .filter((call) => call.method === "host.status")
+      .map((call) => ({ hostId: call.authority.endpoint.hostId }));
+  }
+
+  function tile(paneVisible: boolean, tabSelected: boolean): ReactNode {
+    return (
+      <PaneVisibilityContext.Provider value={paneVisible}>
+        <TabBodySelectedContext.Provider value={tabSelected}>
+          <PublishedChatTile
+            node={NODE}
+            viewTabId="tab-1"
+            tileId="pane-1"
+            isActive={false}
+            epicId="epic-1"
+          />
+        </TabBodySelectedContext.Provider>
+      </PaneVisibilityContext.Provider>
+    );
+  }
+
+  async function settled(): Promise<void> {
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+  }
+
+  beforeEach(() => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue(OFFLINE_REMOTE_OWNER);
+  });
+
+  it("asks the owner host for its status while the copy stays on the serving host", async () => {
+    render(tile(true, true));
+
+    await waitFor(() => {
+      expect(statusCalls()).toEqual([{ hostId: "owner-host-1" }]);
+    });
+    await settled();
+    expect(statusCalls()).toHaveLength(1);
+    expect(screen.queryByTestId("chat-tile-session-view")).not.toBeNull();
+  });
+
+  it.each([
+    { name: "its pane is hidden", paneVisible: false, tabSelected: true },
+    { name: "its tab is not selected", paneVisible: true, tabSelected: false },
+  ])(
+    "sends nothing while $name and asks once more each time it is shown again",
+    async ({ paneVisible, tabSelected }) => {
+      const view = render(tile(paneVisible, tabSelected));
+      expect(statusCalls()).toHaveLength(0);
+
+      view.rerender(tile(true, true));
+      await waitFor(() => {
+        expect(statusCalls()).toHaveLength(1);
+      });
+      await settled();
+
+      view.rerender(tile(paneVisible, tabSelected));
+      await settled();
+      expect(statusCalls()).toHaveLength(1);
+
+      view.rerender(tile(true, true));
+      await waitFor(() => {
+        expect(statusCalls()).toHaveLength(2);
+      });
+      await settled();
+      expect(statusCalls()).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    {
+      name: "a reachable owner",
+      owner: { ...OFFLINE_REMOTE_OWNER, status: "reachable" as const },
+    },
+    {
+      name: "a local owner",
+      owner: { ...OFFLINE_REMOTE_OWNER, hostKind: "local" as const },
+    },
+    {
+      name: "an owner of unknown kind",
+      owner: { ...OFFLINE_REMOTE_OWNER, hostKind: "unknown" as const },
+    },
+  ])("never dials $name", async ({ owner }) => {
+    mockUseHostReachability.mockReturnValue(owner);
+    const view = render(tile(true, true));
+    await settled();
+    expect(statusCalls()).toHaveLength(0);
+
+    // The same mounted tile dials as soon as the owner qualifies, so the
+    // silence above is the gate and not a harness that cannot send.
+    mockUseHostReachability.mockReturnValue(OFFLINE_REMOTE_OWNER);
+    view.rerender(tile(true, true));
+    await waitFor(() => {
+      expect(statusCalls()).toHaveLength(1);
+    });
   });
 });

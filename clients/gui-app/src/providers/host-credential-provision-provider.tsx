@@ -1,13 +1,11 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import type {
-  HostCredentialMintOutcome,
-  HostCredentialMintRequest,
-} from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
+import type { HostCredentialMintRequest } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
 import type { MintHostCredentialFetchResult } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import { useHostBinding, useHostDirectory } from "@/lib/host";
 import {
   resetHostCredentialProvisioning,
   setHostCredentialMintRunner,
+  type HostCredentialMintRunnerOutcome,
 } from "@/lib/auth/host-credential-provisioning";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -47,7 +45,7 @@ export function HostCredentialProvisionProvider(props: {
   useEffect(() => {
     const run = async (
       request: HostCredentialMintRequest,
-    ): Promise<HostCredentialMintOutcome> => {
+    ): Promise<HostCredentialMintRunnerOutcome> => {
       const auth = binding?.auth ?? null;
       if (auth === null) {
         return { kind: "unavailable" };
@@ -103,7 +101,7 @@ export function HostCredentialProvisionProvider(props: {
 
 function toMintOutcome(
   result: MintHostCredentialFetchResult,
-): HostCredentialMintOutcome {
+): HostCredentialMintRunnerOutcome {
   if (result.kind === "ok") {
     return {
       kind: "provisioned",
@@ -116,8 +114,9 @@ function toMintOutcome(
       expiresIn: result.response.expiresIn,
     };
   }
-  // `superseded` (409) included deliberately: another client won the race, so
-  // there is NOTHING to hand the host and the winner's credential is already on
-  // its way. Retrying here would mint a third credential and retire the winner's.
-  return { kind: "unavailable" };
+  // `superseded` (409) included deliberately: another client won the race, or
+  // the host is registered to another account and every mint is refused, so
+  // there is NOTHING to hand the host. Retrying here would mint again; `spent`
+  // has the escalation ladder pace the next mint instead.
+  return { kind: "spent" };
 }

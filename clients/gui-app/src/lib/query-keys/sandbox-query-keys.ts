@@ -15,6 +15,7 @@ export const sandboxQueryKeys = {
     authService,
     userId,
   ],
+  listAll: (): readonly unknown[] => ["auth", "registered-hosts", "sandboxes"],
   listMissing: (): readonly unknown[] => [
     "auth",
     "registered-hosts",
@@ -134,6 +135,11 @@ export const sandboxMutationKeys = {
     ["auth", "sandbox", "destroy", sandboxId] as const,
   // Per sandbox, like destroy: the card's suspend / resume / stop / start.
   verb: (sandboxId: string) => ["auth", "sandbox", "verb", sandboxId] as const,
+  // Per sandbox, like destroy: the rename and the idle and resting periods.
+  patch: (sandboxId: string) =>
+    ["auth", "sandbox", "patch", sandboxId] as const,
+  // Per sandbox, like destroy.
+  keep: (sandboxId: string) => ["auth", "sandbox", "keep", sandboxId] as const,
   // Per HOST: the tab open that wakes it knows the host, not the sandbox id.
   wake: (hostId: string) => ["auth", "sandbox", "wake", hostId] as const,
   // Per account, like create: the first open creates the row and can take
@@ -146,4 +152,10 @@ export const sandboxMutationKeys = {
   // A host RPC, not a control-plane call: the sandbox host repairs itself.
   repairGuestConfiguration: () =>
     ["host.sandbox.repairGuestConfiguration"] as const,
+  // Per host: Settings' `Retry applying` on one listed sandbox.
+  repairGuestConfigurationOn: (hostId: string) =>
+    ["host.sandbox.repairGuestConfiguration", hostId] as const,
+  // Per account: Settings' `Destroy all idle` over the filtered rows.
+  destroyBatch: (userId: string | null) =>
+    ["auth", "sandbox", "destroy-batch", userId] as const,
 };

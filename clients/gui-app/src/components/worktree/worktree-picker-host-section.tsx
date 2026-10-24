@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { HostSection } from "@/components/home/host-workspace-selector/host-section";
+import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
@@ -18,10 +19,11 @@ import { useHostBinding } from "@/lib/host";
 export interface WorktreePickerHostSectionProps {
   readonly surfaceKey: string;
   /**
-   * Only the terminal picker offers the Automations host; the
-   * git diff panel and the file tree read worktrees it does not serve.
+   * The terminal picker's composer mode, where a New sandbox row stages a
+   * create the terminal open runs; `null` for the git diff panel and the
+   * file tree, which read worktrees of hosts that already exist.
    */
-  readonly offersAutomations: boolean;
+  readonly composer: HostSwitcherComposerMode | null;
 }
 
 export function WorktreePickerHostSection(
@@ -46,7 +48,7 @@ export function WorktreePickerHostSection(
         listsFailed={options.listsFailed}
         onRetryLists={options.retryLists}
         intent="pin"
-        offersAutomations={props.offersAutomations}
+        composer={props.composer}
       />
     </div>
   );

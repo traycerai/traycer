@@ -257,6 +257,23 @@ export interface CreateComposerToolbarStoreInput {
   readonly reasoningFallback: ReasoningFallback;
 }
 
+/**
+ * Whether `hostId`'s catalog has answered: its harnesses are known and, when
+ * it offers any, the selected harness's models are loaded. The selection then
+ * holds that host's default model, or none when it offers no agent.
+ */
+export function catalogSettledFor(
+  state: ComposerToolbarState,
+  hostId: string | null,
+): boolean {
+  const { catalog } = state;
+  return (
+    catalog.hostId === hostId &&
+    catalog.harnesses !== undefined &&
+    (catalog.harnesses.length === 0 || catalog.modelsLoaded)
+  );
+}
+
 export function createComposerToolbarStore(
   input: CreateComposerToolbarStoreInput,
 ): ComposerToolbarStore {

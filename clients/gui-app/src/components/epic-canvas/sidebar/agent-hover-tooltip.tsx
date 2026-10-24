@@ -7,41 +7,27 @@
  * hovered in the navigator and the same agent hovered on the canvas must say
  * the same things about it.
  *
- * THREE OUTCOMES, and the order matters - this is the sidebar's own precedence,
- * preserved exactly:
- *
- *   1. Owner metadata (worktree / resource stats) when the node has BOTH a host
- *      and a resource-tracked owner kind, with any role claims appended to it
- *      as supplemental content. The richest case, and the common one.
- *   2. Role claims alone, in a plain tooltip, when there is no owner metadata to
- *      show but the agent has claimed something.
- *   3. NO HOVER AT ALL. An agent with neither is not given an empty card - a
- *      tooltip that opens onto nothing is worse than no tooltip.
- *
- * An UNREACHABLE owner host falls to outcome 2/3, and that is a data fact
- * rather than a policy: outcome 1's content is a live RPC chain against the
- * row's own binding host (`worktree.listAllForHost` + `listByWorkspacePaths`),
- * and branch and worktree path are FILESYSTEM facts of that machine. There is
- * nothing to replicate that would fix this - a cloud copy of a folder list
- * would be a stale claim about a disk this client cannot see - so the honest
- * degrade is to show what is still true: the agent's name, and its roles.
- *
- * The TUI roster's phase 2 is what makes the case ordinary. Every terminal
- * agent on every other machine the user owns is now in the tree, and hovering
- * one whose laptop is shut would otherwise open a card that spins on a host
- * nothing can reach.
+ * Host facts come from the viewer's sandbox list or the task's authorized
+ * summary. They survive an unreachable owner host; live workspace metadata
+ * does not. A task summary never authorizes a read of the host's disk.
+ * Without a sandbox projection or live metadata, the full name and any role
+ * claims still remain readable in the plain tooltip.
  *
  * DATA COMES FROM THE EPIC SELECTORS, not from the caller. Both call sites pass
  * only the node's identity; everything SHOWN is read here, so neither surface
  * can hand it a different truth. `ownerHostUnreachable` is the one exception,
  * and it is not shown - it only chooses between the outcomes. See its own doc.
  */
-import type { ReactElement, ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { HoverCard } from "@/components/ui/hover-card";
+import { SandboxKeepDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 import { AgentRoleHoverContent } from "@/components/epic-canvas/sidebar/agent-role-badges";
+import { AgentHostSection } from "@/components/epic-canvas/sidebar/agent-host-section";
+import { useAgentHostProjection } from "@/hooks/epic/use-agent-host-projection";
 
 export interface AgentHoverTooltipProps {
   readonly trigger: ReactElement;
@@ -124,6 +110,28 @@ function fallbackTooltipLabel(
 }
 
 export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
+  const [keepSandbox, setKeepSandbox] = useState<SandboxSummary | null>(null);
+  return (
+    <>
+      <AgentHoverTooltipContent {...props} onKeep={setKeepSandbox} />
+      {keepSandbox === null ? null : (
+        <SandboxKeepDialog
+          sandbox={keepSandbox}
+          open
+          onOpenChange={(open) => {
+            if (!open) setKeepSandbox(null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function AgentHoverTooltipContent(
+  props: AgentHoverTooltipProps & {
+    readonly onKeep: (sandbox: SandboxSummary) => void;
+  },
+): ReactNode {
   const {
     epicId,
     hostId,
@@ -135,6 +143,17 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     roleClaims,
     side,
   } = props;
+  const hostProjection = useAgentHostProjection(epicId, hostId);
+  const hostSection =
+    hostProjection === null ? null : (
+      <AgentHostSection
+        projection={hostProjection}
+        epicId={epicId}
+        nodeId={nodeId}
+        ownerHostUnreachable={ownerHostUnreachable}
+        onKeep={props.onKeep}
+      />
+    );
   const roleContent = agentRoleHoverContent(roleClaims);
   // `null` is the ONLY way to say "nothing to add", which is why the prop is
   // an element and not a `ReactNode`. `ReactNode` admits `undefined`, `false`
@@ -150,7 +169,12 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
       </>
     );
 
-  if (hostId !== null && ownerKind !== null && !ownerHostUnreachable) {
+  if (
+    hostId !== null &&
+    ownerKind !== null &&
+    !ownerHostUnreachable &&
+    hostProjection?.kind !== "task"
+  ) {
     return (
       <WorktreeOwnerMetadataTooltip
         trigger={props.trigger}
@@ -159,8 +183,39 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
         epicId={epicId}
         ownerId={nodeId}
         ownerKind={ownerKind}
+        hostSection={hostSection}
         supplementalContent={supplemental}
         side={side}
+      />
+    );
+  }
+  if (hostSection !== null) {
+    return (
+      <HoverCard
+        trigger={props.trigger}
+        content={
+          <div className="w-full max-w-md">
+            <div className="border-b border-border/70 px-3 py-2 text-ui-sm font-medium break-words">
+              {nodeName}
+            </div>
+            {hostSection}
+            {supplemental === null ? null : (
+              <div className="border-t border-border px-3 py-2">
+                {supplemental}
+              </div>
+            )}
+          </div>
+        }
+        appearance="preview"
+        semantics={{ role: "dialog", label: nodeName }}
+        side={side}
+        align="start"
+        sideOffset={4}
+        enabled
+        open={null}
+        onOpenChange={null}
+        testId={null}
+        className="max-w-md"
       />
     );
   }

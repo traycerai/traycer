@@ -112,6 +112,7 @@ import {
   openChatEventSchema,
   openChatSchema,
   openRuntimeEventSchema,
+  openRuntimeEventSchemaPreNotApplied,
   openRuntimeEventSchemaPreDelivery,
   openRuntimeEventSchemaPreHtml,
   openRuntimeEventSchemaPreArtifact,
@@ -155,6 +156,7 @@ import {
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreNotApplied,
   openChatRangeResponseSchemaPreCanvas,
   openChatRangeResponseSchemaPreDelivery,
   openChatRangeResponseSchemaPreHtml,
@@ -164,6 +166,7 @@ import {
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreNotApplied,
   openChatTranscriptWindowSchemaPreCanvas,
   openChatTranscriptWindowSchemaPreDelivery,
   openChatTranscriptWindowSchemaPreHtml,
@@ -1804,11 +1807,10 @@ export const chatApprovalStateSchema = lazySchema(() =>
     /** Card-only facts - see `runtimeApprovalDisplayFactSchema`. */
     displayFacts: z.array(runtimeApprovalDisplayFactSchema).optional(),
     /**
-     * The CLI stamped this ask as one a person must answer individually (it
-     * carried the tool's own `decisionReason` or a `matchedAskRule`). "Approve
-     * all" skips it. Not the judge's `tier`: that is Traycer's judge saying why
-     * it escalated, this is the provider's own stamp, and it exists in every
-     * mode, judge or none.
+     * The provider stamped this ask for individual human review: Claude's
+     * `defaultToNo` or `matchedAskRule`, or Copilot's managed-approval marker.
+     * "Approve all" skips it. Distinct from the judge's `tier`, which says why
+     * Traycer's judge escalated. This stamp exists in every mode, judge or none.
      */
     cautious: z.boolean().optional(),
   }),
@@ -3465,7 +3467,7 @@ export const QUEUE_STEER_RESTART_UNCONFIRMED_CODE =
 // Every reason a queued steer would restart the turn, on a `rejected` ack
 // carrying `QUEUE_STEER_RESTART_UNCONFIRMED`: the host refuses a restart the
 // client did not confirm, and names each cause so the confirm dialog can.
-// Absent on every other ack. `1.37`; `projectChatActionAckForVersion` strips
+// Absent on every other ack. `1.38`; `projectChatActionAckForVersion` strips
 // it below. Optional for the same reason `cause` is.
 const steerRestartAckFields = {
   steerRestartReasons: lazySchema(() =>
@@ -3739,9 +3741,9 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
     },
   });
 
-// The common frames as `chat.subscribe@1.35` and `@1.36` ship them: `1.34`'s
-// over the live open queue, which may carry a memory-curation item. Frozen
-// without the steer restart reasons `1.37` adds to `actionAck`.
+// The common frames as `chat.subscribe@1.35` through `@1.37` ship them:
+// `1.34`'s over the live open queue, which may carry a memory-curation item.
+// Frozen without the steer restart reasons `1.38` adds to `actionAck`.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
@@ -3759,9 +3761,9 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.37`): `1.35`'s with the steer
+// The live common frames (`chat.subscribe@1.38`): `1.35`'s with the steer
 // restart reasons on a rejected `actionAck`.
-const chatSubscribeCommonServerFrameSchemasOpenHarnessV137 =
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV138 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
     queue: openChatQueueStateSchema,
@@ -4044,7 +4046,7 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarness,
-  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreNotApplied),
 ];
 
 // The shared frames `chat.subscribe@1.34` ships: its common set over the same
@@ -4052,22 +4054,30 @@ const chatSubscribeSharedServerFrameSchemasOpenHarness = [
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV134 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV134,
-  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreNotApplied),
 ];
 
-// The shared frames `chat.subscribe@1.35` and `@1.36` ship: their common set
-// over the same `blockDelta`.
+// The shared frames shipped at `chat.subscribe@1.35`: its open-harness common
+// set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV135 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV135,
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreNotApplied),
+];
+
+// The shared frames shipped at `chat.subscribe@1.37`: the current compaction
+// outcome schema, without the steer restart reasons `1.38` adds.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV137 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV135,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
-// The live shared frames (`chat.subscribe@1.37`): the live open-harness common
-// set over the same `blockDelta`.
-const chatSubscribeSharedServerFrameSchemasOpenHarnessV137 = [
+// Live shared frames (`chat.subscribe@1.38`): the live open-harness common set
+// over the same `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV138 = [
   messageDeliveryChangedServerFrameSchema,
-  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV137,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV138,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
@@ -4834,8 +4844,8 @@ const chatSubscribeClientFrameSchemaOptionsPreCanvas = [
 
 const [sendClientFrameSchemaPreCanvas, ...clientFrameOptionsAfterSend] =
   chatSubscribeClientFrameSchemaOptionsPreCanvas;
-// Client frames of `chat.subscribe@1.32` through `@1.36`: `send` carries
-// browser annotations; `queueSteerNow` has no restart confirmation (`1.37`).
+// Client frames of `chat.subscribe@1.32` through `@1.37`: `send` carries
+// browser annotations; `queueSteerNow` has no restart confirmation (`1.38`).
 const chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm = [
   lazySchema(() =>
     sendClientFrameSchemaPreCanvas.extend({
@@ -4848,7 +4858,7 @@ const chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm = [
 // Positional, like the destructure of the middle options above: `send`, then
 // the two message frames and the seven frames ahead of `queueSteerNow` in
 // `chatSubscribeClientFrameSchemaMiddleOptionsLive`. A miscount re-binds the
-// wrong frame; `chat-subscribe-steer-restart-v137.test.ts` asserts the new key
+// wrong frame; `chat-subscribe-steer-restart-v138.test.ts` asserts the new key
 // on `queueSteerNow` by kind.
 const [
   sendClientFrameSchemaPreSteerRestartConfirm,
@@ -4865,7 +4875,7 @@ const [
   ...clientFrameOptionsAfterQueueSteerNow
 ] = chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm;
 
-// Live client frames (`chat.subscribe@1.37`): `queueSteerNow` says whether the
+// Live client frames (`chat.subscribe@1.38`): `queueSteerNow` says whether the
 // person confirmed ending the running turn. A host on this line refuses a
 // steer that would restart the turn unless it is confirmed, and names why
 // (`steerRestartReasons` on the rejected ack); the client confirms and sends
@@ -6324,12 +6334,44 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
 
-// The live windowed snapshot (`chat.subscribe@1.22`): `1.21`'s with the queue
-// and the tail reopened to the open harness id. `chat` (the record head:
-// settings, active session chain, held wake chains), `activeTurn` and the
-// fallback tuples keep the closed enum - they are what a peer DRIVES, and the
-// host still refuses a chat whose head names a harness the peer cannot
-// (`open-harness-wire.ts`).
+/** Complete snapshot shipped through 1.35, before the not-applied outcome flag. */
+const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
+  z.object({
+    chat: chatRecordSchema,
+    access: chatAccessSchema,
+    queue: openChatQueueStateSchema,
+    runStatus: chatRunStatusSchema,
+    activeTurn: chatActiveTurnSchema.nullable(),
+    pendingApprovals: z.array(chatApprovalStateSchema),
+    pendingInterviews: z.array(chatPendingInterviewStateSchema),
+    worktreeBinding: worktreeBindingSchema.nullable(),
+    missingWorktreePaths: z.array(z.string()),
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    accumulatedFileChangeCount: z.number().int().nonnegative(),
+    backgroundItems: z.array(backgroundItemSchema).optional(),
+    managedCommands: z.array(managedCommandSchema).default([]),
+    heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+    turnInProgress: z.boolean().optional(),
+    transcriptEpoch: z.number().int().nonnegative(),
+    rowCount: z.number().int().nonnegative(),
+    indexRevision: z.number().int().nonnegative().nullable(),
+    tail: openChatTranscriptWindowSchemaPreNotApplied,
+    derived: chatTranscriptDerivedSchema,
+    pendingFallback: pendingFallbackSchema.optional(),
+    pendingReturn: pendingReturnSchema.optional(),
+    lastFailedAttempt: lastFailedAttemptSchema.optional(),
+    lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    portForwards: z.array(chatPortForwardSchema).default([]),
+    messageDelivery: chatMessageDeliverySchema.nullable().optional(),
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
+    thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
+    sendWouldQueue: z.boolean().optional(),
+  }),
+);
+
+// The live windowed snapshot reopens harness ids in the queue and tail.
+// The record head, active turn and fallback tuples keep the closed enum:
+// they are what a peer drives (`open-harness-wire.ts`).
 export const openChatWindowedSnapshotSchema = lazySchema(() =>
   chatWindowedSnapshotSchema.extend({
     queue: openChatQueueStateSchema,
@@ -6359,7 +6401,7 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness = lazySchema(
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
-      snapshot: openChatWindowedSnapshotSchema
+      snapshot: openChatWindowedSnapshotSchemaPreNotApplied
         .omit({ sendWouldQueue: true })
         .extend({ queue: openChatQueueStateSchemaPreMemoryCuration }),
     }),
@@ -6373,14 +6415,25 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134 =
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
-      snapshot: openChatWindowedSnapshotSchema.extend({
+      snapshot: openChatWindowedSnapshotSchemaPreNotApplied.extend({
         queue: openChatQueueStateSchemaPreMemoryCuration,
       }),
     }),
   );
 
-// The live snapshot (`chat.subscribe@1.35`).
+// The snapshot shipped at `chat.subscribe@1.35`.
 const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135 =
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchemaPreNotApplied,
+    }),
+  );
+
+// The live snapshot carries the not-applied outcome flag.
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137 =
   lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
@@ -6512,6 +6565,15 @@ const chatSubscribeRangeServerFrameSchemaPreMcpApp = lazySchema(() =>
 );
 
 const chatSubscribeRangeServerFrameSchemaOpenHarness = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: openChatRangeResponseSchemaPreNotApplied,
+  }),
+);
+
+const chatSubscribeRangeServerFrameSchemaOpenHarnessV137 = lazySchema(() =>
   z.object({
     kind: z.literal("range"),
     ...textFrameFields,
@@ -7086,7 +7148,7 @@ const chatSubscribeServerFrameSchemaV131 = lazySchema(() =>
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchema,
     ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas,
-    blockDeltaServerFrameSchema(openRuntimeEventSchema),
+    blockDeltaServerFrameSchema(openRuntimeEventSchemaPreNotApplied),
   ]),
 );
 
@@ -7148,7 +7210,7 @@ const chatSubscribeServerFrameSchemaV134 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.35 and 1.36: `actionAck` carries no steer restart reasons (`1.37`). */
+/** Frozen 1.35 and 1.36: memory-curation queue, no not-applied outcome flag. */
 const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135,
@@ -7165,8 +7227,25 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
   ]),
 );
 
+/** Frozen 1.37: not-applied outcome flag, no steer restart reasons (`1.38`). */
+const chatSubscribeServerFrameSchemaV137 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV137,
+  ]),
+);
+
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.37`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.38`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7176,17 +7255,17 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
  */
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135,
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
     chatSubscribeTurnStateChangedServerFrameSchemaV134,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV137,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV138,
   ]),
 );
 export type OpenChatSubscribeWindowedServerFrame = z.infer<
@@ -8296,18 +8375,27 @@ export const chatSubscribeV136 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeV135.clientFrameSchema,
 });
 
-/**
- * 1.37: a queued steer that would end the running turn needs the person's
- * confirmation. `queueSteerNow` carries `restartConfirmed`; the host refuses
- * an unconfirmed restart with `QUEUE_STEER_RESTART_UNCONFIRMED` and every
- * cause in `steerRestartReasons` on the rejected ack, and stages nothing. A
- * peer below 1.37 keeps the old behaviour: its steer restarts the turn
- * unasked, and the host strips the reasons from its acks.
- */
+/** 1.37 distinguishes an unsuccessful compaction that was not applied. */
 export const chatSubscribeV137 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 37 } as const,
-  openRequestSchema: chatSubscribeV135.openRequestSchema,
+  openRequestSchema: chatSubscribeV136.openRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV137,
+  clientFrameSchema: chatSubscribeV136.clientFrameSchema,
+});
+
+/**
+ * 1.38: a queued steer that would end the running turn needs the person's
+ * confirmation. `queueSteerNow` carries `restartConfirmed`; the host refuses
+ * an unconfirmed restart with `QUEUE_STEER_RESTART_UNCONFIRMED` and every
+ * cause in `steerRestartReasons` on the rejected ack, and stages nothing. A
+ * peer below 1.38 keeps the old behaviour: its steer restarts the turn
+ * unasked, and the host strips the reasons from its acks.
+ */
+export const chatSubscribeV138 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 38 } as const,
+  openRequestSchema: chatSubscribeV137.openRequestSchema,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
