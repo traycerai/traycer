@@ -159,13 +159,16 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // passthrough: publishers MUST stamp a conditional 1.10 minReaderVersion when
 // any message carries canvas evidence. Older readers refuse at the head before
 // fetching a shard they cannot decode (no browser identity may be fabricated).
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 10 } as const;
+// 1.11 carries compaction.notApplied, defaulted false for older input.
+// Older readers conservatively show failed and preserve the canonical raw field.
+// No reader floor: this changes presentation, not an action the reader takes.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 11 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 
 /**
  * Payload-side schema for `schemaVersion`, pinned to the constant above so the
- * two cannot drift. A payload claiming any other version is not a v1.1 record
+ * two cannot drift. A payload claiming any other version is not this contract's record
  * and does not parse as one.
  */
 export const chatSyncSchemaVersionSchema = lazySchema(() =>

@@ -387,6 +387,7 @@ import {
   chatSubscribeV133,
   chatSubscribeV134,
   chatSubscribeV135,
+  chatSubscribeV136,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -14919,7 +14920,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 35,
+      latestMinor: 36,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15118,6 +15119,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // as it omits the task-overdue item below @1.27). @1.34 is frozen at
         // its six-arm queue.
         35: { contract: chatSubscribeV135 },
+        36: { contract: chatSubscribeV136 },
       },
     },
   },

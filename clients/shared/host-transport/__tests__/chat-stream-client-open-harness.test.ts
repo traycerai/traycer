@@ -189,3 +189,130 @@ describe("chat.subscribe open harness ids on messageAccepted", () => {
     );
   });
 });
+
+describe("chat.subscribe errored-compaction outcome on the live windowed consumer", () => {
+  const ERRORED_COMPACTION_BLOCK = {
+    blockId: "compaction-1",
+    status: "errored",
+    timestamp: 3,
+    type: "compaction",
+    trigger: "auto",
+    preTokens: 900,
+    postTokens: null,
+    durationMs: null,
+    summary: null,
+    error: "Copilot did not apply this compaction.",
+  };
+
+  const ASSISTANT_ROW = {
+    role: "assistant",
+    messageId: "assistant-1",
+    sender: {
+      type: "agent",
+      harnessId: "copilot",
+      agentId: "agent-1",
+      displayName: "Copilot",
+    },
+    timestamp: 4,
+    turnId: "turn-1",
+    usage: null,
+  };
+
+  function rangeEnvelope(block: Record<string, unknown>): StreamFrameEnvelope {
+    return {
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "range-1",
+        epoch: 0,
+        fromOrdinal: 0,
+        rowIds: ["assistant-1"],
+        messages: [{ ...ASSISTANT_ROW, blocks: [block] }],
+        events: [],
+        reachedStart: true,
+        reachedEnd: true,
+      },
+    };
+  }
+
+  function blockDeltaEnvelope(
+    event: Record<string, unknown>,
+  ): StreamFrameEnvelope {
+    return {
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event,
+    };
+  }
+
+  const ERRORED_EVENT = {
+    type: "compaction.errored",
+    blockId: "compaction-1",
+    timestamp: 3,
+    error: "Copilot did not apply this compaction.",
+  };
+
+  it.each([
+    [{ notApplied: true }, true],
+    [{}, false],
+  ])(
+    "delivers a range row's compaction flag from a negotiated 1.36 session (%j)",
+    (flag, expected) => {
+      const { wsStreamClient, session } = stubClientAtVersion({
+        major: 1,
+        minor: 36,
+      });
+      const heard: unknown[] = [];
+      const client = new ChatStreamClient({
+        wsStreamClient,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: noopCallbacks({
+          onRange: (frame) => {
+            const row = frame.range.messages[0];
+            if (row?.role === "assistant") heard.push(row.blocks[0]);
+          },
+        }),
+      });
+
+      session.deliver(rangeEnvelope({ ...ERRORED_COMPACTION_BLOCK, ...flag }));
+
+      expect(heard).toHaveLength(1);
+      expect(heard[0]).toMatchObject({
+        type: "compaction",
+        notApplied: expected,
+      });
+      client.close();
+    },
+  );
+
+  it("delivers a compaction.errored delta's flag from a negotiated 1.36 session and leaves it absent when unsent", () => {
+    const { wsStreamClient, session } = stubClientAtVersion({
+      major: 1,
+      minor: 36,
+    });
+    const heard: unknown[] = [];
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: noopCallbacks({
+        onBlockDelta: (frame) => {
+          heard.push(frame.event);
+        },
+      }),
+    });
+
+    session.deliver(blockDeltaEnvelope({ ...ERRORED_EVENT, notApplied: true }));
+    session.deliver(blockDeltaEnvelope(ERRORED_EVENT));
+
+    expect(heard).toHaveLength(2);
+    expect(heard[0]).toMatchObject({ notApplied: true });
+    expect(heard[1]).not.toHaveProperty("notApplied");
+    client.close();
+  });
+});

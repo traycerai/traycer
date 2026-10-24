@@ -3,9 +3,16 @@ import { z } from "zod";
 import {
   agentFailureSchema,
   contentBlockSchema,
+  contentBlockSchemaPreBrowser,
   contentBlockSchemaPreFallback,
+  contentBlockSchemaPreHtml,
   contentBlockSchemaPreImage,
+  contentBlockSchemaPreMcpApp,
+  contentBlockSchemaPreReasonix,
+  contentBlockSchemaPreReceipt,
   contentBlockSchemaPreSettlement,
+  contentBlockSchemaPreShellHost,
+  contentBlockSchemaV18,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
   errorBlockSchema,
@@ -1521,5 +1528,54 @@ describe("toolCallBlockSchema agentMessageDelivery (cross-host send state)", () 
     });
     expect(Object.hasOwn(block, "agentMessageDelivery")).toBe(false);
     expect(block.toolName).toBe("traycer_send_message");
+  });
+});
+
+describe("compaction notApplied across the frozen epic block chains", () => {
+  const erroredCompaction = {
+    blockId: "compaction-1",
+    status: "errored",
+    timestamp: 1,
+    type: "compaction",
+    trigger: "auto",
+    preTokens: 900,
+    postTokens: null,
+    durationMs: null,
+    summary: null,
+    error: "Copilot did not apply this compaction.",
+  };
+
+  const frozenUnions = [
+    { name: "PreHtml", schema: contentBlockSchemaPreHtml },
+    { name: "PreReasonix", schema: contentBlockSchemaPreReasonix },
+    { name: "PreImage", schema: contentBlockSchemaPreImage },
+    { name: "PreSettlement", schema: contentBlockSchemaPreSettlement },
+    { name: "PreFallback", schema: contentBlockSchemaPreFallback },
+    { name: "PreShellHost", schema: contentBlockSchemaPreShellHost },
+    { name: "PreBrowser", schema: contentBlockSchemaPreBrowser },
+    { name: "PreReceipt", schema: contentBlockSchemaPreReceipt },
+    { name: "PreMcpApp", schema: contentBlockSchemaPreMcpApp },
+    { name: "V18", schema: contentBlockSchemaV18 },
+  ] as const;
+
+  it.each(frozenUnions)(
+    "contentBlockSchema$name drops the flag and keeps the failure",
+    ({ schema }) => {
+      const block = schema.parse({ ...erroredCompaction, notApplied: true });
+      expect(Object.hasOwn(block, "notApplied")).toBe(false);
+      expect(block.status).toBe("errored");
+    },
+  );
+
+  it("the live union carries true and defaults absent input to false", () => {
+    const notAppliedOf = (input: object): boolean => {
+      const block = contentBlockSchema.parse(input);
+      if (block.type !== "compaction") {
+        throw new Error("expected a compaction block");
+      }
+      return block.notApplied;
+    };
+    expect(notAppliedOf({ ...erroredCompaction, notApplied: true })).toBe(true);
+    expect(notAppliedOf(erroredCompaction)).toBe(false);
   });
 });

@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -4823,6 +4823,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "notApplied": {
+                                              "default": false,
+                                              "type": "boolean"
                                             }
                                           },
                                           "required": [
@@ -4835,7 +4839,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "postTokens",
                                             "durationMs",
                                             "summary",
-                                            "error"
+                                            "error",
+                                            "notApplied"
                                           ],
                                           "additionalProperties": false
                                         },
