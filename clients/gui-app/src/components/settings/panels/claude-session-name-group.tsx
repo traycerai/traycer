@@ -210,7 +210,7 @@ function ClaudeSessionNameField(props: {
         <div className="flex flex-col gap-1">
           <p>{PROVIDERS.definitions.sessionNameTemplate.description}</p>
           <p>
-            Placeholders:{" "}
+            You can use:{" "}
             <span className="font-mono">
               {state.placeholders.map((name) => `{${name}}`).join(" ")}
             </span>
@@ -303,7 +303,8 @@ function templateProblem(
   }
   const unknown = unknownSessionNamePlaceholders(template, placeholders);
   if (unknown.length > 0) {
-    return `Unknown placeholder: ${unknown.map((name) => `{${name}}`).join(", ")}`;
+    const names = unknown.map((name) => `{${name}}`).join(", ");
+    return `${names} ${unknown.length === 1 ? "isn't" : "aren't"} supported here`;
   }
   return null;
 }
