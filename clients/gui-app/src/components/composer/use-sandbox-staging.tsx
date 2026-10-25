@@ -53,7 +53,6 @@ import {
 import {
   SANDBOXES_CANT_BE_CREATED,
   NEEDS_CREDITS,
-  configurationLabel,
   needsCreditsRow,
   newSandboxRowLabel,
   reachRemedyLine,
@@ -516,7 +515,7 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
       configurationKey: stageConfigurationKey(facts.configuration),
       label: head,
       subLine: SANDBOXES_CANT_BE_CREATED,
-      configurationName: configurationLabel(copy),
+      configuration: copy,
       disabled: true,
     };
   }
@@ -532,7 +531,7 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
     configurationKey: stageConfigurationKey(facts.configuration),
     label: facts.needsCredits ? `${head} · ${NEEDS_CREDITS}` : head,
     subLine: parts.join(" · "),
-    configurationName: configurationLabel(copy),
+    configuration: copy,
     disabled: false,
   };
 }

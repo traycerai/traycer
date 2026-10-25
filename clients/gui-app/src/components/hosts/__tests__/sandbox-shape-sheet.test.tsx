@@ -136,6 +136,36 @@ describe("<SandboxShapeSheet />", () => {
 
     expect(screen.getByText(idleAndRestingLine(30, null))).toBeDefined();
   });
+  it("introduces the sheet the same way for Personal and a team", () => {
+    const intro = "Used for this sandbox and remembered for your next one.";
+    for (const configuration of [
+      { kind: "personal" },
+      { kind: "team", teamId: "team-1", teamName: "Acme" },
+    ] as const) {
+      render(
+        <SandboxShapeSheet
+          open
+          onOpenChange={() => undefined}
+          configuration={configuration}
+          defaults={null}
+          initialShape={null}
+          initialName=""
+          context={{
+            audience: "private",
+            reachHost: null,
+            unmovedComputer: null,
+          }}
+          onUseShape={() => undefined}
+        />,
+      );
+      expect(
+        document.getElementById(
+          screen.getByRole("dialog").getAttribute("aria-describedby") ?? "",
+        )?.textContent,
+      ).toBe(intro);
+      cleanup();
+    }
+  });
   it("offers a provider's listed shapes in one Size list with the default selected", () => {
     catalogueInUse = catalogueWithShapes();
     renderSheet(vi.fn());
