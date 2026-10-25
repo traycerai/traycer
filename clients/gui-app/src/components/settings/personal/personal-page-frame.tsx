@@ -30,6 +30,7 @@ import {
   useEnvironmentStatusRead,
 } from "@/hooks/environment/use-environment-reads";
 import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
+import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -252,6 +253,9 @@ function HostPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
+  // A Local row's settings are its computer's own, and no status reports
+  // their revision: they are reread on focus.
+  useRereadHostReadsOnFocus(pick.kind === "local" ? pick.hostId : null);
   const kinds = personalPageItemKinds(props.section);
   if (
     kinds === null &&

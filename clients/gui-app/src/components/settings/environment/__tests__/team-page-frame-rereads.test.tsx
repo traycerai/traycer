@@ -3,14 +3,18 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useConfigurationMcpServersQuery } from "@/hooks/environment/team/use-mcp-servers";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
@@ -72,6 +76,30 @@ function PersonalMcpServerReader(): ReactNode {
   return null;
 }
 
+/** Reads `config.env.list` the way the Shell panel's variables table does. */
+function HostVariablesReader(): ReactNode {
+  useHostQuery<HostRpcRegistry, "config.env.list">({
+    cacheKeyIdentity: undefined,
+    client: useHostClient(),
+    method: "config.env.list",
+    params: {},
+    options: { enabled: true },
+  });
+  return null;
+}
+
+/** A page's own read of the computer's shell, which no poll re-reads. */
+function HostShellReader(): ReactNode {
+  useHostQuery<HostRpcRegistry, "config.shell.get">({
+    cacheKeyIdentity: undefined,
+    client: useHostClient(),
+    method: "config.shell.get",
+    params: {},
+    options: { enabled: true },
+  });
+  return null;
+}
+
 const personal: EnvironmentDescriptorV11 = {
   environmentId: "env-personal",
   ownerKind: "user",
@@ -88,17 +116,16 @@ const personal: EnvironmentDescriptorV11 = {
 function mountTeamFrame(
   handlers: Parameters<typeof mountTeamPage>[1],
 ): TeamPageHarness {
-  return mountFrame(
-    { kind: "team", environmentId: "env-a" },
-    handlers,
-    <TeamMcpServers />,
-  );
+  return mountFrame({ kind: "team", environmentId: "env-a" }, handlers, {
+    section: "mcp-servers",
+    element: <TeamMcpServers />,
+  });
 }
 
 function mountFrame(
   pick: EnvironmentPick,
   handlers: Parameters<typeof mountTeamPage>[1],
-  page: ReactNode,
+  page: { readonly section: SettingsSectionId; readonly element: ReactNode },
 ): TeamPageHarness {
   act(() => {
     useSettingsEnvironmentPickStore.setState({ pick });
@@ -108,9 +135,12 @@ function mountFrame(
     queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
     mutations: { retry: false },
   });
-  render(<PersonalPageFrame section="mcp-servers">{page}</PersonalPageFrame>, {
-    wrapper: harness.Wrapper,
-  });
+  render(
+    <PersonalPageFrame section={page.section}>
+      {page.element}
+    </PersonalPageFrame>,
+    { wrapper: harness.Wrapper },
+  );
   return harness;
 }
 
@@ -204,7 +234,7 @@ describe("a team page under PersonalPageFrame", () => {
         "environment.host.list": () => ({ hosts: [] }),
         "environment.configuration.mcpServers.list": () => ({ servers: [] }),
       },
-      <PersonalMcpServerReader />,
+      { section: "mcp-servers", element: <PersonalMcpServerReader /> },
     );
     await waitFor(() => {
       expect(
@@ -220,6 +250,77 @@ describe("a team page under PersonalPageFrame", () => {
       expect(
         harness.paramsOf("environment.configuration.mcpServers.list"),
       ).toHaveLength(2);
+    });
+  });
+
+  it.each([
+    { name: "a Local pick rereads", local: true, reads: 2 },
+    { name: "a team pick does not reread", local: false, reads: 1 },
+  ])(
+    "the computer's own variables read on focus: $name",
+    async ({ local, reads }) => {
+      let served = 0;
+      const harness = mountFrame(
+        local
+          ? {
+              kind: "local",
+              hostId: mockLocalHostEntry.hostId,
+              hostName: "This Mac",
+            }
+          : { kind: "team", environmentId: "env-a" },
+        {
+          "environment.list": () => ({ environments: [personal, acme] }),
+          "environment.host.list": () => ({ hosts: [] }),
+          "config.env.list": () => {
+            served += 1;
+            return { entries: [] };
+          },
+        },
+        { section: "secrets", element: <HostVariablesReader /> },
+      );
+      await waitFor(() => {
+        expect(served).toBe(1);
+      });
+
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+
+      await waitFor(() => {
+        expect(served).toBe(reads);
+      });
+      expect(harness.paramsOf("config.env.list")).toHaveLength(reads);
+    },
+  );
+
+  it("a Local pick rereads a read its page renders that no poll re-reads, beyond the delta-fed ones", async () => {
+    let served = 0;
+    mountFrame(
+      {
+        kind: "local",
+        hostId: mockLocalHostEntry.hostId,
+        hostName: "This Mac",
+      },
+      {
+        "environment.list": () => ({ environments: [personal, acme] }),
+        "environment.host.list": () => ({ hosts: [] }),
+        "config.shell.get": () => {
+          served += 1;
+          return { path: "/bin/zsh", args: [], synthesised: false };
+        },
+      },
+      { section: "secrets", element: <HostShellReader /> },
+    );
+    await waitFor(() => {
+      expect(served).toBe(1);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(served).toBe(2);
     });
   });
 });

@@ -428,8 +428,8 @@ export function McpServerTools(props: {
   });
   if (item === null) return null;
   const harness = providerIdToGuiHarnessId(props.providerId);
-  const tools =
-    list.data?.servers.find((row) => row.name === item.key)?.tools ?? [];
+  const reported = list.data?.servers.find((row) => row.name === item.key);
+  const tools = reported?.tools ?? [];
   const label = providerDisplayName(props.providerId);
   return (
     <div className="flex flex-col gap-2">
@@ -437,6 +437,18 @@ export function McpServerTools(props: {
         <h4 className="text-ui-xs font-medium">{label}</h4>
       ) : null}
       {list.isPending ? <MutedAgentSpinner /> : null}
+      {/* The tools are the host's read, not the page's: say where it is. */}
+      {list.isError && !list.isFetching ? (
+        <TeamReadFailed
+          message={`Couldn't read ${label}'s tools for this server.`}
+          onRetry={() => void list.refetch()}
+        />
+      ) : null}
+      {list.data !== undefined && reported === undefined ? (
+        <p role="status" className="text-ui-xs text-muted-foreground">
+          {`${label} hasn't listed this server's tools yet.`}
+        </p>
+      ) : null}
       {tools.map((tool) => {
         const enabled = item.toolToggles[harness]?.[tool.name] ?? tool.enabled;
         return (

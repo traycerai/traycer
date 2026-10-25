@@ -353,7 +353,23 @@ function EnvironmentSkillDetail(props: {
   const row: ProviderSkill | undefined = list.data?.skills.find(
     (skill) => skill.source === "managed" && skill.name === props.skill.name,
   );
-  if (row === undefined) return null;
+  // Edit or Preview opens on this second read, so it says where that read
+  // is rather than opening nothing.
+  if (list.isError && !list.isFetching)
+    return (
+      <TeamReadFailed
+        message="Couldn't read this skill's files."
+        onRetry={() => void list.refetch()}
+      />
+    );
+  if (list.data === undefined) return <MutedAgentSpinner />;
+  if (row === undefined)
+    return (
+      <TeamReadFailed
+        message="Couldn't find this skill's files."
+        onRetry={() => void list.refetch()}
+      />
+    );
   return (
     <ProviderSkillDetailDialog
       skill={row}

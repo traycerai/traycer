@@ -423,6 +423,81 @@ describe("The MCP servers page", () => {
     expectNoItemOrDeclarationWrites(harness);
   });
 
+  describe("a server's Tools that cannot be shown", () => {
+    /** One server only Claude Code serves, so its Tools section is one provider's. */
+    function claudeOnly(): EnvironmentMcpServerDeclaration {
+      return declaredServer({
+        serverId: "srv-1",
+        name: "github",
+        item: {
+          key: "github",
+          revision: 4,
+          toolToggles: {},
+          offFor: offFor(CAPABLE.filter((id) => id !== "claude-code")),
+        },
+      });
+    }
+
+    it("says the provider's tools could not be read when the read fails, and Retry shows them", async () => {
+      negotiateMethods(ALL_METHODS);
+      let failing = true;
+      const base = handlers({
+        servers: () => [claudeOnly()],
+        hostServers: [hostMcpServer("github", ["search"])],
+      });
+      const providersList = base["providers.list"];
+      if (providersList === undefined)
+        throw new Error("The harness serves providers.list.");
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...base,
+        "providers.list": (request) => {
+          if (failing && request.native !== null) {
+            throw new Error("host unavailable");
+          }
+          return providersList(request);
+        },
+      });
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Tools" }),
+      );
+
+      expect((await screen.findByRole("status")).textContent).toBe(
+        "Couldn't read Claude Code's tools for this server.Retry",
+      );
+
+      failing = false;
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(
+        await screen.findByRole("switch", {
+          name: "github Claude Code search",
+        }),
+      ).toBeTruthy();
+    });
+
+    it("says the provider has not listed the server's tools yet when the read answers without it", async () => {
+      negotiateMethods(ALL_METHODS);
+      const harness = mountTeamPage(
+        poolSource("editor"),
+        handlers({
+          servers: () => [claudeOnly()],
+          hostServers: [hostMcpServer("other", ["search"])],
+        }),
+      );
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Tools" }),
+      );
+
+      expect((await screen.findByRole("status")).textContent).toContain(
+        "Claude Code hasn't listed this server's tools yet.",
+      );
+    });
+  });
+
   it.each([
     {
       configuration: "Personal",

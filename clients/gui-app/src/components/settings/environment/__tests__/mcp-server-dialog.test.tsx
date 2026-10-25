@@ -267,6 +267,44 @@ describe("The MCP server dialog", () => {
     });
   });
 
+  it("says the secrets could not be read to pick from, and Retry brings them into the select", async () => {
+    negotiate(PUT_1_1);
+    let failing = true;
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ servers: [], secrets: [], answer: SAVED }),
+      "environment.secrets.list": () => {
+        if (failing) throw new Error("host unavailable");
+        return { secrets: [secret("acme-key", {})], removed: [] };
+      },
+    });
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+    const dialog = await openAdd();
+
+    await userEvent.type(
+      within(dialog).getByLabelText("Web address"),
+      "https://api.acme.test/mcp",
+    );
+    await choose(dialog, "Credential", "Secret");
+
+    expect((await within(dialog).findByRole("status")).textContent).toBe(
+      "Couldn't read the secrets to pick from.Retry",
+    );
+
+    failing = false;
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Retry" }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("combobox", { name: "Secret" }),
+    );
+
+    expect(
+      (await screen.findAllByRole("option")).map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(["acme-key", "Add a secret"]);
+  });
+
   it("takes only a typed value on a host at put 1.0, and sends it as the PAT", async () => {
     negotiate(PUT_1_0);
     const harness = mountTeamPage(

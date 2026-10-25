@@ -1,7 +1,10 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentReviewHeldApplyResponse } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
+import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   stillLocalFromPlanes,
   type EnvironmentPlanes,
@@ -36,6 +39,7 @@ import {
 } from "@/hooks/environment/use-environment-reads";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 export function RetrospectiveSession(props: {
@@ -66,6 +70,13 @@ export function RetrospectiveSession(props: {
   const record = useEnvironmentReviewRecordMutation(props.client);
   const heldApply = useEnvironmentReviewHeldApplyMutation(props.client);
   const recordMutate = record.mutate;
+  const queryClient = useQueryClient();
+  const reviewHostId = props.reviewHostId;
+  const retryReview = (): void => {
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(reviewHostId, "environment.review"),
+    });
+  };
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
   const [bindingHeld, setBindingHeld] = useState<{
@@ -113,6 +124,7 @@ export function RetrospectiveSession(props: {
         stillLocal={stillLocal}
         heldPendingId={heldPendingId}
         heldIssue={heldApplyIssue(heldApply.data)}
+        inventoryRead={inventoryReadLine(review, props.hostName, retryReview)}
         onOpenChange={props.onOpenChange}
         onShown={onShown}
         onAcknowledged={() => {
@@ -161,6 +173,27 @@ export function RetrospectiveSession(props: {
       />
     </>
   );
+}
+
+/**
+ * Where the review read is, while it is read or once it fails: an inventory
+ * with no rows would otherwise read as nothing on this computer.
+ */
+function inventoryReadLine(
+  review: EnvironmentRead<unknown>,
+  hostName: string,
+  onRetry: () => void,
+): ReactNode {
+  if (review.isError)
+    return (
+      <TeamReadFailed
+        message={`Couldn't read ${hostName}'s settings.`}
+        onRetry={onRetry}
+      />
+    );
+  if (review.supported === true && review.data === null)
+    return <MutedAgentSpinner />;
+  return null;
 }
 
 /**

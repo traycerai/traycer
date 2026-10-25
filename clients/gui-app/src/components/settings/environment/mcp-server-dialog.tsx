@@ -20,7 +20,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  AgentSpinningDots,
+  MutedAgentSpinner,
+} from "@/components/ui/agent-spinning-dots";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import {
@@ -42,6 +45,7 @@ import {
   type McpServerForm,
 } from "./mcp-server-form";
 import { useConfigurationName } from "./mcp-servers-model";
+import { TeamReadFailed } from "./team-read-failed";
 import {
   addServerReach,
   addServerTitle,
@@ -87,6 +91,17 @@ export function McpServerDialog(props: {
     );
   const secrets = useEnvironmentSecretsQuery(client);
   const secretList = secrets.data?.secrets ?? [];
+  // The pick is read apart from the server: while it is read, or once it
+  // fails, the list is not "no secrets".
+  let secretsRead: ReactNode = null;
+  if (secrets.isError && !secrets.isFetching)
+    secretsRead = (
+      <TeamReadFailed
+        message="Couldn't read the secrets to pick from."
+        onRetry={() => void secrets.refetch()}
+      />
+    );
+  else if (secrets.isLoading) secretsRead = <MutedAgentSpinner />;
   const { put } = useConfigurationMcpServerMutations();
   const [form, setForm] = useState<McpServerForm>(() =>
     initialMcpServerForm(server),
@@ -166,6 +181,7 @@ export function McpServerDialog(props: {
               update={update}
               canPick={canPick}
               secrets={secretList}
+              secretsRead={secretsRead}
               custody={custodySentence(personal, name)}
             />
           ) : null}
@@ -263,6 +279,8 @@ function McpServerSecretFields(props: {
   readonly update: FormUpdate;
   readonly canPick: boolean;
   readonly secrets: readonly EnvironmentSecret[];
+  /** Where the secrets read is, while it is read or once it fails. */
+  readonly secretsRead: ReactNode;
   readonly custody: string;
 }): ReactNode {
   const { form, update } = props;
@@ -308,6 +326,7 @@ function McpServerSecretFields(props: {
           </SelectContent>
         </Select>
       ) : null}
+      {props.canPick ? props.secretsRead : null}
       {adding ? (
         <Input
           aria-label="Secret value"

@@ -90,6 +90,8 @@ export function RetrospectiveSheet(props: {
   readonly heldPendingId: string | null;
   /** A held-row choice the configuration refused, said under the rows. */
   readonly heldIssue: ConfigurationWriteIssue;
+  /** Where the inventory's read is while it is read or once it fails. */
+  readonly inventoryRead: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
@@ -140,6 +142,7 @@ export function RetrospectiveSheet(props: {
           >
             {NO_MOVE_SHEET_ACCEPTANCE}
           </p>
+          {props.inventoryRead}
           <dl className="flex flex-col gap-3">
             {props.sharedInUse.length > 0 ? (
               <InventoryRow

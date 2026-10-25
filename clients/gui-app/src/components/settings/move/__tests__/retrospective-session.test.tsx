@@ -357,3 +357,48 @@ describe("<RetrospectiveSession /> a held choice the host refuses", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
+
+describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
+  it("says where the settings could not be read, and Retry brings the rows", async () => {
+    let failing = true;
+    const entries = [
+      entryOf({
+        entryId: "value-1",
+        reason: "credential_like_value",
+        key: "DATABASE_URL",
+      }),
+    ];
+    renderSessionWith(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "local",
+          room: "local",
+        },
+      }),
+      entries,
+      [],
+      {
+        extraHandlers: {
+          "environment.review": () => {
+            if (failing) throw new Error("host unavailable");
+            return reviewOf(entries);
+          },
+        },
+        onOpenChange: vi.fn(),
+      },
+    );
+    const sheet = await screen.findByTestId("retrospective-sheet");
+    expect((await within(sheet).findByRole("status")).textContent).toBe(
+      "Couldn't read Old laptop's settings.Retry",
+    );
+    expect(screen.queryByTestId("retrospective-held-value-1")).toBeNull();
+
+    failing = false;
+    fireEvent.click(within(sheet).getByRole("button", { name: "Retry" }));
+
+    expect(
+      await screen.findByTestId("retrospective-held-value-1"),
+    ).toBeTruthy();
+  });
+});

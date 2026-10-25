@@ -211,6 +211,67 @@ describe("The Skills page", () => {
     expect(await screen.findByText("Review a change.")).toBeTruthy();
   });
 
+  describe("a skill's files that cannot be read", () => {
+    async function openReview(
+      nativeSkills: () => readonly ProviderSkill[],
+    ): Promise<void> {
+      negotiateMethods(BASE_METHODS);
+      const base = handlers({ list: listed([REVIEW]), hostSkills: [] });
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...base,
+        "providers.list": (request) => {
+          if (request.native === null) {
+            return {
+              providers: CAPABLE.map((id) =>
+                providerState(id, { mcp: false, skills: true }),
+              ),
+              native: null,
+            };
+          }
+          return {
+            providers: [],
+            native: {
+              ok: true as const,
+              kind: "skills" as const,
+              skills: [...nativeSkills()],
+            },
+          };
+        },
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+      const row = (await screen.findByText("review")).closest("li");
+      if (row === null) throw new Error("no row for review");
+      await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    }
+
+    it("says the files could not be read when the read fails, and Retry opens the skill once it answers", async () => {
+      let failing = true;
+      await openReview(() => {
+        if (failing) throw new Error("host unavailable");
+        return [hostSkill("review", "managed")];
+      });
+
+      expect((await screen.findByRole("status")).textContent).toBe(
+        "Couldn't read this skill's files.Retry",
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      failing = false;
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(await screen.findByRole("dialog")).toBeTruthy();
+    });
+
+    it("says the files could not be found when the read answers without the skill", async () => {
+      await openReview(() => [hostSkill("other", "managed")]);
+
+      expect((await screen.findByRole("status")).textContent).toBe(
+        "Couldn't find this skill's files.Retry",
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
   it("shows an edited description in the list once the edit dialog closes", async () => {
     negotiateMethods(BASE_METHODS);
     let description = REVIEW.description;
