@@ -10,6 +10,10 @@ const BOARDS = [
   "docs/50%.html",
 ];
 
+function destination(path: string, search: string, hash: string) {
+  return { path, search, hash };
+}
+
 describe("resolveCanvasBoardLink", () => {
   describe("resolves relative to the linking board", () => {
     it.each([
@@ -23,37 +27,69 @@ describe("resolveCanvasBoardLink", () => {
       ["docs/intro.html", "intro.html", "docs/intro.html"],
       ["docs/intro.html", "guide//setup.html", "docs/guide/setup.html"],
     ])("from %s, %s goes to %s", (from, href, expected) => {
-      expect(resolveCanvasBoardLink(from, href, BOARDS)).toBe(expected);
+      expect(resolveCanvasBoardLink(from, href, BOARDS)).toEqual(
+        destination(expected, "", ""),
+      );
     });
   });
 
-  describe("drops the query and the fragment", () => {
+  describe("preserves the query and the fragment on the resolved board", () => {
     it.each([
-      "about.html?tab=2",
-      "about.html#team",
-      "about.html?tab=2#team",
-      "about.html#team?tab=2",
-    ])("%s", (href) => {
-      expect(resolveCanvasBoardLink("index.html", href, BOARDS)).toBe(
-        "about.html",
+      ["about.html?tab=2", "?tab=2", ""],
+      ["about.html#team", "", "#team"],
+      ["about.html?tab=2#team", "?tab=2", "#team"],
+    ])("%s", (href, search, hash) => {
+      expect(resolveCanvasBoardLink("index.html", href, BOARDS)).toEqual(
+        destination("about.html", search, hash),
       );
     });
 
-    it.each(["#team", "?tab=2", "", "#"])(
-      "has no board to go to for %j alone",
-      (href) => {
+    it("keeps a fragment that itself looks like a query untouched", () => {
+      // The fragment is everything from the first `#` on; a `?` inside it is
+      // not a second query string.
+      expect(
+        resolveCanvasBoardLink("index.html", "about.html#team?tab=2", BOARDS),
+      ).toEqual(destination("about.html", "", "#team?tab=2"));
+    });
+  });
+
+  describe("a suffix with no path navigates the linking board itself", () => {
+    it.each([
+      ["#team", "", "#team"],
+      ["?tab=2", "?tab=2", ""],
+      ["?tab=2#team", "?tab=2", "#team"],
+    ])("%s on a board in the canvas", (href, search, hash) => {
+      expect(resolveCanvasBoardLink("index.html", href, BOARDS)).toEqual(
+        destination("index.html", search, hash),
+      );
+    });
+
+    it("needs the linking board itself to be one of the given boards", () => {
+      expect(
+        resolveCanvasBoardLink("missing.html", "#team", BOARDS),
+      ).toBeNull();
+      expect(resolveCanvasBoardLink("index.html", "#team", [])).toBeNull();
+    });
+
+    it.each(["", "#"])("has no board to go to for %j alone", (href) => {
+      // "#" alone resolves to the linking board (an empty fragment); "" is
+      // not a link at all.
+      if (href === "")
         expect(resolveCanvasBoardLink("index.html", href, BOARDS)).toBeNull();
-      },
-    );
+      else
+        expect(resolveCanvasBoardLink("index.html", href, BOARDS)).toEqual(
+          destination("index.html", "", "#"),
+        );
+    });
   });
 
   it("decodes percent-escapes in a path segment", () => {
     expect(
       resolveCanvasBoardLink("docs/intro.html", "my%20page.html", BOARDS),
-    ).toBe("docs/my page.html");
+    ).toEqual(destination("docs/my page.html", "", ""));
     expect(
       resolveCanvasBoardLink("docs/intro.html", "50%25.html", BOARDS),
-    ).toBe("docs/50%.html");
+    ).toEqual(destination("docs/50%.html", "", ""));
   });
 
   describe("never leaves the canvas's own root", () => {
@@ -88,6 +124,12 @@ describe("resolveCanvasBoardLink", () => {
     it("refuses a malformed escape", () => {
       expect(
         resolveCanvasBoardLink("index.html", "%E0%A4%A.html", BOARDS),
+      ).toBeNull();
+    });
+
+    it("refuses a bare control character in the href", () => {
+      expect(
+        resolveCanvasBoardLink("index.html", "about.html\t", BOARDS),
       ).toBeNull();
     });
   });

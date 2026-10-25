@@ -273,6 +273,11 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     readonly reasoning: string;
     readonly serviceTier: string;
     readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId: string | null;
+      readonly harnesses: readonly unknown[] | undefined;
+      readonly modelsLoaded: boolean;
+    };
   }
   const toolbarStore = createStore<ToolbarMockState>(() => ({
     selection: {
@@ -280,6 +285,8 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       modelSlug: "claude-sonnet",
       profileId: null,
     },
+    // No catalog answered: this suite stages no sandbox to hand off.
+    catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
     permission: "supervised",
     reasoning: "medium",
     serviceTier: "",
@@ -405,6 +412,11 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
 
+// Nothing is staged in this suite: the staged send takes no submit.
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
+}));
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,

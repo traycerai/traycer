@@ -41,6 +41,11 @@ export interface DraftSubmissionAttempt {
   readonly abortController: AbortController;
   /** Identity/window lifetime at intent. Teardown retires this generation. */
   readonly settlementGeneration: number;
+  /**
+   * Told once whether this attempt reached its create: `true` as the create
+   * starts, `false` as the attempt finishes without one.
+   */
+  readonly onSettled: ((createStarted: boolean) => void) | null;
   createStarted: boolean;
 }
 
@@ -194,6 +199,7 @@ export class DraftRuntime {
 
   startSubmission(
     placement: DraftSubmissionPlacement,
+    onSettled: ((createStarted: boolean) => void) | null,
   ): DraftSubmissionAttempt | null {
     if (this.attempt !== null || this.closed) return null;
     this.flush();
@@ -208,6 +214,7 @@ export class DraftRuntime {
       attachmentRoots: new Set(snapshot.attachmentRoots),
       abortController: new AbortController(),
       settlementGeneration: this.settlementGeneration(),
+      onSettled,
       createStarted: false,
     };
     this.attempt = attempt;
@@ -228,7 +235,10 @@ export class DraftRuntime {
 
   markCreateStarted(attempt: DraftSubmissionAttempt): boolean {
     if (!this.canStartCreate(attempt)) return false;
-    attempt.createStarted = true;
+    if (!attempt.createStarted) {
+      attempt.createStarted = true;
+      attempt.onSettled?.(true);
+    }
     return true;
   }
 
@@ -253,6 +263,7 @@ export class DraftRuntime {
     if (!this.ownsAttempt(attempt)) return false;
     this.attempt = null;
     this.store.setState({ isSubmitting: false });
+    if (!attempt.createStarted) attempt.onSettled?.(false);
     return true;
   }
 

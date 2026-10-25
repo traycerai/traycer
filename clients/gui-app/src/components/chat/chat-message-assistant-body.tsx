@@ -22,11 +22,26 @@ import type {
   ChatMessageStoppedInfo,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { Check, Copy, Sparkles, Split, Square } from "lucide-react";
-import { use, useCallback, useMemo } from "react";
+import { Check, Copy, Sparkles, Split, Square, Volume2 } from "lucide-react";
+import { use, useCallback, useMemo, useRef } from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { useReadAloud } from "@/hooks/ui/use-read-aloud";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
-import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
+import {
+  collectAssistantReplyMarkdowns,
+  collectAssistantReplyText,
+} from "@/lib/chat/collect-assistant-reply-text";
+import {
+  useEpicAgentRoleClaimsByAgentId,
+  useEpicArtifactRecords,
+} from "@/lib/epic-selectors";
+import { spokenParagraphsFromRenderedReply } from "@/lib/speech/spoken-reply-dom";
+import {
+  spokenParagraphsFromReplyMarkdown,
+  type AgentLabelResolver,
+} from "@/markdown/spoken-paragraphs";
+import { EpicSessionGate } from "@/providers/epic-session-gate";
+import { resolveAgentReference } from "./agent-reference-resolution";
 import { knownHarnessId } from "@/lib/chat/sender-display";
 import { formatClockDuration } from "@/lib/format-duration";
 import {
@@ -297,12 +312,10 @@ export function AssistantMessageBody({
   // aggregated onto `stopped` so the copy button still has something to
   // copy. Every other row (including a stopped row that legitimately has its
   // own content) keeps using its own segments, unchanged.
+  const boundaryReplySegments = boundaryReplySegmentsOf(segments, stopped);
   const replyText = useMemo(
-    () =>
-      segments.length === 0 && stopped !== null && stopped.turnHadOutput
-        ? collectAssistantReplyText(stopped.turnReplySegments)
-        : collectAssistantReplyText(segments),
-    [segments, stopped],
+    () => collectAssistantReplyText(boundaryReplySegments ?? segments),
+    [boundaryReplySegments, segments],
   );
   // A completed turn whose only visible segment is the autonomous-resume
   // divider is a note about an earlier call, and it always says how it ended.
@@ -470,6 +483,7 @@ export function AssistantMessageBody({
           stopped={stopped}
           meta={meta}
           replyText={replyText}
+          boundaryReplySegments={boundaryReplySegments}
           forkAction={forkAction}
           silentAutonomousResume={silentAutonomousResume}
         />
@@ -619,6 +633,7 @@ function AssistantElapsedFooter({
   stopped,
   meta,
   replyText,
+  boundaryReplySegments,
   forkAction,
   silentAutonomousResume,
 }: {
@@ -629,6 +644,8 @@ function AssistantElapsedFooter({
   stopped: ChatMessageStoppedInfo | null;
   meta: AssistantTurnMeta | null;
   replyText: string;
+  /** The turn's reply when this row does not draw it (a stopped boundary). */
+  boundaryReplySegments: ReadonlyArray<MessageSegment> | null;
   forkAction: ChatMessageForkAction | null;
   silentAutonomousResume: boolean;
 }) {
@@ -701,6 +718,9 @@ function AssistantElapsedFooter({
       {replyText.length > 0 ? (
         <AssistantReplyCopyButton text={replyText} />
       ) : null}
+      {replyText.length > 0 ? (
+        <ReplyReadAloudButton boundaryReplySegments={boundaryReplySegments} />
+      ) : null}
       {forkAction !== null ? <AssistantForkButton action={forkAction} /> : null}
     </div>
   );
@@ -739,6 +759,149 @@ function AssistantReplyCopyButton({ text }: { text: string }) {
       )}
     </button>
   );
+}
+
+/**
+ * Play/Stop for reading the reply aloud with the device's own voices. Absent
+ * where the device has no speech engine or no on-device voice.
+ */
+function ReadAloudButton({
+  readParagraphs,
+}: {
+  readParagraphs: (button: HTMLButtonElement | null) => ReadonlyArray<string>;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const read = useCallback(
+    () => readParagraphs(buttonRef.current),
+    [readParagraphs],
+  );
+  const { available, reading, toggle } = useReadAloud(read);
+  if (!available) return null;
+
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      onClick={toggle}
+      aria-label={reading ? "Stop reading" : "Read reply aloud"}
+      data-testid="assistant-reply-read-aloud"
+      className={cn(
+        "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
+        "text-muted-foreground/60 transition-colors",
+        "hover:bg-accent hover:text-foreground",
+        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+      )}
+    >
+      {reading ? (
+        <Square className="size-3" aria-hidden />
+      ) : (
+        <Volume2 className="size-3.5" aria-hidden />
+      )}
+    </button>
+  );
+}
+
+/**
+ * A content-less boundary row (synthesized after a trailing steer bubble) has
+ * no reply of its own; the turn's reply is on its earlier rows. `null` for
+ * every row that draws its reply.
+ */
+function boundaryReplySegmentsOf(
+  segments: ReadonlyArray<MessageSegment>,
+  stopped: ChatMessageStoppedInfo | null,
+): ReadonlyArray<MessageSegment> | null {
+  return segments.length === 0 && stopped !== null && stopped.turnHadOutput
+    ? stopped.turnReplySegments
+    : null;
+}
+
+/**
+ * Speech reads what the reply shows. A row that draws its reply reads its own
+ * rendered DOM; a boundary row projects the reply its earlier rows draw.
+ */
+function ReplyReadAloudButton({
+  boundaryReplySegments,
+}: {
+  boundaryReplySegments: ReadonlyArray<MessageSegment> | null;
+}) {
+  if (boundaryReplySegments === null) {
+    return <ReadAloudButton readParagraphs={readRenderedReply} />;
+  }
+  return <BoundaryReplyReadAloudButton segments={boundaryReplySegments} />;
+}
+
+/** The row draws its reply: read what it shows, from its own DOM. */
+function readRenderedReply(
+  button: HTMLButtonElement | null,
+): ReadonlyArray<string> {
+  const turn = button?.closest("[data-assistant-turn]") ?? null;
+  return turn === null ? [] : spokenParagraphsFromRenderedReply(turn);
+}
+
+const UNRESOLVED_AGENT_LABEL: AgentLabelResolver = () => null;
+
+/**
+ * A stopped-boundary row's Play/Stop. Its reply is drawn by earlier rows of
+ * the turn, which the virtualized transcript may have unmounted, so it is
+ * projected from the same parsed parts those rows render. Agent references
+ * resolve as their chips do, and read as written with no open epic.
+ */
+function BoundaryReplyReadAloudButton({
+  segments,
+}: {
+  segments: ReadonlyArray<MessageSegment>;
+}) {
+  return (
+    <EpicSessionGate
+      fallback={
+        <BoundaryReplyReadAloud
+          segments={segments}
+          resolveAgentLabel={UNRESOLVED_AGENT_LABEL}
+        />
+      }
+    >
+      <ResolvedBoundaryReplyReadAloud segments={segments} />
+    </EpicSessionGate>
+  );
+}
+
+function ResolvedBoundaryReplyReadAloud({
+  segments,
+}: {
+  segments: ReadonlyArray<MessageSegment>;
+}) {
+  const records = useEpicArtifactRecords();
+  const roleClaimsByAgentId = useEpicAgentRoleClaimsByAgentId();
+  const resolveAgentLabel = useCallback<AgentLabelResolver>(
+    (referenceId) =>
+      resolveAgentReference({ referenceId, records, roleClaimsByAgentId })
+        ?.label ?? null,
+    [records, roleClaimsByAgentId],
+  );
+  return (
+    <BoundaryReplyReadAloud
+      segments={segments}
+      resolveAgentLabel={resolveAgentLabel}
+    />
+  );
+}
+
+function BoundaryReplyReadAloud({
+  segments,
+  resolveAgentLabel,
+}: {
+  segments: ReadonlyArray<MessageSegment>;
+  resolveAgentLabel: AgentLabelResolver;
+}) {
+  const readParagraphs = useCallback(
+    () =>
+      spokenParagraphsFromReplyMarkdown(
+        collectAssistantReplyMarkdowns(segments),
+        resolveAgentLabel,
+      ),
+    [resolveAgentLabel, segments],
+  );
+  return <ReadAloudButton readParagraphs={readParagraphs} />;
 }
 
 function AssistantForkButton({
@@ -1399,6 +1562,7 @@ export function AssistantSegment({
       return (
         <CompactionSegment
           status={segment.status}
+          notApplied={segment.notApplied}
           trigger={segment.trigger}
           preTokens={segment.preTokens}
           postTokens={segment.postTokens}

@@ -1,6 +1,8 @@
+import { FrameCommentPortalContext } from "./frame-comment-surface-context";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import type { CommentAnchor } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  useContext,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -34,6 +36,21 @@ import {
   type CommentComposerHandle,
 } from "./comment-composer";
 
+export interface AnchoredDraftTidInsertion {
+  readonly boardPath: string;
+  readonly marker: number;
+  readonly tagName: string;
+  readonly tid: string;
+  readonly sha256Before: string;
+  readonly sha256After: string;
+  /** The insertion's splices, for shifting the live document's markers. */
+  readonly splices: readonly {
+    readonly start: number;
+    readonly end: number;
+    readonly replacement: string;
+  }[];
+}
+
 export function AnchoredDraftPopover(props: {
   readonly epicId: string;
   readonly artifactId: string;
@@ -41,6 +58,10 @@ export function AnchoredDraftPopover(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly onCreated: (threadId: string) => void;
   readonly onClosed: () => void;
+  /** Lets the surface adopt a first comment's tid without reloading the board. */
+  readonly onTidInserted?: (
+    insertion: AnchoredDraftTidInsertion,
+  ) => Promise<void>;
 }) {
   const { epicId, artifactId, tileId, hostClient, onCreated, onClosed } = props;
   const stored = useAnchoredDraftStore((state) => state.byEpicId[epicId]);
@@ -57,6 +78,7 @@ export function AnchoredDraftPopover(props: {
   const composer = useRef<CommentComposerHandle | null>(null);
   const floatingRef = useRef<HTMLDialogElement | null>(null);
   const paneContainer = usePanePortalContainer();
+  const commentContainer = useContext(FrameCommentPortalContext);
   const focused = usePaneFocused();
   const pending = createThread.isPending || edit.isPending;
   const dismiss = useCallback((): boolean => {
@@ -138,7 +160,8 @@ export function AnchoredDraftPopover(props: {
     target: AnchoredCommentDraft,
   ): Promise<CommentAnchor | null> => {
     const anchor = target.anchor;
-    if (anchor.kind === "artifact") return anchor;
+    if (anchor.kind === "artifact" || anchor.kind === "canvas-point")
+      return anchor;
     if (anchor.elementId !== null)
       return { ...anchor, elementId: anchor.elementId };
     if (target.selection === null || target.selection.element.generated) {
@@ -163,6 +186,19 @@ export function AnchoredDraftPopover(props: {
       });
       return null;
     }
+    if (
+      props.onTidInserted !== undefined &&
+      target.selection.element.marker !== null
+    )
+      await props.onTidInserted({
+        boardPath: target.selection.boardPath,
+        marker: target.selection.element.marker,
+        tagName: target.selection.element.tagName,
+        tid: result.tid,
+        sha256Before: target.selection.servedSha256,
+        sha256After: result.sha256After,
+        splices: result.splices,
+      });
     const resolved: CommentAnchor = { ...anchor, elementId: result.tid };
     useAnchoredDraftStore
       .getState()
@@ -177,11 +213,15 @@ export function AnchoredDraftPopover(props: {
       hostId === null
         ? null
         : readNegotiatedMethodVersion(hostId, "epic.createCommentThread");
+    // Anchored threads negotiate at 1.2; the canvas-point anchor is 1.3's
+    // request growth, so an older host must refuse it here rather than
+    // reject the wire call.
+    const neededMinor = draft.anchor.kind === "canvas-point" ? 3 : 2;
     if (
       version === null ||
       version === false ||
       version.major !== 1 ||
-      version.minor < 2
+      version.minor < neededMinor
     ) {
       setFailure({
         draftId: draft.draftId,
@@ -266,6 +306,6 @@ export function AnchoredDraftPopover(props: {
         className={undefined}
       />
     </dialog>,
-    paneContainer ?? document.body,
+    commentContainer ?? paneContainer ?? document.body,
   );
 }

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
 import type { SecretRequestDecideOutcome } from "@/hooks/sandboxes/use-secret-request-decide-mutation";
 import type { SecretsNotificationDetail } from "@/lib/notifications/secrets-notification-detail";
@@ -36,12 +35,10 @@ vi.mock("@/hooks/sandboxes/use-secret-request-decide-mutation", () => ({
     };
   },
 }));
-vi.mock("@/components/providers/secrets-dashboard-link", () => ({
-  SecretsDashboardLink: (props: { readonly testId: string }): ReactNode => (
-    <a href="https://dashboard.test/secrets" data-testid={props.testId}>
-      Open Secrets
-    </a>
-  ),
+
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
@@ -102,6 +99,7 @@ beforeEach(() => {
   mocks.state.variables = undefined;
   mocks.mutate.mockClear();
   mocks.decideArgs.mockClear();
+  navigateToSettingsSectionMock.mockClear();
 });
 afterEach(cleanup);
 
@@ -229,7 +227,7 @@ describe("<SecretGrantRequestCard />", () => {
     }
   });
 
-  it("explains a secret-required outcome, links the dashboard and keeps the answers", () => {
+  it("explains a secret-required outcome, opens Secrets and keeps the answers", () => {
     mocks.state.data = { kind: "secret-required" };
     renderCard({ ...DETAIL, secretName: null }, false);
     const outcomeLine = screen.getByTestId("secret-grant-request-outcome");
@@ -237,9 +235,9 @@ describe("<SecretGrantRequestCard />", () => {
     expect(outcomeLine.textContent).toContain(
       "There is no secret stored for this destination yet",
     );
-    expect(
-      screen.getByTestId("secret-grant-request-open-secrets"),
-    ).toBeTruthy();
+    fireEvent.click(screen.getByTestId("secret-grant-request-open-secrets"));
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
     for (const testId of ANSWER_IDS) {
       expect(isDisabled(testId)).toBe(false);
     }

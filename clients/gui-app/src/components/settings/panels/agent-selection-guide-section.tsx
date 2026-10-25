@@ -2,11 +2,11 @@
  * Docs: see ../SETTINGS.md (Providers → Agent selection guide).
  * Update that file whenever this settings surface changes.
  */
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import type { ReactNode } from "react";
 import { useEffect, useReducer, useRef } from "react";
 import { Check, TriangleAlert } from "lucide-react";
 import {
-  AGENT_SELECTION_GUIDE_DESCRIPTION,
   AGENT_SELECTION_GUIDE_TITLE,
   AgentSelectionGuideEditorSurface,
 } from "@/components/agent-selection-guide-editor-surface";
@@ -23,6 +23,10 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
+
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamGuide } from "@/components/settings/environment/team-guide";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -102,6 +106,18 @@ function agentsGuideEditorReducer(
 }
 
 export function AgentSelectionGuideSection() {
+  const source = useConfigurationSource();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
+  return source.kind === "pool" ? (
+    <TeamGuide key={configurationKey} />
+  ) : (
+    <HostAgentSelectionGuideSection />
+  );
+}
+
+function HostAgentSelectionGuideSection() {
   const scope = usePersonalHostScope();
   const realBinding = useHostBinding();
 
@@ -225,9 +241,6 @@ function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
         >
           {AGENT_SELECTION_GUIDE_TITLE}
         </h2>
-        <p className="mt-1 text-ui-xs text-muted-foreground">
-          {AGENT_SELECTION_GUIDE_DESCRIPTION}
-        </p>
       </div>
       {props.children}
     </section>
@@ -240,6 +253,7 @@ function AgentsGuideEditor(props: {
   readonly generatedDefaultContent: string;
 }) {
   const { hostLabel, initialContent, generatedDefaultContent } = props;
+  const pick = useEnvironmentPick();
   const setMutation = useAgentSelectionGuideSetGlobalMutation();
   const resetMutation = useAgentSelectionGuideResetGlobalMutation();
   const [state, dispatch] = useReducer(
@@ -400,10 +414,14 @@ function AgentsGuideEditor(props: {
         onOpenChange={(open) =>
           dispatch({ type: "confirm-open-changed", open })
         }
-        title="Revert to default instructions?"
-        description={`This replaces your agent selection instructions with defaults based on the providers currently available on ${hostLabel}. Your custom instructions will be lost.`}
+        title="Reset to default instructions?"
+        description={
+          pick.kind === "personal"
+            ? "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost."
+            : `This replaces your agent selection instructions with defaults based on the providers currently available on ${hostLabel}. Your custom instructions will be lost.`
+        }
         cascadeSummary={null}
-        actionLabel="Revert to default"
+        actionLabel="Reset to default"
         isPending={state.resetInFlight}
         onConfirm={onRevert}
       />

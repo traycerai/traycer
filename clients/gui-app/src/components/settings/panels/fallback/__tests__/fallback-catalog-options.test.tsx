@@ -44,7 +44,9 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: (): { data: ListGuiHarnessesResponse | undefined } => ({
+  useGuiHarnessesQueryForClient: (): {
+    data: ListGuiHarnessesResponse | undefined;
+  } => ({
     data:
       fixture.harnesses === undefined
         ? undefined

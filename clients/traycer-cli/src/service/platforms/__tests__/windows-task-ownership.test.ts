@@ -103,6 +103,7 @@ import {
   setWindowsAccountSidResolverForTests,
   setWindowsDefinitionDepsForTests,
   setWindowsStartEvidenceDepsForTests,
+  setWindowsTaskHiddenProbeForTests,
   setWindowsTaskInstallDepsForTests,
   setWindowsTaskUserSidReaderForTests,
   windowsTaskXmlEnabledState,
@@ -311,6 +312,7 @@ beforeEach(() => {
   });
   setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
   setWindowsAccountSidResolverForTests(async () => null);
+  setWindowsTaskHiddenProbeForTests(async () => false);
   setWindowsDefinitionDepsForTests({
     queryTaskXml: async () => {
       queryCount += 1;
@@ -335,6 +337,7 @@ afterEach(() => {
   }
   setWindowsTaskUserSidReaderForTests(null);
   setWindowsAccountSidResolverForTests(null);
+  setWindowsTaskHiddenProbeForTests(null);
   setWindowsDefinitionDepsForTests(null);
   setWindowsStartEvidenceDepsForTests(null);
   setWindowsTaskInstallDepsForTests(null);
@@ -482,6 +485,28 @@ describe("a task that is not the caller's: install never registers, runs or star
       expect(await exists(launcherPath())).toBe(false);
     });
   }
+
+  it("install over a task the query cannot see but that is hidden from this account: refuses as another user's - 0 /Create, nothing staged", async () => {
+    registered = { kind: "absent" };
+    setWindowsTaskHiddenProbeForTests(async () => true);
+    const stage = vi.fn(async () => ({
+      tmpDir: "/tmp/never",
+      xmlPath: "/tmp/never/task.xml",
+    }));
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: stage,
+      removeStagedTaskDefinition: async () => undefined,
+    });
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).install(options),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, verb: "create", reason: "other-owner" },
+    });
+    expect(verbCalls(calls, "/Create")).toHaveLength(0);
+    expect(stage).not.toHaveBeenCalled();
+  });
 });
 
 describe("a task that is not the caller's: uninstall leaves it in place and finishes the caller's own teardown", () => {

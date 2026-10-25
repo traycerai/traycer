@@ -6,6 +6,11 @@ import {
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
+import {
+  SANDBOX_ROUTE_PROTOCOLS,
+  SANDBOX_SECRET_FORM_KINDS,
+  SANDBOX_SECRET_SWAP_SITES,
+} from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
  * Wire shapes of the environment methods: the desktop Settings pages a person's
@@ -45,6 +50,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "auto_policy",
   "member",
   "secret",
+  "sandbox_defaults",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),
@@ -228,7 +234,10 @@ export const environmentStatusResponseSchema = lazySchema(() =>
     setup: z
       .object({
         stage: z.string().min(1).max(32),
-        /** Known: running, stalled, failed, done. */
+        /**
+         * Known: running, stalled, failed, done, and `awaiting_consent` (the
+         * move waits for the person's `Move to Personal`; served at `@1.1`).
+         */
         state: z.string().min(1).max(32),
       })
       .nullable(),
@@ -237,6 +246,46 @@ export const environmentStatusResponseSchema = lazySchema(() =>
 );
 export type EnvironmentStatusResponse = z.infer<
   typeof environmentStatusResponseSchema
+>;
+
+/**
+ * Where one plane of this computer's settings stands: still `local`,
+ * `moved` by the person's accepted move, `shared_unrecorded` by an earlier
+ * build with no acceptance on record, or `stopped` sharing.
+ */
+export const environmentPlaneStateSchema = lazySchema(() =>
+  z.enum(["local", "moved", "shared_unrecorded", "stopped"]),
+);
+export type EnvironmentPlaneState = z.infer<typeof environmentPlaneStateSchema>;
+
+/**
+ * `environment.status@1.1`: `@1.0` plus the move. `consent` is the accepted
+ * move sheet, null before one. `planes` is where the records, the broker's
+ * secrets and the room's files each stand; a `@1.0` answer upgrades as fully
+ * moved, which is what a host that predates the move had done. `returnedFromTeam`
+ * is when this computer went back to its own settings after a team, null when
+ * it never did. `stoppedAt` is when this computer stopped sharing, null while
+ * it shares or never did.
+ */
+export const environmentStatusResponseSchemaV11 = lazySchema(() =>
+  environmentStatusResponseSchema.extend({
+    consent: z
+      .object({ acceptedAt: z.number(), planHash: z.string().min(1) })
+      .nullable()
+      .default(null),
+    planes: z
+      .object({
+        records: environmentPlaneStateSchema,
+        broker: environmentPlaneStateSchema,
+        room: environmentPlaneStateSchema,
+      })
+      .default({ records: "moved", broker: "moved", room: "moved" }),
+    returnedFromTeam: z.object({ at: z.number() }).nullable().default(null),
+    stoppedAt: z.number().nullable().default(null),
+  }),
+);
+export type EnvironmentStatusResponseV11 = z.infer<
+  typeof environmentStatusResponseSchemaV11
 >;
 
 // ── environment.notices / .undo / .review ───────────────────────────────────
@@ -329,6 +378,132 @@ export const environmentReviewResponseSchema = lazySchema(() =>
 );
 export type EnvironmentReviewResponse = z.infer<
   typeof environmentReviewResponseSchema
+>;
+
+/**
+ * `environment.review@1.1`: `@1.0` plus the retrospective sheet's record.
+ * `shownAt` and `acknowledgedAt` are two timestamps (shown is not read);
+ * `evidence` is the earlier build that shared this computer's settings and
+ * when, each null where unknown. Defaulted, so a `@1.0` answer upgrades as a
+ * sheet never shown with no evidence.
+ */
+export const environmentReviewResponseSchemaV11 = lazySchema(() =>
+  environmentReviewResponseSchema.extend({
+    shownAt: z.number().nullable().default(null),
+    acknowledgedAt: z.number().nullable().default(null),
+    evidence: z
+      .object({
+        version: z.string().min(1).max(64).nullable(),
+        at: z.number().nullable(),
+      })
+      .default({ version: null, at: null }),
+  }),
+);
+export type EnvironmentReviewResponseV11 = z.infer<
+  typeof environmentReviewResponseSchemaV11
+>;
+
+/**
+ * `environment.review@1.2`: each entry names what a held executable does, the
+ * facts its line on the retrospective sheet reads. All null on a held value
+ * and on any row the host cannot describe; a `@1.1` answer upgrades with all
+ * null.
+ *
+ * - `command`: what it runs, as configured: an MCP server's or hook's command
+ *   line, arguments included and env values left out; a shell's path and
+ *   arguments; a setup script's lines.
+ * - `event`: when it runs: a hook's trigger, or a setup script's.
+ * - `description`: a skill's one-line description, as the skill states it.
+ * - `harness`: the harness id an agent definition is for, or the program an
+ *   env setting changes (its key's `<harness>:` prefix).
+ * - `value`: a launch-sensitive variable's or env setting's value as
+ *   configured. A value that looks like a credential is never here: that row
+ *   is a held value.
+ */
+export const environmentReviewEntrySchemaV12 = lazySchema(() =>
+  environmentReviewEntrySchema.extend({
+    command: z.string().min(1).max(8192).nullable().default(null),
+    event: z.string().min(1).max(256).nullable().default(null),
+    description: z.string().min(1).max(1024).nullable().default(null),
+    harness: z.string().min(1).max(64).nullable().default(null),
+    value: z.string().min(1).max(8192).nullable().default(null),
+  }),
+);
+export type EnvironmentReviewEntryV12 = z.infer<
+  typeof environmentReviewEntrySchemaV12
+>;
+
+export const environmentReviewResponseSchemaV12 = lazySchema(() =>
+  environmentReviewResponseSchemaV11.extend({
+    entries: z.array(environmentReviewEntrySchemaV12),
+  }),
+);
+export type EnvironmentReviewResponseV12 = z.infer<
+  typeof environmentReviewResponseSchemaV12
+>;
+
+/**
+ * `environment.review.heldApply@1.0`: the retrospective sheet's choice for one
+ * held entry (`EnvironmentReviewEntry.entryId`). `secret`, `variable` and
+ * `stays` answer a held credential-like value; `approve` a held hook;
+ * `discard` either. `gone` is an entry already applied or discarded.
+ *
+ * `secret` promotes the held value, already sealed in the broker, to a secret
+ * with the binding the add dialog collects: its kind, protocol, hosts and
+ * port, the swap sites, and the plaintext-at-the-gateway consent's disclosure
+ * version where the protocol needs it. The value never travels again.
+ */
+export const environmentReviewHeldApplyRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("choice", [
+    z.object({
+      heldId: z.string().min(1),
+      choice: z.literal("secret"),
+      kind: z.enum(SANDBOX_SECRET_FORM_KINDS),
+      protocol: z.enum(SANDBOX_ROUTE_PROTOCOLS),
+      hosts: z.array(z.string().min(1).max(253)).min(1).max(16),
+      port: z.number().int().min(1).max(65_535).nullable(),
+      portOverride: z.boolean(),
+      swapSites: z.array(z.enum(SANDBOX_SECRET_SWAP_SITES)).min(1).max(3),
+      plaintextConsent: z
+        .object({ disclosureVersion: z.number().int().nonnegative() })
+        .nullable(),
+    }),
+    z.object({
+      heldId: z.string().min(1),
+      choice: z.enum(["variable", "stays", "discard", "approve"]),
+    }),
+  ]),
+);
+export type EnvironmentReviewHeldApplyRequest = z.infer<
+  typeof environmentReviewHeldApplyRequestSchema
+>;
+
+export const environmentReviewHeldApplyResponseSchema = lazySchema(() =>
+  z.object({ outcome: z.enum(["applied", "gone", "forbidden"]) }),
+);
+export type EnvironmentReviewHeldApplyResponse = z.infer<
+  typeof environmentReviewHeldApplyResponseSchema
+>;
+
+/**
+ * `environment.review.record@1.0`: this computer's retrospective sheet was
+ * `shown`, or the person `acknowledged` it (Got it); the two are recorded
+ * separately and read back as `review@1.1`'s `shownAt` and `acknowledgedAt`.
+ * `not_shared` is a computer an earlier build never shared, which has no
+ * sheet.
+ */
+export const environmentReviewRecordRequestSchema = lazySchema(() =>
+  z.object({ event: z.enum(["shown", "acknowledged"]) }),
+);
+export type EnvironmentReviewRecordRequest = z.infer<
+  typeof environmentReviewRecordRequestSchema
+>;
+
+export const environmentReviewRecordResponseSchema = lazySchema(() =>
+  z.object({ outcome: z.enum(["recorded", "not_shared"]) }),
+);
+export type EnvironmentReviewRecordResponse = z.infer<
+  typeof environmentReviewRecordResponseSchema
 >;
 
 // ── Local overrides ─────────────────────────────────────────────────────────
@@ -505,6 +680,30 @@ export const providersLinkCompleteResponseSchema = lazySchema(() =>
 );
 export type ProvidersLinkCompleteResponse = z.infer<
   typeof providersLinkCompleteResponseSchema
+>;
+
+/**
+ * The `@1.1` requests of `providers.link` and `providers.linkComplete`:
+ * `@1.0`'s plus the environment whose plan is linked, so a team's plan links
+ * through the same host. Null is the serving host's own environment, which is
+ * what every `@1.0` request meant. The responses are `@1.0`'s.
+ */
+const providersLinkEnvironmentIdField = {
+  environmentId: lazySchema(() => z.string().min(1).nullable().default(null)),
+};
+
+export const providersLinkRequestSchemaV11 = lazySchema(() =>
+  providersLinkRequestSchema.extend(providersLinkEnvironmentIdField),
+);
+export type ProvidersLinkRequestV11 = z.infer<
+  typeof providersLinkRequestSchemaV11
+>;
+
+export const providersLinkCompleteRequestSchemaV11 = lazySchema(() =>
+  providersLinkCompleteRequestSchema.extend(providersLinkEnvironmentIdField),
+);
+export type ProvidersLinkCompleteRequestV11 = z.infer<
+  typeof providersLinkCompleteRequestSchemaV11
 >;
 
 // ── environment.agentDefinitions.* ──────────────────────────────────────────
@@ -959,6 +1158,27 @@ export type EnvironmentSecretsDestroyResponse = z.infer<
 >;
 
 /**
+ * `environment.secrets.destroy@1.1`: `@1.0` plus `revoked`, the answer to a
+ * Remove of the current version at its confirmation.
+ */
+export const environmentSecretsDestroyResponseSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("destroyed"),
+      destroyedAt: z.number(),
+    }),
+    z.object({
+      outcome: z.literal("refused"),
+      code: z.string().min(1).max(64),
+    }),
+    z.object({ outcome: z.literal("revoked") }),
+  ]),
+);
+export type EnvironmentSecretsDestroyResponseV11 = z.infer<
+  typeof environmentSecretsDestroyResponseSchemaV11
+>;
+
+/**
  * One evidence entry of a `rotation_ack` receipt: `kind` from the closed three,
  * and `count` as given per kind. `session_closed` counts the sessions closed,
  * nullable only for a class that holds no sessions; `cache_cleared` counts the
@@ -1073,6 +1293,150 @@ export const environmentSecretsConsentResponseSchema = lazySchema(() =>
 );
 export type EnvironmentSecretsConsentResponse = z.infer<
   typeof environmentSecretsConsentResponseSchema
+>;
+
+/**
+ * The `@1.1` requests of every `environment.secrets.*` method: `@1.0`'s plus
+ * the environment whose secrets they address, so a team's secrets read and
+ * write through the same forwarder. Null is the serving host's own
+ * environment, which is what every `@1.0` request meant. The responses are
+ * `@1.0`'s, but for `versions`, which gains `removal`, and `list`, which gains
+ * `removed`.
+ */
+const secretsEnvironmentIdField = {
+  environmentId: lazySchema(() => z.string().min(1).nullable().default(null)),
+};
+
+export const environmentSecretsListRequestSchemaV11 = lazySchema(() =>
+  z.object(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsListRequestV11 = z.infer<
+  typeof environmentSecretsListRequestSchemaV11
+>;
+
+export const environmentSecretsCreateRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsCreateRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsCreateRequestV11 = z.infer<
+  typeof environmentSecretsCreateRequestSchemaV11
+>;
+
+export const environmentSecretsDestroyRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsDestroyRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsDestroyRequestV11 = z.infer<
+  typeof environmentSecretsDestroyRequestSchemaV11
+>;
+
+export const environmentSecretsVersionsRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsVersionsRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsVersionsRequestV11 = z.infer<
+  typeof environmentSecretsVersionsRequestSchemaV11
+>;
+
+export const environmentSecretsRotationRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsRotationRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsRotationRequestV11 = z.infer<
+  typeof environmentSecretsRotationRequestSchemaV11
+>;
+
+export const environmentSecretsVerifyRequestSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("target", [
+    z.object({
+      target: z.literal("secret"),
+      secretId: z.string().min(1),
+      ...secretsEnvironmentIdField,
+    }),
+    z.object({
+      target: z.literal("candidate"),
+      ...secretBindingCandidateFields,
+      ...secretsEnvironmentIdField,
+    }),
+  ]),
+);
+export type EnvironmentSecretsVerifyRequestV11 = z.infer<
+  typeof environmentSecretsVerifyRequestSchemaV11
+>;
+
+export const environmentSecretsReplaceValueRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsReplaceValueRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsReplaceValueRequestV11 = z.infer<
+  typeof environmentSecretsReplaceValueRequestSchemaV11
+>;
+
+export const environmentSecretsUndoRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsUndoRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsUndoRequestV11 = z.infer<
+  typeof environmentSecretsUndoRequestSchemaV11
+>;
+
+export const environmentSecretsConsentRequestSchemaV11 = lazySchema(() =>
+  environmentSecretsConsentRequestSchema.extend(secretsEnvironmentIdField),
+);
+export type EnvironmentSecretsConsentRequestV11 = z.infer<
+  typeof environmentSecretsConsentRequestSchemaV11
+>;
+
+/**
+ * `versions@1.1`'s answer: `@1.0`'s plus the secret's removal, null while it
+ * has none. `outcome` is how far the removal reached; `targets` is each place
+ * that held it (a host, the broker's current, old and held copies) and whether
+ * its removal there is `requested` or `confirmed`. Never a value.
+ */
+export const environmentSecretRemovalSchema = lazySchema(() =>
+  z.object({
+    outcome: z.enum(["revoked", "cleanup_requested", "destroyed"]),
+    revokedAt: z.number(),
+    destroyedAt: z.number().nullable(),
+    targets: z.array(
+      z.object({
+        target: z.enum(["host", "broker_current", "broker_old", "broker_held"]),
+        hostId: z.string().min(1).nullable(),
+        hostName: z.string().nullable(),
+        state: z.enum(["requested", "confirmed"]),
+        at: z.number(),
+      }),
+    ),
+  }),
+);
+export type EnvironmentSecretRemoval = z.infer<
+  typeof environmentSecretRemovalSchema
+>;
+
+/**
+ * `list@1.1`'s answer: `@1.0`'s rows unchanged, plus the secrets removed in
+ * the last 30 days, kept as metadata: id, name and how far the removal
+ * reached. A `@1.0` answer upgrades with none.
+ */
+export const environmentSecretsListResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    secrets: z.array(environmentSecretSchema),
+    removed: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          removal: environmentSecretRemovalSchema,
+        }),
+      )
+      .default([]),
+  }),
+);
+export type EnvironmentSecretsListResponseV11 = z.infer<
+  typeof environmentSecretsListResponseSchemaV11
+>;
+
+export const environmentSecretsVersionsResponseSchemaV11 = lazySchema(() =>
+  environmentSecretsVersionsResponseSchema.extend({
+    removal: environmentSecretRemovalSchema.nullable().default(null),
+  }),
+);
+export type EnvironmentSecretsVersionsResponseV11 = z.infer<
+  typeof environmentSecretsVersionsResponseSchemaV11
 >;
 
 // ── environment.reachDiagnostics ────────────────────────────────────────────

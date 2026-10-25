@@ -11,6 +11,7 @@ import {
   useFallbackModelCatalogues,
   useFallbackModelLabels,
 } from "@/components/chat/fallback/fallback-identity";
+import { ChatOpencodeLineContext } from "@/hooks/harnesses/chat-opencode-line-context";
 
 /**
  * `useFallbackModelLabels`'s own resolution rules, isolated from any
@@ -444,6 +445,31 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     // Unasked-for ids have no read in flight; treating them as unsettled
     // would block on a request that will never be made.
     expect(result.current.settledFor("grok")).toBe(true);
+  });
+
+  it("reads an opencode tuple's catalogue for the line its chat runs, and no other harness's", () => {
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", true, SETTLED_TRUE),
+        settledRow("opencode", true, SETTLED_TRUE),
+      ],
+    };
+    renderHook(
+      () =>
+        useFallbackModelCatalogues(HOST_SPINE, ["opencode", "claude"], true),
+      {
+        wrapper: ({ children }) => (
+          <ChatOpencodeLineContext.Provider value={1}>
+            {children}
+          </ChatOpencodeLineContext.Provider>
+        ),
+      },
+    );
+
+    expect(hostQueriesCalls.requests.map((r) => r.params)).toEqual([
+      { harnessId: "claude", workingDirectory: null },
+      { harnessId: "opencode", workingDirectory: null, opencodeLine: 1 },
+    ]);
   });
 
   it("resolves the failed model from the null-directory catalog query", () => {

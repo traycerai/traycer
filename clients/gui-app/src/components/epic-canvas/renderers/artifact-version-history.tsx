@@ -755,7 +755,7 @@ function ArtifactVersionHistoryPanel(props: {
               <p className="border-t p-3 text-ui-xs text-muted-foreground">
                 {unavailableCount} older{" "}
                 {unavailableCount === 1 ? "version is" : "versions are"}{" "}
-                unavailable from this machine.
+                unavailable from this computer.
               </p>
             ) : null}
           </div>

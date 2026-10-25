@@ -149,6 +149,7 @@ import {
 import {
   commentThreadWireSchema,
   commentThreadWireSchemaPreAnchor,
+  commentThreadWireSchemaPreCanvasPoint,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   deletedHtmlArtifactSchema,
@@ -519,6 +520,13 @@ export const epicCommentThreadRecordSchemaPreAnchor = lazySchema(() =>
     ...epicLaneRowRevisionFields,
   }),
 );
+export const epicCommentThreadRecordSchemaPreCanvasPoint = lazySchema(() =>
+  commentThreadWireSchemaPreCanvasPoint.extend({
+    artifactId: z.string().min(1),
+    ...epicLaneRowRevisionFields,
+  }),
+);
+/** 1.5 adds the canvas-point anchor kind; 1.4 keeps its frozen enum. */
 export const epicCommentThreadRecordSchema = lazySchema(() =>
   commentThreadWireSchema.extend({
     artifactId: z.string().min(1),
@@ -1024,12 +1032,12 @@ export const epicStateSubscribeV13 = defineStreamRpcContract({
 /** 1.4 carries HTML/canvas comment anchors; older minors strip these keys. */
 const epicStateSubscribeSnapshotFrameSchemaV14 = lazySchema(() =>
   epicStateSubscribeSnapshotFrameSchemaV13.extend({
-    commentThreads: z.array(epicCommentThreadRecordSchema),
+    commentThreads: z.array(epicCommentThreadRecordSchemaPreCanvasPoint),
   }),
 );
 const epicStateSubscribeDeltaFrameSchemaV14 = lazySchema(() =>
   epicStateSubscribeDeltaFrameSchemaV13.extend({
-    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchemaPreCanvasPoint),
   }),
 );
 export const epicStateSubscribeServerFrameSchemaV14 = lazySchema(() =>
@@ -1051,5 +1059,42 @@ export const epicStateSubscribeV14 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV14,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * 1.5 adds the canvas-point anchor kind to the thread rows, which is value
+ * growth over 1.4's frozen enum: the host serves a pre-1.5 subscriber a
+ * point thread anchored to the whole artifact instead.
+ */
+const epicStateSubscribeSnapshotFrameSchemaV15 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV14.extend({
+    commentThreads: z.array(epicCommentThreadRecordSchema),
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV15 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV14.extend({
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV15 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV15,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV15,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({ kind: z.literal("pong"), ...epicLaneTextFrameFields }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
+export type EpicStateSubscribeServerFrameV15 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV15
+>;
+export const epicStateSubscribeV15 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV15,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

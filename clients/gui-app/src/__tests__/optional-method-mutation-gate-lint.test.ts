@@ -171,10 +171,12 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.conversation.send":
     "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-message-composer.tsx)",
+  "bot.onboarding.choose":
+    "sibling-method proxy gate: BotOnboardingCard draws its checkboxes only from a bot.onboarding.read answer, and that read is enabled only under useHostSupportsMethod(tabHostId, 'bot.onboarding.read') on the same tab-host client the choose goes through; the three methods entered the registry together (home/bots/bot-onboarding-card.tsx)",
+  "bot.onboarding.complete":
+    "target-choice gate: BotOnboardingCard sends it only to the host chooseBotCreateHost picks from useHostsAdvertisingMethod(connectableHostIds, 'bot.onboarding.complete'), so a host without it is never the target (home/bots/bot-onboarding-card.tsx)",
   "epic.attachEnvironment":
     "call-and-catch degrade: a host that predates it answers E_HOST_UNSUPPORTED, which the hook does not toast and the fork dialog answers by forking as it did before the method existed (use-epic-attach-environment-mutation.ts, chat-fork-dialog.tsx)",
-  "environment.host.bind":
-    "sibling-method proxy gate: host-environment-section.tsx renders the picker only under useHostMethodSupport(hostId, 'environment.host.read'), registered in the same block as bind; the refusal is the picker's inline notice (use-environment-host-bind-mutation.ts)",
 };
 
 /**

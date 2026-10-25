@@ -15,6 +15,7 @@ import {
   isChatTimelineAtStrictBottom,
   isChatTimelineGeometryMeasurable,
   useChatTimelineFollowLatch,
+  type ChatTimelineFollowLatch,
 } from "@/components/chat/chat-timeline-follow-latch";
 
 describe("isChatTimelineGeometryMeasurable", () => {
@@ -204,6 +205,7 @@ const DEFAULT_FOLLOW_LATCH_OPTIONS = {
   onReaderGesture: undefined,
   isCorrectionSuppressed: undefined,
   resolveSuppressedEndLanding: undefined,
+  isReattachSuppressed: undefined,
 };
 
 interface FakeListRef {
@@ -327,6 +329,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -387,6 +390,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -436,6 +440,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -475,6 +480,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -516,6 +522,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -561,6 +568,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -592,6 +600,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -676,6 +685,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -731,6 +741,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -765,6 +776,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -804,6 +816,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -831,6 +844,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -859,6 +873,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -899,6 +914,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -937,6 +953,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -968,6 +985,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1102,6 +1120,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1137,6 +1156,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1164,6 +1184,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1192,6 +1213,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1224,6 +1246,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1255,6 +1278,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1281,6 +1305,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1302,6 +1327,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: () => true,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1660,6 +1686,7 @@ describe("useChatTimelineFollowLatch", () => {
         onReaderGesture: undefined,
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
       }),
     );
 
@@ -1691,5 +1718,160 @@ describe("useChatTimelineFollowLatch", () => {
     // Follow releases to the navigation; no corrective snap-back is issued.
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  describe("while reattachment is suppressed", () => {
+    interface SuppressedLatch {
+      readonly node: HTMLDivElement;
+      readonly listRef: FakeListRef;
+      readonly onFollowIntentChange: Mock<(isFollowing: boolean) => void>;
+      readonly latch: () => ChatTimelineFollowLatch;
+      readonly setSuppressed: (suppressed: boolean) => void;
+    }
+
+    /** Mounts a following latch at the strict bottom whose reattachment
+     *  suppression the test flips; `isCorrectionSuppressed` stays off. */
+    function mountSuppressibleLatch(): SuppressedLatch {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      let suppressed = false;
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          onFollowIntentChange,
+          onReaderGesture: undefined,
+          isCorrectionSuppressed: undefined,
+          resolveSuppressedEndLanding: undefined,
+          isReattachSuppressed: () => suppressed,
+        }),
+      );
+      return {
+        node,
+        listRef,
+        onFollowIntentChange,
+        latch: () => result.current,
+        setSuppressed: (next) => {
+          suppressed = next;
+        },
+      };
+    }
+
+    /** The reader wheels away from the tail, then the transcript starts
+     *  recovering underneath them. */
+    function detachThenSuppress(mounted: SuppressedLatch): void {
+      mounted.node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      shim.setGeometry(mounted.node, { scrollTop: 200 });
+      fireNativeScroll(mounted.node);
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      mounted.onFollowIntentChange.mockClear();
+      mounted.setSuppressed(true);
+    }
+
+    /** A recovering commit shrinks the content and the browser clamps the
+     *  reader's offset to the new end. */
+    function clampToStrictBottom(node: HTMLDivElement): void {
+      shim.setGeometry(node, { scrollTop: 300, scrollHeight: 800 });
+    }
+
+    it("leaves a detached reader detached at a clamped native strict-bottom report, through the growth after it", () => {
+      const mounted = mountSuppressibleLatch();
+      detachThenSuppress(mounted);
+
+      clampToStrictBottom(mounted.node);
+      fireNativeScroll(mounted.node);
+
+      // The recovery grows the transcript back away from the reader.
+      shim.setGeometry(mounted.node, { scrollHeight: 1500 });
+      fireNativeScroll(mounted.node);
+      shim.setGeometry(mounted.node, { scrollHeight: 1700 });
+      mounted.latch().followEndIfPermitted();
+      fireResizeObservers();
+      for (let i = 0; i < 12; i++) flushAnimationFrame();
+
+      expect(mounted.onFollowIntentChange).not.toHaveBeenCalled();
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("leaves a detached reader detached when maintenance finds the clamped strict bottom", () => {
+      const mounted = mountSuppressibleLatch();
+      detachThenSuppress(mounted);
+
+      clampToStrictBottom(mounted.node);
+      mounted.latch().followEndIfPermitted();
+      fireResizeObservers();
+
+      expect(mounted.onFollowIntentChange).not.toHaveBeenCalled();
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("follows a finger that reaches the tail", () => {
+      const mounted = mountSuppressibleLatch();
+      detachThenSuppress(mounted);
+
+      fireTouch(mounted.node, "touchstart", 300);
+      shim.setGeometry(mounted.node, { scrollTop: 1000 });
+      fireNativeScroll(mounted.node);
+
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("follows an explicit go-live", () => {
+      const mounted = mountSuppressibleLatch();
+      detachThenSuppress(mounted);
+
+      mounted.latch().beginOwnedEndNavigation();
+      shim.setGeometry(mounted.node, { scrollTop: 1000 });
+      fireNativeScroll(mounted.node);
+      mounted
+        .latch()
+        .completeOwnedEndNavigation(mounted.latch().isAtStrictEnd());
+
+      expect(mounted.onFollowIntentChange).toHaveBeenCalledTimes(1);
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("re-grants once when it lifts with the reader settled at the strict bottom", () => {
+      const mounted = mountSuppressibleLatch();
+      detachThenSuppress(mounted);
+      clampToStrictBottom(mounted.node);
+      fireNativeScroll(mounted.node);
+
+      mounted.setSuppressed(false);
+      mounted.latch().followEndIfPermitted();
+
+      expect(mounted.onFollowIntentChange).toHaveBeenCalledTimes(1);
+      expect(mounted.onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("stays detached when it lifts with the reader settled away from the end", () => {
+      const mounted = mountSuppressibleLatch();
+      detachThenSuppress(mounted);
+      clampToStrictBottom(mounted.node);
+      fireNativeScroll(mounted.node);
+      shim.setGeometry(mounted.node, { scrollHeight: 1500 });
+
+      mounted.setSuppressed(false);
+      mounted.latch().followEndIfPermitted();
+
+      expect(mounted.onFollowIntentChange).not.toHaveBeenCalled();
+      expect(mounted.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("keeps a following reader following and correcting", () => {
+      const mounted = mountSuppressibleLatch();
+      mounted.setSuppressed(true);
+
+      fireNativeScroll(mounted.node);
+      shim.setGeometry(mounted.node, { scrollHeight: 1700 });
+      mounted.latch().followEndIfPermitted();
+
+      expect(mounted.listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(mounted.onFollowIntentChange).not.toHaveBeenCalled();
+    });
   });
 });

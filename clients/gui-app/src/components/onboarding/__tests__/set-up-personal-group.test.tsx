@@ -36,7 +36,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentSecret,
-  EnvironmentStatusResponse,
+  EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderCliState,
@@ -72,7 +72,7 @@ afterEach(() => {
 interface HostFacts {
   readonly providers: ProviderCliState[];
   readonly secrets: EnvironmentSecret[];
-  readonly status: EnvironmentStatusResponse;
+  readonly status: EnvironmentStatusResponseV11;
   /** The methods the host advertises. */
   readonly methods: readonly string[];
 }
@@ -118,7 +118,7 @@ function storedKey(): ProviderCliState {
   };
 }
 
-function guideStatus(): EnvironmentStatusResponse {
+function guideStatus(): EnvironmentStatusResponseV11 {
   return environmentStatusFixture({
     items: [itemStatusFixture({ kind: "agent_selection_guide", key: "guide" })],
   });
@@ -136,7 +136,7 @@ function renderGroup(
     },
     "environment.secrets.list": () => {
       calls.secrets += 1;
-      return { secrets: [...facts.secrets] };
+      return { removed: [], secrets: [...facts.secrets] };
     },
     "environment.status": () => {
       calls.status += 1;
@@ -213,7 +213,7 @@ describe("<SetUpPersonalGroup />", () => {
       within(steps[1]).getByRole("button", { name: "Open Secrets" }),
     ).toBeTruthy();
     expect(
-      within(steps[2]).getByRole("button", { name: "Open Agent selection" }),
+      within(steps[2]).getByRole("button", { name: "Open Agents" }),
     ).toBeTruthy();
   });
 
@@ -349,7 +349,7 @@ describe("<SetUpPersonalGroup />", () => {
       const facts: {
         providers: ProviderCliState[];
         secrets: EnvironmentSecret[];
-        status: EnvironmentStatusResponse;
+        status: EnvironmentStatusResponseV11;
         methods: readonly string[];
       } = {
         providers: [],
@@ -409,9 +409,7 @@ describe("<SetUpPersonalGroup />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open Providers" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Secrets" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open Agent selection" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Open Agents" }));
 
     expect(navigateMock.mock.calls.map((call: unknown[]) => call[0])).toEqual([
       "providers",

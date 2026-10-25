@@ -101,6 +101,68 @@ describe("sandbox control plane mirror", () => {
     expect(parsed.providers[0]?.shape.diskDefaultMb).toBe(20480);
   });
 
+  describe("shapes", () => {
+    const BOUNDS = {
+      cpuMin: 1,
+      cpuMax: 16,
+      cpuStep: 1,
+      memoryPerCpuMinMb: 1024,
+      memoryPerCpuMaxMb: 8192,
+      memoryMinMb: 1024,
+      memoryMaxMb: 65536,
+      memoryStepMb: 512,
+      diskMinMb: 10240,
+      diskMaxMb: 102400,
+      diskDefaultMb: 20480,
+    };
+    const ROW = {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: BOUNDS,
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      dockerInGuest: true,
+      regions: [
+        {
+          id: "us",
+          label: "US",
+          fromPriceMcPerHour: { awakeMc: 60, suspendedMc: 2, stoppedMc: 1 },
+        },
+      ],
+    };
+    const SMALL = { cpus: 1, memoryMb: 1024, diskMb: 10240, default: false };
+    const DEFAULT = { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true };
+
+    function shapesOf(shapes: unknown): unknown {
+      return sandboxCatalogueSchema.parse({
+        providers: [{ ...ROW, shapes }],
+      }).providers[0]?.shapes;
+    }
+
+    it("parses a provider's listed shapes", () => {
+      expect(shapesOf([SMALL, DEFAULT])).toEqual([SMALL, DEFAULT]);
+    });
+
+    // Prevents a client failing on a catalogue from a server that predates the list.
+    it("reads a server that lists no shapes as none", () => {
+      expect(
+        sandboxCatalogueSchema.parse({ providers: [ROW] }).providers[0]?.shapes,
+      ).toBeNull();
+    });
+
+    // Prevents one bad entry failing the whole catalogue.
+    it("reads a list with a bad entry as none and still parses the catalogue", () => {
+      expect(shapesOf([SMALL, { ...DEFAULT, cpus: "two" }])).toBeNull();
+    });
+
+    // Prevents a client staging a size no rung is the default of.
+    it("reads a list without exactly one default as none", () => {
+      expect(shapesOf([SMALL, { ...DEFAULT, default: false }])).toBeNull();
+      expect(shapesOf([{ ...SMALL, default: true }, DEFAULT])).toBeNull();
+    });
+  });
+
   describe("creatable and notCreatableReason", () => {
     // An older server's provider row: neither field.
     const OLDER_ROW = {
@@ -131,6 +193,13 @@ describe("sandbox control plane mirror", () => {
         },
       ],
     };
+
+    // Prevents a client failing on a region from a server before per-unit rates.
+    it("reads an older server's region with no per-unit pricing", () => {
+      const row = sandboxCatalogueSchema.parse({ providers: [OLDER_ROW] })
+        .providers[0];
+      expect(row?.regions[0]?.pricing).toBeNull();
+    });
 
     // Prevents a client failing on, or hiding, a catalogue from a server that predates the fields.
     it("reads an older server's row as creatable with no reason", () => {

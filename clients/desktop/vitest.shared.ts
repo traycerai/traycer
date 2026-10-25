@@ -10,12 +10,12 @@
  * Forces `zod` through the test module graph instead of the dependency
  * optimizer's pre-bundle.
  *
- * zod 4.4.3's entry re-exports a namespace binding:
+ * zod 4.6.7's entry re-exports a namespace binding:
  *
  * ```js
  * import * as z from "./v4/classic/external.js";
  * export * from "./v4/classic/external.js";
- * export { z };
+ * export { z, z as default };
  * ```
  *
  * The pinned Vite 8 loses that binding when it pre-bundles the package, so

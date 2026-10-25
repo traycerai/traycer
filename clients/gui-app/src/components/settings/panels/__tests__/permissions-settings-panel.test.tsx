@@ -1,10 +1,22 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetRulesEditForTests } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  ConfigurationSourceContext,
+  type ConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import type { PendingRuleDraft } from "@/components/settings/panels/auto-policy-document";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -110,6 +122,27 @@ vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
   ),
 }));
 
+// The team's surface has its own suite; here it is a marker.
+vi.mock("@/components/settings/environment/team-permissions", () => ({
+  TeamPermissions: (props: { readonly children: ReactNode }): ReactNode => (
+    <div data-testid="team-permissions">{props.children}</div>
+  ),
+}));
+
+// A team's switch reads and writes through the pool; both are markers here, as
+// the team's own suite owns them.
+vi.mock("@/hooks/environment/team/use-browser-access-query", () => ({
+  useEnvironmentBrowserAccessQuery: () => ({
+    isPending: false,
+    data: { agentAccess: true },
+  }),
+}));
+vi.mock("@/hooks/environment/team/use-configuration-item-mutations", () => ({
+  useConfigurationItemMutations: () => ({
+    put: { mutate: vi.fn(), isPending: false, data: undefined },
+  }),
+}));
+
 const initialInnerWidth = window.innerWidth;
 
 beforeEach(() => {
@@ -196,6 +229,22 @@ describe("PermissionsSettingsPanel", () => {
     expect(screen.getAllByRole("tab")).toHaveLength(4);
   });
 
+  it("shows the Browser agent access switch below the tabs on a host pick", () => {
+    render(<PermissionsSettingsPanel />);
+
+    const group = screen.getByTestId("settings-browser-agent-access");
+    expect(group.textContent).toContain("Browser agent access");
+    expect(
+      within(group).getByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeTruthy();
+    const tabs = screen.getAllByRole("tab")[0];
+    expect(
+      tabs.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
   it("starts on Modes", () => {
     render(<PermissionsSettingsPanel />);
 
@@ -208,7 +257,7 @@ describe("PermissionsSettingsPanel", () => {
       render(<PermissionsSettingsPanel />);
 
       expect(screen.getByText(/New conversations start in/)).not.toBeNull();
-      expect(screen.getByText("All machines")).not.toBeNull();
+      expect(screen.getByText("This app only")).not.toBeNull();
     });
 
     it("renders with no host at all", () => {
@@ -312,6 +361,114 @@ describe("PermissionsSettingsPanel", () => {
       expect(judgeRenderedUnder.current.every((id) => id === "host-b")).toBe(
         true,
       );
+    });
+  });
+
+  describe("with a team picked", () => {
+    const TEAM_PICK = { kind: "team", environmentId: "env-a" } as const;
+    const POOL: ConfigurationSource = {
+      kind: "pool",
+      configuration: "team",
+      environmentId: "env-a",
+      roomId: "room-a",
+      providerHandle: "handle-a",
+      effectiveRole: "admin",
+    };
+
+    /** `PersonalPageFrame`'s rule: the team's source while a team is picked. */
+    function PickedSource(props: { readonly children: ReactNode }): ReactNode {
+      const pick = useEnvironmentPick();
+      return pick.kind === "team" ? (
+        <ConfigurationSourceContext.Provider value={POOL}>
+          {props.children}
+        </ConfigurationSourceContext.Provider>
+      ) : (
+        props.children
+      );
+    }
+
+    function renderPicked(): void {
+      render(
+        <PickedSource>
+          <PermissionsSettingsPanel />
+        </PickedSource>,
+      );
+    }
+
+    beforeEach(() => {
+      const windowHost = hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "MacBook Pro",
+      });
+      scopeOverrides.current = {
+        host: windowHost,
+        hosts: [
+          windowHost,
+          hostScopeOptionFixture({
+            hostId: "host-b",
+            name: "Studio",
+            isLocalMachine: false,
+          }),
+        ],
+      };
+      useSettingsEnvironmentPickStore.setState({
+        pick: TEAM_PICK,
+        defaultPick: PERSONAL_PICK,
+      });
+    });
+
+    afterEach(() => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: null,
+        defaultPick: PERSONAL_PICK,
+      });
+    });
+
+    it("shows the team's Permissions while nothing asked for a machine's", () => {
+      renderPicked();
+
+      expect(screen.getByTestId("team-permissions")).not.toBeNull();
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        TEAM_PICK,
+      );
+    });
+
+    it("shows the Browser agent access switch inside the team's Permissions", () => {
+      renderPicked();
+
+      const group = within(screen.getByTestId("team-permissions")).getByTestId(
+        "settings-browser-agent-access",
+      );
+      expect(group.textContent).toContain("Browser agent access");
+      expect(
+        within(group)
+          .getByRole("switch", { name: "Let agents use the in-app browser" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+    });
+
+    it("opens a composer's machine on its Judge tab, moving the pick to that machine's row, and spends the intent", () => {
+      armIntent({ tab: "judge", draft: null, hostId: "host-b" });
+      renderPicked();
+
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "host-b",
+        hostName: "Studio",
+      });
+      expect(screen.queryByTestId("team-permissions")).toBeNull();
+      expect(activeTabTestId()).toBe("permissions-tab-judge");
+      expect(screen.getByTestId("judge-body")).not.toBeNull();
+      expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
+    });
+
+    it("opens this window's own machine on its default row", () => {
+      armIntent({ tab: "judge", draft: null, hostId: "host-a" });
+      renderPicked();
+
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+      expect(activeTabTestId()).toBe("permissions-tab-judge");
+      expect(useSettingsOpenIntentStore.getState().intent).toBeNull();
     });
   });
 

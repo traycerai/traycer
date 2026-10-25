@@ -103,6 +103,14 @@ vi.mock("@/components/epic-canvas/epic-plain-terminal-create-owner", () => ({
   EpicPlainTerminalCreateOwner: () => null,
 }));
 
+// A staged sandbox's send owners: they read the session host, not records.
+vi.mock("@/components/epic-canvas/sidebar/new-conversation-modal", () => ({
+  NewConversationModalHost: () => null,
+}));
+vi.mock("@/components/epic-canvas/sidebar/new-terminal-staged-handoff", () => ({
+  NewTerminalStagedHandoff: () => null,
+}));
+
 const EPIC_ID = "epic-record-poll-park";
 const TAB_ID = "tab-record-poll-park";
 const VIEW_TAB_ID = "view-record-poll-park";

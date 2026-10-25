@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 10
+              "const": 11
             }
           },
           "required": [
@@ -2165,6 +2165,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "direct": {
+                                "type": "boolean",
+                                "const": true
                               }
                             },
                             "required": [
@@ -4823,6 +4827,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "notApplied": {
+                                              "default": false,
+                                              "type": "boolean"
                                             }
                                           },
                                           "required": [
@@ -4835,7 +4843,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "postTokens",
                                             "durationMs",
                                             "summary",
-                                            "error"
+                                            "error",
+                                            "notApplied"
                                           ],
                                           "additionalProperties": false
                                         },
@@ -6122,7 +6131,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                   "proposal",
                                   "automation",
                                   "bot-created",
-                                  "policy"
+                                  "policy",
+                                  "question"
                                 ]
                               },
                               "link": {
@@ -6142,6 +6152,18 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "link"
                             ],
                             "additionalProperties": false
+                          },
+                          "options": {
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "repliesTo": {
+                            "type": "string",
+                            "minLength": 1
                           }
                         },
                         "required": [

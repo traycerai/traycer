@@ -46,7 +46,7 @@ export const SET_UP_PERSONAL_STEPS: ReadonlyArray<SetUpPersonalStep> = [
     id: "agents",
     section: "agents",
     text: "Choose how agents are picked for each task.",
-    action: "Open Agent selection",
+    action: "Open Agents",
   },
 ];
 
@@ -63,7 +63,7 @@ export interface SetUpPersonalFacts {
  * computer's own sign-in does not count, since it is not one of the person's
  * settings.
  */
-function providerSetUp(providers: readonly ProviderCliState[]): boolean {
+export function providerSetUp(providers: readonly ProviderCliState[]): boolean {
   return providers.some(
     (provider) =>
       (provider.apiKey.configured && provider.apiKey.source === "stored") ||

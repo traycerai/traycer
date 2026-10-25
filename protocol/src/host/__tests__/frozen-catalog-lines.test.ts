@@ -41,6 +41,8 @@ import {
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
   providersListResponseSchemaV104Preimage,
+  providersListResponseSchemaV105Preimage,
+  providersListResponseSchemaV106Preimage,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
@@ -64,6 +66,7 @@ import {
   getChatRunSettingsBatchResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Defense-in-depth for the freeze discipline: frozen catalog response schemas
@@ -78,7 +81,7 @@ import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lin
  */
 
 function dump(schema: z.ZodType): unknown {
-  return z.toJSONSchema(schema, { unrepresentable: "any" });
+  return toCanonicalJsonSchema(schema, { unrepresentable: "any" });
 }
 
 const LIVE_FROZEN_EXPORTS = {
@@ -290,9 +293,15 @@ const LIVE_FROZEN_EXPORTS = {
   // opened 10.5: its envelope is the two-key shape. Its dump did not change by
   // the freeze.
   "providers.list@10.4": providersListResponseSchemaV104Preimage,
+  // 10.5 froze when `managedLines` and the selection's `line` opened 10.6. Its
+  // dump did not change by the freeze.
+  "providers.list@10.5": providersListResponseSchemaV105Preimage,
+  // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
+  // freeze.
+  "providers.list@10.6": providersListResponseSchemaV106Preimage,
   // The head line: it names the LIVE schema, so the next growth of the provider
   // state fails here first.
-  "providers.list@10.5": providersListResponseSchema,
+  "providers.list@10.7": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import {
   modelMatchesPattern,
@@ -16,7 +17,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
-import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 
 /**
  * What the "Equivalent models" editor may offer in a row's Model and Effort
@@ -174,9 +175,16 @@ export function catalogModelForFamily(
 export function useFallbackCatalogOptions(
   groups: readonly TierGroup[],
 ): FallbackCatalogOptions {
-  const client = useHostClient();
-  const harnessesQuery = useGuiHarnessesQuery({
-    enabled: true,
+  return useFallbackCatalogOptionsForClient(useHostClient(), groups);
+}
+
+/** A team reads live model catalogs only through its eligible viewing host. */
+export function useFallbackCatalogOptionsForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  groups: readonly TierGroup[],
+): FallbackCatalogOptions {
+  const harnessesQuery = useGuiHarnessesQueryForClient(client, {
+    enabled: client !== null,
     subscribed: true,
   });
 

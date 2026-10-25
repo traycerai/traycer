@@ -10,6 +10,7 @@ import {
   type HostNotificationKind,
   type HostNotificationsSurface,
 } from "@traycer/protocol/host/notifications/contracts";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Cross-surface conformance: for EVERY registered serving path and EVERY
@@ -223,6 +224,71 @@ const REPRESENTATIVE_ENTRIES: Readonly<
       podCount: 4,
     },
   },
+  "environment.move.stalled": {
+    ...ENTRY_BASE,
+    kind: "environment.move.stalled",
+    severity: "failure",
+    outcome: "errored",
+    payload: {
+      kind: "environment_move_stalled",
+      environmentId: "env-1",
+      hostId: "host-1",
+      hostName: "MacBook Pro",
+      remaining: 3,
+      reason: "upload_timed_out",
+    },
+  },
+  "environment.apply.failed": {
+    ...ENTRY_BASE,
+    kind: "environment.apply.failed",
+    severity: "failure",
+    outcome: "errored",
+    payload: {
+      kind: "environment_apply_failed",
+      environmentId: "env-1",
+      hostId: "host-1",
+      hostName: "dev-box",
+      itemKey: "PATH",
+      reason: "native_write_failed",
+    },
+  },
+  "team.role.changed": {
+    ...ENTRY_BASE,
+    kind: "team.role.changed",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_role_changed",
+      environmentId: "env-1",
+      teamName: "Acme",
+      from: "viewer",
+      to: "editor",
+    },
+  },
+  "team.host.returned": {
+    ...ENTRY_BASE,
+    kind: "team.host.returned",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_host_returned",
+      environmentId: "env-1",
+      teamName: "Acme",
+      hostName: "MacBook Pro",
+    },
+  },
+  "secret.removed": {
+    ...ENTRY_BASE,
+    kind: "secret.removed",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "secret_removed",
+      environmentId: "env-1",
+      secretName: "STRIPE_KEY",
+      outcome: "destroyed",
+    },
+  },
   "host.operation.finished": {
     ...ENTRY_BASE,
     kind: "host.operation.finished",
@@ -338,7 +404,7 @@ function carriesNotificationEntries(contract: unknown): boolean {
   );
   return schemas.some(([, schema]) => {
     const dump = JSON.stringify(
-      z.toJSONSchema(schema as z.ZodType, { unrepresentable: "any" }),
+      toCanonicalJsonSchema(schema as z.ZodType, { unrepresentable: "any" }),
     );
     return ALL_HOST_NOTIFICATION_KINDS.some((kind) =>
       dump.includes(`"${kind}"`),

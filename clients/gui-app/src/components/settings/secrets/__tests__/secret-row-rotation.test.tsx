@@ -1,8 +1,32 @@
+// The page names its environment through the surface's client and the viewer.
+const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => hostBoundary.client,
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
 // What a link asks the app to open. The page under test does not open one, but
 // its Add dialog reads the hook.
 const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
+}));
+
+// The computers holding a copy are covered by `secret-remove-preview-computers`;
+// here Remove's preview is read with none.
+vi.mock("@/components/settings/personal/use-personal-computers", () => ({
+  usePersonalComputers: () => ({
+    computers: [],
+    statuses: new Map(),
+    versions: new Map(),
+    participants: [],
+  }),
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -38,8 +62,19 @@ import {
   SECRET_SAVED_OFFLINE,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "host-secrets";
+const PERSONAL_ENV = "env-personal";
+
+/** The day and month a version is dated by, as the page formats them. */
+function dayMonth(at: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+  }).format(at);
+}
 const TYPED_VALUE = "sk_live_REPLACEMENT_VALUE_4d1e8b";
 
 type Rotation = EnvironmentSecretsRotationResponse["rotation"];
@@ -184,9 +219,29 @@ function buildRotationHost(
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: PERSONAL_ENV,
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      }),
+      "environment.history": () => ({
+        readerScope: "full" as const,
+        entries: [],
+        hostStates: [],
+      }),
       "environment.secrets.list": () => {
         reads.list += 1;
-        return { secrets: [...state.secrets] };
+        return { removed: [], secrets: [...state.secrets] };
       },
       "environment.secrets.rotation": () => {
         reads.rotation += 1;
@@ -194,7 +249,7 @@ function buildRotationHost(
       },
       "environment.secrets.versions": () => {
         reads.versions += 1;
-        return { versions: [...state.versions] };
+        return { versions: [...state.versions], removal: null };
       },
       "environment.secrets.replaceValue": (request) => {
         replaceRequests.push(request);
@@ -229,6 +284,7 @@ function buildRotationHost(
 }
 
 function renderPage(host: RotationHost): QueryClient {
+  hostBoundary.client = host.client;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -248,10 +304,14 @@ function renderPage(host: RotationHost): QueryClient {
 
 beforeEach(() => {
   openLinkMock.mockResolvedValue(undefined);
+  useAuthStore.setState({ status: "signed-in" });
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
   cleanup();
+  hostBoundary.client = null;
+  useAuthStore.setState({ status: "signed-out" });
   openLinkMock.mockReset();
 });
 
@@ -275,12 +335,63 @@ async function typeAndReplace(): Promise<void> {
   fireEvent.click(buttonOf(screen.getByTestId("replace-secret-confirm")));
 }
 
+/** Opens the row's Details, where the versions are listed. */
 async function openVersions(): Promise<HTMLElement[]> {
-  fireEvent.click(await screen.findByTestId("secret-row-versions"));
+  fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+  await screen.findByTestId("secret-details-controls");
   return screen.findAllByTestId("secret-version");
 }
 
-describe("Replace value", () => {
+describe("the Replace dialog's copy", () => {
+  it("says who holds the value and that running tools keep the old one", async () => {
+    renderPage(buildRotationHost({ rotation: enforcingRotation() }));
+    await openReplaceDialog();
+
+    expect(screen.getByTestId("secret-replace-custody").textContent).toBe(
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
+    );
+    expect(screen.getByTestId("secret-replace-restart").textContent).toBe(
+      SECRET_RESTART_LINE,
+    );
+  });
+});
+
+describe("Remove", () => {
+  it("previews what Remove does: who added it, when, and the current version", async () => {
+    renderPage(buildRotationHost({ rotation: enforcingRotation() }));
+
+    fireEvent.click(await screen.findByTestId("secret-row-remove"));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    const first = dayMonth(Date.UTC(2026, 9, 1, 12));
+    await waitFor(() => {
+      expect(dialog.textContent).toContain(
+        `Added by you on ${first}. Version 3. Tools already running keep it until they restart.`,
+      );
+    });
+    expect(dialog.textContent).not.toMatch(/unknown|Came from|Held on/);
+    expect(dialog.textContent).not.toMatch(/on the web|dashboard/i);
+  });
+
+  it("leaves out the added clause when the first version is not in the list", async () => {
+    const host = buildRotationHost({
+      versions: [
+        versionFixture({ versionId: "ver-3", ordinal: 3, current: true }),
+      ],
+    });
+    renderPage(host);
+
+    fireEvent.click(await screen.findByTestId("secret-row-remove"));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    await waitFor(() => {
+      expect(dialog.textContent).toContain("Version 3.");
+    });
+    expect(dialog.textContent).not.toContain("Added");
+  });
+});
+
+describe("Replace", () => {
   it("sends the typed value against the version the list showed, then shows the rotation and the restart line", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     renderPage(host);
@@ -291,7 +402,12 @@ describe("Replace value", () => {
       expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
     });
     expect(host.replaceRequests).toEqual([
-      { secretId: "sec-1", value: TYPED_VALUE, expectedVersionId: "ver-3" },
+      {
+        secretId: "sec-1",
+        value: TYPED_VALUE,
+        expectedVersionId: "ver-3",
+        environmentId: PERSONAL_ENV,
+      },
     ]);
     const headline = await screen.findByTestId("secret-rotation-headline");
     expect(headline.textContent).toBe(
@@ -409,7 +525,7 @@ describe("Replace value", () => {
     expect(screen.queryByTestId("secret-restart-line")).toBeNull();
   });
 
-  it("offers no Replace value on a revoked secret", async () => {
+  it("offers no Replace on a revoked secret", async () => {
     renderPage(
       buildRotationHost({ secrets: [secretFixture({ revoked: true })] }),
     );
@@ -417,7 +533,7 @@ describe("Replace value", () => {
     await screen.findByTestId("secret-row");
 
     expect(screen.queryByTestId("secret-row-replace")).toBeNull();
-    expect(screen.getByTestId("secret-row-versions")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
   });
 
   it("holds the typed value in no query or mutation cache", async () => {
@@ -467,8 +583,9 @@ describe("a secret's versions", () => {
       "destroyed",
     ]);
     expect(rows[0].textContent).toContain("Version 3");
+    // The current version leaves through the row's Remove, never from here.
     expect(within(rows[0]).queryByTestId("secret-version-undo")).toBeNull();
-    expect(within(rows[0]).getByTestId("secret-version-destroy")).toBeTruthy();
+    expect(within(rows[0]).queryByTestId("secret-version-destroy")).toBeNull();
     expect(within(rows[1]).getByTestId("secret-version-undo").textContent).toBe(
       "Undo",
     );
@@ -501,7 +618,12 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.undoRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2", regrant: false },
+        {
+          secretId: "sec-1",
+          versionId: "ver-2",
+          regrant: false,
+          environmentId: PERSONAL_ENV,
+        },
       ]);
     });
     await waitFor(() => {
@@ -523,7 +645,12 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.undoRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2", regrant: true },
+        {
+          secretId: "sec-1",
+          versionId: "ver-2",
+          regrant: true,
+          environmentId: PERSONAL_ENV,
+        },
       ]);
     });
   });
@@ -557,7 +684,7 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.destroyRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2" },
+        { secretId: "sec-1", versionId: "ver-2", environmentId: PERSONAL_ENV },
       ]);
     });
     await waitFor(() => {
@@ -581,18 +708,19 @@ describe("a secret's versions", () => {
   });
 
   it("says the current value cannot be destroyed when the host refuses", async () => {
+    // An Undo landed between render and click: the replaced version is now current.
     const host = buildRotationHost({
       destroyAnswer: { outcome: "refused", code: "version_current" },
     });
     renderPage(host);
     const rows = await openVersions();
 
-    fireEvent.click(within(rows[0]).getByTestId("secret-version-destroy"));
+    fireEvent.click(within(rows[1]).getByTestId("secret-version-destroy"));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     fireEvent.click(within(dialog).getByTestId("confirm-action"));
 
     expect(
-      (await within(rows[0]).findByTestId("secret-version-note")).textContent,
+      (await within(rows[1]).findByTestId("secret-version-note")).textContent,
     ).toBe("This is the current value. Replace or revoke it first.");
   });
 });

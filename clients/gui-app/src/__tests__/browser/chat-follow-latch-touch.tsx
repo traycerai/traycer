@@ -53,6 +53,7 @@ export function Harness() {
     onReaderGesture: undefined,
     isCorrectionSuppressed: undefined,
     resolveSuppressedEndLanding: undefined,
+    isReattachSuppressed: undefined,
   });
 
   useLayoutEffect(() => {

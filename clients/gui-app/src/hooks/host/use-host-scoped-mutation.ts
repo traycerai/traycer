@@ -12,6 +12,10 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
@@ -27,7 +31,7 @@ import {
   type AnalyticsProviderOperation,
 } from "@/lib/analytics";
 
-interface HostScopedMutationContext<Captured> {
+export interface HostScopedMutationContext<Captured> {
   readonly hostId: string | null;
   /** Whatever `captureContext` read at send time; `undefined` without one. */
   readonly captured: Captured;
@@ -39,10 +43,16 @@ interface UseHostScopedMutationArgs<
 > {
   readonly method: Method;
   readonly mutationKey: ReadonlyArray<unknown>;
-  readonly errorMessage: string;
+  /**
+   * The failure toast's words. Null when they name what the call was for,
+   * which the request does not carry: the caller toasts in its own
+   * `mutate(…, { onError })`.
+   */
+  readonly errorMessage: string | null;
   /**
    * Method prefixes to invalidate on success. Each entry expands to
-   * `["host", hostId, method]`, dropping every cached query for that
+   * `["host", servingHostId, method]` (the pool for a pool-only read, else
+   * the host the mutation went to), dropping every cached query for that
    * method regardless of params. Pass the full set of read methods this
    * mutation affects; an empty list means "no automatic invalidation."
    */
@@ -181,13 +191,24 @@ export function useHostScopedMutationForClient<
         args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
+          // Under the tier that answers the read, as `useHostQuery` keys it: a
+          // pool-only read is filed under the pool whichever host carried this.
           void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(ctx.hostId, method),
+            queryKey: hostQueryKeys.methodScope(
+              hostRpcServingTierHostId(
+                method,
+                ctx.hostId,
+                readProcessHostRpcTierPlan(),
+                null,
+              ),
+              method,
+            ),
           });
         }
       },
       onError: (error) => {
         if (args.silentCodes?.includes(error.code) === true) return;
+        if (args.errorMessage === null) return;
         toastFromHostError(error, args.errorMessage);
       },
     },

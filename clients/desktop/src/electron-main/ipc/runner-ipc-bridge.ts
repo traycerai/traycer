@@ -1813,6 +1813,7 @@ class NullSupportService implements IpcSupportService {
         pid: null,
         hostId: null,
         layer0: null,
+        ensureFailure: null,
       },
       logs: [],
       links: [],

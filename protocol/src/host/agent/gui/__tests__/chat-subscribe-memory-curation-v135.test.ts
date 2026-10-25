@@ -3,6 +3,9 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   chatSubscribeV134,
   chatSubscribeV135,
+  chatSubscribeV136,
+  chatSubscribeV137,
+  chatSubscribeV138,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -10,7 +13,8 @@ import {
  * `chat.subscribe@1.35` adds the `memory-curation` queue item: the ask that the
  * environment's main bot curate its shared memory. `1.32` through `1.34` bind a
  * frozen six-arm queue, so a frame carrying the item parses on `1.35` and is
- * refused on `1.34` (the host omits the item for those peers).
+ * refused on `1.34` (the host omits the item for those peers). `1.36` carries
+ * the same frames unchanged, so the item parses there too.
  */
 
 const line = hostStreamRpcRegistry["chat.subscribe"][1];
@@ -103,15 +107,36 @@ const SURFACES = [
 ] as const;
 
 describe("chat.subscribe@1.35 registration", () => {
-  it("is the newest line and binds chatSubscribeV135 above the frozen 1.34", () => {
-    expect(line.latestMinor).toBe(35);
+  it("binds chatSubscribeV135 above the frozen 1.34, under the 1.38 head", () => {
+    expect(line.latestMinor).toBe(38);
+    expect(line.versions[37].contract).toBe(chatSubscribeV137);
+    expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
     expect(line.versions[34].contract).toBe(chatSubscribeV134);
     expect(chatSubscribeV135.schemaVersion).toEqual({ major: 1, minor: 35 });
-    expect(chatSubscribeV135.serverFrameSchema).toBe(
+    expect(chatSubscribeV137.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
+    expect(chatSubscribeV138.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV135.serverFrameSchema).not.toBe(
+      chatSubscribeV137.serverFrameSchema,
+    );
     expect(chatSubscribeV134.serverFrameSchema).not.toBe(
+      chatSubscribeV135.serverFrameSchema,
+    );
+  });
+
+  it("carries 1.35's request, client and server schemas unchanged on 1.36", () => {
+    expect(chatSubscribeV136.schemaVersion).toEqual({ major: 1, minor: 36 });
+    expect(chatSubscribeV136.openRequestSchema).toBe(
+      chatSubscribeV135.openRequestSchema,
+    );
+    expect(chatSubscribeV136.clientFrameSchema).toBe(
+      chatSubscribeV135.clientFrameSchema,
+    );
+    expect(chatSubscribeV136.serverFrameSchema).toBe(
       chatSubscribeV135.serverFrameSchema,
     );
   });
@@ -136,6 +161,13 @@ describe.each(SURFACES)("memory-curation item on a $name frame", (surface) => {
         status: "pending",
       },
     ]);
+  });
+
+  it("parses on 1.36 exactly as on 1.35", () => {
+    const frame = surface.frame([memoryCurationItem]);
+    expect(chatSubscribeV136.serverFrameSchema.parse(frame)).toEqual(
+      chatSubscribeV135.serverFrameSchema.parse(frame),
+    );
   });
 
   it("is refused on 1.34, whose queue is frozen at the six older arms", () => {

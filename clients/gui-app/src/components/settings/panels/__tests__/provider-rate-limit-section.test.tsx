@@ -40,8 +40,6 @@ const mocks = vi.hoisted(
     hostId: string;
     turnRefreshCalls: TurnRefreshCall[];
     fetchScope: { hostId: string };
-    refreshProviders: Mock<() => Promise<void>>;
-    refreshProfileStatus: Mock<(...args: unknown[]) => Promise<unknown>>;
     refreshOnMount: Mock<(...args: unknown[]) => void>;
   } => ({
     data: undefined,
@@ -54,8 +52,6 @@ const mocks = vi.hoisted(
     hostId: "host-1",
     turnRefreshCalls: [],
     fetchScope: { hostId: "host-b" },
-    refreshProviders: vi.fn(() => Promise.resolve()),
-    refreshProfileStatus: vi.fn((..._args: unknown[]) => Promise.resolve()),
     refreshOnMount: vi.fn(),
   }),
 );
@@ -100,26 +96,20 @@ vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
   fetchProviderRateLimits: (...args: unknown[]) =>
     mocks.fetchProviderRateLimits(...args),
 }));
-vi.mock("@/hooks/providers/use-refresh-providers", () => ({
-  useRefreshProviders: () => mocks.refreshProviders,
-}));
-vi.mock(
-  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
-  () => ({
-    useProvidersRefreshProfileStatusForClient: () => ({
-      isPending: false,
-      mutateAsync: (...args: unknown[]) => mocks.refreshProfileStatus(...args),
-    }),
-  }),
-);
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
 
 import {
+  NO_NOTICES,
+  NO_OVERRIDES,
+  NO_REVIEW,
+  PersonalPageContext,
+} from "@/components/settings/personal/personal-page-context";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
   EmbeddedProviderRateLimitForProvider,
-  ProviderProfilesRefreshButton,
   ProviderRateLimitForProvider,
 } from "../provider-rate-limit-section";
 
@@ -199,8 +189,6 @@ describe("ProviderRateLimitForProvider", () => {
     );
     mocks.hostId = "host-1";
     mocks.turnRefreshCalls = [];
-    mocks.refreshProviders.mockClear();
-    mocks.refreshProfileStatus.mockClear();
     mocks.refreshOnMount.mockClear();
   });
 
@@ -257,8 +245,53 @@ describe("ProviderRateLimitForProvider", () => {
         fetchEligible
       />,
     );
-    expect(screen.getByText("Usage limits")).toBeTruthy();
+    expect(screen.getByText("Rate limits")).toBeTruthy();
     expect(screen.getByText("Loading usage limits")).toBeTruthy();
+  });
+
+  it("heads the live card with the host that reported it, and offers no other host", () => {
+    mocks.data = envelope(CLAUDE_RATE_LIMITS);
+    render(
+      <PersonalPageContext.Provider
+        value={{
+          section: "providers",
+          pick: PERSONAL_PICK,
+          state: { kind: "unknown" },
+          line: null,
+          hostName: "Studio",
+          localOverrides: NO_OVERRIDES,
+          hostId: "host-1",
+          client: null,
+          notices: NO_NOTICES,
+          review: NO_REVIEW,
+        }}
+      >
+        <ProviderRateLimitForProvider
+          providerId="claude-code"
+          profileId={null}
+          usageUpdatedAt={null}
+          fetchEligible
+        />
+      </PersonalPageContext.Provider>,
+    );
+
+    expect(screen.getByText("Rate limits")).toBeTruthy();
+    expect(screen.getByText(/as reported by Studio/)).toBeTruthy();
+    expect(screen.queryByText(/Use another host/)).toBeNull();
+    expect(screen.queryByText("Usage limits")).toBeNull();
+  });
+
+  it("names this computer in the heading when the page carries no host name", () => {
+    render(
+      <EmbeddedProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(screen.getByText(/as reported by this computer/)).toBeTruthy();
   });
 
   it("routes turn-completion refreshes through the current profile id", () => {
@@ -291,7 +324,7 @@ describe("ProviderRateLimitForProvider", () => {
         fetchEligible
       />,
     );
-    expect(screen.getByText("Usage limits")).toBeTruthy();
+    expect(screen.getByText("Rate limits")).toBeTruthy();
     expect(screen.queryByText("Loading usage limits")).toBeNull();
   });
 
@@ -625,62 +658,6 @@ describe("ProviderRateLimitForProvider", () => {
       { force: true },
     );
     expect(mocks.refetch).not.toHaveBeenCalled();
-  });
-
-  it("keeps the Terminal-only profile refresh on the existing bulk path", () => {
-    mocks.data = envelope(CODEX_RATE_LIMITS);
-    render(
-      <ProviderProfilesRefreshButton
-        providerId="codex"
-        profileId="work-profile"
-        usageUpdatedAt={null}
-        fetchEligible
-        maintenanceAvailable={false}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Refresh profile statuses and usage limits",
-      }),
-    );
-
-    expect(mocks.refreshProviders).toHaveBeenCalledTimes(1);
-    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledWith(
-      mocks.fetchScope,
-      {
-        providerId: "codex",
-        accountContext: DEFAULT_ACCOUNT_CONTEXT,
-        profileId: "work-profile",
-      },
-      { force: true },
-    );
-    expect(mocks.refreshProfileStatus).not.toHaveBeenCalled();
-  });
-
-  it("routes managed profile maintenance through the dedicated host RPC", () => {
-    render(
-      <ProviderProfilesRefreshButton
-        providerId="codex"
-        profileId="work-profile"
-        usageUpdatedAt={null}
-        fetchEligible={false}
-        maintenanceAvailable
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Refresh profile status and usage limits",
-      }),
-    );
-
-    expect(mocks.refreshProfileStatus).toHaveBeenCalledWith({
-      providerId: "codex",
-      profileId: "work-profile",
-    });
-    expect(mocks.refreshProviders).not.toHaveBeenCalled();
-    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
   });
 
   // `isRefreshing` (and so the button's disabled state) is now a direct

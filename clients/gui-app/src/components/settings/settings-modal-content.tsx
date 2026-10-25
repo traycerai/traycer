@@ -7,10 +7,10 @@ import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
   isSettingsSectionVisible,
+  RETIRED_SECTION_REPLACEMENTS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
-import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
@@ -31,13 +31,15 @@ import {
   ProvidersSettingsPanel,
   SkillsSettingsPanel,
 } from "@/components/settings/panels/providers-settings-panel";
-import { AgentDefinitionsSettingsPanel } from "@/components/settings/panels/agent-definitions-settings-panel";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
+import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
+import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
+import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
@@ -64,7 +66,7 @@ export function SettingsModalContent(
   const requested: SettingsSectionId = props.section ?? "general";
   const section: SettingsSectionId = isSettingsSectionVisible(requested)
     ? requested
-    : "general";
+    : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -101,7 +103,9 @@ const SETTINGS_PANELS = {
   "getting-started": GettingStartedSettingsPanel,
   general: GeneralSettingsPanel,
   browser: BrowserSettingsPanel,
-  "browser-agent-access": BrowserAgentAccessSettingsPanel,
+  // Retired: `SettingsModalContent` opens their replacement instead
+  // (`RETIRED_SECTION_REPLACEMENTS`), as their routes redirect there.
+  "browser-agent-access": PermissionsSettingsPanel,
   appearance: AppearanceSettingsPanel,
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,
@@ -110,7 +114,7 @@ const SETTINGS_PANELS = {
   secrets: SecretsSettingsPanel,
   "mcp-servers": McpServersSettingsPanel,
   skills: SkillsSettingsPanel,
-  "agent-definitions": AgentDefinitionsSettingsPanel,
+  "agent-definitions": AgentsSettingsPanel,
   "machine-setup": MachineSetupSettingsPanel,
   notifications: NotificationsSettingsPanel,
   permissions: PermissionsSettingsPanel,
@@ -126,6 +130,9 @@ const SETTINGS_PANELS = {
   "app-diagnostics": AppDiagnosticsSettingsPanel,
   diagnostics: DiagnosticsSettingsPanel,
   usage: UsageSettingsPanel,
+  credits: CreditsSettingsPanel,
+  sandboxes: SandboxesSettingsPanel,
+  members: MembersSettingsPanel,
 } satisfies Record<SettingsSectionId, () => ReactNode>;
 
 export function SettingsPanelForSection(props: {

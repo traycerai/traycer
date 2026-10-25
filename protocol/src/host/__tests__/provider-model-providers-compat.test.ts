@@ -62,6 +62,7 @@ import {
   providersModelProviderAuthRequestSchema,
   providersModelProviderAuthResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 /**
  * Model Providers wire contract.
@@ -1865,8 +1866,8 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
   it.each(PAIRS)(
     "%s: the frozen v7.0 copy still matches the live schema",
     (_label, live, frozen) => {
-      expect(z.toJSONSchema(frozen, { unrepresentable: "any" })).toEqual(
-        z.toJSONSchema(live, { unrepresentable: "any" }),
+      expect(toCanonicalJsonSchema(frozen, { unrepresentable: "any" })).toEqual(
+        toCanonicalJsonSchema(live, { unrepresentable: "any" }),
       );
     },
   );
@@ -1878,10 +1879,12 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
       }),
     });
     expect(
-      z.toJSONSchema(providerMcpCapabilitiesSchemaV70, {
+      toCanonicalJsonSchema(providerMcpCapabilitiesSchemaV70, {
         unrepresentable: "any",
       }),
-    ).toEqual(z.toJSONSchema(liveBeforeRemedies, { unrepresentable: "any" }));
+    ).toEqual(
+      toCanonicalJsonSchema(liveBeforeRemedies, { unrepresentable: "any" }),
+    );
   });
 
   it("frozen skills actionScopes = live keys minus inspect/edit/update, exactly", () => {

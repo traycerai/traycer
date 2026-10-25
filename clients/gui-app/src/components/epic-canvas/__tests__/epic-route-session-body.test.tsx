@@ -75,6 +75,21 @@ vi.mock("@/components/epic-canvas/dialogs/epic-migration-modal", () => ({
   ),
 }));
 
+// The tab-level owners of a staged sandbox's send: placement only.
+vi.mock("@/components/epic-canvas/sidebar/new-conversation-modal", () => ({
+  NewConversationModalHost: (props: { readonly active: boolean }) => (
+    <div
+      data-testid="new-conversation-modal-host"
+      data-active={props.active ? "true" : "false"}
+    />
+  ),
+}));
+vi.mock("@/components/epic-canvas/sidebar/new-terminal-staged-handoff", () => ({
+  NewTerminalStagedHandoff: () => (
+    <div data-testid="new-terminal-staged-handoff" />
+  ),
+}));
+
 vi.mock("@/components/epic-canvas/epic-plain-terminal-create-owner", () => ({
   EpicPlainTerminalCreateOwner: () => null,
 }));
@@ -125,6 +140,12 @@ describe("<EpicRouteSessionBody />", () => {
     // gate, for the same reason - a background epic keeps its terminal rows.
     expect(useEpicSyncTuiAgentRecordsMock).toHaveBeenCalledWith("epic-a");
     expect(screen.queryByTestId("epic-migration-modal")).toBeNull();
+    // A staged sandbox's send started in this tab finishes in the background;
+    // the modal is shown only for the active pane.
+    expect(
+      screen.getByTestId("new-conversation-modal-host").dataset.active,
+    ).toBe("false");
+    expect(screen.getByTestId("new-terminal-staged-handoff")).toBeDefined();
   });
 
   it("runs route synchronization and migration modal only for the active pane", () => {

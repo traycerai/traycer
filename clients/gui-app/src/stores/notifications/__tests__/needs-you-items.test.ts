@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { HostNotificationsCloudFeedRowV13 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV14 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
@@ -207,7 +207,7 @@ describe("useNeedsYouItems (cloud store wiring)", () => {
   function cloudApprovalRow(
     entryId: string,
     chatTitle: string,
-  ): HostNotificationsCloudFeedRowV13 {
+  ): HostNotificationsCloudFeedRowV14 {
     return {
       entryId,
       originHostId: "host-a",

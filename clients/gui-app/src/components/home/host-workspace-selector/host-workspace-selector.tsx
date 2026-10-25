@@ -37,7 +37,10 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  useComposerSurfaceHostKey,
+  useComposerSurfaceHostPin,
+} from "@/hooks/host/use-composer-surface-host-pin";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -160,6 +163,14 @@ import { useRecentWorkspaces } from "./use-recent-workspaces";
 import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import {
+  useSandboxStaging,
+  type SandboxStaging,
+  type SandboxStagingSurface,
+} from "@/components/composer/use-sandbox-staging";
+import { EMPTY_SANDBOX } from "@/lib/sandboxes/sandbox-strings";
+import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 /**
  *
  *
@@ -380,6 +391,12 @@ function HomeSurface(props: HomeSurfaceProps) {
   // have to agree on which machine they describe. That resolution is the
   // composer surface pin (pin ?? effective), so read the same primitive.
   const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const surfaceKey = useComposerSurfaceHostKey();
+  // The landing composer creates the task, so there is none yet.
+  const sandboxStaging = useMemo<SandboxStagingSurface>(
+    () => ({ surfaceKey, task: null }),
+    [surfaceKey],
+  );
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -390,6 +407,7 @@ function HomeSurface(props: HomeSurfaceProps) {
   );
   return (
     <ActiveHostWorkspaceControls
+      sandboxStaging={sandboxStaging}
       stagingKey={stagingKey}
       layout="inline"
       workspaceSeed={null}
@@ -441,6 +459,13 @@ type ActiveHostWorkspaceControlsProps = {
   readonly layout: "inline" | "stacked";
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
+  /**
+   * A composer's sandbox staging (sandboxes redesign D9): the picker offers
+   * New sandbox rows, a pick only stages, and the consequences block renders
+   * under the row. `null` for a surface that does not create work on a new
+   * host (the fork dialogs, the terminal-agent launcher).
+   */
+  readonly sandboxStaging: SandboxStagingSurface | null;
 };
 
 export function ActiveHostWorkspaceControls(
@@ -497,6 +522,11 @@ export function ActiveHostWorkspaceControls(
     activeHostId === null
       ? null
       : (listedHostOption ?? unavailableHostOption(activeHostId, hostLabel));
+  const staging = useSandboxStaging({
+    surface: props.sandboxStaging,
+    memoryHostId: activeHostId,
+    hosts: hostOptions.hosts,
+  });
   const visibleHostOptions = hostPickerOptionsForScope(
     props.hostScope,
     selectedHostOption,
@@ -596,31 +626,35 @@ export function ActiveHostWorkspaceControls(
           isLoading={hostOptions.isLoading}
           listsFailed={hostOptions.listsFailed}
           onRetryLists={hostOptions.retryLists}
-          offersAutomations={false}
+          composer={stagingComposer(staging)}
           // `pin`, not `bind`: since P1.2 a pick here writes this composer's
           // surface pin and never rebinds the window. (The two intents gate
           // rows identically; only `view` differs.)
           intent="pin"
         />
+        <SandboxStagingExtras staging={staging} />
         <section
           aria-label="Workspaces"
           data-testid="host-workspace-selector-folders-section"
           className="w-full max-w-full min-w-0"
         >
           <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-          <HomeWorkspaceRows
-            workspaceSource={workspaceSource}
-            resolvedFolders={resolved.folders}
-            activeHostClient={activeHostClient}
-            activeHostId={activeHostId}
-            hostLabel={hostLabel}
-            stagingKey={props.stagingKey}
-            seedIntent={props.seedIntent}
-            seedIntentOverride={props.seedIntentOverride}
-            restingMode="rows"
-            hostSlot={null}
-            disabled={disabled}
-          />
+          <SandboxWorkspaceSlot staging={staging}>
+            <HomeWorkspaceRows
+              workspaceSource={workspaceSource}
+              resolvedFolders={resolved.folders}
+              activeHostClient={activeHostClient}
+              activeHostId={activeHostId}
+              hostLabel={hostLabel}
+              stagingKey={props.stagingKey}
+              seedIntent={props.seedIntent}
+              seedIntentOverride={props.seedIntentOverride}
+              restingMode="rows"
+              hostSlot={null}
+              emptySandbox={false}
+              disabled={disabled}
+            />
+          </SandboxWorkspaceSlot>
         </section>
       </div>
     );
@@ -640,24 +674,84 @@ export function ActiveHostWorkspaceControls(
       isLoading={hostOptions.isLoading}
       listsFailed={hostOptions.listsFailed}
       onRetryLists={hostOptions.retryLists}
-      offersAutomations={false}
+      composer={stagingComposer(staging)}
       surface="inline"
     />
   );
+  // The host switcher stays where it is while a sandbox is staged: only the
+  // workspace summary beside it reads `Empty sandbox`, so the picker that
+  // just staged keeps its trigger and focus.
   return (
-    <HomeWorkspaceRows
-      workspaceSource={workspaceSource}
-      resolvedFolders={resolved.folders}
-      activeHostClient={activeHostClient}
-      activeHostId={activeHostId}
-      hostLabel={hostLabel}
-      stagingKey={props.stagingKey}
-      seedIntent={props.seedIntent}
-      seedIntentOverride={props.seedIntentOverride}
-      restingMode="summary"
-      hostSlot={deviceSelect}
-      disabled={disabled}
-    />
+    <>
+      <HomeWorkspaceRows
+        workspaceSource={workspaceSource}
+        resolvedFolders={resolved.folders}
+        activeHostClient={activeHostClient}
+        activeHostId={activeHostId}
+        hostLabel={hostLabel}
+        stagingKey={props.stagingKey}
+        seedIntent={props.seedIntent}
+        seedIntentOverride={props.seedIntentOverride}
+        restingMode="summary"
+        hostSlot={deviceSelect}
+        emptySandbox={staging !== null && staging.stage !== null}
+        disabled={disabled}
+      />
+      <SandboxStagingExtras staging={staging} />
+    </>
+  );
+}
+
+function stagingComposer(
+  staging: SandboxStaging | null,
+): HostSwitcherComposerMode | null {
+  return staging === null ? null : staging.composer;
+}
+
+/**
+ * The popover's workspace slot: `Empty sandbox` while a sandbox is staged,
+ * else the surface's own folder rows.
+ */
+function SandboxWorkspaceSlot(props: {
+  readonly staging: SandboxStaging | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (props.staging === null || props.staging.stage === null) {
+    return props.children;
+  }
+  return <EmptySandboxSummary />;
+}
+
+/**
+ * A staged sandbox's workspace is the new host's, which holds no folder
+ * until the agent or the terminal fetches one.
+ */
+function EmptySandboxSummary(): ReactNode {
+  return (
+    <span
+      className="min-w-0 truncate px-1.5 py-1 text-ui-sm text-muted-foreground opacity-70"
+      data-testid="workspace-summary-empty-sandbox"
+    >
+      {EMPTY_SANDBOX}
+    </span>
+  );
+}
+
+/** The consequences block under the staged host, and the shape sheet. */
+function SandboxStagingExtras(props: {
+  readonly staging: SandboxStaging | null;
+}): ReactNode {
+  if (props.staging === null) return null;
+  return (
+    <>
+      {props.staging.consequences === null ? null : (
+        <ConsequencesBlock
+          input={props.staging.consequences}
+          onMoveFirst={null}
+        />
+      )}
+      {props.staging.sheet}
+    </>
   );
 }
 
@@ -690,6 +784,8 @@ function HomeWorkspaceRows(props: {
   readonly seedIntentOverride: SeedIntentOverride | null;
   readonly restingMode: "rows" | "summary";
   readonly hostSlot: ReactNode;
+  /** The summary reads `Empty sandbox`: a sandbox is staged. */
+  readonly emptySandbox: boolean;
   readonly disabled: boolean;
 }) {
   const {
@@ -1221,6 +1317,7 @@ function HomeWorkspaceRows(props: {
         <HomeWorkspaceSummaryControl
           items={items}
           hostSlot={props.hostSlot}
+          emptySandbox={props.emptySandbox}
           addFolderPending={addFolderPending}
           onAddFolder={addFolders}
           onEditEnvironment={handleEditEnvironment}
@@ -1268,6 +1365,7 @@ function HomeWorkspaceRows(props: {
 function HomeWorkspaceSummaryControl(props: {
   readonly items: ReadonlyArray<WorkspaceRunItem>;
   readonly hostSlot: ReactNode;
+  readonly emptySandbox: boolean;
   readonly addFolderPending: boolean;
   readonly onAddFolder: AddFolderHandler;
   readonly onEditEnvironment: (workspacePath: string) => void;
@@ -1297,32 +1395,38 @@ function HomeWorkspaceSummaryControl(props: {
           {props.hostSlot}
         </div>
       )}
-      <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
-        <WorkspaceFolderSummaryControl
-          onFirstTaskSetupComplete={
-            guidedSetup && props.items.length > 0 ? reviewWorkspace : undefined
-          }
-          items={props.items}
-          readOnly={false}
-          bindingResolved
-          addFolderPending={props.addFolderPending}
-          addFolderDisabled={props.disabled}
-          addFolderDisabledReason={null}
-          onAddFolder={props.onAddFolder}
-          onUpdate={null}
-          updateEnabled={false}
-          updatePending={false}
-          onDiscardStaged={null}
-          discardDisabled={false}
-          onEditEnvironment={props.onEditEnvironment}
-          refresh={props.refresh}
-          popoverTestId="home-workspace-rows-popover"
-          popoverSide="bottom"
-          recentWorkspaces={props.recentWorkspaces}
-          recentWorkspaceCount={props.recentWorkspaceCount}
-          moveToRecent={props.moveToRecent}
-        />
-      </div>
+      {props.emptySandbox ? (
+        <EmptySandboxSummary />
+      ) : (
+        <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">
+          <WorkspaceFolderSummaryControl
+            onFirstTaskSetupComplete={
+              guidedSetup && props.items.length > 0
+                ? reviewWorkspace
+                : undefined
+            }
+            items={props.items}
+            readOnly={false}
+            bindingResolved
+            addFolderPending={props.addFolderPending}
+            addFolderDisabled={props.disabled}
+            addFolderDisabledReason={null}
+            onAddFolder={props.onAddFolder}
+            onUpdate={null}
+            updateEnabled={false}
+            updatePending={false}
+            onDiscardStaged={null}
+            discardDisabled={false}
+            onEditEnvironment={props.onEditEnvironment}
+            refresh={props.refresh}
+            popoverTestId="home-workspace-rows-popover"
+            popoverSide="bottom"
+            recentWorkspaces={props.recentWorkspaces}
+            recentWorkspaceCount={props.recentWorkspaceCount}
+            moveToRecent={props.moveToRecent}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -3227,7 +3331,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       isLoading={hostOptions.isLoading}
       listsFailed={hostOptions.listsFailed}
       onRetryLists={hostOptions.retryLists}
-      offersAutomations={false}
+      composer={null}
       surface="inline"
       keepFocusableWhenDisabled={surface.kind === "terminal-agent"}
     />

@@ -35,6 +35,9 @@ const BOT: BotRecord = {
   hostEpoch: 1,
   createdAt: 1_000,
   archivedAt: null,
+  directive: null,
+  replyMode: "thread",
+  appConversationChatId: null,
 };
 
 function response(outcome: BotOpenResponse["outcome"]): BotOpenResponse {

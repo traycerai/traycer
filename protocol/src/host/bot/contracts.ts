@@ -25,6 +25,12 @@ import {
   botSubscribeServerFrameSchema,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
+  botUpdateDirectiveRequestSchema,
+  botUpdateReplyModeRequestSchema,
+  botNotificationLevelReadRequestSchema,
+  botNotificationLevelReadResponseSchema,
+  botNotificationLevelSetRequestSchema,
+  botNotificationLevelSetResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -35,6 +41,14 @@ import {
   botThreadListRequestSchema,
   botThreadListResponseSchema,
 } from "./conversation-schemas";
+import {
+  botOnboardingChooseRequestSchema,
+  botOnboardingChooseResponseSchema,
+  botOnboardingCompleteRequestSchema,
+  botOnboardingCompleteResponseSchema,
+  botOnboardingReadRequestSchema,
+  botOnboardingReadResponseSchema,
+} from "./onboarding-schemas";
 
 /**
  * The `bot.*` namespace (Tracy Bots, T5). Brand-new v1.0 methods, none on
@@ -101,6 +115,39 @@ export const botUpdateRunSettingsV10 = defineRpcContract({
   responseSchema: botUpdateResponseSchema,
 });
 
+export const botUpdateDirectiveV10 = defineRpcContract({
+  method: "bot.updateDirective",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateDirectiveRequestSchema,
+  responseSchema: botUpdateResponseSchema,
+});
+
+export const botUpdateReplyModeV10 = defineRpcContract({
+  method: "bot.updateReplyMode",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateReplyModeRequestSchema,
+  responseSchema: botUpdateResponseSchema,
+});
+
+/**
+ * `bot.notificationLevel.read@1.0` / `.set@1.0`: the caller's notification
+ * level per conversation of a bot, kept in the cloud and proxied by any
+ * host, like the rest of the namespace's cloud reads.
+ */
+export const botNotificationLevelReadV10 = defineRpcContract({
+  method: "bot.notificationLevel.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationLevelReadRequestSchema,
+  responseSchema: botNotificationLevelReadResponseSchema,
+});
+
+export const botNotificationLevelSetV10 = defineRpcContract({
+  method: "bot.notificationLevel.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationLevelSetRequestSchema,
+  responseSchema: botNotificationLevelSetResponseSchema,
+});
+
 export const botDeleteV10 = defineRpcContract({
   method: "bot.delete",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -162,9 +209,38 @@ export const botThreadListV10 = defineRpcContract({
 });
 
 /**
+ * `bot.onboarding.*@1.0` (T48): a team environment's onboarding. The read
+ * and the choice answer from any host (the set is authn's, the choice the
+ * cloud's); the completion creates the chosen bots on the serving host, so
+ * the client sends it to a host the bots may run on. Same optional posture
+ * as the namespace.
+ */
+export const botOnboardingReadV10 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchema,
+});
+
+export const botOnboardingChooseV10 = defineRpcContract({
+  method: "bot.onboarding.choose",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOnboardingChooseRequestSchema,
+  responseSchema: botOnboardingChooseResponseSchema,
+});
+
+export const botOnboardingCompleteV10 = defineRpcContract({
+  method: "bot.onboarding.complete",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOnboardingCompleteRequestSchema,
+  responseSchema: botOnboardingCompleteResponseSchema,
+});
+
+/**
  * `bot.subscribe@1.0` - the bot row, its task list with cadence and last
  * check-in, the open-request count and the bound host, as one snapshot
- * re-sent on change. Replaces polling for Home and the bot tab.
+ * re-sent on change, and what the bot's running chats are doing, one entry
+ * per change. Replaces polling for Home and the bot tab.
  */
 export const botSubscribeV10 = defineStreamRpcContract({
   method: "bot.subscribe",

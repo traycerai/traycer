@@ -11,21 +11,30 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
-// The grant minter a write carries is read from the host binding. The client
-// is a REAL `HostClient` over an in-memory messenger (`buildAccessHost`): only
-// the host on the far side is faked.
+// The grant minter a write carries is read from the host binding: the real
+// runtime's binding, with only its `auth` swapped for a minter. The client is a
+// REAL `HostClient` over an in-memory messenger (`buildAccessHost`): only the
+// host on the far side is faked.
 const hostMock = vi.hoisted(
   (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostBinding: () => hostMock.binding };
+  return {
+    ...actual,
+    useHostBinding: () => {
+      const real = actual.useHostBinding();
+      return real === null || hostMock.binding === null
+        ? real
+        : { ...real, auth: hostMock.binding.auth };
+    },
+  };
 });
 
-// What a dashboard link asks the app to open.
-const openLinkMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => openLinkMock,
+// Where the Review button asks Settings to go.
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -40,38 +49,54 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentReviewEntryV12,
+  EnvironmentStatusResponse,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
   buildAccessHost,
-  DASHBOARD_ORIGIN,
-  dashboardRunnerHost,
   noticeFixture,
   reviewEntryFixture,
   type AccessHost,
   type AccessHostState,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { provider } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  HostRuntimeContext,
+  HostRuntimeProvider,
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 afterEach(() => {
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostMock.binding = null;
-  openLinkMock.mockReset();
+  navigateToSettingsSectionMock.mockReset();
 });
 
 function FakePanel(): ReactNode {
@@ -100,6 +125,55 @@ const SHELL_PAGE: FrameOptions = {
   mintsGrants: true,
 };
 
+/**
+ * The page under the host runtime Settings gives it: the real provider, and
+ * the scope's client re-provided the way a host-scoped panel does, so the
+ * page's own chip reads the same host the page does.
+ */
+function ScopedHostRuntime(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <RunnerHostProvider
+      runnerHost={
+        new MockRunnerHost({
+          signInUrl: "https://auth.traycer.invalid/sign-in",
+          authnBaseUrl: "https://authn.traycer.invalid",
+          localHost: null,
+          hosts: [],
+          workspaceFolderPickerPaths: undefined,
+          hasLocalHost: undefined,
+          traycerCli: undefined,
+        })
+      }
+    >
+      <HostRuntimeProvider
+        registry={hostRpcRegistry}
+        messengerFactory={(args) =>
+          new MockHostMessenger<HostRpcRegistry>({
+            registry: args.registry,
+            requestId: () => "req-runtime",
+            handlers: {},
+          })
+        }
+        invalidator={null}
+        requestId={null}
+        remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+        fallback={null}
+      >
+        <ScopedBinding>{props.children}</ScopedBinding>
+      </HostRuntimeProvider>
+    </RunnerHostProvider>
+  );
+}
+
+function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
+  const binding = useScopedHostBinding(useHostScope());
+  return (
+    <HostRuntimeContext.Provider value={binding}>
+      {props.children}
+    </HostRuntimeContext.Provider>
+  );
+}
+
 function renderPage(host: AccessHost, options: FrameOptions): void {
   recordNegotiatedHostMethods(options.windowHostId, options.methods);
   hostMock.binding = options.mintsGrants
@@ -115,6 +189,14 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
         },
       }
     : null;
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: {
+      kind: "local",
+      hostId: options.windowHostId,
+      hostName: ACCESS_HOST_NAME,
+    },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({
       hostId: options.windowHostId,
@@ -134,15 +216,30 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
   );
   render(
     <QueryClientProvider client={queryClient}>
-      {options.runnerHost === null ? (
-        page
-      ) : (
+      <ScopedHostRuntime>
+        {/* The page's own shell, or none, as each case says; the runtime's
+            shell above is only what the provider starts on. */}
         <RunnerHostContext.Provider value={options.runnerHost}>
           {page}
         </RunnerHostContext.Provider>
-      )}
+      </ScopedHostRuntime>
     </QueryClientProvider>,
   );
+}
+
+/** A held entry as an `environment.review@1.2` host sends it. */
+function heldCommandEntry(
+  overrides: Partial<EnvironmentReviewEntryV12>,
+): EnvironmentReviewEntryV12 {
+  return {
+    ...reviewEntryFixture({}),
+    command: null,
+    event: null,
+    description: null,
+    harness: null,
+    value: null,
+    ...overrides,
+  };
 }
 
 function hostWith(
@@ -567,7 +664,7 @@ describe("Keep this host's value", () => {
 });
 
 describe("a Personal page's 'needs you' rows", () => {
-  it("says why each held value waits, with a way to review it in the dashboard", async () => {
+  it("says why each value waits, and sends a held key-shaped value to its retrospective sheet, a held command to the host's, and the rest to Secrets", async () => {
     const host = hostWith(
       {},
       {
@@ -577,10 +674,12 @@ describe("a Personal page's 'needs you' rows", () => {
             key: "DATABASE_URL",
             reason: "credential_like_value",
           }),
-          reviewEntryFixture({
+          heldCommandEntry({
             entryId: "entry-2",
-            key: "SHELL_INIT",
+            kind: "shell",
+            key: "shell",
             reason: "executable_entry",
+            command: "zsh -l",
           }),
           reviewEntryFixture({
             entryId: "entry-3",
@@ -595,46 +694,68 @@ describe("a Personal page's 'needs you' rows", () => {
         ],
       },
     );
-    renderPage(host, { ...SHELL_PAGE, runnerHost: dashboardRunnerHost() });
+    renderPage(host, SHELL_PAGE);
 
     const rows = await screen.findAllByTestId("personal-review-row");
     expect(rows.map((row) => row.textContent)).toEqual([
+      "DATABASE_URL looks like a key and is on hold until you choose · Review",
       expect.stringContaining(
-        "DATABASE_URL is waiting for you: looks like a secret.",
+        "shell (shell) is what terminals and agents start in: zsh -l and is on hold until you choose",
       ),
-      expect.stringContaining("SHELL_INIT is waiting for you: runs a command."),
       expect.stringContaining(
         "LOG_LEVEL is waiting for you: was changed without your confirmation.",
       ),
       expect.stringContaining("FUTURE_THING is waiting for you."),
     ]);
     for (const row of rows) {
-      expect(
-        within(row).getByRole("button", { name: "Review in the dashboard" }),
-      ).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Review" })).toBeTruthy();
     }
 
-    fireEvent.click(
-      within(rows[0]).getByRole("button", { name: "Review in the dashboard" }),
-    );
-    expect(openLinkMock).toHaveBeenCalledTimes(1);
-    expect(openLinkMock.mock.calls[0]?.[0]).toBe(
-      `${DASHBOARD_ORIGIN}/environments/personal/review`,
-    );
-    expect(openLinkMock.mock.calls[0]?.[1]).toBe("account");
+    // Any other reason's Review opens Secrets.
+    fireEvent.click(within(rows[2]).getByRole("button", { name: "Review" }));
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+
+    // A held command's opens the host's retrospective sheet.
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Review" }));
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(useRetrospectiveSheetStore.getState()).toMatchObject({
+      open: true,
+      target: { hostId: ACCESS_HOST_ID, hostName: ACCESS_HOST_NAME },
+    });
+
+    // The held value's opens its own retrospective sheet.
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
+    const sheet = await screen.findByTestId("retrospective-sheet");
+    expect(
+      within(sheet).getByTestId("retrospective-held-entry-1"),
+    ).toBeTruthy();
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
   });
 
-  it("says the row text and offers no review button without a shell to name the dashboard", async () => {
-    const host = hostWith({}, { review: [reviewEntryFixture({})] });
+  it("words a held variable from a host that sends none by what it changes", async () => {
+    const host = hostWith(
+      {},
+      {
+        review: [
+          heldCommandEntry({
+            entryId: "entry-1",
+            kind: "variable",
+            key: "SHELL_INIT",
+            reason: "executable_entry",
+          }),
+        ],
+      },
+    );
     renderPage(host, SHELL_PAGE);
 
-    const row = await screen.findByTestId("personal-review-row");
-    expect(row.textContent).toContain(
-      "DATABASE_URL is waiting for you: looks like a secret.",
-    );
-    expect(
-      within(row).queryByRole("button", { name: "Review in the dashboard" }),
-    ).toBeNull();
+    const rows = await screen.findAllByTestId("personal-review-row");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining(
+        "SHELL_INIT (variable) changes how programs start and is on hold until you choose",
+      ),
+    ]);
   });
 
   it("shows only the rows of this page's kinds", async () => {
@@ -668,13 +789,11 @@ describe("a team's host on a Personal page", () => {
         review: [reviewEntryFixture({})],
       },
     );
-    renderPage(host, { ...SHELL_PAGE, runnerHost: dashboardRunnerHost() });
+    renderPage(host, SHELL_PAGE);
 
     const line = await screen.findByTestId("team-owned-line");
     expect(
-      within(line).getByText(
-        "These settings belong to Acme. Change them in the dashboard.",
-      ),
+      within(line).getByText("These settings belong to Acme."),
     ).toBeTruthy();
     expect(line.closest("[inert]")).toBeNull();
     expect(

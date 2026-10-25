@@ -5,6 +5,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -26,6 +27,8 @@ import {
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 
 const BOT_TITLE_MAX = 500;
+/** `bot.create`'s directive bound (`BOT_DIRECTIVE_MAX_LENGTH`). */
+const BOT_DIRECTIVE_MAX = 8_000;
 
 /**
  * The form's line for a failed create. Every create carries one request key
@@ -99,8 +102,8 @@ function createFailureLine(
 
 /**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
- * card's and is sent explicitly; what the reader chooses here is the title
- * and the model. Never the machine: the app picks the host the bot starts on
+ * card's and is sent explicitly; what the reader chooses here is the title,
+ * the model and, optionally, the bot's directive. Never the machine: the app picks the host the bot starts on
  * (`chooseBotCreateHost`, which documents the order), and the form names no
  * host - when none qualifies it says the bot needs a machine that runs bots,
  * and where to set one up.
@@ -115,16 +118,20 @@ export function CreateBotForm(props: {
   readonly connectableHostIds: ReadonlyArray<string>;
   /** Each connectable host's environment (`useHostEnvironmentBindings`). */
   readonly environmentBindings: HostEnvironmentBindings;
-  readonly onDone: () => void;
+  /** Runs once the bot exists and its tab is open. */
+  readonly onCreated: () => void;
+  readonly onCancel: () => void;
 }): ReactNode {
   const {
     environmentId,
     environmentLabel,
     connectableHostIds,
     environmentBindings,
-    onDone,
+    onCreated,
+    onCancel,
   } = props;
   const [title, setTitle] = useState("");
+  const [directive, setDirective] = useState("");
   const localHostId = useReactiveLocalHostId();
   const effectiveHostId = useEffectiveHostId();
   const creatingHostIds = useHostsAdvertisingMethod(
@@ -177,12 +184,15 @@ export function CreateBotForm(props: {
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
   const titleId = useId();
+  const directiveId = useId();
 
   const trimmedTitle = title.trim();
+  const trimmedDirective = directive.trim();
   const canSubmit =
     hostId !== null &&
     trimmedTitle.length > 0 &&
     trimmedTitle.length <= BOT_TITLE_MAX &&
+    trimmedDirective.length <= BOT_DIRECTIVE_MAX &&
     modelSlug.length > 0 &&
     !create.isPending;
 
@@ -209,6 +219,7 @@ export function CreateBotForm(props: {
         effort: toolbar.reasoning.length === 0 ? null : toolbar.reasoning,
         profile: toolbar.selection.profileId,
         requestKey,
+        directive: trimmedDirective.length === 0 ? null : trimmedDirective,
       })
       .then(
         (response) => {
@@ -220,7 +231,7 @@ export function CreateBotForm(props: {
             hostId,
             title: response.bot.title,
           });
-          onDone();
+          onCreated();
           navigateToTabIntent(
             navigate,
             botTabIntent(response.bot.botId),
@@ -255,6 +266,20 @@ export function CreateBotForm(props: {
           disabled={create.isPending}
           data-testid="create-bot-title"
           onChange={(event) => setTitle(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={directiveId}>Directive</Label>
+        <Textarea
+          id={directiveId}
+          value={directive}
+          size="sm"
+          rows={3}
+          maxLength={BOT_DIRECTIVE_MAX}
+          placeholder="What this bot owns and how it should work (optional)"
+          disabled={create.isPending}
+          data-testid="create-bot-directive"
+          onChange={(event) => setDirective(event.target.value)}
         />
       </div>
       {choice.kind === "chosen" ? null : (
@@ -297,7 +322,7 @@ export function CreateBotForm(props: {
           variant="ghost"
           size="sm"
           disabled={create.isPending}
-          onClick={onDone}
+          onClick={onCancel}
         >
           Cancel
         </Button>
@@ -326,7 +351,7 @@ export function CreateBotForm(props: {
  * what the bot needs and where to set it up, never which machines were
  * looked at.
  */
-function CreateBotNoHost(props: {
+export function CreateBotNoHost(props: {
   readonly checking: boolean;
   readonly environmentLabel: string;
   readonly someUnchecked: boolean;
@@ -337,7 +362,7 @@ function CreateBotNoHost(props: {
   if (checking) {
     return (
       <p className="text-ui-xs text-muted-foreground" aria-busy="true">
-        Finding a machine that runs {environmentLabel}&apos;s bots…
+        Finding a computer that runs {environmentLabel}&apos;s bots…
       </p>
     );
   }
@@ -346,8 +371,8 @@ function CreateBotNoHost(props: {
       className="text-ui-xs text-muted-foreground"
       data-testid="create-bot-no-host"
     >
-      This bot needs a machine that runs bots for {environmentLabel}. Set one up
-      in{" "}
+      This bot needs a computer that runs bots for {environmentLabel}. Set one
+      up in{" "}
       <Button
         type="button"
         variant="link"
@@ -362,7 +387,7 @@ function CreateBotNoHost(props: {
       {someUnchecked ? (
         <span data-testid="create-bot-unchecked">
           {" "}
-          Some of your machines couldn&apos;t be checked.{" "}
+          Some of your computers couldn&apos;t be checked.{" "}
           <Button type="button" variant="link" size="xs" onClick={onRetry}>
             Retry
           </Button>

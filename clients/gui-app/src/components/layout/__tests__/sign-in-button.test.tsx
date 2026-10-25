@@ -965,8 +965,16 @@ describe("<SignInButton />", () => {
     restoreFetch();
     // 404 on BOTH `/user` and the refresh spend: the validate stops retrying,
     // the rotate classifies it `refresh-rejected-account`, and that arm holds.
+    // The body is authn's own error envelope for a missing user row: the
+    // account verdict needs it, because a bare 404 is also what answers when
+    // nothing at the URL is authn, and that reads as an outage instead.
     restoreFetch = installFetch(() =>
-      Promise.resolve(new Response(null, { status: 404 })),
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ statusCode: 404, error: "User not found" }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+      ),
     );
 
     const result = mountSignInButton(host, "compact");

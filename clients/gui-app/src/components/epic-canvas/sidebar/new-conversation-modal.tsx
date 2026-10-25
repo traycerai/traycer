@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -8,7 +9,13 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  mintNewEpicTerminalTile,
+  type TerminalLaunchTarget,
+} from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
@@ -54,12 +61,19 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  PortalConcealmentProvider,
+  usePortalConcealed,
+} from "@/components/ui/portal-concealment-context";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
-import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import {
+  KeyboardOwnerContext,
+  usePrimaryActionShortcut,
+} from "@/hooks/use-primary-action-shortcut";
 import {
   isAttachmentIngestPending,
   useComposerHashPaste,
@@ -89,7 +103,10 @@ import {
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
 import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
-import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
+import {
+  newConversationSurfaceKey,
+  subscribeFollowingSurfaceReset,
+} from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { composerTopNotice } from "@/components/home/composer/composer-mirror-line-model";
@@ -122,10 +139,7 @@ import {
   type AttachmentsByHashPlan,
 } from "@/lib/composer/attachments-by-hash";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
-import {
-  deriveFolderlessAllowedWorkspaceAvailability,
-  workspaceComposerCanStart,
-} from "@/lib/composer/workspace-composer-availability";
+import { deriveFolderlessAllowedWorkspaceAvailability } from "@/lib/composer/workspace-composer-availability";
 import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { shouldDeferWorktreeProvisioning } from "@/lib/worktree/defer-worktree-provisioning";
 import { markEpicCreateSeedPending } from "@/lib/worktree/pending-epic-create-seeds";
@@ -133,6 +147,28 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import {
+  stagingSurfaceKey,
+  useInTaskSandboxStagingSurface,
+} from "@/components/composer/use-sandbox-staging";
+import {
+  useStagedSandboxHandoff,
+  useStagedSandboxSend,
+  type StagedResubmit,
+} from "@/components/composer/use-staged-sandbox-send";
+import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
+import {
+  ownerGoneOnUnmount,
+  useStagedSandboxStore,
+  useStagedTerminalLaunch,
+  type StagedSandbox,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  stagedResubmitReady,
+  stagedTerminalLaunchOnHost,
+} from "@/components/composer/staged-terminal-launch";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
@@ -146,6 +182,7 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -158,7 +195,10 @@ import {
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import {
+  tileIntent,
+  type ExplicitTilePlacement,
+} from "@/lib/canvas/tile-open/intent";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -360,70 +400,230 @@ export function NewConversationModalAction(
   return trigger;
 }
 
+function closeRequestOwnedBy(epicId: string, tabId: string): void {
+  const current = useNewConversationModalOpenStore.getState().request;
+  if (
+    current !== null &&
+    current.epicId === epicId &&
+    current.tabId === tabId
+  ) {
+    useNewConversationModalOpenStore.getState().close();
+  }
+}
+
+/**
+ * Whether this tab's modal handed its send (or Start) to a staged sandbox that
+ * has not settled yet. Phase 2 resubmits from the body, so the body is kept
+ * while this holds; a failure, a cancel or a clear ends it.
+ */
+type StagedAcceptance = (accepted: boolean) => void;
+
+/** Tells the waiting staged resubmit, once, whether its create went out. */
+function settleStagedAcceptance(
+  ref: { current: StagedAcceptance | null },
+  accepted: boolean,
+): void {
+  const settle = ref.current;
+  ref.current = null;
+  settle?.(accepted);
+}
+
+function modalHandoffPending(
+  stage: StagedSandbox | undefined,
+  tabId: string,
+): boolean {
+  return (
+    stage !== undefined &&
+    stage.sendTaken &&
+    stage.ownerId === tabId &&
+    stage.phase !== "staged" &&
+    stage.failure === null
+  );
+}
+
 /**
  * Per-tab host for the shared New Conversation modal. Mounted inside the epic
- * route (so the modal's permission/connection gating and per-epic draft store
- * resolve to this epic). Renders the modal whenever the open-request store
- * targets this epic + tab; every creation trigger - sidebar `+`, in-pane
+ * surface (so the modal's permission/connection gating and per-epic draft
+ * store resolve to this epic) for as long as the tab is retained, and shows
+ * the modal whenever the open-request store targets this epic + tab while
+ * the tab is in front; every creation trigger - sidebar `+`, in-pane
  * PaneOpener, ⌘K palette - funnels through that one request.
+ *
+ * The body is one instance for its whole life: rendered here, through a
+ * portal into a container this host owns, which the dialog attaches while it
+ * is open and detaches when it closes. A send handed to a staged sandbox keeps
+ * that instance mounted, detached and owning no keyboard, until the stage
+ * settles, so the send happens though the modal closed or the tab went to
+ * the background; reopening attaches the same instance again.
  */
 export function NewConversationModalHost(props: {
   readonly epicId: string;
   readonly tabId: string;
+  readonly active: boolean;
 }) {
+  const { epicId, tabId, active } = props;
   const request = useNewConversationModalOpenStore((state) => state.request);
-  const closeModal = useNewConversationModalOpenStore((state) => state.close);
-  const isOpen =
-    request !== null &&
-    request.epicId === props.epicId &&
-    request.tabId === props.tabId;
-  // This host only mounts for the active tab. If it unmounts (the user switches
-  // to another epic tab) while it still owns the open request, clear it -
-  // otherwise the global request lingers with no live host to dismiss it and
-  // the modal re-pops when the user returns to this tab.
+  const ownedRequest =
+    request !== null && request.epicId === epicId && request.tabId === tabId
+      ? request
+      : null;
+  const isOpen = active && ownedRequest !== null;
+  // The modal belongs to the tab in front. A tab that goes to the background,
+  // or unmounts, while it owns the open request clears it - otherwise the
+  // global request lingers with no live dialog to dismiss it and the modal
+  // re-pops when the user returns to this tab. Only on leaving the front: a
+  // request filed for a tab before it comes to the front is shown once it does.
+  const wasActiveRef = useRef(active);
   useEffect(() => {
-    return () => {
-      const current = useNewConversationModalOpenStore.getState().request;
-      if (
-        current !== null &&
-        current.epicId === props.epicId &&
-        current.tabId === props.tabId
-      ) {
-        useNewConversationModalOpenStore.getState().close();
-      }
-    };
-  }, [props.epicId, props.tabId]);
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (wasActive && !active) closeRequestOwnedBy(epicId, tabId);
+  }, [active, epicId, tabId]);
+  useEffect(() => () => closeRequestOwnedBy(epicId, tabId), [epicId, tabId]);
+  const handingOff = useStagedSandboxStore((state) =>
+    modalHandoffPending(
+      state.bySurface[newConversationSurfaceKey(epicId)],
+      tabId,
+    ),
+  );
+  // The request the body was opened with, kept while its send is handed off,
+  // hidden or reopened from another trigger: the send still lands where it
+  // was asked to. A request filed meanwhile is held, and becomes the body's
+  // once the handoff settles.
+  const [bodyRequest, setBodyRequest] = useState(isOpen ? ownedRequest : null);
+  if (isOpen && !handingOff && ownedRequest !== bodyRequest) {
+    setBodyRequest(ownedRequest);
+  }
+  const mountBody = (isOpen || handingOff) && bodyRequest !== null;
+  const [bodyContainer] = useState(() => {
+    const element = document.createElement("div");
+    element.style.display = "contents";
+    return element;
+  });
+  const attachBody = useCallback(
+    (slot: HTMLDivElement | null) => {
+      if (slot === null) bodyContainer.remove();
+      else slot.appendChild(bodyContainer);
+    },
+    [bodyContainer],
+  );
+  // See `NewConversationModalDialog`: published by the open dialog's content.
+  const dismissPickerRef = useRef<(() => boolean) | null>(null);
+  // The body is a React SIBLING of the dialog (the portal below), so Radix's
+  // own "was this pointer-down inside my React tree" check on the dialog never
+  // sees the body's events. React still routes events from the body's DOM
+  // (nested inside the dialog's node) through the dialog's React capture, so
+  // plain clicks in the body are fine - but an overlay the body opens that
+  // portals to `document.body`, such as the model picker, is neither in the
+  // dialog's DOM nor in its React tree, and the dialog dismissed itself on
+  // every click in it. The body's React capture sees those (React capture
+  // follows portals), so it records the pointer-down here and the dialog
+  // declines to treat that same event as an outside interaction.
+  const bodyPointerDownRef = useRef<Event | null>(null);
+  const [overlayBoundaryEl, setOverlayBoundaryEl] =
+    useState<HTMLElement | null>(null);
+  // The composer picker store outlives the body's focus-driven unmount. A fresh
+  // store is minted each time the modal opens, so a reopened modal starts
+  // clean, while it survives focus toggles within one open session.
+  const [transientSession, setTransientSession] = useState<
+    NewConversationTransientState & { readonly open: boolean }
+  >(() => ({ open: isOpen, pickerStore: createComposerPickerStore() }));
+  if (isOpen !== transientSession.open) {
+    setTransientSession((prev) =>
+      isOpen
+        ? { open: true, pickerStore: createComposerPickerStore() }
+        : { ...prev, open: false },
+    );
+  }
+  const transient = useMemo<NewConversationTransientState>(
+    () => ({ pickerStore: transientSession.pickerStore }),
+    [transientSession.pickerStore],
+  );
+  // Hidden, the body's own overlays (a toolbar popover left open, a menu)
+  // un-present with it, and re-present intact when it is shown again: a tab
+  // can be activated from outside the page, with no input that would have
+  // dismissed them.
+  const concealed = usePortalConcealed() || !isOpen;
+  // Closes the request the send was made from, never one filed after it was
+  // handed off.
+  const onSubmitted = useCallback(() => {
+    const store = useNewConversationModalOpenStore.getState();
+    if (bodyRequest !== null && store.request === bodyRequest) store.close();
+  }, [bodyRequest]);
   return (
-    <NewConversationModalDialog
-      epicId={props.epicId}
-      tabId={props.tabId}
-      placement={isOpen ? request.placement : null}
-      parentId={isOpen ? request.parentId : null}
-      hostId={isOpen ? request.hostId : null}
-      open={isOpen}
-      onOpenChange={(next) => {
-        if (!next) closeModal();
-      }}
-    />
+    <>
+      <NewConversationModalDialog
+        open={isOpen}
+        onOpenChange={(next) => {
+          if (!next) closeRequestOwnedBy(epicId, tabId);
+        }}
+        dismissPickerRef={dismissPickerRef}
+        bodyPointerDownRef={bodyPointerDownRef}
+        onOverlayBoundary={setOverlayBoundaryEl}
+        attachBody={attachBody}
+      />
+      {mountBody
+        ? createPortal(
+            <div
+              className="contents"
+              onPointerDownCapture={(event) => {
+                bodyPointerDownRef.current = event.nativeEvent;
+              }}
+            >
+              <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
+                <PortalConcealmentProvider value={concealed}>
+                  <SurfaceActivityProvider active>
+                    <KeyboardOwnerContext value={isOpen}>
+                      <NewConversationTransientContext.Provider
+                        value={transient}
+                      >
+                        <NewConversationModalBody
+                          epicId={epicId}
+                          tabId={tabId}
+                          placement={bodyRequest.placement}
+                          parentId={bodyRequest.parentId}
+                          hostId={bodyRequest.hostId}
+                          dismissPickerRef={dismissPickerRef}
+                          onSubmitted={onSubmitted}
+                        />
+                      </NewConversationTransientContext.Provider>
+                    </KeyboardOwnerContext>
+                  </SurfaceActivityProvider>
+                </PortalConcealmentProvider>
+              </DialogOverlayBoundaryContext.Provider>
+            </div>,
+            bodyContainer,
+          )
+        : null}
+    </>
   );
 }
 
 function NewConversationModalDialog(props: {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly placement: ExplicitTilePlacement | null;
-  readonly parentId: string | null;
-  readonly hostId: string | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  readonly dismissPickerRef: RefObject<(() => boolean) | null>;
+  /** The last pointer-down inside the body's React tree; see the host. */
+  readonly bodyPointerDownRef: RefObject<Event | null>;
+  readonly onOverlayBoundary: (element: HTMLElement | null) => void;
+  /** Attaches the host's body container to the open dialog's body slot. */
+  readonly attachBody: (slot: HTMLDivElement | null) => void;
 }) {
+  const {
+    open,
+    onOpenChange,
+    dismissPickerRef,
+    bodyPointerDownRef,
+    onOverlayBoundary,
+    attachBody,
+  } = props;
   // Opt this modal out of the keybinding provider's dialog block so the nested
   // model picker's ⌘/⌥ leader-digit shortcuts and hints fire while it's open
   // (see `isAnyDialogOpen` in keybinding-provider.tsx). The modal owns no leader
   // shortcuts itself, so an absorber scope claims both leaders while open -
   // closed-picker leader digits are swallowed here instead of switching the
   // tabs behind the modal, and the picker's own scope layers on top when open.
-  useLeaderScopeAbsorber(props.open, LEADER_SCOPE_NEW_CONVERSATION_MODAL);
+  useLeaderScopeAbsorber(open, LEADER_SCOPE_NEW_CONVERSATION_MODAL);
   // The composer's @/slash picker (see `ComposerMenu`) is a plain portalled
   // floating menu, not a Radix dismissable layer, so Radix can't coordinate
   // Escape with it. Radix's escape listener runs first (document, capture) and
@@ -433,7 +633,7 @@ function NewConversationModalDialog(props: {
   // dismiss here: while a picker is open we close it ourselves and preventDefault
   // (first Escape closes only the picker); once it's closed the call returns
   // false and Escape falls through to dismiss the dialog (second Escape).
-  const dismissPickerRef = useRef<(() => boolean) | null>(null);
+  //
   // The workspace controls' nested Branch/Location popovers portal to
   // `document.body` by default, landing as a DOM sibling of this dialog - the
   // dialog's scroll-lock then swallows wheel input over their scrollable
@@ -441,33 +641,10 @@ function NewConversationModalDialog(props: {
   // `DialogOverlayBoundaryContext`). Publishing this dialog's own content node
   // lets those nested overlays portal inside it instead, so the lock
   // recognizes their content as its own.
-  const [overlayBoundaryEl, setOverlayBoundaryEl] =
-    useState<HTMLElement | null>(null);
-  // The composer picker store outlives the body's focus-driven unmount. A fresh
-  // store is minted each time the modal opens, so a reopened modal starts clean,
-  // while it survives focus toggles within one open session (this dialog stays
-  // mounted throughout).
-  const [transientSession, setTransientSession] = useState<
-    NewConversationTransientState & { readonly open: boolean }
-  >(() => ({
-    open: props.open,
-    pickerStore: createComposerPickerStore(),
-  }));
-  if (props.open !== transientSession.open) {
-    setTransientSession((prev) =>
-      props.open
-        ? { open: true, pickerStore: createComposerPickerStore() }
-        : { ...prev, open: false },
-    );
-  }
-  const transient = useMemo<NewConversationTransientState>(
-    () => ({ pickerStore: transientSession.pickerStore }),
-    [transientSession.pickerStore],
-  );
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        ref={setOverlayBoundaryEl}
+        ref={onOverlayBoundary}
         // Capped to the band `top-safe-center-y` centres it in - that token and
         // `--spacing-safe-dvh` measure the same region, so the two agree by
         // construction - less a 1rem gutter at each end. Without a cap the card
@@ -481,12 +658,18 @@ function NewConversationModalDialog(props: {
         className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
-        // Same portal rule as the worktree pickers: the host switcher's list
-        // mounts outside this dialog, so a click in it reads as an interaction
-        // from outside. Dismissing on that would throw away the form someone is
-        // in the middle of filling, for the crime of choosing a host in it.
+        // A pointer-down the body's React tree already saw is the body's own
+        // (the model picker's rows and effort slider portal to `document.body`
+        // and would otherwise read as outside; see `bodyPointerDownRef`). The
+        // host switcher's list mounts outside the body's tree as well as this
+        // dialog, so it keeps its own check. Dismissing on either would throw
+        // away the form someone is in the middle of filling, for the crime of
+        // choosing a model or a host in it.
         onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
+          if (
+            event.detail.originalEvent === bodyPointerDownRef.current ||
+            isHostSwitcherListInteraction(event.target)
+          ) {
             event.preventDefault();
           }
         }}
@@ -509,27 +692,12 @@ function NewConversationModalDialog(props: {
           </Button>
         </DialogClose>
         <DialogTitle className="sr-only">New agent</DialogTitle>
-        {props.open ? (
+        {open ? (
           <div
+            ref={attachBody}
             className="min-h-0 flex-1 overflow-y-auto"
             data-testid="epic-sidebar-new-conversation-modal-body"
-          >
-            <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
-              <SurfaceActivityProvider active>
-                <NewConversationTransientContext.Provider value={transient}>
-                  <NewConversationModalBody
-                    epicId={props.epicId}
-                    tabId={props.tabId}
-                    placement={props.placement}
-                    parentId={props.parentId}
-                    hostId={props.hostId}
-                    dismissPickerRef={dismissPickerRef}
-                    onSubmitted={() => props.onOpenChange(false)}
-                  />
-                </NewConversationTransientContext.Provider>
-              </SurfaceActivityProvider>
-            </DialogOverlayBoundaryContext.Provider>
-          </div>
+          />
         ) : null}
       </DialogContent>
     </Dialog>
@@ -574,6 +742,18 @@ export function NewConversationModalBody(props: {
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  // Shown again after finishing a staged send hidden (`NewConversationModalHost`):
+  // the editor took focus once, when it mounted, so it takes it back here.
+  // Hidden, it closes its @/slash menu, which portals to the page and holds a
+  // scroll lock rather than leaving with the dialog.
+  const ownsKeyboard = use(KeyboardOwnerContext);
+  const ownedKeyboardRef = useRef(ownsKeyboard);
+  useEffect(() => {
+    const owned = ownedKeyboardRef.current;
+    ownedKeyboardRef.current = ownsKeyboard;
+    if (ownsKeyboard && !owned) editorRef.current?.focusAtEnd();
+    if (!ownsKeyboard && owned) editorRef.current?.dismissActiveSuggestion();
+  }, [ownsKeyboard]);
   // A ref, not state: a re-render would change the send button's disabled look
   // for a wait that no document produces today, and the guard only has to stop
   // a second Enter from starting a second create for the same draft.
@@ -628,6 +808,18 @@ export function NewConversationModalBody(props: {
    * re-entry takes no argument, so the marker is the whole of it.
    */
   const submitReentryQueued = useRef(false);
+  /**
+   * The staged resubmit waiting to hear whether its create went out: told
+   * `true` where the create is dispatched and `false` wherever the send stops
+   * short. A preparation outlives this body, so its exit tells it either way.
+   */
+  const stagedAcceptanceRef = useRef<StagedAcceptance | null>(null);
+  // Stopped short unless a preparation is still running or queued to run
+  // again: that one settles it.
+  const settleStagedUnlessPreparing = useCallback((): void => {
+    if (draftImagePrepFlight.current || submitReentryQueued.current) return;
+    settleStagedAcceptance(stagedAcceptanceRef, false);
+  }, []);
   // The picker store is lifted onto the always-mounted dialog so it survives
   // this body's focus-driven unmount (see the transient context); the hook falls
   // back to a local store when rendered outside the dialog.
@@ -890,7 +1082,19 @@ export function NewConversationModalBody(props: {
       resolvedWorkspace.isError,
     ],
   );
-  const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
+  // A request that names its host stages nothing: naming the machine IS the
+  // request. Otherwise the picker offers New sandbox rows keyed by this Epic's
+  // placement pin.
+  const sandboxStaging = useInTaskSandboxStagingSurface(
+    epicId,
+    newConversationSurfaceKey(epicId),
+    hostId,
+  );
+  const workspaceGate = useStagedWorkspaceGate(
+    stagingSurfaceKey(sandboxStaging),
+    workspaceAvailability,
+  );
+  const workspaceCanStart = workspaceGate.canStart;
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
   const paste = useComposerHashPaste(
@@ -914,9 +1118,87 @@ export function NewConversationModalBody(props: {
     !attachmentPending &&
     workspaceCanStart &&
     hasSubmittableContent;
+  // The staged sandbox's send (sandboxes plan D1). Its phase 2 resubmits from
+  // this body, which `NewConversationModalHost` keeps mounted until the stage
+  // settles, though the modal closes. `handleSubmit` is declared below and
+  // reads this hook, hence the ref.
+  const { openTile } = useEpicTileNavigation();
+  const stagedTerminal = useMemo(
+    () => ({
+      epicId,
+      open: (target: TerminalLaunchTarget) => {
+        openTile(
+          tileIntent(
+            mintNewEpicTerminalTile({ ...target, epicId }),
+            { tabId },
+            "explicit",
+            "direct_ui",
+          ),
+        );
+      },
+    }),
+    [epicId, openTile, tabId],
+  );
+  // The latest resubmit, set below once `handleSubmit` and the terminal
+  // dispatch are declared.
+  const stagedSubmitRef = useRef<() => StagedResubmit>(() => false);
+  // A terminal agent's Start that a staged sandbox took: launched on the new
+  // host in phase 2, as the chat send resubmits there. The stage keeps it, and
+  // the host keeps this body, so closing the modal while the sandbox boots
+  // does not drop it.
+  const stagedTerminalLaunch = useStagedTerminalLaunch(
+    stagingSurfaceKey(sandboxStaging),
+  );
+  const stagedProviders = useProvidersListForClient(hostClient, {
+    enabled: stagedTerminalLaunch !== null,
+    subscribed: stagedTerminalLaunch !== null,
+  });
+  // Phase 2 resubmits once the new host's catalog has answered, so the
+  // selection holds its default model, or none when it offers no agent: that
+  // resubmit is refused, and the line says the sandbox is awake but cannot
+  // run one. A Start also waits for its providers, which say whether the
+  // profile is offered there.
+  const catalogSettled = useStore(toolbarStore, (s) =>
+    catalogSettledFor(s, resolvedHostId),
+  );
+  const submitOnSandbox = useCallback(
+    (): StagedResubmit => stagedSubmitRef.current(),
+    [],
+  );
+  // Folders picked on the old host are not the new one's: the draft takes the
+  // new host's workspace, which starts empty, before the resubmit.
+  const prepareSandboxHandoff = useCallback((): void => {
+    useNewConversationModalStore.getState().clearWorkspace(epicId);
+  }, [epicId]);
+  useStagedSandboxHandoff({
+    surfaceKey: stagingSurfaceKey(sandboxStaging),
+    resolvedHostId,
+    canSubmit: stagedResubmitReady({
+      catalogSettled,
+      launch: stagedTerminalLaunch,
+      harnessId,
+      canSubmit,
+      canStart: [canMutate, workspaceCanStart, !isSubmitting],
+      providers: stagedProviders,
+    }),
+    submit: submitOnSandbox,
+    prepareHandoff: prepareSandboxHandoff,
+    // The epic's tabs share its stage; the handoff is the sending tab's,
+    // gone with its host (the tab closed).
+    ownerId: tabId,
+    watchOwner: ownerGoneOnUnmount,
+  });
+  const stagedSend = useStagedSandboxSend({
+    surfaceKey: stagingSurfaceKey(sandboxStaging),
+    terminal: stagedTerminal,
+    taskId: epicId,
+    ownerId: tabId,
+    // The draft is the epic's, so any tab's body holds the one that sent.
+    claimsSend: true,
+  });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
-    workspaceAvailability.disabledHint;
+    workspaceGate.disabledHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();
   // Local partition OR epic replica, for the PASTE filter. On its own the epic
   // map strips a pasted hash-only node whose bytes are in this window's image
@@ -961,6 +1243,7 @@ export function NewConversationModalBody(props: {
     });
   const workspaceControls = (
     <ActiveHostWorkspaceControls
+      sandboxStaging={sandboxStaging}
       disabled={false}
       stagingKey={stagingKey}
       layout="inline"
@@ -1309,6 +1592,7 @@ export function NewConversationModalBody(props: {
       // The toast (with the host's reason) is the shared create hook's, which
       // is mutation-level and so survives this close.
       cleanupAfterSubmit();
+      settleStagedAcceptance(stagedAcceptanceRef, true);
     },
     [
       canSubmit,
@@ -1426,6 +1710,9 @@ export function NewConversationModalBody(props: {
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
+    // A staged sandbox takes the first send: it is created or woken, and
+    // this submit runs again on it once it is ready. The draft stays.
+    if (stagedSend.intercept(composerDisplayPlainText(captured), null)) return;
     // The draft this submit is FOR. The editor stays editable across the reads
     // below and the create ends in `cleanupAfterSubmit`, which clears the draft
     // store and the editor - so without this, a sentence typed during the read
@@ -1667,6 +1954,7 @@ export function NewConversationModalBody(props: {
           // and the argument dies the day someone adds an await to the fast
           // path.
           if (!submitReentryQueued.current) submitReentryAttempt.current = 0;
+          settleStagedUnlessPreparing();
           return;
         }
         submitReentryRequested.current = false;
@@ -1707,17 +1995,21 @@ export function NewConversationModalBody(props: {
         message:
           "The images in this prompt could not be prepared. The draft has been kept - try again.",
       });
+      settleStagedUnlessPreparing();
     });
   }, [
     canSubmit,
     epicId,
     raiseHostNotice,
     resolvedHostId,
+    settleStagedUnlessPreparing,
     // The client the by-hash upload dispatches on, and it must be the CURRENT
     // one: the host picker stays live while the upload runs, and bytes put on
     // the machine the chip stopped showing are bytes the create's host never
     // received.
     submitTarget,
+    setSubmitReentryTick,
+    stagedSend,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
     toolbarStore,
@@ -1743,16 +2035,18 @@ export function NewConversationModalBody(props: {
     handledSubmitReentryTick.current = submitReentryTick;
     submitReentryQueued.current = false;
     handleSubmit();
-  }, [submitReentryTick, handleSubmit]);
-  const handleStartTerminal = useCallback(
-    (launch: TerminalAgentLaunch) => {
-      if (!canMutate || !workspaceCanStart) return;
+    settleStagedUnlessPreparing();
+  }, [submitReentryTick, handleSubmit, settleStagedUnlessPreparing]);
+  // Whether the create was sent: false on a refusal, which says why inline.
+  const dispatchStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch): boolean => {
+      if (!canMutate || !workspaceCanStart) return false;
       if (teamSandboxHarnessBlocked(launch.harnessId)) {
         raiseHostNotice({
           kind: "refused",
           message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
         });
-        return;
+        return false;
       }
       // Same §54 gate as `handleSubmit`, and for the same ordering reason:
       // `cleanupAfterSubmit` runs before the async create, so a placement that
@@ -1761,7 +2055,7 @@ export function NewConversationModalBody(props: {
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
         raiseHostNotice({ kind: "refused", message: placementVerdict.message });
-        return;
+        return false;
       }
       // The staged key and this create both derive from the same captured
       // submitTarget (see `handleSubmit`), so no render-vs-live drift check.
@@ -1796,6 +2090,7 @@ export function NewConversationModalBody(props: {
           profileId: launch.profileId,
         })
         .catch(() => undefined);
+      return true;
     },
     [
       canMutate,
@@ -1815,6 +2110,64 @@ export function NewConversationModalBody(props: {
       workspaceCanStart,
     ],
   );
+  const handleStartTerminal = useCallback(
+    (launch: TerminalAgentLaunch) => {
+      if (!canMutate || !workspaceCanStart) return;
+      // A staged sandbox takes the Start as it takes a send.
+      if (stagedSend.intercept("terminal", launch)) return;
+      dispatchStartTerminal(launch);
+    },
+    [canMutate, dispatchStartTerminal, stagedSend, workspaceCanStart],
+  );
+  // A layout effect, so the staged handoff's effect (a passive one, declared
+  // earlier) reads this render's resubmit, not the last one's. No model or no
+  // launch on the new host is no agent there; a Start is assembled again for
+  // it. Any other refusal, or a send that stops short while its images are
+  // read, is a send that did not go.
+  useLayoutEffect(() => {
+    const providers = stagedProviders.data?.providers;
+    stagedSubmitRef.current =
+      stagedTerminalLaunch === null
+        ? () => {
+            if (toolbarStore.getState().selection.modelSlug.length === 0) {
+              return false;
+            }
+            // One left waiting from an earlier handoff is over.
+            settleStagedAcceptance(stagedAcceptanceRef, false);
+            // Its images may still be read and inlined: the stage holds the
+            // handoff, and this body, until the create goes out. The executor
+            // runs now, so a create that goes out in this call is sent
+            // already, and one still reading its images settles later.
+            const sent = { value: false };
+            const accepted = new Promise<boolean>((resolve) => {
+              stagedAcceptanceRef.current = (dispatched) => {
+                sent.value = dispatched;
+                resolve(dispatched);
+              };
+              handleSubmit();
+              settleStagedUnlessPreparing();
+            });
+            return sent.value ? true : accepted;
+          }
+        : () => {
+            const launch = stagedTerminalLaunchOnHost(
+              stagedTerminalLaunch,
+              toolbarStore.getState(),
+              providers,
+            );
+            if (launch === null) return false;
+            return dispatchStartTerminal(launch)
+              ? true
+              : Promise.resolve(false);
+          };
+  }, [
+    dispatchStartTerminal,
+    handleSubmit,
+    settleStagedUnlessPreparing,
+    stagedProviders.data,
+    stagedTerminalLaunch,
+    toolbarStore,
+  ]);
   usePrimaryActionShortcut(chatComposerActive, handleSubmit);
   const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
@@ -1853,12 +2206,16 @@ export function NewConversationModalBody(props: {
       editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
+      stagedAhead={workspaceGate.stagedAhead}
       header={header}
       topBanner={
-        <ComposerHostNotice
-          notice={topNotice.notice}
-          onDismiss={topNotice.dismiss}
-        />
+        <>
+          {stagedSend.line}
+          <ComposerHostNotice
+            notice={topNotice.notice}
+            onDismiss={topNotice.dismiss}
+          />
+        </>
       }
       // Same rule as the landing composer's row (`landing-composer.tsx`): six
       // pills do not fit a phone-width row, so below `md` the agent-mode pill

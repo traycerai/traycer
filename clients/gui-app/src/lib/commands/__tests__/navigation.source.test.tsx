@@ -143,32 +143,31 @@ describe("navigationSource", () => {
     expect(account?.statusBadge).toBe("Account");
   });
 
-  it("lists the Browser agent access and Secrets pages in the settings sub-page", () => {
+  it("lists the Secrets page, and none of the retired pages, in the settings sub-page", () => {
     const items = captureSettingsSubpage("/");
     const ids = items.map((i) => i.id);
-    expect(ids).toContain("nav:settings/browser-agent-access");
-    expect(ids).toContain("nav:settings/secrets");
-    const access = items.find(
-      (i) => i.id === "nav:settings/browser-agent-access",
-    );
     const secrets = items.find((i) => i.id === "nav:settings/secrets");
-    expect(access?.label).toBe("Browser agent access");
-    expect(access?.statusBadge).toBe("Personal");
     expect(secrets?.label).toBe("Secrets");
-    expect(secrets?.statusBadge).toBe("Personal");
+    expect(secrets?.statusBadge).toBe("Environment");
+    for (const retired of [
+      "browser-agent-access",
+      "agent-definitions",
+      "machine-setup",
+    ]) {
+      expect(ids, retired).not.toContain(`nav:settings/${retired}`);
+    }
   });
 
-  it("lists the MCP servers, Skills, Agent definitions and Machine setup pages in the settings sub-page", () => {
+  it("lists the MCP servers, Skills and Agents pages in the settings sub-page", () => {
     const items = captureSettingsSubpage("/");
     for (const [id, label] of [
       ["mcp-servers", "MCP servers"],
       ["skills", "Skills"],
-      ["agent-definitions", "Agent definitions"],
-      ["machine-setup", "Machine setup"],
+      ["agents", "Agents"],
     ] as const) {
       const item = items.find((i) => i.id === `nav:settings/${id}`);
       expect(item?.label, id).toBe(label);
-      expect(item?.statusBadge, id).toBe("Personal");
+      expect(item?.statusBadge, id).toBe("Environment");
     }
   });
 
@@ -176,11 +175,11 @@ describe("navigationSource", () => {
     const items = captureSettingsSubpage("/");
     const badgeOf = (id: string): string | undefined =>
       items.find((i) => i.id === `nav:settings/${id}`)?.statusBadge;
-    expect(badgeOf("fallback")).toBe("Personal");
-    expect(badgeOf("permissions")).toBe("Account");
-    expect(badgeOf("providers")).toBe("Personal");
-    expect(badgeOf("shell")).toBe("Personal");
-    expect(badgeOf("agents")).toBe("Personal");
+    expect(badgeOf("fallback")).toBe("Environment");
+    expect(badgeOf("permissions")).toBe("Environment");
+    expect(badgeOf("providers")).toBe("Environment");
+    expect(badgeOf("shell")).toBe("Environment");
+    expect(badgeOf("agents")).toBe("Environment");
     expect(badgeOf("devices")).toBe("Account");
     expect(badgeOf("worktrees")).toBe("Host");
   });

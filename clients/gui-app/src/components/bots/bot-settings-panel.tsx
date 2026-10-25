@@ -1,14 +1,32 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useStore } from "zustand";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import { ChevronRight, X } from "lucide-react";
+import type {
+  BotNotificationLevel,
+  BotRecord,
+  BotReplyMode,
+} from "@traycer/protocol/host/bot/schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -19,36 +37,368 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import {
   useBotDeleteMutation,
+  useBotUpdateReplyModeMutation,
   useBotUpdateRunSettingsMutation,
   useBotUpdateTitleMutation,
 } from "@/hooks/bots/use-bot-mutations";
+import {
+  useBotNotificationLevelSetMutation,
+  useBotNotificationLevelsQuery,
+} from "@/hooks/bots/use-bot-notification-level";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { AvatarStack, BotAvatar } from "@/components/bots/bot-avatars";
+import {
+  BotIdentityContext,
+  botAccessLine,
+  useBotIdentity,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
 
 const BOT_TITLE_MAX = 500;
 
 /**
- * A bot's own settings (Tracy Bots): its name, the model its trunk runs on,
- * whether it is its environment's main bot, and deletion. Every write goes through the tab host's client - the host
- * `bot.open` chose to serve the tab - with nothing gated on which host that
- * is: a host that cannot make the change refuses it, and the refusal is shown
- * in place, under the control. The stream snapshot, not the mutation's
- * answer, is what the header re-renders from.
+ * A bot channel's settings (Tracy Bots, T63), behind the channel header's ⋮,
+ * in a side panel beside the channel (over it on a narrow pane), which Escape
+ * closes. Grouped as Slack's channel details are:
+ * - Details: the bot's name, who manages it and who may message it, how a
+ *   personal bot answers posts (T52), and a team's members;
+ * - Notifications: what the bell raises for this channel;
+ * - Bots in this channel: the team's bots;
+ * - Advanced, collapsed: the model the bot runs on and whether it is its
+ *   environment's main bot;
+ * - deleting the bot, behind a confirmation.
+ *
+ * Every write goes through the tab host's client - the host `bot.open` chose
+ * to serve the tab - with nothing gated on which host that is: a host that
+ * cannot make the change refuses it, and the refusal is shown in place,
+ * under the control. The stream snapshot, not the mutation's answer, is what
+ * the header re-renders from.
  */
-export function BotSettingsPanel(props: {
+export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
   /** Whether the bot is its environment's main bot; `null` when not known. */
+  readonly isMain: boolean | null;
+  /** Whether the bot is a personal environment's; a team's always answers in threads. */
+  readonly personal: boolean;
+  /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
+  readonly channelId: string | null;
+  /** The bots of the bot's environment; `null` until the list answers. */
+  readonly environmentBots: ReadonlyArray<BotRecord> | null;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { bot, isMain, personal, channelId, environmentBots, onClose } = props;
+  const panelRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  // Opening the panel takes focus into it, and Escape inside it closes it.
+  // A dialog the panel opens is portalled out of its DOM, so the dialog's
+  // own Escape closes the dialog, not the panel under it.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return undefined;
+    panel.focus();
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    panel.addEventListener("keydown", onKeyDown);
+    return () => panel.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  return (
+    <aside
+      ref={panelRef}
+      tabIndex={-1}
+      aria-labelledby={titleId}
+      data-testid="bot-channel-settings"
+      className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background outline-none @3xl:static @3xl:z-auto @3xl:w-2/5 @3xl:max-w-xl @3xl:shrink-0 @3xl:border-l @3xl:border-border/60"
+    >
+      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
+        <h2
+          id={titleId}
+          className="min-w-0 flex-1 truncate text-ui-md font-semibold text-foreground"
+        >
+          Channel settings
+        </h2>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close channel settings"
+          data-testid="bot-channel-settings-close"
+          onClick={onClose}
+        >
+          <X aria-hidden="true" />
+        </Button>
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4">
+        <SettingsGroup title="Details" testId="bot-settings-details">
+          {/* Keyed by the stream's title: a rename made elsewhere remounts
+              the form on the new name instead of leaving the field on the
+              old one. */}
+          <BotTitleForm key={bot.title} bot={bot} />
+          <BotOwnerDetails />
+          {personal ? <BotReplyModeSection bot={bot} /> : null}
+          {personal ? null : <BotTeamMembers />}
+        </SettingsGroup>
+        {channelId === null ? null : (
+          <BotNotificationsSection botId={bot.botId} channelId={channelId} />
+        )}
+        {personal || environmentBots === null ? null : (
+          <BotsInChannel bots={environmentBots} />
+        )}
+        <BotAdvancedSettings bot={bot} isMain={isMain} />
+        <BotDeleteSection bot={bot} />
+      </div>
+    </aside>
+  );
+}
+
+/** One of the panel's groups, under its heading. */
+function SettingsGroup(props: {
+  readonly title: string;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <section
+      aria-label={props.title}
+      data-testid={props.testId}
+      className="flex flex-col gap-4"
+    >
+      <h3 className="text-ui-sm font-semibold text-foreground">
+        {props.title}
+      </h3>
+      {props.children}
+    </section>
+  );
+}
+
+/** Who manages the bot and who may message it, in the person's words. */
+function BotOwnerDetails(): ReactNode {
+  const owner = useBotIdentity()?.owner ?? null;
+  if (owner === null) return null;
+  return (
+    <dl
+      className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-ui-sm"
+      data-testid="bot-settings-owner"
+    >
+      <dt className="text-muted-foreground">Managed by</dt>
+      <dd className="min-w-0 truncate text-foreground">{owner.name}</dd>
+      <dt className="text-muted-foreground">Who can message it</dt>
+      <dd className="min-w-0 truncate text-foreground">
+        {botAccessLine(owner)}
+      </dd>
+    </dl>
+  );
+}
+
+const MEMBER_STACK_MAX = 5;
+
+/** A team bot's members: who can see and post in its channel. */
+function BotTeamMembers(): ReactNode {
+  const owner = useBotIdentity()?.owner ?? null;
+  if (owner === null || owner.kind !== "team" || owner.members === null) {
+    return null;
+  }
+  const members = owner.members;
+  return (
+    <section
+      aria-label="Members"
+      data-testid="bot-settings-members"
+      className="flex flex-col gap-2"
+    >
+      <span className="text-ui-sm font-medium text-foreground">Members</span>
+      <div className="flex min-w-0 items-center gap-2">
+        <AvatarStack
+          identities={members.map((member) => ({
+            kind: "person",
+            userId: member.userId,
+            name: member.displayName ?? member.userId,
+            avatarUrl: member.avatarUrl,
+          }))}
+          max={MEMBER_STACK_MAX}
+          size="sm"
+          label={`${String(members.length)} members`}
+          testId="bot-settings-member-stack"
+        />
+        <span className="text-ui-xs text-muted-foreground">
+          {members.length === 1 ? "1 member" : `${members.length} members`}
+        </span>
+      </div>
+      <ul className="flex flex-wrap gap-x-3 gap-y-1 text-ui-xs text-muted-foreground">
+        {members.map((member) => (
+          <li key={member.userId} className="min-w-0 truncate">
+            {member.displayName ?? member.userId}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+const NOTIFICATION_LEVEL_OPTIONS: ReadonlyArray<{
+  readonly level: BotNotificationLevel;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    level: "mentions",
+    label: "Mentions and answers to me",
+    description:
+      "The bell tells you when the bot answers your posts and threads you wrote in.",
+  },
+  {
+    level: "off",
+    label: "Off",
+    description: "Nothing from this channel reaches the bell.",
+  },
+];
+
+/**
+ * What the bell raises for this channel and its threads, the same on every
+ * device the person uses. Drawn where the tab's host can read and write it;
+ * a channel with no level set reads "Mentions and answers to me".
+ */
+function BotNotificationsSection(props: {
+  readonly botId: string;
+  readonly channelId: string;
+}): ReactNode {
+  const { botId, channelId } = props;
+  const client = useTabHostClient();
+  const hostId = useTabHostId();
+  const readSupported =
+    useHostMethodSupport(hostId, "bot.notificationLevel.read") === true;
+  const setSupported =
+    useHostMethodSupport(hostId, "bot.notificationLevel.set") === true;
+  const supported = readSupported && setSupported;
+  const levels = useBotNotificationLevelsQuery(client, botId, supported);
+  const update = useBotNotificationLevelSetMutation(client);
+  const groupId = useId();
+  if (!supported) return null;
+  const level = channelLevel(levels.data?.levels, channelId);
+  return (
+    <SettingsGroup title="Notifications" testId="bot-settings-notifications">
+      <RadioGroup
+        aria-label="Notifications"
+        value={level ?? ""}
+        disabled={level === null || update.isPending}
+        onValueChange={(value) => {
+          const option = NOTIFICATION_LEVEL_OPTIONS.find(
+            (candidate) => candidate.level === value,
+          );
+          if (option === undefined) return;
+          update.mutate({
+            botId,
+            conversationId: channelId,
+            level: option.level,
+          });
+        }}
+      >
+        {NOTIFICATION_LEVEL_OPTIONS.map((option) => (
+          <ChoiceOption
+            key={option.level}
+            groupId={groupId}
+            value={option.level}
+            label={option.label}
+            description={option.description}
+            testId={`bot-settings-notifications-${option.level}`}
+          />
+        ))}
+      </RadioGroup>
+      <BotSettingsRefusal
+        message={notificationsRefusal(levels.error, update.error)}
+      />
+    </SettingsGroup>
+  );
+}
+
+/**
+ * The channel's level as the cloud has it: `mentions` for a channel with
+ * none set, `null` until the levels are read.
+ */
+function channelLevel(
+  levels: Readonly<Record<string, BotNotificationLevel>> | undefined,
+  channelId: string,
+): BotNotificationLevel | null {
+  if (levels === undefined) return null;
+  return Object.hasOwn(levels, channelId) ? levels[channelId] : "mentions";
+}
+
+/** Why the notifications control cannot show or change the level now. */
+function notificationsRefusal(
+  readError: Error | null,
+  writeError: Error | null,
+): string | null {
+  if (readError !== null) return "Couldn't read this channel's notifications.";
+  return writeError === null ? null : writeError.message;
+}
+
+/** The bots of a team's environment, each as its picture and name. */
+function BotsInChannel(props: {
+  readonly bots: ReadonlyArray<BotRecord>;
+}): ReactNode {
+  const live = props.bots.filter((bot) => bot.archivedAt === null);
+  if (live.length === 0) return null;
+  return (
+    <SettingsGroup title="Bots in this channel" testId="bot-settings-bots">
+      <ul className="flex flex-col gap-2">
+        {live.map((bot) => (
+          <BotsInChannelRow key={bot.botId} bot={bot} />
+        ))}
+      </ul>
+    </SettingsGroup>
+  );
+}
+
+function BotsInChannelRow(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
+  const surface = useBotIdentity();
+  const identity = useMemo(
+    (): BotIdentity => ({
+      botId: bot.botId,
+      title: bot.title,
+      owner: surface?.owner ?? null,
+      openActivity: null,
+    }),
+    [bot.botId, bot.title, surface?.owner],
+  );
+  return (
+    <li className="flex min-w-0 items-center gap-2 text-ui-sm text-foreground">
+      <BotIdentityContext value={identity}>
+        <BotAvatar size="sm" />
+      </BotIdentityContext>
+      <span className="truncate">{bot.title}</span>
+    </li>
+  );
+}
+
+/**
+ * What changes how the bot runs rather than how the channel reads: its model
+ * and whether it is its environment's main bot. Collapsed until opened.
+ */
+function BotAdvancedSettings(props: {
+  readonly bot: BotRecord;
   readonly isMain: boolean | null;
 }): ReactNode {
   const { bot, isMain } = props;
   return (
-    <div className="flex flex-col gap-6 overflow-y-auto p-4">
-      {/* Keyed by the stream's title: a rename made elsewhere remounts the
-          form on the new name instead of leaving the field on the old one. */}
-      <BotTitleForm key={bot.title} bot={bot} />
-      <BotRunSettingsForm bot={bot} />
-      {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
-      <BotDeleteSection bot={bot} />
-    </div>
+    <Collapsible data-testid="bot-settings-advanced">
+      <CollapsibleTrigger
+        variant="quiet"
+        className="group flex w-full items-center text-left"
+        data-testid="bot-settings-advanced-toggle"
+      >
+        <ChevronRight
+          className="me-1 size-4 transition-transform group-data-[state=open]:rotate-90"
+          aria-hidden="true"
+        />
+        <span className="text-ui-sm font-semibold">Advanced</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-6 pt-4">
+        <BotRunSettingsForm bot={bot} />
+        {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -233,6 +583,104 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
         message={update.error === null ? null : update.error.message}
       />
     </section>
+  );
+}
+
+const REPLY_MODE_OPTIONS: ReadonlyArray<{
+  readonly mode: BotReplyMode;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    mode: "direct",
+    label: "In the channel",
+    description: "The bot answers each post right under it.",
+  },
+  {
+    mode: "thread",
+    label: "In a thread",
+    description: "Each post gets a thread of its own.",
+  },
+];
+
+/**
+ * How the bot answers a post (T52): drawn for a personal environment's bot
+ * only, where the tab's host can write it. A pick applies to the next post.
+ */
+function BotReplyModeSection(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
+  const client = useTabHostClient();
+  const hostId = useTabHostId();
+  const supported =
+    useHostMethodSupport(hostId, "bot.updateReplyMode") === true;
+  const update = useBotUpdateReplyModeMutation(client);
+  const groupId = useId();
+  if (!supported) return null;
+  return (
+    <section
+      className="flex flex-col gap-2"
+      aria-label="Replies"
+      data-testid="bot-settings-reply-mode"
+    >
+      <span id={groupId} className="text-ui-sm font-medium text-foreground">
+        Replies
+      </span>
+      <RadioGroup
+        aria-labelledby={groupId}
+        value={bot.replyMode}
+        disabled={update.isPending}
+        onValueChange={(value) => {
+          const option = REPLY_MODE_OPTIONS.find(
+            (candidate) => candidate.mode === value,
+          );
+          if (option === undefined || option.mode === bot.replyMode) return;
+          update.mutate({ botId: bot.botId, replyMode: option.mode });
+        }}
+      >
+        {REPLY_MODE_OPTIONS.map((option) => (
+          <ChoiceOption
+            key={option.mode}
+            groupId={groupId}
+            value={option.mode}
+            label={option.label}
+            description={option.description}
+            testId={`bot-settings-reply-mode-${option.mode}`}
+          />
+        ))}
+      </RadioGroup>
+      <BotSettingsRefusal
+        message={update.error === null ? null : update.error.message}
+      />
+    </section>
+  );
+}
+
+/** One choice of a radio group, its label and what picking it does. */
+function ChoiceOption(props: {
+  readonly groupId: string;
+  readonly value: string;
+  readonly label: string;
+  readonly description: string;
+  readonly testId: string;
+}): ReactNode {
+  const { groupId, value, label, description, testId } = props;
+  const id = `${groupId}-${value}`;
+  const descriptionId = `${id}-description`;
+  return (
+    <div className="flex items-start gap-3 py-1" data-testid={testId}>
+      <RadioGroupItem
+        value={value}
+        id={id}
+        aria-describedby={descriptionId}
+        className="mt-0.5"
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <Label htmlFor={id}>{label}</Label>
+        <p id={descriptionId} className="text-ui-xs text-muted-foreground">
+          {description}
+        </p>
+      </div>
+    </div>
   );
 }
 

@@ -1,3 +1,4 @@
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   PersonalEntryMark,
@@ -75,6 +76,12 @@ import {
 import { McpScopePicker } from "./provider-mcp-scope-picker";
 import { useProviderNativeScope } from "./use-provider-native-scope";
 
+import {
+  useConfigurationSource,
+  useCanEditConfiguration,
+} from "@/components/settings/environment/configuration-source";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
+
 const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
 export function ProviderSkillsTab({
@@ -111,7 +118,12 @@ function ProviderSkillsTabBody({
   readonly providerLabel: string;
   readonly caps: ProviderSkillsCapabilities;
 }): ReactNode {
-  const scopeState = useProviderNativeScope(caps.actionScopes.list);
+  const source = useConfigurationSource();
+  const canEdit = useCanEditConfiguration();
+  const team = source.kind === "pool";
+  const scopeState = useProviderNativeScope(
+    team ? ["global"] : caps.actionScopes.list,
+  );
   const {
     targets,
     workspaceRoot,
@@ -201,14 +213,15 @@ function ProviderSkillsTabBody({
   const composerPending = isComposerPending(isMutating, pendingKey);
   const updatePending = isUpdatePending(isMutating, pendingKey);
   const editPending = isEditPending(isMutating, pendingKey);
-  const canEditHere = skillActionAdvertised(
-    caps.actionScopes.edit,
-    effectiveScope,
-  );
-  const canUpdateHere = skillActionAdvertised(
-    caps.actionScopes.update,
-    effectiveScope,
-  );
+  const allowed = skillWrites({
+    caps,
+    scope: effectiveScope,
+    canEdit,
+    team,
+    needsWorkspace: projectNeedsWorkspace,
+  });
+  const canEditHere = allowed.edit;
+  const canUpdateHere = allowed.update;
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`.
   const {
     personal: openSkillPersonal,
@@ -223,7 +236,7 @@ function ProviderSkillsTabBody({
   const globalOnly = !multiScope && effectiveScope === "global";
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
   // boolean props to `boolean | null`.
-  const canAuthorHere = authoring.canAuthor && !projectNeedsWorkspace;
+  const canAuthorHere = allowed.author;
 
   // Read off the listing rather than mirrored from host code, so the composer
   // can name the provider's own skills folder without a second copy of that
@@ -268,6 +281,7 @@ function ProviderSkillsTabBody({
       .then((expectedHash) =>
         mutate.mutateAsync({
           providerId,
+          environmentId: source.kind === "pool" ? source.environmentId : null,
           scope: effectiveScope,
           workspaceRoot: listWorkspaceRoot,
           mutation: {
@@ -287,9 +301,7 @@ function ProviderSkillsTabBody({
         return true;
       })
       .catch((err: unknown) => {
-        setDetailError(
-          err instanceof Error ? err.message : "Couldn't edit this skill.",
-        );
+        setDetailError(skillMutationMessage(err, "Couldn't edit this skill."));
         return false;
       })
       .finally(() => {
@@ -313,6 +325,7 @@ function ProviderSkillsTabBody({
     try {
       return await mutate.mutateAsync({
         providerId,
+        environmentId: source.kind === "pool" ? source.environmentId : null,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         mutation,
@@ -340,6 +353,7 @@ function ProviderSkillsTabBody({
     try {
       const data = await mutate.mutateAsync({
         providerId,
+        environmentId: source.kind === "pool" ? source.environmentId : null,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         mutation: confirm
@@ -372,9 +386,7 @@ function ProviderSkillsTabBody({
         return;
       }
       setUpdateConfirm(null);
-      setDetailError(
-        err instanceof Error ? err.message : "Couldn't update this skill.",
-      );
+      setDetailError(skillMutationMessage(err, "Couldn't update this skill."));
     } finally {
       setPendingKey(null);
     }
@@ -386,6 +398,7 @@ function ProviderSkillsTabBody({
     mutate.mutate(
       {
         providerId,
+        environmentId: source.kind === "pool" ? source.environmentId : null,
         scope: effectiveScope,
         workspaceRoot: listWorkspaceRoot,
         // `name` AND `path`: the host re-lists and matches on both (plus a
@@ -406,7 +419,9 @@ function ProviderSkillsTabBody({
           // where the error renders, and re-confirming an operation that just
           // failed is not the next step.
           setRemoveTarget(null);
-          setDetailError(err.message);
+          setDetailError(
+            skillMutationMessage(err, "Couldn't remove this skill."),
+          );
         },
       },
     );
@@ -434,7 +449,7 @@ function ProviderSkillsTabBody({
           <ProviderSkillDetailDialog
             skill={openSkill}
             removal={skillRemovability({
-              removeScopes: caps.actionScopes.remove,
+              removeScopes: allowed.removeScopes,
               source: openSkill.source,
               effectiveScope,
               conflict: openSkill.conflict === true,
@@ -506,7 +521,14 @@ function ProviderSkillsTabBody({
       >
         {globalOnly ? (
           <p className="text-ui-xs text-muted-foreground">
-            Applies to every workspace on this host.
+            {source.kind === "pool" ? (
+              <CloudSkillsScopeCaption
+                configuration={source.configuration}
+                providerLabel={providerLabel}
+              />
+            ) : (
+              "Applies to every workspace on this host."
+            )}
           </p>
         ) : (
           <McpScopePicker
@@ -571,6 +593,17 @@ function ProviderSkillsTabBody({
       {renderDialogs()}
     </div>
   );
+}
+
+/** Where a cloud configuration's global skill applies. */
+function CloudSkillsScopeCaption(props: {
+  readonly configuration: "personal" | "team";
+  readonly providerLabel: string;
+}): ReactNode {
+  const name = useConfigurationName();
+  return props.configuration === "personal"
+    ? `Which of Personal's skills ${props.providerLabel} uses, on every computer and sandbox running Personal.`
+    : `Which of ${name}'s skills ${props.providerLabel} uses, on every host running ${name}.`;
 }
 
 function skillAfterUpdate(
@@ -1099,8 +1132,44 @@ function SkillRow({
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
-      {/* Beside the row, not inside it: the mark can hold its own button. */}
-      <PersonalEntryMark target={markTarget} name={skill.name} />
+      {/* Beside the row, not inside it: the mark can hold its own button. A
+          built-in reads "Built-in" alone: it is the environment's or the
+          tool's, never one computer's. */}
+      {skill.source === "managed" ? null : (
+        <PersonalEntryMark target={markTarget} name={skill.name} />
+      )}
     </li>
   );
+}
+
+/** Native authoring stays host-local; a team adds room skills by upload. */
+function skillWrites(args: {
+  readonly caps: ProviderSkillsCapabilities;
+  readonly scope: ProviderNativeScope;
+  readonly canEdit: boolean;
+  readonly team: boolean;
+  readonly needsWorkspace: boolean;
+}): {
+  readonly edit: boolean;
+  readonly update: boolean;
+  readonly author: boolean;
+  readonly removeScopes: readonly ProviderNativeScope[];
+} {
+  const { caps, scope, canEdit, team, needsWorkspace } = args;
+  return {
+    edit: canEdit && skillActionAdvertised(caps.actionScopes.edit, scope),
+    update: canEdit && skillActionAdvertised(caps.actionScopes.update, scope),
+    author:
+      canEdit &&
+      !team &&
+      skillAuthoring(caps, scope).canAuthor &&
+      !needsWorkspace,
+    removeScopes: canEdit ? caps.actionScopes.remove : [],
+  };
+}
+
+function skillMutationMessage(error: unknown, fallback: string): string {
+  if (error instanceof HostMethodVersionUnsatisfiedError)
+    return "Changing skills needs an updated host.";
+  return error instanceof Error ? error.message : fallback;
 }

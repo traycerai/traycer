@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
+import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import { contentBlocksPreview } from "@/lib/chat/content-block-text";
 
 describe("contentBlocksPreview", () => {
@@ -83,5 +84,36 @@ describe("contentBlocksPreview", () => {
     expect(preview.length).toBeLessThanOrEqual(201);
     expect(preview.startsWith("Reasoning rrr")).toBe(true);
     expect(preview.endsWith("…")).toBe(true);
+  });
+});
+
+describe("contentBlocksPreview of an unsuccessful compaction", () => {
+  function decodedPreview(overrides: Record<string, unknown>): string {
+    const block = contentBlockSchema.parse({
+      blockId: "compaction-1",
+      status: "errored",
+      timestamp: 1,
+      type: "compaction",
+      trigger: "auto",
+      preTokens: null,
+      postTokens: null,
+      durationMs: null,
+      summary: null,
+      error: "Copilot did not apply this compaction.",
+      ...overrides,
+    });
+    return contentBlocksPreview([block]);
+  }
+
+  it("previews a not-applied compaction neutrally, not as its raw error", () => {
+    expect(decodedPreview({ notApplied: true })).toBe("Context not compacted");
+  });
+
+  it("keeps previewing an ordinary failure's error and a completed summary", () => {
+    expect(decodedPreview({})).toBe("Copilot did not apply this compaction.");
+    expect(decodedPreview({ error: null })).toBe("Context compaction failed");
+    expect(
+      decodedPreview({ status: "completed", summary: "Folded.", error: null }),
+    ).toBe("Folded.");
   });
 });

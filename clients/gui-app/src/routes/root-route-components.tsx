@@ -7,7 +7,7 @@ import { HostUnresponsivePrompt } from "@/components/layout/bridges/host-unrespo
 import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-lifecycle-analytics-bridge";
 import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
-import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-dialog";
+import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -34,6 +34,7 @@ import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { TeamRemovalTileCloser } from "@/providers/team-removal-tile-closer";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
+import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
 import {
@@ -105,9 +106,7 @@ export function RootComponent() {
           keeps closed. */}
       <HostUnresponsivePrompt />
       <DesktopDialogHost />
-      {/* The question in front of a team sandbox's wake, from any wake path:
-          a picker that closes on pick has no surface left to ask it from. */}
-      <TeamWakeConfirmDialogHost />
+      <SandboxDetailsDrawerHost />
       {/* The host quit modal: on every route, signed in or not, so a quit is
           always answered in-window rather than by main's native prompt. */}
       <HostQuitDecisionBridge />
@@ -181,6 +180,11 @@ export function RootComponent() {
                   behind the default-host scope, because it reads only the
                   source host it captured. */}
               <ProfileSyncModalHost />
+              {/* The retrospective and move sheets. Here rather than in
+                  Settings: the retrospective sheet opens by itself once on
+                  the first launch after the update, whatever the window
+                  shows, and the Start toast opens it too. */}
+              <EnvironmentSheetsHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
               <NotificationsMobileSheet />

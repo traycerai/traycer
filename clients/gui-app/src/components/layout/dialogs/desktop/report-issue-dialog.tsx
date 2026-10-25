@@ -138,10 +138,13 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/opening-behavior": "Settings - Opening behavior",
   "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
+  "/settings/sandboxes": "Settings - Sandboxes",
+  "/settings/members": "Settings - Members",
   "/settings/secrets": "Settings - Secrets",
   "/settings/service": "Settings - Service",
-  "/settings/shell": "Settings - Variables and shells",
+  "/settings/shell": "Settings - Variables & shells",
   "/settings/usage": "Settings - Usage",
+  "/settings/credits": "Settings - Credits",
   "/settings/worktrees": "Settings - Worktrees",
   "/when-you-quit": "When you quit Traycer",
 };
@@ -2312,7 +2315,7 @@ function deliveryOutcomeMessage(
   // Stored, not lost, and not resendable: the app will send it by itself
   // when the connection comes back, and no action from here would help.
   if (result?.status === "queued") {
-    return "You're offline, so your report is saved on this machine - it will be sent automatically when the connection returns. There's nothing else to do.";
+    return "You're offline, so your report is saved on this computer - it will be sent automatically when the connection returns. There's nothing else to do.";
   }
   // The one failure with a remedy. The draft stays exactly as typed, so
   // "try again" means retry the send, not retype the report.

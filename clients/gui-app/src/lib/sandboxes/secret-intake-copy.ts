@@ -60,9 +60,9 @@ const SECRET_KIND_HINT: Readonly<Record<SandboxSecretFormKind, string>> = {
 };
 
 /**
- * The kinds added here. The others are set up on the web, where their own
- * forms live (the SSH key and host-key check, the cloud and certificate
- * forms); the picker still lists them, so every kind is one click from here.
+ * The kinds whose form lives in the app. SSH, the cloud and certificate
+ * kinds have no row: secrets are values and logins. The protocol catalogue
+ * is unchanged.
  */
 export const DESKTOP_SECRET_KINDS = [
   "api_key",
@@ -71,14 +71,17 @@ export const DESKTOP_SECRET_KINDS = [
 ] as const satisfies readonly SandboxSecretFormKind[];
 export type DesktopSecretKind = (typeof DESKTOP_SECRET_KINDS)[number];
 
+/** The kinds Add a secret offers; a provider's key is set on its Account tab. */
+export const ADD_SECRET_KINDS = [
+  "api_key",
+  "database",
+] as const satisfies readonly DesktopSecretKind[];
+
 export function isDesktopSecretKind(
   kind: SandboxSecretFormKind,
 ): kind is DesktopSecretKind {
   return DESKTOP_SECRET_KINDS.some((desktop) => desktop === kind);
 }
-
-/** The picker's line for a kind set up on the web. */
-export const SECRET_KIND_ON_THE_WEB = "Set up on the web";
 
 export const SECRET_PROTOCOL_LABEL: Readonly<
   Record<SandboxRouteProtocol, string>
@@ -119,15 +122,15 @@ export function secretProtocolLabel(protocol: string): string {
 }
 
 export const SECRET_MODE_LABEL: Readonly<Record<SandboxSecretMode, string>> = {
-  brokered: "Brokered",
-  exposed: "Exposed",
+  brokered: "Agents use it without seeing it (recommended)",
+  exposed: "Agents can read it",
 };
 
-/** What each mode means on a sandbox, in the one line the dialog states it in. */
+/** The warning under the mode that hands agents the value; the other needs none. */
 export const SECRET_MODE_CONSEQUENCE: Readonly<
-  Record<SandboxSecretMode, string>
+  Record<SandboxSecretMode, string | null>
 > = {
-  brokered: "On a sandbox, agents can use it and never read it.",
+  brokered: null,
   exposed:
     "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
 };

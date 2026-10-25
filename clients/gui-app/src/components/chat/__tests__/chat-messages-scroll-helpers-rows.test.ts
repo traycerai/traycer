@@ -44,7 +44,13 @@ function hydrated(
 }
 
 function placeholder(key: string, ordinal: number): TranscriptListRow {
-  return { kind: "placeholder", key, ordinal, entry: null };
+  return {
+    kind: "placeholder",
+    key,
+    ordinal,
+    entry: null,
+    provenance: "index",
+  };
 }
 
 function state(rowTops: readonly number[], scroll: number) {

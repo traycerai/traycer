@@ -33,6 +33,8 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
 /**
@@ -94,6 +96,22 @@ vi.mock("@tanstack/react-router", () => ({
   }: {
     select: (state: { location: { pathname: string } }) => unknown;
   }) => select({ location: { pathname: routerState.pathname } }),
+}));
+
+const sandboxes = vi.hoisted(() => ({
+  catalogue: null as SandboxCatalogue | null,
+}));
+vi.mock(
+  "@/hooks/host/use-composer-surface-host-pin",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/host/use-composer-surface-host-pin")
+    >()),
+    useComposerSurfaceHostKey: () => "landing:window-test",
+  }),
+);
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: sandboxes.catalogue ?? undefined }),
 }));
 
 // The real header mounts the tab strip, notifications and menus - none of which
@@ -429,6 +447,88 @@ describe("<HostReadyGate />", () => {
     expect(screen.getByTestId("host-ready-gate").dataset.readiness).toBe(
       "mobile-no-host",
     );
+  });
+
+  describe("a person with no host, whose first host can be a sandbox", () => {
+    afterEach(() => {
+      sandboxes.catalogue = null;
+      useStagedSandboxStore.setState({ bySurface: {} });
+    });
+
+    it("mounts the app, and so the landing composer, while a sandbox is staged there", () => {
+      useStagedSandboxStore.getState().stage("landing:window-test", {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "",
+        wakeString: null,
+      });
+      renderGate({ kind: "mobile-no-host" }, PRESENTATION);
+      expect(screen.getByRole("main")).toBeTruthy();
+      expect(screen.queryByTestId("host-ready-gate")).toBeNull();
+    });
+
+    it("mounts the app when the catalogue offers a shape to stage", () => {
+      sandboxes.catalogue = {
+        providers: [
+          {
+            provider: "tensorlake",
+            os: ["linux"],
+            shape: {
+              cpuMin: 1,
+              cpuMax: 16,
+              cpuStep: 1,
+              memoryPerCpuMinMb: 1024,
+              memoryPerCpuMaxMb: 8192,
+              memoryMinMb: 1024,
+              memoryMaxMb: 65536,
+              memoryStepMb: 512,
+              diskMinMb: 10240,
+              diskMaxMb: 102400,
+              diskDefaultMb: 20480,
+            },
+            suspendFidelity: "memory",
+            stoppedStorage: "snapshot",
+            wakeClass: "resume",
+            shapes: null,
+            dockerInGuest: true,
+            creatable: true,
+            notCreatableReason: null,
+            regions: [
+              {
+                id: "us-east",
+                label: "US East",
+                fromPriceMcPerHour: {
+                  awakeMc: 80,
+                  suspendedMc: 4,
+                  stoppedMc: 2,
+                },
+                pricing: null,
+              },
+            ],
+          },
+        ],
+      };
+      renderGate({ kind: "mobile-no-host" }, PRESENTATION);
+      expect(screen.getByRole("main")).toBeTruthy();
+    });
+
+    it("keeps the no-host screen when no sandbox can be created", () => {
+      sandboxes.catalogue = { providers: [] };
+      renderGate({ kind: "mobile-no-host" }, PRESENTATION);
+      expect(screen.queryByRole("main")).toBeNull();
+      expect(screen.getByTestId("host-ready-gate").dataset.readiness).toBe(
+        "mobile-no-host",
+      );
+    });
   });
 
   it("lets /settings through even while the host is not ready", () => {

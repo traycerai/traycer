@@ -7,6 +7,7 @@ import type {
   LocalOverrideTarget,
   RemoteAccessState,
 } from "@traycer/protocol/host/environment-schemas";
+import { heldCommandLine } from "@/components/settings/move/held-from-review";
 import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { providerDisplayName } from "@/lib/provider-ordering";
@@ -148,7 +149,7 @@ export const MOVED_NOTICE_TEXT =
 
 export function teamOwnedText(teamName: string): string {
   if (teamName === "") return "These settings belong to your team.";
-  return `These settings belong to ${teamName}. Change them in the dashboard.`;
+  return `These settings belong to ${teamName}.`;
 }
 
 // ── This host's own values ───────────────────────────────────────────────────
@@ -260,17 +261,37 @@ export function keptUndoFailedText(hostName: string): string {
 // ── Needs you ────────────────────────────────────────────────────────────────
 
 const REVIEW_REASONS: Readonly<Partial<Record<string, string>>> = {
-  credential_like_value: "looks like a secret",
   executable_entry: "runs a command",
   needs_grant: "was changed without your confirmation",
 };
 
-/** "DATABASE_URL is waiting for you: looks like a secret." */
+/**
+ * "DATABASE_URL is waiting for you: looks like a secret."; a held key-shaped
+ * value reads "DATABASE_URL looks like a key and is on hold until you
+ * choose", which its row follows with `· Review`, and a held command reads
+ * `heldCommandText`.
+ */
 export function reviewText(entry: EnvironmentReviewEntry): string {
+  if (entry.reason === "executable_entry") return heldCommandText(entry);
+  if (entry.reason === "credential_like_value") {
+    return `${itemLabel(entry)} looks like a key and is on hold until you choose`;
+  }
   const reason = REVIEW_REASONS[entry.reason];
   return reason === undefined
     ? `${itemLabel(entry)} is waiting for you.`
     : `${itemLabel(entry)} is waiting for you: ${reason}.`;
+}
+
+/**
+ * "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on hold until
+ * you choose", "notify (hook) runs notify.sh on stop and is on hold until you
+ * choose", or without a command "env-e2e-memory (MCP server) is on hold until
+ * you choose"; every other kind by its own line (`heldCommandLine`). Its
+ * row's `Review` opens the retrospective sheet.
+ */
+function heldCommandText(entry: EnvironmentReviewEntry): string {
+  const line = heldCommandLine(entry);
+  return `${line.name} ${line.clause}${line.acts ? " and" : ""} is on hold until you choose`;
 }
 
 export const REVIEW_LINK_LABEL = "Review in the dashboard";

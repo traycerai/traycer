@@ -6,32 +6,50 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
+import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 
 const MESSAGE_MAX = 100_000;
 
 /**
  * Slack's message box, for a bot's channel and its threads (Tracy Bots): a
- * post at the channel's top level (`threadId: null`), which opens a thread
- * the bot answers in, or a reply in a thread. Enter sends, Shift+Enter
- * breaks the line.
+ * post at the channel's top level (`threadId: null`), a reply in a thread,
+ * or a reply under an announcement or direct post (`announcementId`), which
+ * opens the thread hung off it. Enter sends, Shift+Enter breaks the line.
  *
  * A send is a request to the bot, not a turn: there is no model to choose,
  * nothing to approve and nothing to attach, and the bot may be paused - the
  * host then accepts the message as `queued` and the bot reads it once it can
  * be reached. The box says so, once, for the send that was queued.
+ *
+ * A send that fails before the host takes it leaves the text in the box and
+ * says so above it (`failure`, which an option the person clicks reports to
+ * as well), until they edit or send again.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
   readonly conversationId: string;
   /** The thread the reply goes into; `null` posts at the channel's top level. */
   readonly threadId: string | null;
+  /** The question or proposal the reply answers, opening its thread; `null` otherwise. */
+  readonly announcementId: string | null;
   /** "Message #name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
   readonly label: string;
   readonly testId: string;
+  readonly failure: BotSendFailure;
 }): ReactNode {
-  const { botId, conversationId, threadId, placeholder, label, testId } = props;
+  const {
+    botId,
+    conversationId,
+    threadId,
+    announcementId,
+    placeholder,
+    label,
+    testId,
+    failure,
+  } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
@@ -44,13 +62,15 @@ export function BotMessageComposer(props: {
 
   const submit = (): void => {
     if (!canSend) return;
+    failure.clear();
     send.mutate(
-      { botId, conversationId, text: trimmed, threadId },
+      { botId, conversationId, text: trimmed, threadId, announcementId },
       {
         onSuccess: (response) => {
           setText("");
           setLastDelivery(response.delivery);
         },
+        onError: failure.fail,
       },
     );
   };
@@ -93,6 +113,7 @@ export function BotMessageComposer(props: {
           onChange={(event) => {
             setText(event.target.value);
             if (lastDelivery !== null) setLastDelivery(null);
+            failure.clear();
           }}
           onKeyDown={onKeyDown}
         />
@@ -117,7 +138,7 @@ export function BotMessageComposer(props: {
         </div>
       </div>
       <ComposerStatus
-        error={send.error === null ? null : send.error.message}
+        failed={failure.failed}
         queued={lastDelivery === "queued"}
         testId={testId}
       />
@@ -126,16 +147,12 @@ export function BotMessageComposer(props: {
 }
 
 function ComposerStatus(props: {
-  readonly error: string | null;
+  readonly failed: boolean;
   readonly queued: boolean;
   readonly testId: string;
 }): ReactNode {
-  if (props.error !== null) {
-    return (
-      <p role="alert" className="text-ui-xs text-destructive">
-        {props.error}
-      </p>
-    );
+  if (props.failed) {
+    return <BotSendFailedNotice testId={`${props.testId}-send-failed`} />;
   }
   if (!props.queued) return null;
   return (

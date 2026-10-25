@@ -19,7 +19,7 @@ import {
   type BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import {
-  environmentListResponseSchema,
+  environmentListResponseSchemaV11,
   type EnvironmentDescriptor,
 } from "@traycer/protocol/host/environment/contracts";
 import { isIncompatibleCloseForMethod } from "@traycer/protocol/host-transport/stream-session";
@@ -84,7 +84,7 @@ export async function listEnvironments(): Promise<
   const result = await toBotCliError(callHostRpc("environment.list", {}));
   return parseCanonicalHostResponse(
     "environment.list",
-    environmentListResponseSchema,
+    environmentListResponseSchemaV11,
     result,
   ).environments;
 }

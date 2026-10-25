@@ -269,7 +269,7 @@ function runDeleteCommand(
             declined: declined ?? null,
             error: null,
           }),
-        onTargetFailed: (_worktreePath, reason, _holders, code) =>
+        onTargetFailed: (_worktreePath, reason, { code }) =>
           finish({
             kind: "settled",
             deleted: false,

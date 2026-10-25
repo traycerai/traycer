@@ -33,7 +33,7 @@ import {
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
 import {
-  usePersonalHostScope,
+  useAccountHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -86,7 +86,7 @@ const LEAVE_SECRET_UNCHANGED: HostNotificationsSecretWrite = {
  * it is not the one this window's bell reads from.
  */
 export function NotificationsSettingsPanel() {
-  const scope = usePersonalHostScope();
+  const scope = useAccountHostScope();
   return (
     <NotificationsSettingsPanelContent
       scope={scope}

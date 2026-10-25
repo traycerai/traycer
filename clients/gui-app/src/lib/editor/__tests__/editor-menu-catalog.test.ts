@@ -20,7 +20,7 @@ describe("noEditorInstalledMessage", () => {
 
   it("keeps the fixed sentence template around the labels", () => {
     expect(noEditorInstalledMessage(EDITORS)).toBe(
-      "None of VS Code, Cursor, Windsurf, Zed, VSCodium or Code - OSS is installed on this machine; install one to open files from Traycer.",
+      "None of VS Code, Cursor, Windsurf, Zed, VSCodium or Code - OSS is installed on this computer; install one to open files from Traycer.",
     );
   });
 

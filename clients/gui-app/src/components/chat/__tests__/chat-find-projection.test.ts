@@ -37,6 +37,11 @@ import type {
 } from "@/stores/composer/chat-store";
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { makeMessage } from "./chat-message-fixtures";
+import {
+  persistedCompaction,
+  REFUSED_COMPACTION_ERROR,
+  renderedCompactionMessages,
+} from "@/stores/chats/__tests__/rendered-compaction-fixture";
 
 const TILE_INSTANCE_ID = "chat-find-test-tile";
 
@@ -2205,5 +2210,60 @@ describe("buildSubagentChatFindRows", () => {
     expect(last.unitId).toBe(chatFindSubagentChatResultUnitId(OPEN_ID));
     expect(last.text).toBe("Final answer");
     expect(last.owningChain).toEqual([]);
+  });
+});
+
+describe("chat find projection of an unsuccessful compaction", () => {
+  const FIND_OPTIONS = {
+    hideReasoning: false,
+    queuePauseReasonProtocolSupported: null,
+  } as const;
+
+  function findTextOf(persisted: Record<string, unknown>): string {
+    return buildChatFindRows(
+      renderedCompactionMessages(persisted),
+      TILE_INSTANCE_ID,
+      new Set(),
+      FIND_OPTIONS,
+    )
+      .map((row) => rowSearchText(row))
+      .join("\n");
+  }
+
+  it("indexes a not-applied manual compaction by the neutral label it paints, not the hidden error", () => {
+    const text = findTextOf(persistedCompaction({ notApplied: true }));
+
+    expect(text).toContain("Compaction not applied");
+    expect(text).not.toContain(REFUSED_COMPACTION_ERROR);
+    expect(text).not.toContain("errored");
+  });
+
+  it("indexes a not-applied automatic compaction by the automatic label", () => {
+    const text = findTextOf(
+      persistedCompaction({ notApplied: true, trigger: "auto" }),
+    );
+
+    expect(text).toContain("Auto-compaction not applied");
+    expect(text).not.toContain(REFUSED_COMPACTION_ERROR);
+  });
+
+  it("keeps indexing an ordinary failed compaction's error and status", () => {
+    const text = findTextOf(persistedCompaction({}));
+
+    expect(text).toContain(REFUSED_COMPACTION_ERROR);
+    expect(text).toContain("errored");
+    expect(text).not.toContain("not applied");
+  });
+
+  it("keeps indexing a completed compaction's summary", () => {
+    const text = findTextOf(
+      persistedCompaction({
+        status: "completed",
+        summary: "The folded context",
+        error: null,
+      }),
+    );
+
+    expect(text).toContain("The folded context");
   });
 });

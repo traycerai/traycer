@@ -14,6 +14,7 @@ import {
 import { LandingTerminalPanel } from "./landing-terminal-panel";
 import { LandingTerminalGestureProvider } from "./landing-terminal-gesture-provider";
 import { resolveHostedLandingDraftId } from "./landing-terminal-surface-binding";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   useLandingPaneAnchorStore,
   type LandingPanePresentation,
@@ -53,6 +54,13 @@ export function LandingTerminalPaneAnchor(props: {
   useEffect(
     () => () => setPresentation(draftId, null),
     [draftId, setPresentation],
+  );
+  // A terminal asked for on this page from outside the panel ends with it: the
+  // landing visit it was filed for is over.
+  useEffect(
+    () => () =>
+      useLandingPanelStore.getState().dropTerminalRequestForPage(draftId),
+    [draftId],
   );
   return (
     <div

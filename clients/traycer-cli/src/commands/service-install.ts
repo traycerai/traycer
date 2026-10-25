@@ -30,6 +30,10 @@ import {
   maybeProvisionCredential,
   runSignInPreflight,
 } from "../host/install-auth";
+import {
+  defaultResolveHostStartTargetDeps,
+  resolveHostStartTarget,
+} from "./host-start";
 
 // `traycer host service install [--no-linger] [--takeover]` - register the
 // OS service for the current environment. `--no-linger` skips `loginctl
@@ -132,6 +136,14 @@ export function buildServiceInstallCommand(
             null,
           );
         }
+        // Registration starts the installed host. Check the supervisor's
+        // prerequisite under the install lock before writing a registration
+        // or stopping the host managed by Desktop; otherwise a missing install
+        // leaves a task behind and surfaces only as a spawn timeout.
+        await resolveHostStartTarget(
+          { environment: ctx.runtime.environment, cwd: null },
+          defaultResolveHostStartTargetDeps,
+        );
         const label = serviceLabelFor(ctx.runtime.environment);
         const cli = await resolveServiceCliInvocation({
           environment: ctx.runtime.environment,

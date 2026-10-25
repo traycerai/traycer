@@ -20,10 +20,6 @@ import { queryClient } from "@/lib/query-client";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
-import {
-  confirmTeamWake,
-  teamWakeAsks,
-} from "@/stores/hosts/team-wake-confirm-store";
 
 /** How often the sandbox list is re-read while a wake is under way. */
 const WAKE_POLL_INTERVAL_MS = 2_000;
@@ -277,48 +273,36 @@ interface SandboxWakeBinding {
  * in flight for the host rather than resuming it twice, and reports the
  * outcome once, from the call that started it. On any answer the directory
  * and the host list are refreshed, so a woken host dials the moment it is
- * listed `awake`. A team sandbox asks first (`confirmTeamWake`): the wake
- * runs only on the person's Resume.
+ * listed `awake`. The wake's payer is said before it, where the action that
+ * wakes it is offered (the consequences block's payer clause), so it asks
+ * nothing here.
  *
  * Imperative (a `MutationObserver` per call) because a picker learns the host
- * at pick time, while a hook's mutation key is fixed when it mounts.
+ * at pick time, while a hook's mutation key is fixed when it mounts. The
+ * outcome resolves for a caller that waits on it (the composer's send), and
+ * is `null` when no wake was sent (signed out, or a build without the control
+ * plane).
  */
 export function startSandboxWake(
   client: QueryClient,
   binding: SandboxWakeBinding | null,
   hostId: string,
-  /**
-   * What the caller already knows asks: a pick's own row says team before
-   * the directory may have the entry. `false` from a caller with no row.
-   */
-  callerAsks: boolean,
-): void {
+): Promise<SandboxWakeOutcome | null> {
   // Signed out there is no sandbox row to wake, and nothing a retry fixes.
-  if (binding === null) return;
+  if (binding === null) return Promise.resolve(null);
   const { auth, directory } = binding;
   // A build that cannot reach the control plane (staging) sends no wake: it
   // says why once, instead of a failed request's "try again".
   const unavailable = auth.sandboxControlUnavailableReason();
   if (unavailable !== null) {
     toast.warning("Couldn't wake this sandbox", { description: unavailable });
-    return;
+    return Promise.resolve(null);
   }
-  // A team sandbox asks before its wake bills the person opening it, unless
-  // a wake for it is already running: joining that one bills nobody new.
   const entry = directory.findById(hostId);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const teamOwned =
-    callerAsks || (facts !== null && facts.ownerTeamName !== null);
-  const directoryAsks =
-    facts !== null &&
-    teamWakeAsks(facts.ownerTeamName !== null, facts.profile, facts.frozen);
-  const asks =
-    (callerAsks || directoryAsks) &&
-    client.isMutating({ mutationKey: sandboxMutationKeys.wake(hostId) }) === 0;
-  confirmTeamWake(asks, () =>
-    runSandboxWake(client, binding, hostId, teamOwned),
-  );
+  const teamOwned = facts !== null && facts.ownerTeamName !== null;
+  return runSandboxWake(client, binding, hostId, teamOwned);
 }
 
 function runSandboxWake(
@@ -326,7 +310,7 @@ function runSandboxWake(
   binding: SandboxWakeBinding,
   hostId: string,
   teamOwned: boolean,
-): void {
+): Promise<SandboxWakeOutcome | null> {
   const { auth, directory } = binding;
   // The account this wake runs for. A wake that ends under another account
   // stops polling (see `readSandboxFacts`), and reports and refreshes nothing:
@@ -352,9 +336,12 @@ function runSandboxWake(
   // Subscribed for the mutation's life, so the cache can collect it once it
   // settles; a rejection is already reported by `onError`.
   const unsubscribe = observer.subscribe(() => undefined);
-  observer
+  return observer
     .mutate()
-    .catch(() => undefined)
+    .then(
+      (run) => run.outcome,
+      () => null,
+    )
     .finally(unsubscribe);
 }
 
@@ -370,13 +357,5 @@ function runSandboxWake(
  */
 export function wakeSandboxOnPick(host: HostScopeOption): void {
   if (!isSleepingSandboxPick(host)) return;
-  const sandbox = host.sandbox;
-  const asks =
-    sandbox !== null &&
-    teamWakeAsks(
-      sandbox.teamOwned,
-      sandbox.summary?.kind ?? host.item?.profile ?? null,
-      sandbox.frozen,
-    );
-  startSandboxWake(queryClient, getHostBindingSnapshot(), host.hostId, asks);
+  void startSandboxWake(queryClient, getHostBindingSnapshot(), host.hostId);
 }

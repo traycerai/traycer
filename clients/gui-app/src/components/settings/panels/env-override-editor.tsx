@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
 import {
   isCredentialShapedEnvName,
   urlCarriesCredentials,
@@ -18,7 +19,9 @@ import { cn } from "@/lib/utils";
 /**
  * Shared inline environment-override editor (Settings → Providers per-provider,
  * and Settings → Shell host-process). One flat, column-aligned table:
- * `Name · Set/Unset value · actions`, with an explicit staged add row. `value:
+ * `Name · Set/Unset value · actions`, with an explicit staged add row; a row
+ * on hold reads `NAME · on hold until you choose · Review`, and a saved value
+ * that looks like a key shows as dots, never in a field. `value:
  * null` is an explicit unset (drop a variable the process would otherwise
  * inherit). The parent owns the mutations.
  */
@@ -50,7 +53,27 @@ interface Draft {
   readonly value: string;
   readonly mode: EnvMode;
   readonly error: string | null;
+  /** Refused because the value looks like a key; the row offers Secrets. */
+  readonly keyShaped: boolean;
 }
+
+/**
+ * What a row says when its value looks like a key, and where its link takes
+ * the name and value: Add a secret, or a provider's Account tab for that
+ * provider's own key.
+ */
+export interface KeyRefusal {
+  /** The line, with its link between `before` and `after`. */
+  readonly before: string;
+  readonly link: string;
+  readonly after: string;
+  /** The value is cleared from the field rather than carried on. */
+  readonly clearsValue: boolean;
+  readonly onLink: (name: string, value: string) => void;
+}
+
+/** The refusal for a variable's name; `null` where nothing is refused. */
+export type KeyRefusalFor = ((name: string) => KeyRefusal) | null;
 
 function modeForValue(value: string | null): EnvMode {
   return value === null ? "unset" : "set";
@@ -62,6 +85,7 @@ function draftOf(entry: EnvOverrideValue): Draft {
     value: entry.value ?? "",
     mode: modeForValue(entry.value),
     error: null,
+    keyShaped: false,
   };
 }
 
@@ -70,7 +94,8 @@ function draftShowsEntry(draft: Draft, entry: EnvOverrideValue): boolean {
     draft.key === entry.key &&
     draft.value === (entry.value ?? "") &&
     draft.mode === modeForValue(entry.value) &&
-    draft.error === null
+    draft.error === null &&
+    !draft.keyShaped
   );
 }
 
@@ -115,13 +140,52 @@ function EnvRowFooter(props: {
   readonly draft: Draft;
   readonly disabled: boolean;
   readonly onTrim: () => void;
+  readonly keyRefusal: KeyRefusalFor;
+  /** The link handed the value on: the row drops its draft. */
+  readonly onRefusalFollowed: () => void;
 }) {
   const { draft, disabled, onTrim } = props;
+  if (draft.keyShaped && props.keyRefusal !== null) {
+    const name = draft.key.trim();
+    return (
+      <KeyRefusalLine
+        refusal={props.keyRefusal(name)}
+        disabled={disabled}
+        onLink={(refusal) => {
+          refusal.onLink(name, draft.value);
+          props.onRefusalFollowed();
+        }}
+      />
+    );
+  }
   if (draft.error !== null) {
     return <p className="text-ui-xs text-destructive">{draft.error}</p>;
   }
   if (draft.mode !== "set" || !hasEdgeWhitespace(draft.value)) return null;
   return <EnvValueWhitespaceNotice disabled={disabled} onTrim={onTrim} />;
+}
+
+function KeyRefusalLine(props: {
+  readonly refusal: KeyRefusal;
+  readonly disabled: boolean;
+  readonly onLink: (refusal: KeyRefusal) => void;
+}) {
+  const { refusal } = props;
+  return (
+    <p className="text-ui-xs text-destructive" data-testid="env-key-refusal">
+      {refusal.before}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        disabled={props.disabled}
+        onClick={() => props.onLink(refusal)}
+      >
+        {refusal.link}
+      </Button>
+      {refusal.after}
+    </p>
+  );
 }
 
 function EnvValueWhitespaceNotice(props: {
@@ -147,6 +211,30 @@ function EnvValueWhitespaceNotice(props: {
         Trim spaces
       </button>
     </p>
+  );
+}
+
+/**
+ * Whether a saved value looks like a key: such a row never shows it, on any
+ * page, whether or not the page refuses one being typed.
+ */
+function savedKeyShaped(entry: EnvOverrideValue): boolean {
+  return (
+    entry.value !== null &&
+    classifyCredential({ name: entry.key, value: entry.value }).credentialLike
+  );
+}
+
+/** Whether `value` is refused here as a key: only where a handler is set. */
+function refusedAsKey(
+  key: string,
+  value: string | null,
+  keyRefusal: KeyRefusalFor,
+): boolean {
+  return (
+    keyRefusal !== null &&
+    value !== null &&
+    classifyCredential({ name: key, value }).credentialLike
   );
 }
 
@@ -194,6 +282,17 @@ export function EnvOverrideEditor(props: {
    * dev-box"). An empty map for a list with nothing to say.
    */
   readonly rowNotes: ReadonlyMap<string, string>;
+  /**
+   * Rows on hold until the person chooses, by key, each with its `Review`
+   * control. Such a row shows its name only, never its value.
+   */
+  readonly onHold: ReadonlyMap<string, ReactNode>;
+  /**
+   * Set where a value that looks like a key must not be stored as a
+   * variable: such a value is refused in its row with the refusal for its
+   * name, whose link takes the name and value on.
+   */
+  readonly keyRefusal: KeyRefusalFor;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
@@ -202,6 +301,7 @@ export function EnvOverrideEditor(props: {
     value: string | null,
   ) => void;
   readonly onDelete: (key: string) => void;
+  readonly renderDetails?: (key: string) => ReactNode;
 }) {
   const {
     overrides,
@@ -241,19 +341,42 @@ export function EnvOverrideEditor(props: {
       ) : null}
       {overrides.length > 0 ? (
         <ul className="divide-y divide-border/40">
-          {overrides.map((entry) => (
-            <EnvOverrideRow
-              key={entry.key}
-              entry={entry}
-              otherKeys={keys.filter((k) => k !== entry.key)}
-              disabled={disabled}
-              credentialRefusal={credentialRefusal}
-              note={props.rowNotes.get(entry.key) ?? null}
-              staleRefusal={props.staleRefusal}
-              onCommit={onCommit}
-              onDelete={onDelete}
-            />
-          ))}
+          {overrides.map((entry) => {
+            const review = props.onHold.get(entry.key);
+            if (review !== undefined) {
+              return (
+                <EnvHeldRow key={entry.key} name={entry.key} review={review} />
+              );
+            }
+            if (savedKeyShaped(entry)) {
+              return (
+                <EnvMaskedRow
+                  key={entry.key}
+                  entry={entry}
+                  disabled={disabled}
+                  keyRefusal={props.keyRefusal}
+                  note={props.rowNotes.get(entry.key) ?? null}
+                  details={props.renderDetails?.(entry.key) ?? null}
+                  onDelete={onDelete}
+                />
+              );
+            }
+            return (
+              <EnvOverrideRow
+                key={entry.key}
+                entry={entry}
+                otherKeys={keys.filter((k) => k !== entry.key)}
+                disabled={disabled}
+                credentialRefusal={credentialRefusal}
+                keyRefusal={props.keyRefusal}
+                note={props.rowNotes.get(entry.key) ?? null}
+                details={props.renderDetails?.(entry.key) ?? null}
+                staleRefusal={props.staleRefusal}
+                onCommit={onCommit}
+                onDelete={onDelete}
+              />
+            );
+          })}
         </ul>
       ) : null}
       {adding ? (
@@ -261,6 +384,7 @@ export function EnvOverrideEditor(props: {
           existingKeys={keys}
           disabled={disabled}
           credentialRefusal={credentialRefusal}
+          keyRefusal={props.keyRefusal}
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
             onCommit("", key, value);
@@ -278,7 +402,7 @@ export function EnvOverrideEditor(props: {
             onClick={() => setAdding(true)}
           >
             <Plus className="size-3.5" />
-            Add variable
+            Add a variable
           </Button>
         </div>
       )}
@@ -291,7 +415,9 @@ function EnvOverrideRow(props: {
   readonly otherKeys: readonly string[];
   readonly disabled: boolean;
   readonly credentialRefusal: string | null;
+  readonly keyRefusal: KeyRefusalFor;
   readonly note: string | null;
+  readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
     oldKey: string,
@@ -321,7 +447,7 @@ function EnvOverrideRow(props: {
   }
   const editDraft = (update: (current: Draft) => Draft): void => {
     setFollowing(false);
-    setDraft(update);
+    setDraft((current) => ({ ...update(current), keyShaped: false }));
   };
   const draftRef = useRef(draft);
   useEffect(() => {
@@ -343,8 +469,14 @@ function EnvOverrideRow(props: {
   useEffect(() => {
     credentialRefusalRef.current = credentialRefusal;
   }, [credentialRefusal]);
+  const keyRefusalRef = useRef(props.keyRefusal);
+  useEffect(() => {
+    keyRefusalRef.current = props.keyRefusal;
+  }, [props.keyRefusal]);
 
   const commitValue = (nextValue: string | null): void => {
+    // A refused draft waits for an edit; its cleared field is no value.
+    if (draft.keyShaped) return;
     const nextKey = draft.key.trim();
     const error = draftError(nextKey, otherKeys);
     if (error !== null) {
@@ -354,6 +486,16 @@ function EnvOverrideRow(props: {
     const refused = credentialError(nextKey, nextValue, credentialRefusal);
     if (refused !== null) {
       setDraft((current) => ({ ...current, error: refused }));
+      return;
+    }
+    if (refusedAsKey(nextKey, nextValue, props.keyRefusal)) {
+      const cleared = props.keyRefusal?.(nextKey).clearsValue === true;
+      setDraft((current) => ({
+        ...current,
+        value: cleared ? "" : current.value,
+        error: null,
+        keyShaped: true,
+      }));
       return;
     }
     setDraft((current) => ({ ...current, error: null }));
@@ -374,6 +516,7 @@ function EnvOverrideRow(props: {
   useEffect(() => {
     return () => {
       const current = draftRef.current;
+      if (current.keyShaped) return;
       const currentEntry = entryRef.current;
       const nextKey = current.key.trim();
       const nextValue = current.mode === "unset" ? null : current.value;
@@ -381,7 +524,8 @@ function EnvOverrideRow(props: {
       if (error !== null) return;
       if (
         credentialError(nextKey, nextValue, credentialRefusalRef.current) !==
-        null
+          null ||
+        refusedAsKey(nextKey, nextValue, keyRefusalRef.current)
       ) {
         return;
       }
@@ -424,20 +568,11 @@ function EnvOverrideRow(props: {
           }
           onBlur={commit}
         />
-        <button
-          type="button"
+        <RemoveVariableButton
+          name={entry.key}
           disabled={disabled}
-          onClick={() => onDelete(entry.key)}
-          aria-label={`Remove ${entry.key}`}
-          // muted-fill-ok: hover also swings the icon to text-destructive, so
-          // the state keeps a channel that no theme can collapse
-          className={cn(
-            ROW_ACTIONS_PLACEMENT,
-            "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50",
-          )}
-        >
-          <Trash2 className="size-4" />
-        </button>
+          onDelete={onDelete}
+        />
       </div>
       {props.note === null ? null : (
         <p
@@ -447,7 +582,117 @@ function EnvOverrideRow(props: {
           {props.note}
         </p>
       )}
-      <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
+      <EnvRowFooter
+        draft={draft}
+        disabled={disabled}
+        onTrim={trimValue}
+        keyRefusal={props.keyRefusal}
+        onRefusalFollowed={() => {
+          // The value went on; the row shows what is stored.
+          setFollowing(false);
+          setDraft(draftOf(entry));
+        }}
+      />
+      {props.details === null ? null : (
+        <div className="flex justify-end">{props.details}</div>
+      )}
+    </li>
+  );
+}
+
+/**
+ * A saved value that looks like a key: its name, dots in place of the value
+ * and Remove, with the refusal for its name below where the page has one. The
+ * value stays saved until the person acts; its link carries it on.
+ */
+function EnvMaskedRow(props: {
+  readonly entry: EnvOverrideValue;
+  readonly disabled: boolean;
+  readonly keyRefusal: KeyRefusalFor;
+  readonly note: string | null;
+  readonly details: ReactNode;
+  readonly onDelete: (key: string) => void;
+}) {
+  const { entry, disabled } = props;
+  return (
+    <li className="flex flex-col gap-1 px-3 py-2" data-testid="env-masked-row">
+      <div className={GRID}>
+        <span className="truncate font-mono text-ui-xs text-foreground">
+          {entry.key}
+        </span>
+        <span
+          className={cn(
+            VALUE_FIELD_PLACEMENT,
+            "font-mono text-ui-xs text-muted-foreground",
+          )}
+          aria-label={`${entry.key} is hidden`}
+          data-testid="env-masked-value"
+        >
+          ••••••••
+        </span>
+        <RemoveVariableButton
+          name={entry.key}
+          disabled={disabled}
+          onDelete={props.onDelete}
+        />
+      </div>
+      {props.note === null ? null : (
+        <p
+          data-testid="env-row-note"
+          className="text-ui-xs text-muted-foreground"
+        >
+          {props.note}
+        </p>
+      )}
+      {props.keyRefusal === null ? null : (
+        <KeyRefusalLine
+          refusal={props.keyRefusal(entry.key)}
+          disabled={disabled}
+          onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
+        />
+      )}
+      {props.details === null ? null : (
+        <div className="flex justify-end">{props.details}</div>
+      )}
+    </li>
+  );
+}
+
+function RemoveVariableButton(props: {
+  readonly name: string;
+  readonly disabled: boolean;
+  readonly onDelete: (key: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={props.disabled}
+      onClick={() => props.onDelete(props.name)}
+      aria-label={`Remove ${props.name}`}
+      // muted-fill-ok: hover also swings the icon to text-destructive, so
+      // the state keeps a channel that no theme can collapse
+      className={cn(
+        ROW_ACTIONS_PLACEMENT,
+        "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50",
+      )}
+    >
+      <Trash2 className="size-4" />
+    </button>
+  );
+}
+
+function EnvHeldRow(props: {
+  readonly name: string;
+  readonly review: ReactNode;
+}) {
+  return (
+    <li
+      className="px-3 py-2.5 text-ui-sm text-muted-foreground"
+      data-testid="env-held-row"
+    >
+      <span className="font-mono text-foreground">{props.name}</span>
+      {" · on hold until you choose · "}
+      {props.review}
     </li>
   );
 }
@@ -456,6 +701,7 @@ function EnvOverrideAddRow(props: {
   readonly existingKeys: readonly string[];
   readonly disabled: boolean;
   readonly credentialRefusal: string | null;
+  readonly keyRefusal: KeyRefusalFor;
   readonly namePlaceholder: string;
   readonly onAdd: (key: string, value: string | null) => void;
   readonly onCancel: () => void;
@@ -473,9 +719,13 @@ function EnvOverrideAddRow(props: {
     value: "",
     mode: "set",
     error: null,
+    keyShaped: false,
   }));
+  const edit = (update: (current: Draft) => Draft): void =>
+    setDraft((current) => ({ ...update(current), keyShaped: false }));
 
   const add = (): void => {
+    if (draft.keyShaped) return;
     const nextKey = draft.key.trim();
     const nextValue = draft.mode === "unset" ? null : draft.value;
     const error =
@@ -483,6 +733,16 @@ function EnvOverrideAddRow(props: {
       credentialError(nextKey, nextValue, credentialRefusal);
     if (error !== null) {
       setDraft((current) => ({ ...current, error }));
+      return;
+    }
+    if (refusedAsKey(nextKey, nextValue, props.keyRefusal)) {
+      const cleared = props.keyRefusal?.(nextKey).clearsValue === true;
+      setDraft((current) => ({
+        ...current,
+        value: cleared ? "" : current.value,
+        error: null,
+        keyShaped: true,
+      }));
       return;
     }
     onAdd(nextKey, nextValue);
@@ -499,7 +759,7 @@ function EnvOverrideAddRow(props: {
           aria-label="New variable name"
           className="h-8"
           onChange={(event) =>
-            setDraft((current) => ({ ...current, key: event.target.value }))
+            edit((current) => ({ ...current, key: event.target.value }))
           }
           font="mono"
           size="xs"
@@ -510,10 +770,8 @@ function EnvOverrideAddRow(props: {
           disabled={disabled}
           ariaLabel="New variable value"
           className={VALUE_FIELD_PLACEMENT}
-          onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
-          onValueChange={(value) =>
-            setDraft((current) => ({ ...current, value }))
-          }
+          onModeChange={(mode) => edit((current) => ({ ...current, mode }))}
+          onValueChange={(value) => edit((current) => ({ ...current, value }))}
           onBlur={() => undefined}
         />
         <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
@@ -543,8 +801,11 @@ function EnvOverrideAddRow(props: {
         draft={draft}
         disabled={disabled}
         onTrim={() =>
-          setDraft((current) => ({ ...current, value: current.value.trim() }))
+          edit((current) => ({ ...current, value: current.value.trim() }))
         }
+        keyRefusal={props.keyRefusal}
+        // The value went on; nothing is stored here.
+        onRefusalFollowed={onCancel}
       />
     </div>
   );

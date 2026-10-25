@@ -4,16 +4,12 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { isWsl } from "./wsl";
-import { configuredDesktopReleaseRepo } from "../../config";
+import { desktopReleasesUrl } from "./desktop-release-feed";
 import type { DesktopAppUpdateGuidance } from "../../ipc-contracts/app-update-types";
 
 const execFileAsync = promisify(execFile);
 
 export type LinuxPackageType = "deb" | "rpm";
-
-function desktopReleasesUrl(): string {
-  return `https://github.com/${configuredDesktopReleaseRepo()}/releases`;
-}
 
 // Bounds `dpkg -S`/`rpm -qf` in `isRegisteredAtRunningLocation`, which runs
 // unconditionally on every cold Linux launch before update listeners are

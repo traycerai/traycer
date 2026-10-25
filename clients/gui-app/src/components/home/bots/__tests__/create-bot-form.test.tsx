@@ -239,13 +239,16 @@ function botCreateResponse(): BotCreateResponse {
       hostEpoch: 1,
       createdAt: 1_000,
       archivedAt: null,
+      directive: null,
+      replyMode: "thread",
+      appConversationChatId: null,
     },
     appConversationChatId: "conversation-1",
   };
 }
 
 const retryFailed = vi.fn<() => void>();
-const onDone = vi.fn<() => void>();
+const onCreated = vi.fn<() => void>();
 
 function mountForm(input: Mount): void {
   const byHostId = new Map<string, EnvironmentHostBinding>();
@@ -264,7 +267,8 @@ function mountForm(input: Mount): void {
         environmentLabel={input.environmentLabel}
         connectableHostIds={input.connectableHostIds}
         environmentBindings={environmentBindings}
-        onDone={onDone}
+        onCreated={onCreated}
+        onCancel={() => undefined}
       />
     </StrictMode>,
   );
@@ -417,7 +421,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
 
     const notice = screen.getByTestId("create-bot-no-host");
     expect(notice.textContent).toBe(
-      "This bot needs a machine that runs bots for Acme. Set one up in Settings.",
+      "This bot needs a computer that runs bots for Acme. Set one up in Settings.",
     );
     expect(screen.getByTestId("create-bot-form").textContent).not.toMatch(
       /Runs on|host-/i,
@@ -434,7 +438,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
     });
 
     expect(screen.getByTestId("create-bot-no-host").textContent).toBe(
-      "This bot needs a machine that runs bots for Personal. Set one up in Settings.",
+      "This bot needs a computer that runs bots for Personal. Set one up in Settings.",
     );
   });
 
@@ -476,7 +480,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
 
     const unchecked = screen.getByTestId("create-bot-unchecked");
     expect(unchecked.textContent).toContain(
-      "Some of your machines couldn't be checked.",
+      "Some of your computers couldn't be checked.",
     );
     expect(unchecked.textContent).not.toMatch(/host-/);
     expect(retryFailed).not.toHaveBeenCalled();
@@ -492,7 +496,7 @@ describe("<CreateBotForm /> when no host qualifies", () => {
 
     expect(screen.queryByTestId("create-bot-no-host")).toBeNull();
     expect(
-      screen.getByText("Finding a machine that runs Acme's bots…"),
+      screen.getByText("Finding a computer that runs Acme's bots…"),
     ).toBeTruthy();
     expect(submitButton().disabled).toBe(true);
   });
@@ -521,12 +525,13 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       effort: null,
       profile: null,
       requestKey: LOWERCASE_UUID,
+      directive: null,
     });
     const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
     expect(record?.hostId).toBe(LOCAL);
     expect(record?.title).toBe("Release Bot");
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
   it("creates through the active host's client when this machine does not run the environment", async () => {
@@ -599,11 +604,12 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       effort: null,
       profile: null,
       requestKey: LOWERCASE_UUID,
+      directive: null,
     });
     expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
       LOCAL,
     );
-    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
   it("does not create for a blank name", async () => {
@@ -613,6 +619,35 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     await user.type(screen.getByTestId("create-bot-title"), "   ");
 
     expect(submitButton().disabled).toBe(true);
+  });
+});
+
+describe("<CreateBotForm /> directive", () => {
+  it("sends a null directive when the directive field holds only whitespace", async () => {
+    const user = userEvent.setup();
+    mountForm(TEAM_WITH_LOCAL);
+
+    await user.type(screen.getByTestId("create-bot-directive"), "   ");
+    await createBot(user);
+
+    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBeNull();
+  });
+
+  it("sends the typed directive trimmed", async () => {
+    const user = userEvent.setup();
+    mountForm(TEAM_WITH_LOCAL);
+
+    await user.type(
+      screen.getByTestId("create-bot-directive"),
+      "  Own the release checklist.  ",
+    );
+    await createBot(user);
+
+    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBe(
+      "Own the release checklist.",
+    );
   });
 });
 
@@ -720,7 +755,7 @@ describe("<CreateBotForm /> a create the transport sends again", () => {
     await createBot(user);
 
     await waitFor(() => {
-      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(onCreated).toHaveBeenCalledTimes(1);
     });
     // Sent twice, and one bot came of it, made by the first send.
     expect(request).toHaveBeenCalledTimes(2);
@@ -788,6 +823,7 @@ describe("<CreateBotForm /> failed create", () => {
           effort: null,
           profile: null,
           requestKey: "0c5f4b8e-3a1d-4f6b-9e2a-7d8c1b2a3f40",
+          directive: null,
         },
         options,
       )

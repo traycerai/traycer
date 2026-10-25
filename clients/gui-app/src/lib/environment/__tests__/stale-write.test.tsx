@@ -188,7 +188,7 @@ describe("useRereadOnStaleWrite", () => {
     queryClient.setQueryData(hostBKey, { entries: [] });
     const rendered = renderHook(
       () => {
-        useRereadOnStaleWrite(hostId);
+        useRereadOnStaleWrite(hostId, null);
         return useMutation({
           mutationFn: (error: Error): Promise<never> => Promise.reject(error),
         });

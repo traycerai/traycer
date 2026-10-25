@@ -6,75 +6,62 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  * `SettingsRow`s, but their copy is still searchable copy, so it is written
  * here once and the panel renders from it.
  *
- * Only the tour owns an ENTRY. It used to be General's "Product tour" row and
- * took that row's words and anchor with it when it moved, so a search for
- * "walkthrough" has to land on the card that replays it. The three guide
- * cards contribute to the page instead: each one names a settings page that
- * has its own entry already ("Agent selection" is the Agents page's own
- * label), and a second result under the same name would outrank the page a
- * person typing it actually wants.
+ * Provider and secret name pages that already have their own entries, so they
+ * contribute to this page rather than competing with Providers and Secrets.
+ * Start a task and the download card have no other home, so each owns an
+ * entry. Credits contributes too: Account ▸ Credits is the page that owns
+ * those words once E4's section is on the index.
  */
 export const GETTING_STARTED = defineSettingsSection("getting-started", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Getting started",
-    description: "Your introduction and setup guides.",
-    keywords: [
-      "onboarding",
-      "setup",
-      "tour",
-      "replay",
-      "tutorial",
-      "guide",
-      "agent selection",
-      "appearance",
-      "customization",
-      "browser cookies",
-      "import logins",
-    ],
+    description: "The first things to do.",
+    keywords: ["onboarding", "setup", "guide", "checklist"],
   },
-  productTour: {
-    kind: "row",
-    group: null,
-    search: { anchor: "getting-started-product-tour" },
-    label: "Initial tour",
-    description: "Your workspace, providers, and tasks.",
-    availableWhen: alwaysAvailable,
-    keywords: [
-      "product tour",
-      "tour",
-      "walkthrough",
-      "replay",
-      "welcome",
-      "first run",
-      "intro",
-    ],
-  },
-  agentSelection: {
+  provider: {
     kind: "row",
     group: null,
     search: { contributesTo: "page" },
-    label: "Agent selection",
-    description: "Choose how agents delegate work.",
+    label: "Add a key or sign in to a coding agent",
+    description: "So a coding agent can run.",
     availableWhen: alwaysAvailable,
-    keywords: ["agents", "harness", "model", "delegation", "instructions"],
+    keywords: ["provider", "api key", "coding agent", "sign in"],
   },
-  appearanceAndLayout: {
+  task: {
+    kind: "row",
+    group: null,
+    search: { anchor: "getting-started-start-task" },
+    label: "Start a task",
+    description: "Begin a piece of work.",
+    availableWhen: alwaysAvailable,
+    keywords: ["task", "epic", "new task"],
+  },
+  secret: {
     kind: "row",
     group: null,
     search: { contributesTo: "page" },
-    label: "Appearance and layout",
-    description: "Theme, start page, fonts, and layout.",
+    label: "Add a secret if agents need one",
+    description: "A deploy key or a login.",
     availableWhen: alwaysAvailable,
-    keywords: ["theme", "wallpaper", "fonts", "density", "sidebar"],
+    keywords: ["secret", "deploy key", "login"],
   },
-  browserSignIns: {
+  install: {
+    kind: "row",
+    group: null,
+    search: { anchor: "getting-started-install" },
+    label: "Install Traycer on another computer",
+    description: "The download page.",
+    availableWhen: alwaysAvailable,
+    keywords: ["download", "install", "another computer", "desktop"],
+  },
+  credits: {
     kind: "row",
     group: null,
     search: { contributesTo: "page" },
-    label: "Browser sign-ins",
-    description: "Bring your cookies from another browser.",
+    label: "Add credits",
+    description: "Credits pay for your sandboxes, awake or resting.",
     availableWhen: alwaysAvailable,
-    keywords: ["cookies", "logins", "sessions", "import", "browser"],
+    keywords: ["credits", "billing", "sandbox"],
   },
 });

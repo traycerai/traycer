@@ -80,6 +80,10 @@ import {
 } from "@/stores/auth/auth-store";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { defaultStageShape } from "@/lib/sandboxes/sandbox-stage-model";
+import { useStagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
@@ -595,7 +599,10 @@ export function DefaultHostReadyGate(props: {
     signedIn: shellAdmission.admitted,
     bypassed: pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   };
-  if (!gateBlocksApp(predicateInput)) return props.children;
+  const sandboxBootstrap = useHostlessSandboxBootstrap(readiness);
+  if (sandboxBootstrap || !gateBlocksApp(predicateInput)) {
+    return props.children;
+  }
   // The frame stays (header + background) so the block still looks like the
   // app rather than a blank document, and so a user whose modal is suppressed
   // on `/settings` is not left staring at nothing.
@@ -619,6 +626,23 @@ export function DefaultHostReadyGate(props: {
         <SurfaceReadinessFallback readiness={cardReadiness} />
       )}
     </div>
+  );
+}
+
+/**
+ * Whether a person with no host at all (`mobile-no-host`) gets the app anyway
+ * because a sandbox can be their first host: the landing composer has one
+ * staged, or the catalogue offers a shape to stage. The composer's picker and
+ * its staged send create it, and the handoff pins the composer to it. Every
+ * other readiness is the gate's as before.
+ */
+function useHostlessSandboxBootstrap(readiness: SurfaceReadiness): boolean {
+  const noHost = readiness.kind === "mobile-no-host";
+  const staged = useStagedSandbox(useComposerSurfaceHostKey()) !== null;
+  const catalogue = useSandboxCatalogue(noHost).data ?? null;
+  if (!noHost) return false;
+  return (
+    staged || (catalogue !== null && defaultStageShape(catalogue) !== null)
   );
 }
 

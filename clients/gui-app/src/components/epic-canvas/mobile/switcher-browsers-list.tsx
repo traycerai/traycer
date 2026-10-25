@@ -53,7 +53,6 @@ import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
-import { cn } from "@/lib/utils";
 
 interface SwitcherListProps {
   readonly epicId: string;
@@ -212,26 +211,31 @@ function SwitcherBrowsersBody(props: {
           onRetry={sessions.lifecycle === "unsupported" ? null : sessions.retry}
         />
       ) : null}
-      {isEmpty ? (
-        <BrowsersPanelEmptyState
-          onAddBrowser={props.onAddBrowser}
-          isAdding={props.isAddingBrowser}
-          elsewhere={elsewhere}
-          onShowHost={hostPin.setSelection}
-        />
-      ) : null}
-      {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
-      {/* One scroller for the browser rows and the Simulators section under
-          them, as the desktop panel stacks its two groups. It only takes the
-          sheet's remaining height when there are rows; otherwise it is as
-          tall as the section, so the empty and no-results states above keep
-          the space they centre in. */}
-      <div
-        className={cn(
-          "flex min-h-0 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom",
-          filteredTabs.length > 0 && "flex-1",
-        )}
-      >
+      {/* One scroller for everything below the header: the empty or
+          no-results state, the browser rows and the Simulators section, as
+          the desktop panel stacks its two groups. The empty and no-results
+          states ride inside it in a wrapper that grows but never shrinks: on
+          a host with no Simulators section they fill the sheet and centre as
+          before, and above a long simulator list they keep their natural
+          height and scroll with it. As a sibling of the scroller they would
+          be flex items competing with a list taller than the sheet, and
+          `min-h-0` let them collapse to nothing with the Add button clipped. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+        {isEmpty ? (
+          <div className="flex shrink-0 grow flex-col">
+            <BrowsersPanelEmptyState
+              onAddBrowser={props.onAddBrowser}
+              isAdding={props.isAddingBrowser}
+              elsewhere={elsewhere}
+              onShowHost={hostPin.setSelection}
+            />
+          </div>
+        ) : null}
+        {hasNoResults ? (
+          <div className="flex shrink-0 grow flex-col">
+            <BrowsersPanelNoResultsState />
+          </div>
+        ) : null}
         {filteredTabs.length > 0 ? (
           <div className="flex flex-col gap-0.5">
             {filteredTabs.map((row) => (

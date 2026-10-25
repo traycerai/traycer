@@ -21,6 +21,7 @@ import {
   EpicArtifactKindSchemaPreHtml,
 } from "@traycer/protocol/common/registry";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
+import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import {
   agentModeSchema,
   tuiHarnessIdSchema,
@@ -2236,6 +2237,19 @@ export const createChatRequestSchemaV12 = lazySchema(() =>
 );
 export type CreateChatRequestV12 = z.infer<typeof createChatRequestSchemaV12>;
 
+/**
+ * v1.3 request: the OpenCode line the new chat is bound to from birth, for
+ * "Continue on OpenCode 2". Absent means the chat binds at its first send from
+ * the selection then, like every other new chat. A new optional key, so a host
+ * below `@1.3` strips it on the within-major re-parse.
+ */
+export const createChatRequestSchemaV13 = lazySchema(() =>
+  createChatRequestSchemaV12.extend({
+    opencodeLine: opencodeLineSchema.optional(),
+  }),
+);
+export type CreateChatRequestV13 = z.infer<typeof createChatRequestSchemaV13>;
+
 export const createChatResponseSchema = lazySchema(() =>
   z.object({
     chatId: z.string(),
@@ -2994,9 +3008,44 @@ export const createCommentThreadRequestSchemaPreAnchor = lazySchema(() =>
   }),
 );
 /** Durable HTML/canvas anchors; offsets refer to normalized element text. */
+export const commentAnchorSchemaPreCanvasPoint = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("artifact") }),
+    z.object({
+      kind: z.literal("element"),
+      artboard: z.string(),
+      elementId: z.string(),
+      label: z.string(),
+    }),
+    z
+      .object({
+        kind: z.literal("text"),
+        artboard: z.string(),
+        elementId: z.string(),
+        startOffset: z.number().int().nonnegative(),
+        endOffset: z.number().int().nonnegative(),
+        label: z.string(),
+      })
+      .refine((anchor) => anchor.endOffset >= anchor.startOffset, {
+        message: "Text anchor end must not precede its start",
+        path: ["endOffset"],
+      }),
+  ]),
+);
+/**
+ * 1.3 adds `canvas-point`: a spot pinned on a canvas page outside every
+ * board, in canvas-space coordinates. 1.2 keeps its frozen anchor union.
+ */
 export const commentAnchorSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("artifact") }),
+    z.object({
+      kind: z.literal("canvas-point"),
+      page: z.string(),
+      x: z.number().finite(),
+      y: z.number().finite(),
+      label: z.string(),
+    }),
     z.object({
       kind: z.literal("element"),
       artboard: z.string(),
@@ -3021,6 +3070,12 @@ export const commentAnchorSchema = lazySchema(() =>
 export type CommentAnchor = z.infer<typeof commentAnchorSchema>;
 
 /** 1.2 adds anchors; negotiation keeps anchored writes off older hosts. */
+export const createCommentThreadRequestSchemaPreCanvasPoint = lazySchema(() =>
+  createCommentThreadRequestSchemaPreAnchor.extend({
+    anchor: commentAnchorSchemaPreCanvasPoint.optional(),
+  }),
+);
+/** 1.3 adds the canvas-point anchor; 1.2 keeps its frozen union. */
 export const createCommentThreadRequestSchema = lazySchema(() =>
   createCommentThreadRequestSchemaPreAnchor.extend({
     anchor: commentAnchorSchema.optional(),
@@ -3197,7 +3252,7 @@ export const commentThreadDataSchemaPreAnchor = lazySchema(() =>
   }),
 );
 
-export const commentThreadDataSchema = lazySchema(() =>
+export const commentThreadDataSchemaPreCanvasPoint = lazySchema(() =>
   commentThreadDataSchemaPreAnchor.extend({
     anchorKind: z.enum(["artifact", "element", "text"]).optional(),
     artboard: z.string().optional(),
@@ -3205,6 +3260,18 @@ export const commentThreadDataSchema = lazySchema(() =>
     startOffset: z.number().int().nonnegative().optional(),
     endOffset: z.number().int().nonnegative().optional(),
     label: z.string().optional(),
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
+export const commentThreadDataSchema = lazySchema(() =>
+  commentThreadDataSchemaPreCanvasPoint.extend({
+    anchorKind: z
+      .enum(["artifact", "canvas-point", "element", "text"])
+      .optional(),
+    /** A canvas-point anchor's page and canvas-space position. */
+    page: z.string().optional(),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
   }),
 );
 
@@ -3215,6 +3282,11 @@ export const commentThreadWireSchemaPreAnchor = lazySchema(() =>
     createdAt: z.number(),
     comments: z.array(commentEntrySchema),
     data: commentThreadDataSchemaPreAnchor,
+  }),
+);
+export const commentThreadWireSchemaPreCanvasPoint = lazySchema(() =>
+  commentThreadWireSchemaPreAnchor.extend({
+    data: commentThreadDataSchemaPreCanvasPoint,
   }),
 );
 export const commentThreadWireSchema = lazySchema(() =>
@@ -3244,6 +3316,12 @@ export const listCommentThreadsResponseSchemaPreAnchor = lazySchema(() =>
     threads: z.array(commentThreadWireSchemaPreAnchor),
   }),
 );
+export const listCommentThreadsResponseSchemaPreCanvasPoint = lazySchema(() =>
+  listCommentThreadsResponseSchemaPreAnchor.extend({
+    threads: z.array(commentThreadWireSchemaPreCanvasPoint),
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
 export const listCommentThreadsResponseSchema = lazySchema(() =>
   listCommentThreadsResponseSchemaPreAnchor.extend({
     threads: z.array(commentThreadWireSchema),

@@ -171,6 +171,7 @@ function renderPanel(
       store={makeToolbarStore()}
       pending={false}
       disabledHint={null}
+      stagedAhead={false}
       hostId={null}
       terminalLoginSurface={null}
       onStart={onStart}
@@ -287,6 +288,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
           store={makeGuiOnlyToolbarStore()}
           pending={false}
           disabledHint={null}
+          stagedAhead={false}
           hostId={null}
           terminalLoginSurface={null}
           onStart={onStart}
@@ -300,6 +302,46 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 
+  it("lets a staged sandbox take Start though this host offers no terminal agent", () => {
+    // A person with no host: no catalog answers, so nothing here is
+    // terminal-capable.
+    const store = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "test",
+      values: {
+        permission: "supervised",
+        selection: { harnessId: "claude", modelSlug: "", profileId: null },
+        reasoning: "",
+        serviceTier: "",
+      },
+      onSettingsChange: null,
+      tuiOnly: true,
+      chatLineCarriesAutoMode: null,
+      hostId: null,
+    });
+    const onStart = vi.fn();
+    render(
+      <TerminalLaunchPanel
+        store={store}
+        pending={false}
+        disabledHint={null}
+        stagedAhead
+        hostId={null}
+        terminalLoginSurface={null}
+        onStart={onStart}
+      />,
+    );
+
+    const start = screen.getByRole("button", { name: "Start agent" });
+    expect(start.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(start);
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessId: "claude" }),
+      null,
+    );
+  });
+
   // S11 coverage: a regression back to the app-wide default host would leave
   // `useHostClientForHostId`, `providers.list`, and the picker all pinned to
   // `null` regardless of the `hostId` prop - this asserts the non-null host
@@ -311,6 +353,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
         store={makeToolbarStore()}
         pending={false}
         disabledHint={null}
+        stagedAhead={false}
         hostId="host-b"
         terminalLoginSurface={null}
         onStart={vi.fn()}
@@ -333,6 +376,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
         store={makeToolbarStore()}
         pending={false}
         disabledHint={null}
+        stagedAhead={false}
         hostId="host-a"
         terminalLoginSurface={null}
         onStart={onStart}

@@ -329,6 +329,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
         slashCatalog: null,
         owner: ACME_OWNER,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -367,6 +368,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
         slashCatalog: null,
         owner: ACME_OWNER,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -398,6 +400,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
         slashCatalog: null,
         owner: ACME_OWNER,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -427,6 +430,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -453,6 +457,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: true,
+        settled: null,
         toolbar: defaultToolbar(),
       });
     });
@@ -473,18 +478,19 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
 
     let refusal: { readonly message: string } | null = null;
     act(() => {
-      refusal = result.current.selectTerminalAgent(
-        {
+      refusal = result.current.selectTerminalAgent({
+        launch: {
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
           terminalAgentArgs: "",
           profileId: null,
         },
-        null,
-        null,
-        true,
-      );
+        draftId: null,
+        owner: null,
+        teamSandboxHarnessBlocked: true,
+        settled: null,
+      });
     });
 
     expect(refusal).toEqual({ message: NOT_ON_TEAM_SANDBOXES });

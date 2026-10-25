@@ -24,10 +24,6 @@ import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  confirmTeamWake,
-  teamWakeAsks,
-} from "@/stores/hosts/team-wake-confirm-store";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 
 /**
@@ -111,9 +107,6 @@ function SandboxTileStateFrameInRuntime(props: {
   // awake sandbox or not. Only the overlay and `inert` vary.
   const overlay =
     facts === null ? null : sandboxTileOverlay(facts.state, facts.frozen);
-  const wakeAsks =
-    facts !== null &&
-    teamWakeAsks(facts.ownerTeamName !== null, facts.profile, facts.frozen);
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
@@ -123,7 +116,6 @@ function SandboxTileStateFrameInRuntime(props: {
         <SandboxTileOverlayLayer
           hostId={hostId}
           overlay={overlay}
-          wakeAsks={wakeAsks}
           teamOwned={facts !== null && facts.ownerTeamName !== null}
           placement="strip"
         />
@@ -144,7 +136,6 @@ function SandboxTileStateFrameInRuntime(props: {
         <SandboxTileOverlayLayer
           hostId={hostId}
           overlay={overlay}
-          wakeAsks={wakeAsks}
           teamOwned={facts !== null && facts.ownerTeamName !== null}
           placement="cover"
         />
@@ -156,8 +147,6 @@ function SandboxTileStateFrameInRuntime(props: {
 function SandboxTileOverlayLayer(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay;
-  /** A team sandbox asks before its Resume or Start bills the opener. */
-  readonly wakeAsks: boolean;
   /** A team's frozen sandbox says whose bundle is out, not "your credits". */
   readonly teamOwned: boolean;
   /**
@@ -226,7 +215,6 @@ function SandboxTileOverlayLayer(props: {
                 sandboxId={summary.id}
                 verb={overlay.verb}
                 label={overlay.label}
-                asks={props.wakeAsks}
               />
             ) : (
               <SandboxTileRowMissing />
@@ -287,7 +275,6 @@ function SandboxTileWakeButton(props: {
   readonly sandboxId: string;
   readonly verb: SandboxLifecycleVerb;
   readonly label: string;
-  readonly asks: boolean;
 }): ReactNode {
   const verb = useSandboxVerb(props.sandboxId);
   return (
@@ -296,7 +283,7 @@ function SandboxTileWakeButton(props: {
       size="sm"
       disabled={verb.isPending}
       data-testid="sandbox-tile-overlay-wake"
-      onClick={() => confirmTeamWake(props.asks, () => verb.mutate(props.verb))}
+      onClick={() => verb.mutate(props.verb)}
     >
       {verb.isPending ? (
         <AgentSpinningDots

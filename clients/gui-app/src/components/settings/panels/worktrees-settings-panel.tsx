@@ -116,10 +116,9 @@ import {
   clearSettledWorktreeDeleteSuccessesForHostIfQuiescent,
   summarizeWorktreeDeleteRuns,
   useWorktreeDeleteRun,
-  worktreeDeleteProgressDetail,
   type WorktreeDeleteRunState,
-  type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
+import { WorktreeDeleteProgressStrip } from "./worktree-delete-progress-strip";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-auto-cleanup-chip";
 import { WorktreeAgentCreateChip } from "@/components/settings/panels/worktree-agent-create-chip";
@@ -1729,6 +1728,7 @@ export function WorktreesList(props: {
         />
         <WorktreeDeleteProgressStrip
           summary={progressSummary}
+          runs={runs}
           onDismiss={dismissTerminalBackgrounded}
         />
         {shouldShowWorktreeFilterResolutionStatus(
@@ -1964,40 +1964,6 @@ function WorktreeDeleteForegroundSurface(props: {
           run={run}
           onClose={props.onCloseProgress}
         />
-      </div>
-    </div>
-  );
-}
-
-function WorktreeDeleteProgressStrip(props: {
-  readonly summary: WorktreeDeleteProgressSummary;
-  readonly onDismiss: () => void;
-}): ReactNode {
-  if (props.summary.total === 0) return null;
-  // Once nothing is in flight, a batch that ended with failures stays put so the
-  // user notices; offer an explicit Dismiss to clear it (and the app-wide toast)
-  // rather than leaving it stuck forever.
-  const showDismiss = props.summary.active === 0 && props.summary.failed > 0;
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 bg-foreground/3 px-5 py-2">
-      <span className="text-ui-sm font-medium text-foreground">
-        {worktreeDeleteProgressTitle(props.summary)}
-      </span>
-      <div className="flex items-center gap-3">
-        <span className="text-ui-xs text-muted-foreground">
-          {worktreeDeleteProgressDetail(props.summary)}
-        </span>
-        {showDismiss ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={props.onDismiss}
-            data-testid="worktree-delete-progress-dismiss"
-          >
-            Dismiss
-          </Button>
-        ) : null}
       </div>
     </div>
   );
@@ -2308,15 +2274,6 @@ function WorktreeBulkDeleteDialog(props: {
       </DialogContent>
     </Dialog>
   );
-}
-
-function worktreeDeleteProgressTitle(
-  summary: WorktreeDeleteProgressSummary,
-): string {
-  if (summary.active > 0) return "Deleting worktrees";
-  if (summary.failed === 0) return "Worktrees deleted";
-  if (summary.deleted === 0) return "Couldn't delete worktrees";
-  return "Some worktrees couldn't be deleted";
 }
 
 type WorktreeScriptReviewDraft = {
@@ -3620,7 +3577,7 @@ function deleteDialogCopy(entry: WorktreeHostEntryV14): {
   ) {
     return {
       title: "Delete worktree with unpushed local commits?",
-      description: `${branch} has local-only commits not on the default branch and was never pushed. Removing the worktree keeps the branch ref, so the commits survive on the branch — but this machine is their only copy. Traycer runs the repo's teardown script, then removes ${entry.worktreePath}.`,
+      description: `${branch} has local-only commits not on the default branch and was never pushed. Removing the worktree keeps the branch ref, so the commits survive on the branch — but this computer is their only copy. Traycer runs the repo's teardown script, then removes ${entry.worktreePath}.`,
       actionLabel: "Delete worktree",
     };
   }

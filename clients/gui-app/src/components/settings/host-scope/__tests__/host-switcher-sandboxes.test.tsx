@@ -3,10 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherAction } from "@/components/settings/host-scope/host-switcher";
 import type { HostPickIntent } from "@/components/settings/host-scope/host-option-model";
-import {
-  isSleepingSandboxPick,
-  NO_HOST_OPTION_REFUSALS,
-} from "@/components/settings/host-scope/host-option-model";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { buildHostScopeOptions } from "@/components/settings/host-scope/host-scope-model";
 import type {
@@ -153,18 +150,6 @@ function renderSwitcher(input: {
   readonly action: HostSwitcherAction;
   readonly intent: HostPickIntent;
 }): void {
-  renderSwitcherOffering(input, false);
-}
-
-function renderSwitcherOffering(
-  input: {
-    readonly hosts: readonly HostScopeOption[];
-    readonly selected: HostScopeOption;
-    readonly action: HostSwitcherAction;
-    readonly intent: HostPickIntent;
-  },
-  offersAutomations: boolean,
-): void {
   render(
     <HostSwitcher
       refusalByHostId={NO_HOST_OPTION_REFUSALS}
@@ -182,7 +167,7 @@ function renderSwitcherOffering(
       onRetryLists={() => undefined}
       updateViewForHost={null}
       environmentLabelForHost={null}
-      offersAutomations={offersAutomations}
+      composer={null}
     />,
   );
   fireEvent.click(screen.getByTestId("settings-host-switcher"));
@@ -372,7 +357,7 @@ describe("<HostSwitcher /> picking a sleeping sandbox", () => {
 });
 
 describe("<HostSwitcher /> the Automations pod", () => {
-  it("hides the pod from a picker that does not offer automations", () => {
+  it("is never offered by a picker", () => {
     renderSwitcher({
       hosts: [PERSONAL, POD_AWAKE, POD_RELEASED],
       selected: PERSONAL,
@@ -385,60 +370,6 @@ describe("<HostSwitcher /> the Automations pod", () => {
     expect(
       screen.queryByTestId("settings-host-switcher-option-pod-released"),
     ).toBeNull();
-  });
-
-  it("lists the pod with the sandboxes when the picker offers automations", () => {
-    renderSwitcherOffering(
-      {
-        hosts: [PERSONAL, POD_AWAKE, POD_RELEASED],
-        selected: PERSONAL,
-        action: PICKER_ACTION,
-        intent: "pin",
-      },
-      true,
-    );
-    const group = screen.getByTestId("settings-host-switcher-sandboxes");
-    expect(group.contains(row("pod-awake"))).toBe(true);
-    expect(group.contains(row("pod-released"))).toBe(true);
-    expect(row("pod-released").getAttribute("aria-disabled")).not.toBe("true");
-  });
-
-  it("wakes a released pod on a pin pick and hands its id to the surface", () => {
-    renderSwitcherOffering(
-      {
-        hosts: [PERSONAL, POD_RELEASED],
-        selected: PERSONAL,
-        action: PICKER_ACTION,
-        intent: "pin",
-      },
-      true,
-    );
-    fireEvent.click(row("pod-released"));
-    expect(wakeSandboxOnPick).toHaveBeenCalledTimes(1);
-    expect(wakeSandboxOnPick).toHaveBeenCalledWith(POD_RELEASED);
-    expect(onSelect).toHaveBeenCalledWith("pod-released");
-  });
-
-  // The switcher hands EVERY pin pick to `wakeSandboxOnPick`, and the
-  // "only a sleeping sandbox wakes" rule is that function's own gate
-  // (`isSleepingSandboxPick`), which the mock above replaces. So this pins
-  // both halves: the pick is forwarded, and the gate the real
-  // `wakeSandboxOnPick` reads refuses an awake pod (a released one passes).
-  it("does not wake an awake pod on a pick", () => {
-    renderSwitcherOffering(
-      {
-        hosts: [PERSONAL, POD_AWAKE],
-        selected: PERSONAL,
-        action: PICKER_ACTION,
-        intent: "pin",
-      },
-      true,
-    );
-    fireEvent.click(row("pod-awake"));
-    expect(wakeSandboxOnPick).toHaveBeenCalledWith(POD_AWAKE);
-    expect(isSleepingSandboxPick(POD_AWAKE)).toBe(false);
-    expect(isSleepingSandboxPick(POD_RELEASED)).toBe(true);
-    expect(onSelect).toHaveBeenCalledWith("pod-awake");
   });
 });
 
@@ -460,6 +391,7 @@ describe("<HostSwitcher /> a sandbox no host row stands for", () => {
       localService: undefined,
       hasLiveSession: () => false,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: [
         sandboxSummaryFixture({
           id: "sbx-broken",

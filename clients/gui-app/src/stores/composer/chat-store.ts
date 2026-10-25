@@ -495,6 +495,7 @@ export type MessageSegment =
       id: string;
       kind: "compaction";
       status: "streaming" | "completed" | "errored";
+      notApplied: boolean;
       trigger: "auto" | "manual" | null;
       preTokens: number | null;
       postTokens: number | null;
@@ -757,11 +758,29 @@ export interface ChatMessage {
    */
   announcement?: BotAnnouncement;
   /**
+   * The choices a bot reply offers the person (Tracy Bots, decision 56),
+   * each a button that posts it as their next message on that surface.
+   * Absent on every other row.
+   */
+  options?: ReadonlyArray<string>;
+  /**
+   * The member's post a bot's direct reply answers, by its message id (Tracy
+   * Bots, reply mode `direct`), on the bot's row in its channel. Absent on
+   * every other row.
+   */
+  repliesTo?: string;
+  /**
    * The picture of the member who wrote this user row, in a bot
    * conversation whose member directory knows one. Absent on every other
    * row, and on a member with no picture.
    */
   senderAvatarUrl?: string;
+  /**
+   * The member who wrote this user row, in a bot conversation: what the
+   * row's picture is hashed from when it has none, as everywhere else the
+   * member is drawn. Absent on every other row.
+   */
+  senderUserId?: string;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;

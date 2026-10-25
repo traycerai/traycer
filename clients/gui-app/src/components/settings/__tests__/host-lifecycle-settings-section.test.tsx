@@ -1161,7 +1161,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and the subscript
 
     await waitFor(() => {
       expect(screen.getByTestId("host-quit-dialog").textContent).toContain(
-        "Stop the host on this machine?",
+        "Stop the host on this computer?",
       );
     });
     fireEvent.click(screen.getByTestId("host-quit-stop"));

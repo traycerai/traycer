@@ -2,8 +2,9 @@
  * The bot's under-the-hood view (Tracy Bots, decision 43): what the bot and
  * its environment have cost, the threads it runs, and the transcript of its
  * trunk or of one thread's session. The real panel and the real cost query run
- * over a mocked `host.usage.summary` read per bot; the transcript is a stub
- * that exposes the chat it was handed.
+ * over a mocked thread listing (the bot's and its trunk's figures) and a
+ * mocked `bot.thread.list` read per sibling bot bound to the tab's host (the
+ * environment's); the transcript is a stub that exposes the chat it was handed.
  */
 import { useState, type ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -11,13 +12,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 
-interface UsageAnswer {
-  readonly totalUsd: number;
-  readonly buckets: ReadonlyArray<{ chatId: string; knownCostUsd: number }>;
+interface ThreadListAnswer {
+  readonly trunkCostUsd: number | null;
+  readonly threads: ReadonlyArray<BotThreadSummary>;
 }
 
 const mocks = vi.hoisted(() => {
-  const answers: Record<string, UsageAnswer> = {};
+  const answers: Record<string, ThreadListAnswer> = {};
   return {
     client: { stub: "tab-host-client" },
     refetchThreads: vi.fn<() => void>(),
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => {
       usageSupported: true,
       answers,
       threads: [] as BotThreadSummary[],
+      trunkCostUsd: null as number | null,
       threadListSupported: true,
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
@@ -51,7 +53,10 @@ vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
     data: mocks.state.threadListAnswered
-      ? { threads: mocks.state.threads }
+      ? {
+          threads: mocks.state.threads,
+          trunkCostUsd: mocks.state.trunkCostUsd,
+        }
       : undefined,
     isError: mocks.state.threadListError,
     refetch: mocks.refetchThreads,
@@ -62,24 +67,16 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
 }));
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { epicId: string | null } }>;
+    requests: ReadonlyArray<{ method: string; params: { botId: string } }>;
   }) =>
     args.requests.map((request) => {
-      const epicId = request.params.epicId;
-      const answer =
-        epicId === null || !Object.hasOwn(mocks.state.answers, epicId)
-          ? null
-          : mocks.state.answers[epicId];
+      const botId = request.params.botId;
       return {
         data:
-          answer === null
-            ? undefined
-            : {
-                summary: {
-                  totals: { knownCostUsd: answer.totalUsd },
-                  chatBuckets: answer.buckets,
-                },
-              },
+          request.method === "bot.thread.list" &&
+          Object.hasOwn(mocks.state.answers, botId)
+            ? mocks.state.answers[botId]
+            : undefined,
       };
     }),
 }));
@@ -99,14 +96,13 @@ import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SIBLING_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const OTHER_HOST_SIBLING_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
 const TRUNK_ID = "trunk-1";
-
-function answer(
-  totalUsd: number,
-  buckets: ReadonlyArray<{ chatId: string; knownCostUsd: number }>,
-): UsageAnswer {
-  return { totalUsd, buckets: [...buckets] };
-}
+const HOST_ID = "host-bound";
+const ENVIRONMENT_BOTS = [
+  { botId: BOT_ID, boundHostId: HOST_ID },
+  { botId: SIBLING_ID, boundHostId: HOST_ID },
+];
 
 function thread(
   threadId: string,
@@ -136,18 +132,22 @@ function thread(
 function Panel(props: {
   readonly onSelectSession: (sessionChatId: string | null) => void;
   readonly sessionChatId: string | null;
+  readonly environmentBots: ReadonlyArray<{
+    readonly botId: string;
+    readonly boundHostId: string | null;
+  }> | null;
 }): ReactNode {
   return (
     <BotUnderTheHoodPanel
       botId={BOT_ID}
-      hostId="host-bound"
+      hostId={HOST_ID}
       botTitle="Release Bot"
       trunkChatId={TRUNK_ID}
       tasks={[]}
       openRequestCount={null}
       paused={false}
       environmentLabel="Acme"
-      environmentBotIds={[BOT_ID, SIBLING_ID]}
+      environmentBots={props.environmentBots}
       sessionChatId={props.sessionChatId}
       onSelectSession={props.onSelectSession}
     />
@@ -157,7 +157,11 @@ function Panel(props: {
 function StatefulPanel(): ReactNode {
   const [sessionChatId, setSessionChatId] = useState<string | null>(null);
   return (
-    <Panel sessionChatId={sessionChatId} onSelectSession={setSessionChatId} />
+    <Panel
+      sessionChatId={sessionChatId}
+      onSelectSession={setSessionChatId}
+      environmentBots={ENVIRONMENT_BOTS}
+    />
   );
 }
 
@@ -171,6 +175,7 @@ beforeEach(() => {
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
   mocks.state.threads = [];
+  mocks.state.trunkCostUsd = null;
   mocks.state.threadListSupported = true;
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
@@ -181,15 +186,25 @@ afterEach(() => {
 });
 
 describe("<BotUnderTheHoodPanel /> cost", () => {
-  it("shows the bot's total, its trunk's share, and the sum across its environment's bots", () => {
+  it("shows the bot's total as its trunk's plus its threads', the trunk's share, and the environment's as the sum of its bots' totals", () => {
+    mocks.state.trunkCostUsd = 3.25;
+    mocks.state.threads = [
+      thread("thread-a", "Please review the release", { costUsd: 9 }),
+      thread("thread-b", "Why is nightly red?", { costUsd: 0.25 }),
+    ];
     mocks.state.answers = {
-      [BOT_ID]: answer(12.5, [
-        { chatId: "session-thread-a", knownCostUsd: 9.25 },
-        { chatId: TRUNK_ID, knownCostUsd: 3.25 },
-      ]),
-      [SIBLING_ID]: answer(7.5, [{ chatId: "other-trunk", knownCostUsd: 7.5 }]),
+      [SIBLING_ID]: {
+        trunkCostUsd: 5,
+        threads: [thread("thread-c", "Bump the deps", { costUsd: 2.5 })],
+      },
     };
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
     expect(cost("bot-cost-bot")).toBe("$12.50");
     expect(cost("bot-cost-trunk")).toBe("$3.25");
@@ -199,32 +214,96 @@ describe("<BotUnderTheHoodPanel /> cost", () => {
     ).toBeTruthy();
   });
 
-  it("shows a trunk with no turns as $0.00", () => {
-    mocks.state.answers = {
-      [BOT_ID]: answer(4, [{ chatId: "session-thread-a", knownCostUsd: 4 }]),
-      [SIBLING_ID]: answer(1, []),
-    };
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+  it("shows the bot's total as unknown while a thread's cost is, and the trunk's regardless", () => {
+    mocks.state.trunkCostUsd = 3.25;
+    mocks.state.threads = [
+      thread("thread-a", "Please review the release", { costUsd: 9 }),
+      thread("thread-b", "Why is nightly red?", { costUsd: null }),
+    ];
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
-    expect(cost("bot-cost-bot")).toBe("$4.00");
-    expect(cost("bot-cost-trunk")).toBe("$0.00");
+    expect(cost("bot-cost-bot")).toBe("—");
+    expect(cost("bot-cost-trunk")).toBe("$3.25");
   });
 
-  it("shows the environment's figure as unknown while one of its bots has not answered, and the bot's own regardless", () => {
-    mocks.state.answers = {
-      [BOT_ID]: answer(12.5, [{ chatId: TRUNK_ID, knownCostUsd: 3.25 }]),
-    };
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+  it("shows the bot's figures as unknown while the thread list has not answered", () => {
+    mocks.state.threadListAnswered = false;
+    mocks.state.trunkCostUsd = 3.25;
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
-    expect(cost("bot-cost-bot")).toBe("$12.50");
-    expect(cost("bot-cost-trunk")).toBe("$3.25");
+    expect(cost("bot-cost-bot")).toBe("—");
+    expect(cost("bot-cost-trunk")).toBe("—");
+  });
+
+  it("shows the environment's figure as unknown while one of its bots has not answered", () => {
+    mocks.state.trunkCostUsd = 0;
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
+
+    expect(cost("bot-cost-bot")).toBe("$0.00");
+    expect(cost("bot-cost-environment")).toBe("—");
+  });
+
+  it("shows the environment's figure as unknown, not the sum of the rest, while one of its bots is bound to another host", () => {
+    mocks.state.trunkCostUsd = 3.25;
+    mocks.state.answers = {
+      [SIBLING_ID]: { trunkCostUsd: 5, threads: [] },
+    };
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={[
+          ...ENVIRONMENT_BOTS,
+          { botId: OTHER_HOST_SIBLING_ID, boundHostId: "host-elsewhere" },
+        ]}
+      />,
+    );
+
+    expect(cost("bot-cost-bot")).toBe("$3.25");
+    expect(cost("bot-cost-environment")).toBe("—");
+  });
+
+  it("shows the environment's figure as unknown while its bots are not listed yet", () => {
+    mocks.state.trunkCostUsd = 3.25;
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={null}
+      />,
+    );
+
+    expect(cost("bot-cost-bot")).toBe("$3.25");
     expect(cost("bot-cost-environment")).toBe("—");
   });
 
   it("shows no cost section on a host that cannot report usage", () => {
     mocks.state.usageSupported = false;
-    mocks.state.answers = { [BOT_ID]: answer(12.5, []) };
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
     expect(screen.queryByTestId("bot-costs")).toBeNull();
     expect(screen.getByTestId("bot-threads")).toBeTruthy();
@@ -267,7 +346,13 @@ describe("<BotUnderTheHoodPanel /> sessions", () => {
       }),
       thread("thread-b", "Roll back the deploy", { replyCount: 4 }),
     ];
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
     const [first, second] = screen.getAllByTestId("bot-thread-row");
     expect(within(first).getByText("Please review the release")).toBeTruthy();
@@ -284,7 +369,13 @@ describe("<BotUnderTheHoodPanel /> thread list unavailable", () => {
   it("lists no threads on a host without the thread list", () => {
     mocks.state.threadListSupported = false;
     mocks.state.threadListAnswered = false;
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
     expect(screen.queryByTestId("bot-threads")).toBeNull();
   });
@@ -293,7 +384,13 @@ describe("<BotUnderTheHoodPanel /> thread list unavailable", () => {
     const user = userEvent.setup();
     mocks.state.threadListAnswered = false;
     mocks.state.threadListError = true;
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
     const threads = screen.getByTestId("bot-threads");
     expect(within(threads).queryByText("No threads yet.")).toBeNull();
@@ -304,7 +401,13 @@ describe("<BotUnderTheHoodPanel /> thread list unavailable", () => {
 
   it("waits for the thread list before saying there are none", () => {
     mocks.state.threadListAnswered = false;
-    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
 
     const threads = screen.getByTestId("bot-threads");
     expect(within(threads).getByTestId("bot-threads-loading")).toBeTruthy();

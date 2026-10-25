@@ -34,6 +34,33 @@ const botProfileSchema = lazySchema(() =>
 );
 
 /**
+ * A bot's standing directive: what its trunk and thread sessions are told as
+ * "your directive". At most 8,000 UTF-16 units of plain text - lines and
+ * tabs, no other control character, no line or paragraph separator and no
+ * bidirectional override, since the text reaches a model prompt the person
+ * reading the form does not see. Mirrored by the cloud's request schema.
+ */
+export const BOT_DIRECTIVE_MAX_LENGTH = 8_000;
+const botDirectiveSchema = lazySchema(() =>
+  z
+    .string()
+    .max(BOT_DIRECTIVE_MAX_LENGTH)
+    .refine((directive) => directive.trim().length > 0, {
+      message: "a directive needs text",
+    })
+    .refine(
+      (directive) =>
+        !/[\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]|(?![\n\t])\p{Cc}/u.test(
+          directive,
+        ),
+      {
+        message:
+          "a directive is plain text: lines and tabs, no other control characters",
+      },
+    ),
+);
+
+/**
  * `bot.create`'s request key: a lowercase UUID, and only that spelling - not
  * `z.uuid()`, which admits uppercase. No database compares the key (the cloud
  * hashes it into the bot's id), so collation never folds two spellings
@@ -45,6 +72,18 @@ const botRequestKeySchema = lazySchema(() =>
     .string()
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
 );
+
+/**
+ * How a bot answers a member's top-level post. `thread`: in a thread under
+ * the post, run by a session of its own. `direct`: the bot itself answers at
+ * the channel's top level, under the post; a member may still open a thread
+ * under the post. `direct` is for a bot of a personal environment
+ * only, and its default there; a team environment's bot is always `thread`.
+ */
+export const botReplyModeSchema = lazySchema(() =>
+  z.enum(["direct", "thread"]),
+);
+export type BotReplyMode = z.infer<typeof botReplyModeSchema>;
 
 /** The bot row as the cloud returns it. */
 export const botRecordSchema = lazySchema(() =>
@@ -74,6 +113,22 @@ export const botRecordSchema = lazySchema(() =>
     hostEpoch: z.number().int().nonnegative(),
     createdAt: z.number().int(),
     archivedAt: z.number().int().nullable(),
+    /** The bot's standing directive; `null` for none. */
+    directive: z.string().nullable(),
+    /**
+     * How the bot answers a top-level post, as it applies to this bot.
+     * Absent from a host that predates the field, which answers every post
+     * in a thread.
+     */
+    replyMode: botReplyModeSchema.default("thread"),
+    /**
+     * The app conversation `bot.create` made with the bot: the bot's
+     * channel. Derived from the bot id, so no conversation filed under the
+     * bot later, whatever its timestamp, can stand in for it. `null` (or
+     * absent) from a host that predates the field; a client then falls back
+     * to the bot's earliest conversation.
+     */
+    appConversationChatId: z.string().min(1).nullable().default(null),
   }),
 );
 export type BotRecord = z.infer<typeof botRecordSchema>;
@@ -103,6 +158,8 @@ export const botCreateRequestSchema = lazySchema(() =>
     effort: botEffortSchema,
     profile: botProfileSchema,
     requestKey: botRequestKeySchema,
+    /** The bot's standing directive, `null` for none. */
+    directive: botDirectiveSchema.nullable(),
   }),
 );
 export type BotCreateRequest = z.infer<typeof botCreateRequestSchema>;
@@ -159,7 +216,8 @@ export const botReadResponseSchema = lazySchema(() =>
 );
 export type BotReadResponse = z.infer<typeof botReadResponseSchema>;
 
-// ---- bot.updateTitle / bot.updateRunSettings --------------------------- //
+// ---- bot.updateTitle / bot.updateRunSettings / bot.updateDirective ------ //
+// ---- bot.updateReplyMode ----------------------------------------------- //
 
 /**
  * Narrow updates, one method per field group - the `epic.updateChatProfile`
@@ -184,10 +242,85 @@ export type BotUpdateRunSettingsRequest = z.infer<
   typeof botUpdateRunSettingsRequestSchema
 >;
 
+/** The directive, or `null` to clear it. */
+export const botUpdateDirectiveRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    directive: botDirectiveSchema.nullable(),
+  }),
+);
+export type BotUpdateDirectiveRequest = z.infer<
+  typeof botUpdateDirectiveRequestSchema
+>;
+
+/**
+ * The reply mode. `direct` on a bot of a team environment is refused with
+ * `E_BOT_REPLY_MODE_NOT_ALLOWED`. The change applies from the next post;
+ * threads already open stay threads.
+ */
+export const botUpdateReplyModeRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    replyMode: botReplyModeSchema,
+  }),
+);
+export type BotUpdateReplyModeRequest = z.infer<
+  typeof botUpdateReplyModeRequestSchema
+>;
+
 export const botUpdateResponseSchema = lazySchema(() =>
   z.object({ bot: botRecordSchema }),
 );
 export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
+
+// ---- bot.notificationLevel.read / bot.notificationLevel.set ------------ //
+
+/**
+ * What the caller's bell raises for one of a bot's conversations (Tracy Bots
+ * T63): `all` of the bot's activity there, `mentions` (the answers to their
+ * own posts and threads they took part in, which is what a conversation
+ * with no level set reads as), or `off`. A thread follows its channel's
+ * level. Stored per person in the cloud, so it is the same on every device.
+ */
+export const botNotificationLevelSchema = lazySchema(() =>
+  z.enum(["all", "mentions", "off"]),
+);
+export type BotNotificationLevel = z.infer<typeof botNotificationLevelSchema>;
+
+export const botNotificationLevelReadRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotNotificationLevelReadRequest = z.infer<
+  typeof botNotificationLevelReadRequestSchema
+>;
+
+/** The caller's levels by conversation id; a conversation absent reads `mentions`. */
+export const botNotificationLevelReadResponseSchema = lazySchema(() =>
+  z.object({
+    levels: z.record(z.string().min(1), botNotificationLevelSchema),
+  }),
+);
+export type BotNotificationLevelReadResponse = z.infer<
+  typeof botNotificationLevelReadResponseSchema
+>;
+
+export const botNotificationLevelSetRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1),
+    level: botNotificationLevelSchema,
+  }),
+);
+export type BotNotificationLevelSetRequest = z.infer<
+  typeof botNotificationLevelSetRequestSchema
+>;
+
+export const botNotificationLevelSetResponseSchema = lazySchema(() =>
+  z.object({ level: botNotificationLevelSchema }),
+);
+export type BotNotificationLevelSetResponse = z.infer<
+  typeof botNotificationLevelSetResponseSchema
+>;
 
 // ---- bot.delete -------------------------------------------------------- //
 
@@ -615,6 +748,16 @@ export const botTaskEntrySchema = lazySchema(() =>
       endedReason: z
         .enum(["by-bot", "deleted", "archived", "completed"])
         .nullable(),
+      /**
+       * The member who set the task up, read off the open request of the
+       * bot thread that created it (T46b); the cloud keeps it only for a
+       * member of the bot's environment. A mention target and a provenance
+       * mark, never an authorization input: nothing reads it to decide who
+       * may act on the bot or the task. `null` for a task the trunk created,
+       * and when the thread had no open request. Defaulted so a host that
+       * predates the field serves an entry without it.
+       */
+      createdByUserId: z.string().min(1).max(36).nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
@@ -643,9 +786,61 @@ export type BotSubscribeOpenRequest = z.infer<
 >;
 
 /**
+ * What one of the bot's running chats (the trunk, or a thread's session) is
+ * doing, as the bound host sees it:
+ *
+ *  - `idle` - the session is open and no turn runs;
+ *  - `replying` - a turn runs; `startedAt` is when it started and `step` the
+ *    latest tool call or command it made, labelled as the transcript labels
+ *    it (`host/agent/gui/activity-step-label.ts`);
+ *  - `parked` - the session's queue is paused on a conversation message it
+ *    could not deliver;
+ *  - `failed` - the last turn ended in an error while the request it answered
+ *    is still open, until a later turn starts or the request resolves.
+ *
+ * `requestId` names the open post the turn is answering, the latest one
+ * delivered to it; `null` for a turn that answers none (a check-in, a
+ * notice), and once its post is resolved while the turn runs on.
+ */
+export const botSessionActivitySchema = lazySchema(() =>
+  z.object({
+    state: z.enum(["idle", "replying", "parked", "failed"]),
+    startedAt: z.number().int().nullable(),
+    step: z.string().nullable(),
+    requestId: z.string().min(1).nullable(),
+  }),
+);
+export type BotSessionActivity = z.infer<typeof botSessionActivitySchema>;
+
+/**
+ * Every running chat of the bot on its bound host. A chat whose session is
+ * not open on the host (never started, gone cold, or its thread closed) is
+ * absent: absent reads as idle.
+ */
+export const botActivitySchema = lazySchema(() =>
+  z.object({
+    trunk: botSessionActivitySchema.nullable(),
+    /** Keyed by thread id, never the session's chat id. */
+    threads: z.record(z.string().min(1), botSessionActivitySchema),
+  }),
+);
+export type BotActivity = z.infer<typeof botActivitySchema>;
+
+/** Which entry of {@link botActivitySchema} an `activity` frame replaces. */
+export const botActivityTargetSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("trunk") }),
+    z.object({ kind: z.literal("thread"), threadId: z.string().min(1) }),
+  ]),
+);
+export type BotActivityTarget = z.infer<typeof botActivityTargetSchema>;
+
+/**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
- * re-sent whole whenever the bot row, its task list, a task's last check-in
- * or its open-request count changes on this host; `deleted` ends it (the bot
+ * re-sent whole whenever the bot row, its task list, a task's last check-in,
+ * its open-request count or its conversations' rows change on this host;
+ * `activity` carries one changed entry of the bot's activity in between;
+ * `deleted` ends it (the bot
  * was archived, or the caller lost it). The conversation rows stay
  * authoritative for open requests; `openRequestCount` is a hint, as the GUI
  * spec says.
@@ -663,6 +858,13 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
        * (a later snapshot carries the count).
        */
       openRequestCount: z.number().int().nonnegative().nullable(),
+      /**
+       * Changes whenever a row is written to the bot's channel or a thread
+       * record on the bound host (a post, a reply, an announcement, a
+       * verdict): a changed value says to read the threads' listing again.
+       * `null` when the serving host is not the bound one.
+       */
+      conversationsRevision: z.number().int().nonnegative().nullable(),
       /** `boundHostId` and `hostEpoch` restated for cheap comparison. */
       boundHost: z.object({
         /** Null when no host runs the bot. */
@@ -671,6 +873,23 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
         /** Whether the serving host is the bound one. */
         isThisHost: z.boolean(),
       }),
+      /**
+       * What the bot's running chats are doing, whole; later changes arrive
+       * as `activity` frames. `null` when the serving host is not the bound
+       * one.
+       */
+      activity: botActivitySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    /**
+     * One entry of the snapshot's `activity` changed: `entry` replaces it, and
+     * `null` removes it (the session is no longer open on the host). Sent
+     * only by the bound host, only after a snapshot.
+     */
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchema.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({

@@ -95,6 +95,16 @@ describe("settings search", () => {
     expect(searchSettings("   ", DESKTOP)).toEqual([]);
   });
 
+  it("describes the Variables and shells page by what Personal shares", () => {
+    const shell = searchSettings("Variables and shells", DESKTOP).find(
+      (result) =>
+        result.entry.section === "shell" && result.entry.anchor === null,
+    );
+    expect(shell?.entry.description).toBe(
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+    );
+  });
+
   it("finds a row by its exact name", () => {
     expect(labelsFor("panel animations", DESKTOP)[0]).toBe("Panel animations");
   });
@@ -114,19 +124,16 @@ describe("settings search", () => {
       "general#general-prevent-sleep",
     );
     expect(labelsFor("dictation", DESKTOP)).toContain("Voice input");
-    expect(labelsFor("proxy", DESKTOP)).toContain("Variables and shells");
+    expect(labelsFor("proxy", DESKTOP)).toContain("Variables & shells");
   });
 
-  it("reaches the replay card by the words the old General row owned", () => {
-    // The tour's replay moved out of General, and its vocabulary moved with
-    // it: these queries appear in no label anywhere and must still land on
-    // the card, anchor included, rather than at the top of a page.
-    expect(landingFor("walkthrough", DESKTOP)).toBe(
-      "getting-started#getting-started-product-tour",
+  it("reaches Start a task and the download card on Getting started", () => {
+    expect(landingFor("start a task", DESKTOP)).toBe(
+      "getting-started#getting-started-start-task",
     );
-    for (const query of ["product tour", "first run", "intro"]) {
-      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
-    }
+    expect(landingFor("another computer", DESKTOP)).toBe(
+      "getting-started#getting-started-install",
+    );
   });
 
   it("reaches the Notifications page by its former name, Inbox", () => {
@@ -223,20 +230,20 @@ describe("settings search", () => {
 
     for (const [query, section, label] of [
       ["Model routing", "fallback", "Model routing"],
-      ["Variables and shells", "shell", "Variables and shells"],
-      ["Agent selection", "agents", "Agent selection"],
-      ["Browser agent access", "browser-agent-access", "Browser agent access"],
+      ["Variables & shells", "shell", "Variables & shells"],
+      ["Agents", "agents", "Agents"],
       ["Secrets", "secrets", "Secrets"],
       ["MCP servers", "mcp-servers", "MCP servers"],
       ["Skills", "skills", "Skills"],
-      ["Agent definitions", "agent-definitions", "Agent definitions"],
-      ["Machine setup", "machine-setup", "Machine setup"],
       ["Providers", "providers", "Providers"],
+      ["Permissions", "permissions", "Permissions"],
+      ["Sandboxes", "sandboxes", "Sandboxes"],
+      ["Members", "members", "Members"],
     ] as const) {
-      expect(pageScopeFor(query, section, label), query).toBe("Personal");
+      expect(pageScopeFor(query, section, label), query).toBe("Environment");
     }
     for (const [query, section, label] of [
-      ["Permissions", "permissions", "Permissions"],
+      ["Credits", "credits", "Credits"],
       ["Notifications", "notifications", "Notifications"],
     ] as const) {
       expect(pageScopeFor(query, section, label), query).toBe("Account");
@@ -244,19 +251,24 @@ describe("settings search", () => {
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
-  it("opens the Browser agent access and Secrets pages on their own words", () => {
+  it("opens Browser agent access on Permissions, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
-      "browser-agent-access#<top>",
+      "permissions#<top>",
     );
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
 
-  it("opens MCP servers, Agent definitions and Machine setup on their own words", () => {
+  it("opens MCP servers on its own words, and Agent definitions on Agents", () => {
     expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
-    expect(landingFor("agent definitions", DESKTOP)).toBe(
-      "agent-definitions#<top>",
-    );
-    expect(landingFor("machine setup", DESKTOP)).toBe("machine-setup#<top>");
+    expect(landingFor("agent definitions", DESKTOP)).toBe("agents#<top>");
+  });
+
+  it("no longer offers Machine setup as a page of its own", () => {
+    expect(
+      searchSettings("machine setup", DESKTOP).some(
+        (result) => result.entry.section === "machine-setup",
+      ),
+    ).toBe(false);
   });
 
   it("reaches the Agent office default view row, group breadcrumb included", () => {

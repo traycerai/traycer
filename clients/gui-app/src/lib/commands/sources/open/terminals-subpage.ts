@@ -26,19 +26,8 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
-import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
-import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
-import {
-  teamPodEnvironmentIds,
-  teamPodOpenHostIds,
-  teamPodOpenRows,
-} from "@/lib/commands/sources/open/team-pod-open";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
-import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
-import {
-  dialableHostEndpoint,
-  dialableHostEndpointFor,
-} from "@/lib/host/transport-key";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
@@ -391,46 +380,20 @@ function useNewTerminalWorkspaceItems(
   // workspace chooser the same freshly-reachable host list as the old dialog.
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
-  // The new terminal picker's own host rule (`hostOptionPickerGroup` with
-  // `offersAutomations`): personal hosts, the user's sandboxes and the
-  // Automations host, and each team's sandboxes and pods; never an agent's
+  // Every picker's host rule (`hostOptionPickerGroup`): personal hosts, the
+  // user's sandboxes and each team's sandboxes; never Automations, an agent's
   // burst sandbox or a sandbox whose control-plane row has not answered.
   const hostOptions = useHostOptions().hosts;
-  const groups = useMemo(
-    () => groupHostOptions(hostOptions, false, true, null),
-    [hostOptions],
-  );
-  const offeredHosts = useMemo(
-    () =>
-      new Map(
-        [
-          ...groups.personal,
-          ...groups.sandboxes,
-          ...groups.teams.flatMap((team) => team.sandboxes),
-        ].map((host) => [host.hostId, host]),
-      ),
-    [groups],
-  );
-  // A team pod that cannot be dialed yet is opened by its environment and
-  // ordinal: one pod-list read per team, however many pods.
-  const podEnvironmentIds = useMemo(
-    () => teamPodEnvironmentIds(groups),
-    [groups],
-  );
-  const podsByEnvironment = useSandboxTeamPods(podEnvironmentIds);
-  const openPod = useSandboxAutomationOpen().mutate;
-  // Dialability depends on the pull-only session cache, so a memo keyed on
-  // directory state alone freezes the row list while the palette is open: a
-  // session dying under an `offline` host would keep offering a
-  // row whose launch gate then silently declines. The subscription re-renders
-  // on a readiness flip; the launch-time gate inside `run` stays an ambient
-  // live read, which is correct for an action.
-  const hasReadySessionFor = useRemoteSessionsPollReadiness(
-    useMemo(
-      () => (directory.data ?? []).map((entry) => entry.hostId),
-      [directory.data],
-    ),
-  );
+  const offeredHosts = useMemo(() => {
+    const groups = groupHostOptions(hostOptions, false, null, null);
+    return new Map(
+      [
+        ...groups.personal,
+        ...groups.sandboxes,
+        ...groups.teams.flatMap((team) => team.sandboxes),
+      ].map((host) => [host.hostId, host]),
+    );
+  }, [hostOptions]);
   const retryBindings = bindings.refetch;
   return useMemo(() => {
     const selectedHostLeaves =
@@ -451,17 +414,6 @@ function useNewTerminalWorkspaceItems(
             },
             hostClient,
           );
-    const dialable = (hostId: string): boolean => {
-      const entry =
-        (directory.data ?? []).find((e) => e.hostId === hostId) ?? null;
-      return (
-        entry !== null &&
-        dialableHostEndpointFor(entry, hasReadySessionFor(hostId)) !== null
-      );
-    };
-    // A team pod that cannot be dialed yet has its Open row below, and that
-    // is its one row.
-    const openedAsPods = teamPodOpenHostIds(groups, dialable);
     // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
     // sleeping sandbox is offered and woken when its sub-page opens. Each
     // workspace row's launch gate still dials before it opens a tile.
@@ -470,7 +422,6 @@ function useNewTerminalWorkspaceItems(
       if (
         entry.hostId === resolvedHostId ||
         host === undefined ||
-        openedAsPods.has(host.hostId) ||
         !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
       ) {
         return [];
@@ -484,36 +435,7 @@ function useNewTerminalWorkspaceItems(
         }),
       ];
     });
-    const podOpens = teamPodOpenRows(groups, podsByEnvironment, dialable).map(
-      (row) => {
-        // The same per-leaf latch as a workspace row: cmdk can invoke a
-        // selected row twice before its view rerenders, and one selection
-        // opens one pod (a generic row would otherwise start two).
-        let hasLaunched = false;
-        return openerActionLeaf({
-          id:
-            row.hostId === null
-              ? `open:terminals:new:team-pod:${row.target.environmentId}`
-              : `open:terminals:new:pod:${row.hostId}`,
-          label: `Open ${row.label}`,
-          keywords: [
-            ...(row.hostId === null ? [] : [row.hostId]),
-            row.label,
-            "pod",
-            "team",
-            "host",
-          ],
-          run: () => {
-            if (hasLaunched) return;
-            hasLaunched = true;
-            // A full team's refusal toasts its server message verbatim
-            // (`sandboxFailureMessage`, `team_pods_full`).
-            openPod(row.target);
-          },
-        });
-      },
-    );
-    return [...selectedHostLeaves, ...otherHosts, ...podOpens];
+    return [...selectedHostLeaves, ...otherHosts];
   }, [
     resolvedHostId,
     bindings.data,
@@ -523,12 +445,8 @@ function useNewTerminalWorkspaceItems(
     retryBindings,
     ctx,
     directory.data,
-    hasReadySessionFor,
     hostClient,
     offeredHosts,
-    groups,
-    podsByEnvironment,
-    openPod,
   ]);
 }
 

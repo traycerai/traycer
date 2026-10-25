@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Permissions).
  * Update that file whenever this settings surface changes.
  */
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
@@ -34,11 +35,17 @@ import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
 import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
 import { useRulesEdit } from "@/components/settings/panels/permissions/rules-edit-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   acknowledgeSettingsOpenIntent,
   useSettingsOpenIntent,
 } from "@/stores/tabs/settings-open-intent-store";
+
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened -
@@ -69,6 +76,62 @@ import {
  * account, Discard, or closing Settings drops it.
  */
 export function PermissionsSettingsPanel(): ReactNode {
+  const source = useConfigurationSource();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
+  return source.kind === "pool" ? (
+    <TeamPermissionsUnlessMachineAsked key={configurationKey} />
+  ) : (
+    <HostPermissionsSettingsPanel />
+  );
+}
+
+/**
+ * A team's Permissions, unless the open intent names a machine: a composer's
+ * "Permission settings…" asks for its run-target host's Judge, and a judge is
+ * that machine's, not the team's. The pick then moves to the machine's row
+ * before paint, as choosing it in the Environment dropdown would (its Local
+ * row, or this window's default row for this window's own machine), and the
+ * host page that mounts under that pick takes the intent.
+ */
+function TeamPermissionsUnlessMachineAsked(): ReactNode {
+  const intent = useSettingsOpenIntent("permissions");
+  const scope = usePersonalHostScope();
+  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const hostId = intent?.hostId ?? null;
+  const hostName =
+    scope.hosts.find((host) => host.hostId === hostId)?.name ?? hostId;
+  // Under a team pick the scope is this window's own machine.
+  const windowHostId = scope.hostId;
+  useLayoutEffect(() => {
+    if (hostId === null || hostName === null) return;
+    setPick(
+      hostId === windowHostId ? null : { kind: "local", hostId, hostName },
+    );
+  }, [hostId, hostName, windowHostId, setPick]);
+  return hostId === null ? (
+    <TeamPermissions>
+      <PermissionsBrowserAgentAccess />
+    </TeamPermissions>
+  ) : null;
+}
+
+/**
+ * The page's Browser agent access region, below its policy. It reads the
+ * ambient binding, so a Local row's pick re-provides it to that computer.
+ */
+function PermissionsBrowserAgentAccess(): ReactNode {
+  return (
+    <div className="pt-5">
+      <EnvironmentHostBinding>
+        <BrowserAgentAccessGroup />
+      </EnvironmentHostBinding>
+    </div>
+  );
+}
+
+function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
@@ -216,6 +279,7 @@ export function PermissionsSettingsPanel(): ReactNode {
           )}
         </TabsContent>
       </Tabs>
+      <PermissionsBrowserAgentAccess />
     </SettingsPanelShell>
   );
 }

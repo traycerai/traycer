@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV13,
+  HostNotificationsCloudFeedRowV14,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   mergeHostPendingForkIntoCloudIndicators,
@@ -216,7 +216,7 @@ describe("cloud notification indicator derivation", () => {
   }
 
   it("does not light the chat's approval glyph for an unresolved browser prompt", () => {
-    const browserRow: HostNotificationsCloudFeedRowV13 = {
+    const browserRow: HostNotificationsCloudFeedRowV14 = {
       entryId: "browser-1",
       originHostId: "host-b",
       coalesceKey: "browser.human.needed:chat-1",

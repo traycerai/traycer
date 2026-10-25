@@ -9,7 +9,6 @@ import {
   useFlashThread,
 } from "@/stores/comments/comment-threads-store";
 import { cn } from "@/lib/utils";
-import { FrameCommentThreadPopover } from "./frame-comments";
 import type { OrderedFrameThread } from "./use-ordered-frame-threads";
 
 function usePinFlash(epicId: string) {
@@ -110,7 +109,7 @@ export function FrameCommentPins(props: {
   >([]);
   const flash = usePinFlash(epicId);
   const activeThreadId = useActiveThreadId(epicId);
-  // A resolved thread selected in the list still needs its pin and popover.
+  // A resolved thread selected in the sidebar still needs its pin.
   const present = useMemo(
     () =>
       source === null
@@ -179,32 +178,27 @@ export function FrameCommentPins(props: {
               );
               if (entry === undefined) return null;
               return (
-                <FrameCommentThreadPopover
+                <button
                   key={pin.threadId}
-                  epicId={epicId}
-                  artifactId={props.artifactId}
-                  artifactType={props.artifactType}
-                  entry={entry}
+                  type="button"
+                  data-comment-pin={pin.threadId}
+                  aria-label={`Open comment ${entry.number}`}
+                  className={cn(
+                    "canvas-nopan touch-auto pointer-events-auto absolute flex size-6 -translate-x-full items-center justify-center rounded-full border border-primary bg-primary text-xs font-medium text-primary-foreground shadow-sm",
+                    (flash?.threadId === pin.threadId ||
+                      activeThreadId === pin.threadId) &&
+                      "ring-2 ring-ring ring-offset-2",
+                    flash?.threadId === pin.threadId && "animate-pulse",
+                  )}
+                  style={{ left: pin.box.x, top: pin.box.y }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onActivate(pin.threadId);
+                  }}
                 >
-                  <button
-                    type="button"
-                    data-comment-pin={pin.threadId}
-                    aria-label={`Open comment ${entry.number}`}
-                    className={cn(
-                      "canvas-nopan touch-auto pointer-events-auto absolute flex size-6 -translate-x-full items-center justify-center rounded-full border border-primary bg-primary text-xs font-medium text-primary-foreground shadow-sm",
-                      flash?.threadId === pin.threadId &&
-                        "animate-pulse ring-2 ring-ring ring-offset-2",
-                    )}
-                    style={{ left: pin.box.x, top: pin.box.y }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onActivate(pin.threadId);
-                    }}
-                  >
-                    {entry.number}
-                  </button>
-                </FrameCommentThreadPopover>
+                  {entry.number}
+                </button>
               );
             })}
     </div>

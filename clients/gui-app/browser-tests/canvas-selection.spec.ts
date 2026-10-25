@@ -1,10 +1,4 @@
-import {
-  expect,
-  test,
-  type FrameLocator,
-  type Locator,
-  type Page,
-} from "@playwright/test";
+import { expect, test, type FrameLocator, type Page } from "@playwright/test";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
@@ -24,6 +18,9 @@ const BOARD_TITLE = "Home";
 interface SelectionProbe {
   readonly ready: boolean;
   readonly editKinds: () => readonly string[];
+  readonly selectedTid: () => string | null;
+  readonly additionalCount: () => number;
+  readonly selectionNote: () => string | null;
   readonly serve: (url: string) => Promise<{
     readonly status: number;
     readonly mediaType: string;
@@ -121,39 +118,32 @@ async function shiftClick(page: Page, tid: string): Promise<void> {
   }
 }
 
-function selectedLayer(page: Page): Locator {
-  return page.getByLabel("Element properties").locator("span").first();
+/** The inspector sits behind its flag, so the selection is read from the
+ * store through the fixture's probe instead of a panel describing it. */
+function selectedTid(page: Page): Promise<string | null> {
+  return page.evaluate(
+    () => (window as ProbeWindow).__selectionProbe?.selectedTid() ?? null,
+  );
 }
 
-/** Opens the inspector and picks `first`; the frame may still be starting, so the click is retried. */
+/** Picks `first`; the frame may still be starting, so the click is retried. */
 async function selectFirst(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Inspector", exact: true }).click();
   await expect(async () => {
     await click(page, "first");
-    await expect(selectedLayer(page)).toHaveText("Paragraph", {
-      timeout: 1000,
-    });
+    await expect.poll(() => selectedTid(page), { timeout: 1000 }).toBe("first");
   }).toPass();
 }
 
-test("a plain click selects the element and shows it in the inspector", async ({
-  page,
-}) => {
+test("a plain click selects the element", async ({ page }) => {
   await open(page);
   await selectFirst(page);
 });
 
-test("a Shift-click on a sibling adds it to the selection", async ({
-  page,
-}) => {
-  await open(page);
-  await selectFirst(page);
-
-  await shiftClick(page, "second");
-
-  await expect(page.getByText("Arrange · 2 selected")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Align left" })).toBeEnabled();
-});
+function additionalCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () => (window as ProbeWindow).__selectionProbe?.additionalCount() ?? -1,
+  );
+}
 
 test("a Shift-click can add several siblings, one after the other", async ({
   page,
@@ -162,10 +152,10 @@ test("a Shift-click can add several siblings, one after the other", async ({
   await selectFirst(page);
 
   await shiftClick(page, "second");
-  await expect(page.getByText("Arrange · 2 selected")).toBeVisible();
+  await expect.poll(() => additionalCount(page)).toBe(1);
   await shiftClick(page, "third");
 
-  await expect(page.getByText("Arrange · 3 selected")).toBeVisible();
+  await expect.poll(() => additionalCount(page)).toBe(2);
 });
 
 test("a Shift-click on an element in another container says so and keeps the selection", async ({
@@ -176,28 +166,13 @@ test("a Shift-click on an element in another container says so and keeps the sel
 
   await shiftClick(page, "elsewhere");
 
-  await expect(
-    page.getByText("Select elements in the same container."),
-  ).toBeVisible();
-  await expect(selectedLayer(page)).toHaveText("Paragraph");
-  await expect(page.getByText(/^Arrange ·/)).toHaveCount(0);
-});
-
-test("the two elements picked by Shift-click are arranged through the toolbar", async ({
-  page,
-}) => {
-  await open(page);
-  await selectFirst(page);
-  await shiftClick(page, "second");
-  await expect(page.getByText("Arrange · 2 selected")).toBeVisible();
-
-  await page.getByRole("button", { name: "Align left" }).click();
-
   await expect
     .poll(() =>
       page.evaluate(
-        () => (window as ProbeWindow).__selectionProbe?.editKinds() ?? [],
+        () => (window as ProbeWindow).__selectionProbe?.selectionNote() ?? null,
       ),
     )
-    .toEqual(["align-elements"]);
+    .toBe("Select elements in the same container.");
+  await expect.poll(() => selectedTid(page)).toBe("first");
+  await expect.poll(() => additionalCount(page)).toBe(0);
 });

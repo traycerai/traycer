@@ -40,6 +40,7 @@ import {
   chatSubscribeV131,
   chatSubscribeV132,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -58,7 +59,7 @@ function canonical(value: unknown): unknown {
 
 function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
   return createHash("sha256")
-    .update(JSON.stringify(canonical(z.toJSONSchema(schema, { io }))))
+    .update(JSON.stringify(canonical(toCanonicalJsonSchema(schema, { io }))))
     .digest("hex");
 }
 
@@ -187,6 +188,16 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // Entries 1.23–1.32 were regenerated again when the assistant row gained the
 // bot channel's optional `announcement` in place (no release carries 1.23 or
 // above); 1.0–1.22 did not move.
+// Entries 1.23–1.32 were regenerated a third time when the assistant row
+// gained the optional `options` (a bot reply's choices) and the announcement
+// kind gained `question` in place (Tracy Bots T46b); 1.0–1.22 did not move.
+// Entries 1.23–1.32 were regenerated a fourth time when a bot channel's rows
+// gained the direct reply mode in place (Tracy Bots T52): a user row's
+// conversation request the optional `direct`, an assistant row the optional
+// `repliesTo`; 1.0–1.22 did not move.
+// Entries 1.23–1.32 were regenerated a fifth time when the chat record gained
+// the optional `opencodeLine` (OpenCode 2) in place, above the T52 fields;
+// 1.0–1.22 did not move.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -281,27 +292,27 @@ const SERVER_FRAME_DIGESTS = {
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
   23: [
-    "aa277e88a7641ab6014d8d97bc6ead104ddc7446dc75801aad15017bf59bc592",
-    "fc6a744b0099d30c97111468489bb65f335070f3ef59e539dd100dfd2dc37cab",
+    "9b49c1f10e3d6466e107c806ab2b7453eccf1f013cbbf320162cceb1a3f2fe50",
+    "4718b607511b2c3681a1fbc154c75461e0fdd8dfb8990f64e54eeda67636b755",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "610abe7438f8e1e20bb46fac7a47451deb8b94c3e77aacf7332509559f092076",
-    "f53a8b389e2478ad36c820152f88091fb71d716c650807817cff8b3536f3eafe",
+    "a8e7bdc76cb2300c66c469a6492b8adb07645d76a6105fd60a5d761cfb91c0e5",
+    "33586a7c4e1fa1e7c6a911c3e77247385b57b13b1a9b97bdd4609123744a7164",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "8a3ef0deeb5daeabb7d45c8d2dced85bf7d806496004f078f96d986a1790c843",
-    "a5001bdd3d1328291c51bbfc3ef6e70b4ae13016e5b6edb5f3945c9dc16dda2f",
+    "c3e1899377342908bcfb109e2aa28e7969e261a82c03bc860e4ef43a178c581c",
+    "abdb7f21dcf2ba7e042e32fae9ab16882247d2b2dcb7d3eafbf05c75105967c1",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "7c7cae2a72191d949e69b8cd392f88d1bb361fdafc8314bb199b3b6ee071c787",
-    "813fa141693515e773a2e96bdd35c20ddd3bbd6ec949d01c8858660c1132a964",
+    "ae408530cd8ab0630a4f2249ffa356f9eeb3d72676d4e08225269a2b714930e9",
+    "f17dc33b4c26dbf3526e8e3208b5dfd65cb390fb9082336a97c9f161f6b9611c",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
   // task-overdue line, with no `signInParked` on a queued prompt and operation
@@ -310,8 +321,8 @@ const SERVER_FRAME_DIGESTS = {
   // one this tree pinned before main's 1.28 landed, and the merged tree's
   // frozen 1.27 reproduces it.
   27: [
-    "5eb3bdd9ca528e82cce61e24b905f3939c1a4a0c687d73c1c03d84417fb2b7c9",
-    "b27371ade82d13af485d4fedfba00ea003c83d77b38a288f2db49e6bdf6c0e08",
+    "432f8db3f612497bdeb7246e7b53ea93d3c8370d528a942f768ee984479c1941",
+    "5e0641a946079b2ccc015491e60f4c61030a7a8cb6a537f90b286c2966831869",
   ],
   // The sign-in park line (main's 1.28): a queued prompt may carry
   // `signInParked`; operation blocks and events keep the four markdown kinds.
@@ -320,8 +331,8 @@ const SERVER_FRAME_DIGESTS = {
   // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
   // as 1.28–1.30, so the re-mint moved nothing else.
   28: [
-    "be06b783af3b0f889290e1557efb4292de93d9764de5e3b235b9508bafdb87e2",
-    "0f9626f6b86bc6e483ea74869315e20bdfdde370e49a6761874ea2797c65ad2b",
+    "fc698062791e85b3f8e6f1e98afd600dac007228537554a717d6822c71e9210e",
+    "189fff2706eae3cb5f3fb017b58de8f89c9ec3b0a3918a7f46d3123a7d9d273e",
   ],
   // The delivery line (main's 1.29): a tool block may carry
   // `agentMessageDelivery`; operation blocks and events keep the four markdown
@@ -330,26 +341,26 @@ const SERVER_FRAME_DIGESTS = {
   // stamp gained `targetHostOffline` (traycer#2421): no stable release carries
   // 1.29 or above, and every line through 1.28 reproduces its value.
   29: [
-    "f0fb0423ee890904893b924bcbed6b8434a93e57ab27fe4363641ad2bfd5d6e7",
-    "a6b920994b6e4c1031e1c460ba73e484e58832cb8200b0d4dbd3c7b4d007dde3",
+    "b51a0ae5bd4d505fc7b4433b421abbc4fb81f17ebf56509843468b19a1364b78",
+    "afbc45409c0d97fe09f7e3b5fa2d7c745b183c29fa2b0b4fce08268ecfcae02c",
   ],
   // The html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "bfd31163463715ae45d809b29d037f6e7a61e3644f46efb0de97cc2170abfb87",
-    "a6c04ad316a8b517cc37ccc2e2de7b223dadd27e713f3a13d1af985dc0c94147",
+    "7e6d7432d4dabce855eee12a745651f7ffcf2b77a27c605226923bb9ab54cdfc",
+    "2ce83228966acdfa0742fabb6942e0863a9a98ee6e70145a7a46c7fc561ecfbb",
   ],
   // The artifact-stamp line, with no canvas annotations. Re-minted above
   // main's 1.29.
   31: [
-    "7159e88ce0defbbedc2c49597e5d2d8503744fce8f5332921816d3af1580be2c",
-    "d5e7b8f51bffad8e9629ad161665bf0bef3d072ec84c6ecc8be873faf40ef769",
+    "6008cf8bf8423de95af05d9f62026041e694c82a3587325c7ca430ca9e9ab4a7",
+    "b00a57a7ce9a9a648822d76c09e11a4e5756b0a38255324c2182132e304e18d3",
   ],
   // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
   // Re-minted above main's 1.29.
   32: [
-    "bd8be9ddee7770fd1b00416408a3c1633d0fc561b441d5914bc509379fcfafa5",
-    "d5adae2413feb765174971a1068dff6784a9666c58e4c6abc2c6ef66fb11a998",
+    "bb99eaf3ff16b63d86cef022d4fb061437738bd9af1b08a769ef3a7f4045cb25",
+    "402f750cc5836980cbbb79a3955341134af3ad79c015e492eac8761b18c753d5",
   ],
 } as const;
 
@@ -663,14 +674,14 @@ describe("chat.subscribe placement freeze", () => {
     ]);
     expect(
       JSON.stringify(
-        z.toJSONSchema(autonomousResumeBlockSchemaV18, {
+        toCanonicalJsonSchema(autonomousResumeBlockSchemaV18, {
           io: "input",
         }),
       ),
     ).not.toContain("deliveryPlacement");
     expect(
       JSON.stringify(
-        z.toJSONSchema(autonomousResumeBlockSchemaV18, {
+        toCanonicalJsonSchema(autonomousResumeBlockSchemaV18, {
           io: "output",
         }),
       ),

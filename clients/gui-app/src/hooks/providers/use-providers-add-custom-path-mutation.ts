@@ -6,7 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { PROVIDER_SELECTION_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
 
 export function useProvidersAddCustomPath(): UseMutationResult<
@@ -19,6 +19,6 @@ export function useProvidersAddCustomPath(): UseMutationResult<
     method: "providers.addCustomPath",
     mutationKey: providersMutationKeys.addCustomPath(),
     errorMessage: "Couldn't add custom CLI path.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
+    invalidateMethods: PROVIDER_SELECTION_INVALIDATIONS,
   });
 }

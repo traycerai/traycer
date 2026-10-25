@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
@@ -60,14 +60,11 @@ export function PersonalEntryMark(props: {
       data-testid="local-entry-mark"
     >
       On {hostName ?? "this host"} only
-      {/* A host refuses to promote a skill, so only an MCP server offers it. */}
-      {props.target.entryKind === "mcp" ? (
-        <AddToPersonalButton
-          entryKind={props.target.entryKind}
-          providerId={props.target.providerId}
-          name={props.name}
-        />
-      ) : null}
+      <AddToPersonalButton
+        entryKind={props.target.entryKind}
+        providerId={props.target.providerId}
+        name={props.name}
+      />
     </span>
   );
 }
@@ -87,6 +84,7 @@ function AddToPersonalButton(props: {
     "providers.nativeMutate",
   );
   const promote = useProvidersPromoteToPersonal();
+  const [refusal, setRefusal] = useState<string | null>(null);
   const supported =
     version !== null &&
     version !== false &&
@@ -96,35 +94,52 @@ function AddToPersonalButton(props: {
     );
   if (!supported) return null;
   return (
-    <Button
-      type="button"
-      variant="link"
-      size="inline-xs"
-      disabled={promote.isPending}
-      data-testid="add-to-personal"
-      onClick={() => {
-        promote.mutate({
-          providerId: props.providerId,
-          mutation: {
-            kind: "promoteToPersonal",
-            entryKind: props.entryKind,
-            scope: "global",
-            workspaceRoot: null,
-            name: props.name,
-          },
-          executableWriteGrant: null,
-        });
-      }}
-    >
-      Add to Personal
-      {promote.isPending ? (
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-          tone="muted"
-        />
-      ) : null}
-    </Button>
+    <>
+      {/* A refusal the host words reads beside the button, as it reads. */}
+      {refusal === null ? null : (
+        <span role="status" className="text-ui-xs text-muted-foreground">
+          {refusal}
+        </span>
+      )}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        disabled={promote.isPending}
+        data-testid="add-to-personal"
+        onClick={() => {
+          setRefusal(null);
+          promote.mutate(
+            {
+              providerId: props.providerId,
+              mutation: {
+                kind: "promoteToPersonal",
+                entryKind: props.entryKind,
+                scope: "global",
+                workspaceRoot: null,
+                name: props.name,
+              },
+              executableWriteGrant: null,
+              expectedEnvironmentId: null,
+            },
+            {
+              onSuccess: (data) => {
+                if (!data.result.ok) setRefusal(data.result.detail);
+              },
+            },
+          );
+        }}
+      >
+        Add to Personal
+        {promote.isPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+            tone="muted"
+          />
+        ) : null}
+      </Button>
+    </>
   );
 }

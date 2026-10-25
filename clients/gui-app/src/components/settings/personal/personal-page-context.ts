@@ -12,8 +12,13 @@ import {
   type PersonalPageStatusLine,
 } from "@/components/settings/personal/personal-page-status";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 
 export interface PersonalPageContextValue {
+  /** The page, and the configuration the Environment dropdown picked. */
+  readonly section: SettingsSectionId;
+  readonly pick: EnvironmentPick;
   readonly state: PersonalHostState;
   readonly line: PersonalPageStatusLine | null;
   readonly hostName: string;
@@ -72,6 +77,26 @@ export function usePersonalRowNotes(
 }
 
 const EMPTY_NOTES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The page's values of `kind` an earlier version held because they look like
+ * a key, by item key (an override's is `<harness>:<NAME>`). Their value is
+ * never shown. Empty outside a Personal page.
+ */
+export function usePersonalHeldValues(
+  kind: "variable" | "env_override",
+): ReadonlyMap<string, EnvironmentReviewEntry> {
+  const review = useContext(PersonalPageContext)?.review ?? NO_REVIEW;
+  const held = new Map<string, EnvironmentReviewEntry>();
+  for (const entry of review) {
+    if (entry.reason === "credential_like_value" && entry.kind === kind) {
+      held.set(entry.key, entry);
+    }
+  }
+  return held.size === 0 ? EMPTY_HELD : held;
+}
+
+const EMPTY_HELD: ReadonlyMap<string, EnvironmentReviewEntry> = new Map();
 
 /**
  * What a Personal MCP server or skill says where its settings cannot be

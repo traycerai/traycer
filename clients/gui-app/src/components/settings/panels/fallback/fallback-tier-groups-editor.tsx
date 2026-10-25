@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { toast } from "sonner";
 import type {
   FallbackPolicy,
@@ -961,6 +962,7 @@ function RestoreDefaultTiers(props: {
   readonly restorePending: boolean;
 }): ReactNode {
   const { tierCount, onRestoreDefaults, restorePending } = props;
+  const source = useConfigurationSource();
   const [confirming, setConfirming] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const awaitingRestoreRef = useRef(false);
@@ -996,8 +998,16 @@ function RestoreDefaultTiers(props: {
       <ConfirmDestructiveDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title={`Replace your ${tierCount === 1 ? "tier" : `${tierCount} tiers`} with the default Frontier, Flagship and Standard tiers?`}
-        description="This also sets the default tier to flagship."
+        title={
+          source.kind === "pool"
+            ? "Restore this team's model routing defaults?"
+            : `Replace your ${tierCount === 1 ? "tier" : `${tierCount} tiers`} with the default Frontier, Flagship and Standard tiers?`
+        }
+        description={
+          source.kind === "pool"
+            ? "Removes the team's model routing settings. Each host uses its own defaults."
+            : "This also sets the default tier to flagship."
+        }
         cascadeSummary={null}
         actionLabel="Restore"
         isPending={restorePending}

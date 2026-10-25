@@ -11,6 +11,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+// The secrets list names its environment through the surface's client.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => scopeOverrides.current.client,
+}));
+
 // What the host's handshake says about `environment.secrets.list`.
 const support = vi.hoisted((): { current: boolean | null } => ({
   current: null,
@@ -38,10 +44,7 @@ vi.mock("@/components/settings/secrets/secrets-page", () => ({
   SecretsPage: () => <div data-testid="secrets-page" />,
 }));
 
-vi.mock("@/lib/links/open-link", () => ({
-  useOpenLink: () => vi.fn(),
-}));
-
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
@@ -77,7 +80,12 @@ function renderPanel(options: {
       ? buildEnvironmentClient({ hostId: HOST_ID, handlers: {} }).client
       : null,
   };
-  render(<SecretsSettingsPanel />);
+  // The panel reads the secrets list to decide whether it has a subtitle.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <SecretsSettingsPanel />
+    </QueryClientProvider>,
+  );
 }
 
 describe("<SecretsSettingsPanel />", () => {
@@ -90,7 +98,7 @@ describe("<SecretsSettingsPanel />", () => {
 
     expect(screen.getByTestId("secrets-page")).toBeTruthy();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the page while the host's principal is not yet read", () => {
@@ -114,7 +122,7 @@ describe("<SecretsSettingsPanel />", () => {
     );
     expect(screen.getByTestId("team-owned-line").textContent).toContain("Acme");
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the team line on a team's host that predates the page", () => {
@@ -127,17 +135,19 @@ describe("<SecretsSettingsPanel />", () => {
     });
 
     expect(screen.getByTestId("secrets-team-view")).toBeTruthy();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
-  it("shows the dashboard link group on a host that predates the page", () => {
+  it("asks to update a host that predates the page", () => {
     renderPanel({
       supported: false,
       status: environmentStatusFixture({ principal: { kind: "personal" } }),
       hasClient: true,
     });
 
-    expect(screen.getByTestId("settings-secrets")).toBeTruthy();
+    expect(screen.getByTestId("secrets-update-host").textContent).toBe(
+      "Update this host to use your secrets here.",
+    );
     expect(screen.queryByTestId("secrets-page")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
@@ -150,7 +160,7 @@ describe("<SecretsSettingsPanel />", () => {
     });
 
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("settings-secrets")).toBeNull();
+    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
 

@@ -42,6 +42,7 @@ import {
   nativeListResultSchemaV101Preimage,
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
+  nativeMutationResultSchemaV14,
   nativeMutationResultSchemaV10Preimage,
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
@@ -70,6 +71,7 @@ import {
   type ProviderNativeCapabilitiesV70Preimage,
 } from "./provider-native-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
 export {
@@ -348,14 +350,41 @@ export const TUI_HARNESS_ID_TO_PROVIDER_ID: Record<TuiHarnessId, ProviderId> = {
   cursor: "cursor",
 };
 
+/**
+ * `line` on the bundled arm names which Managed row the user picked, and only
+ * OpenCode offers more than one. Absent means "Managed, Traycer's default":
+ * that is every selection stored before the line existed, and every pick from
+ * a client that shows a single Managed row. It is an optional KEY rather than
+ * a second `bundled` arm, so a released host's within-major re-parse strips it
+ * instead of refusing the request. First published by
+ * `providers.setSelection@2.2` and `providers.list@10.6`; every released line
+ * binds {@link providerSelectionSchemaV10} instead.
+ */
 export const providerSelectionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("bundled"),
+      line: opencodeLineSchema.optional(),
+    }),
+    z.object({ kind: z.literal("path") }),
+    z.object({ kind: z.literal("custom"), path: z.string() }),
+  ]),
+);
+export type ProviderSelection = z.infer<typeof providerSelectionSchema>;
+
+/**
+ * The selection every released line shipped, before the bundled arm carried
+ * `line`. A hand copy rather than an `.omit()` of the live arm, so the next
+ * key added there cannot reach a frozen line. Its arms are plain objects, so a
+ * reparse through it strips `line`.
+ */
+export const providerSelectionSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("bundled") }),
     z.object({ kind: z.literal("path") }),
     z.object({ kind: z.literal("custom"), path: z.string() }),
   ]),
 );
-export type ProviderSelection = z.infer<typeof providerSelectionSchema>;
 
 export const providerCliCandidateSchema = lazySchema(() =>
   z.object({
@@ -1745,6 +1774,30 @@ export type ProviderMacosRequirement = z.infer<
 >;
 
 /**
+ * One Managed row of a provider that ships more than one managed line. Each
+ * line is its own pack, so the install state and the version panel are the
+ * line's own, with the same meanings (and the same tolerant decoding) as the
+ * provider-level fields of those names.
+ */
+export const providerManagedLineSchema = lazySchema(() =>
+  z.object({
+    line: opencodeLineSchema,
+    candidate: providerCliCandidateSchema.extend({
+      kind: z.literal("bundled"),
+    }),
+    packId: z.string().nullable().catch(null),
+    managedInstallState: providerManagedInstallStateSchema
+      .nullable()
+      .catch(null),
+    managedVersions: providerManagedVersionsSchema.nullable().catch(null),
+    managedVersionsUnavailable: providerManagedVersionsUnavailableSchema
+      .nullable()
+      .catch(null),
+  }),
+);
+export type ProviderManagedLine = z.infer<typeof providerManagedLineSchema>;
+
+/**
  * Enablement is a plain STICKY BOOLEAN on every wire: `enabled` below is the
  * whole story, and the only thing that changes it is the user's toggle
  * (`providers.setEnabled`). An earlier revision of this line carried a
@@ -1917,12 +1970,27 @@ const providerCliStateBaseShape = {
   nextRunBinary: lazySchema(() =>
     providerNextRunBinarySchema.nullable().catch(null).optional(),
   ),
+  // One entry per managed line this provider offers, for a provider with more
+  // than one (OpenCode); absent or `[]` otherwise. When present, the client
+  // renders these as its Managed rows and ignores the `bundled` candidate,
+  // which stays in `candidates` for clients below `providers.list@10.6`. It is
+  // a new KEY rather than a second `bundled` candidate because a within-major
+  // re-parse strips a key but cannot drop an array element: a second candidate
+  // would reach every older client as a second, indistinguishable Managed row.
+  managedLines: lazySchema(() =>
+    z.array(providerManagedLineSchema).catch([]).optional(),
+  ),
+  // Whether existing chats follow the stored selection's line: true when a
+  // caller on `providers.setSelection@2.3` saved the selection as it is now.
+  // A Settings Managed row is checked only when this is true. Absent reads as
+  // false, which is every host below `providers.list@10.7`.
+  chatsFollow: lazySchema(() => z.boolean().optional()),
 };
 
 const providerCliStateBaseShapeV10 = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -1948,7 +2016,7 @@ const providerCliStateBaseShapeV10 = {
 const providerCliStateBaseShapeV20 = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -1962,7 +2030,7 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.5). Mutation echoes use their
+ * Latest provider CLI state (providers.list@10.7). Mutation echoes use their
  * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
@@ -1981,6 +2049,27 @@ export const providerCliStateSchema = lazySchema(() =>
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * The provider row `providers.list@10.6` published: without `chatsFollow`,
+ * which 10.7 added. Every older row derives from this one, so the key reaches
+ * no older reader.
+ */
+const providerCliStateSchemaV106 = lazySchema(() =>
+  providerCliStateSchema.omit({ chatsFollow: true }),
+);
+
+/**
+ * The provider row `providers.list@10.5` published: without `managedLines`,
+ * and with the selection before its bundled arm carried `line`, which 10.6
+ * added. Every older row derives from this one, so neither reaches a released
+ * reader.
+ */
+const providerCliStateSchemaV105 = lazySchema(() =>
+  providerCliStateSchemaV106
+    .omit({ managedLines: true })
+    .extend({ selected: providerSelectionSchemaV10 }),
+);
+
+/**
  * The provider row as every `providers.list` line below 10.5 published it:
  * without `nativeSubagents`, which 10.5 added to the row. The 9.1 row and every
  * 10.0-10.4 preimage derive from this row, so a released reader of those lines
@@ -1988,7 +2077,7 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * so the NEXT row key reddens there rather than widening these lines unseen.
  */
 const providerCliStateSchemaBeforeNativeSubagents = lazySchema(() =>
-  providerCliStateSchema.omit({ nativeSubagents: true }),
+  providerCliStateSchemaV105.omit({ nativeSubagents: true }),
 );
 
 /**
@@ -2395,6 +2484,28 @@ export const providersListResponseSchema = lazySchema(() =>
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 
+/**
+ * Frozen `providers.list@10.6` response: the live envelope over the 10.6 row
+ * (`providerCliStateSchemaV106`), before 10.7 added `chatsFollow`. A hand copy
+ * of the envelope for the reason the 10.4 one is.
+ */
+export const providersListResponseSchemaV106Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchemaV106),
+    native: nativeListResultSchema.nullable().default(null),
+    credentialsManagedInAccount: z.boolean().optional(),
+    scope: z.literal("personal").nullable().optional(),
+    onHostOnly: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+        }),
+      )
+      .optional(),
+  }),
+);
+
 /** The list@10.0 response before MCP remedies and notices were introduced. */
 export const providersListResponseSchemaV100Preimage = lazySchema(() =>
   z.object({
@@ -2477,6 +2588,29 @@ export const providersListResponseSchemaV104Preimage = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchemaBeforeNativeSubagents),
     native: nativeListResultSchema.nullable().default(null),
+  }),
+);
+
+/**
+ * Frozen `providers.list@10.5` response: the 10.5 envelope over the 10.5 row
+ * (`providerCliStateSchemaV105`), before 10.6 added `managedLines` and the
+ * selection's `line`. A hand copy of the envelope for the reason the 10.4 one
+ * is.
+ */
+export const providersListResponseSchemaV105Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchemaV105),
+    native: nativeListResultSchema.nullable().default(null),
+    credentialsManagedInAccount: z.boolean().optional(),
+    scope: z.literal("personal").nullable().optional(),
+    onHostOnly: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+        }),
+      )
+      .optional(),
   }),
 );
 
@@ -2568,7 +2702,7 @@ export type ProviderMutationCliStateV20 = z.infer<
 const providerCliStateBaseShapeV30 = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -2619,7 +2753,7 @@ export type ProvidersListResponseV30 = z.infer<
 const providerCliStateBaseShapeV40 = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -2723,7 +2857,7 @@ export type ProvidersListResponseV40 = z.infer<
 const providerCliStateBaseShapeV70Preimage = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -2822,7 +2956,7 @@ export type ProvidersListResponseV70Preimage = z.infer<
 const providerCliStateBaseShapeV70 = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -2949,7 +3083,7 @@ export type ProviderProfileV80 = z.infer<typeof providerProfileSchemaV80>;
 const providerCliStateBaseShapeV80 = {
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
-  selected: providerSelectionSchema,
+  selected: providerSelectionSchemaV10,
   candidates: lazySchema(() => z.array(providerCliCandidateSchema)),
   authPending: lazySchema(() => z.boolean()),
   checkedAt: lazySchema(() => z.number().nullable()),
@@ -3091,23 +3225,48 @@ export type ProviderMutationCliStateV21 = z.infer<
   typeof providerMutationCliStateSchemaV21
 >;
 
+/** Live request: `providers.setSelection@2.2`, whose bundled arm carries `line`. */
 export const providersSetSelectionRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     selection: providerSelectionSchema,
   }),
 );
+/**
+ * Frozen `providers.setSelection@2.0` / `@2.1` request: the selection before
+ * `line`. A 2.2 caller re-parsed through it loses `line`, which a host on those
+ * lines could not act on anyway.
+ */
+export const providersSetSelectionRequestSchemaV21 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    selection: providerSelectionSchemaV10,
+  }),
+);
 export const providersSetSelectionRequestSchemaV10 = lazySchema(() =>
   z.strictObject({
     providerId: providerIdSchemaV10,
-    selection: providerSelectionSchema,
+    selection: providerSelectionSchemaV10,
   }),
 );
 export type ProvidersSetSelectionRequest = z.infer<
   typeof providersSetSelectionRequestSchema
 >;
 
+/**
+ * Live response: `providers.setSelection@2.2` echoes the selection it just
+ * stored, `line` included, so a caller reading the echo sees the Managed row it
+ * chose rather than a plain `bundled` (which reads as Managed 2.x).
+ */
 export const providersSetSelectionResponseSchema = lazySchema(() =>
+  z.object({
+    state: providerMutationCliStateSchemaV21.extend({
+      selected: providerSelectionSchema,
+    }),
+  }),
+);
+/** Frozen `providers.setSelection@2.1` response: the selection before `line`. */
+export const providersSetSelectionResponseSchemaV21 = lazySchema(() =>
   z.object({
     state: providerMutationCliStateSchemaV21,
   }),
@@ -4086,6 +4245,21 @@ export type ProvidersNativeMutateRequest = z.infer<
 >;
 
 /**
+ * `providers.nativeMutate@1.4` request: `@1.3` plus `expectedEnvironmentId`,
+ * the environment the caller is editing. Null writes wherever this host
+ * writes; an id is refused with `environment_mismatch` unless this host
+ * serves that environment when it writes.
+ */
+export const providersNativeMutateRequestSchemaV14 = lazySchema(() =>
+  providersNativeMutateRequestSchema.extend({
+    expectedEnvironmentId: z.string().min(1).nullable().default(null),
+  }),
+);
+export type ProvidersNativeMutateRequestV14 = z.infer<
+  typeof providersNativeMutateRequestSchemaV14
+>;
+
+/**
  * `providers.nativeMutate@1.0` response. Returns only the mutated native
  * collection: the old `setEnabled` carrier also echoed the full
  * `ProviderCliState`, but no client ever read it on the native arm, and
@@ -4104,6 +4278,14 @@ export const providersNativeMutateResponseSchemaV11Preimage = lazySchema(() =>
 );
 export type ProvidersNativeMutateResponse = z.infer<
   typeof providersNativeMutateResponseSchema
+>;
+
+/** `providers.nativeMutate@1.4` response: the result may be `environment_mismatch`. */
+export const providersNativeMutateResponseSchemaV14 = lazySchema(() =>
+  z.object({ result: nativeMutationResultSchemaV14 }),
+);
+export type ProvidersNativeMutateResponseV14 = z.infer<
+  typeof providersNativeMutateResponseSchemaV14
 >;
 
 // ── Model providers (optional capability channel) ──────────────────────────
@@ -5030,6 +5212,10 @@ export type DowngradableToV10ProviderState = (
   macosRequirement?: ProviderCliState["macosRequirement"];
   // (v10.5) per-provider native subagent setting, absent from earlier rows.
   nativeSubagents?: ProviderCliState["nativeSubagents"];
+  // (v10.6) OpenCode's per-line managed packs, absent from earlier rows.
+  managedLines?: ProviderCliState["managedLines"];
+  // (v10.7) whether existing chats follow the selection, absent from earlier rows.
+  chatsFollow?: ProviderCliState["chatsFollow"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -5062,6 +5248,8 @@ export function downgradeProviderCliStateToV10(
   // - `cliBinaryResolved` — the binary-absent explanation field.
   // - `macosRequirement` (v10.2) — list-only host macOS requirements.
   // - `nativeSubagents` (v10.5) — the per-provider native subagent setting.
+  // - `managedLines` (v10.6) — OpenCode's per-line managed packs.
+  // - `chatsFollow` (v10.7) — whether existing chats follow the selection.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -5102,6 +5290,9 @@ export function downgradeProviderCliStateToV10(
     macosRequirement: _macosRequirement,
     // (v10.5) the per-provider native subagent setting.
     nativeSubagents: _nativeSubagents,
+    managedLines: _managedLines,
+    // (v10.7) whether existing chats follow the selection.
+    chatsFollow: _chatsFollow,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

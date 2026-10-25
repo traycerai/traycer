@@ -109,7 +109,7 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 const PREDATES_AUTO_MODE =
-  "This machine's host predates Auto mode. Update it to choose a judge and write a policy.";
+  "This host predates Auto mode. Update it to choose a judge and write a policy.";
 
 /** A typed harness id for the models query while no pick is shown. */
 const IDLE_MODELS_HARNESS_ID = providerIdToGuiHarnessId("traycer");
@@ -331,12 +331,12 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-muted-foreground">
         {PERMISSIONS.definitions.autoModeJudge.description}
         <Badge variant="muted" size="xs">
-          This machine
+          This host
         </Badge>
       </p>
       {query.isError ? (
         <p className="text-ui-sm font-medium text-warning-foreground">
-          Couldn&apos;t read this machine&apos;s judge. Reopen Settings to try
+          Couldn&apos;t read this host&apos;s judge. Reopen Settings to try
           again.
         </p>
       ) : null}
@@ -347,14 +347,14 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
           className="text-ui-sm font-medium text-warning-foreground"
           data-testid="auto-judge-providers-error"
         >
-          Couldn&apos;t load this machine&apos;s providers. Reopen Settings to
-          try again.
+          Couldn&apos;t load this host&apos;s providers. Reopen Settings to try
+          again.
         </p>
       ) : null}
       {canWrite ? null : (
         <p className="text-ui-sm font-medium text-warning-foreground">
-          This machine&apos;s host can&apos;t change the judge. Update it to
-          pick a different one.
+          This host can&apos;t change the judge. Update it to pick a different
+          one.
         </p>
       )}
       <JudgeTiles

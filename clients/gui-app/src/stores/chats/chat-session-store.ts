@@ -311,6 +311,7 @@ import type {
 // receives is open (`OpenMessage` above).
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { OpenChatSnapshot } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpencodeLineHeld } from "@traycer/protocol/common/opencode-line";
 
 export type ChatStreamClientHandle = Pick<
   ChatStreamClient,
@@ -1584,6 +1585,14 @@ export interface ChatSessionState {
    */
   readonly suggestedPrompt: string | undefined;
   /**
+   * Why the host keeps this chat on its recorded OpenCode line although the
+   * saved selection names the other one (`chat.subscribe@1.38`), for the
+   * composer's one line. Snapshot-only, where an ABSENT key clears: the host
+   * re-sends the snapshot when the chat moves or the hold changes. `undefined`
+   * against a host below `1.38`.
+   */
+  readonly opencodeLineHeld: OpencodeLineHeld | undefined;
+  /**
    * The active turn's thinking-token estimate (`chat.subscribe@1.20`), for the
    * streaming "Thinking" label. Seeded by the snapshot's
    * `thinkingTokensEstimate` (so a reconnect mid-thought is not blank), moved
@@ -2305,6 +2314,15 @@ export interface ChatSessionStoreOptions {
    * `IHostStreamClient.isSilentFor?` makes for the same reason.
    */
   readonly transportSilentFor?: ((ms: number) => boolean) | null;
+  /**
+   * Whether an adjudicated fatal close raises the app's "Agent stream closed
+   * unexpectedly" notification. `silent` for a session whose surface says the
+   * failure itself, in its own view: a bot's channel and threads, whose
+   * opener sets it. OPTIONAL for the reason {@link transportSilentFor} is:
+   * absent is `raise`, the behaviour every other session and the suites that
+   * build these options by hand already have.
+   */
+  readonly fatalCloseNotification?: "raise" | "silent";
 }
 
 /**
@@ -4910,6 +4928,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           // also the reconnect path - a chip the host still holds comes back
           // from here.
           suggestedPrompt: frame.snapshot.suggestedPrompt,
+          // Absent unless the caller's `extra` seats it: the full snapshot
+          // this fold reads carries no hold, and only a windowed snapshot on
+          // `1.38` does. So every other replacement - a legacy snapshot, or a
+          // downgrade onto the legacy line - clears a hold an earlier host
+          // reported, which the current one never said.
+          opencodeLineHeld: undefined,
           // Paired with the snapshot's OWN active turn, so a reconnect
           // mid-thought seats the number under the turn it measured.
           thinkingTokens: thinkingTokensFromSnapshot(
@@ -6844,6 +6868,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         {
           ...aux,
           transcriptRowContext: hydratedRowContext(window),
+          // Straight across: absent is "not held", and it is the value that
+          // clears the line.
+          opencodeLineHeld: frame.snapshot.opencodeLineHeld,
         },
         // The HOST's answer, not a scan of the adapted frame: those records are
         // the hydrated subset, and a failure several user rows back is exactly
@@ -10121,16 +10148,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
           fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          notificationDependencies.appLocalNotifications
-            .getState()
-            .upsertRecurringFailure(
-              chatStreamErrorNotification({
-                hostId: options.hostId,
-                epicId: options.epicId,
-                chatId: options.chatId,
-                details: reason.details,
-              }),
-            );
+          if (options.fatalCloseNotification !== "silent") {
+            notificationDependencies.appLocalNotifications
+              .getState()
+              .upsertRecurringFailure(
+                chatStreamErrorNotification({
+                  hostId: options.hostId,
+                  epicId: options.epicId,
+                  chatId: options.chatId,
+                  details: reason.details,
+                }),
+              );
+          }
         }
         callbacks.onConnectionStatus(status, reason, retryCause);
       };
@@ -10346,6 +10375,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       lastFailedAttempt: undefined,
       lastFallbackOutcome: undefined,
       suggestedPrompt: undefined,
+      opencodeLineHeld: undefined,
       thinkingTokens: null,
       managedCommands: [],
       heldUpdates: [],

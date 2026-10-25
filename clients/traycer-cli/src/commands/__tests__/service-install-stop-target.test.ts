@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { ServiceInstallArgs } from "../service-install";
+import { writeInstalledHostFixture } from "./service-install-host-fixture";
 
 // A `host service install --takeover` that Desktop's force restart bound to
 // one host process (`--expect-host-pid`) holds the whole command to that
@@ -161,11 +162,16 @@ function boundTakeoverArgs(): ServiceInstallArgs {
 describe.skipIf(process.platform === "win32")(
   "host service install --takeover bound to one host process, through the macOS controller",
   () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       const home = homedir();
       for (const entry of readdirSync(home)) {
         rmSync(join(home, entry), { recursive: true, force: true });
       }
+      // Registration starts the installed host; the command refuses without a
+      // real install record and executable.
+      writeInstalledHostFixture(
+        (await import("../../store/paths")).hostInstallRecordPath("production"),
+      );
       mocks.takeoverMock.mockReset();
       mocks.takeoverMock.mockResolvedValue({
         kind: "cli-host-stopped",

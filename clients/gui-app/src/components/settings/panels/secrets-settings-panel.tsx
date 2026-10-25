@@ -1,27 +1,102 @@
 import type { ReactNode } from "react";
-import { SecretsDashboardLink } from "@/components/providers/secrets-dashboard-link";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { SettingsRow } from "@/components/settings/settings-row";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
+
+import {
+  useCanEditConfiguration,
+  useConfigurationIsPersonal,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 
 /**
  * Settings > Personal > Secrets, read through the window's own host:
  *
  * - on a host that serves `environment.secrets.list`, the page itself: the
  *   list, Add a secret, Verify (`SecretsPage`);
- * - on a team's host, the team line: team secrets are kept and changed in
- *   the dashboard, and no value is shown here;
- * - on a host whose version predates the page, the way to the dashboard's
- *   Secrets page, as before.
+ * - on a team's host, the team line, and no value is shown here;
+ * - on a host whose version predates the page, "Update this host to use
+ *   your secrets here."
  */
 export function SecretsSettingsPanel(): ReactNode {
+  const source = useConfigurationSource();
+  return source.kind === "pool" ? (
+    <TeamSecretsSettingsPanel />
+  ) : (
+    <HostSecretsSettingsPanel />
+  );
+}
+
+function TeamSecretsSettingsPanel(): ReactNode {
+  const client = useHostClient();
+  const personal = useConfigurationIsPersonal();
+  const name = useConfigurationName();
+  const canEdit = useCanEditConfiguration();
+  const scope = useTeamViewingHost();
+  return (
+    <SecretsListPanelShell
+      client={client}
+      description={
+        personal
+          ? SECRETS.page.description
+          : `Values and logins ${name}'s agents use, on its sandboxes without being seen.`
+      }
+      headerAction={
+        canEdit ? undefined : (
+          <span className="text-ui-xs text-muted-foreground">Read-only</span>
+        )
+      }
+    >
+      <SecretsPage
+        client={client}
+        hostId={client.getActiveHostId()}
+        hostName={(hostId) =>
+          scope.hosts.data?.hosts.find((host) => host.hostId === hostId)
+            ?.hostLabel ?? "a host"
+        }
+      />
+    </SecretsListPanelShell>
+  );
+}
+
+/**
+ * The shell over the secrets list. No subtitle while the list is empty: the
+ * empty state says the same sentence.
+ */
+function SecretsListPanelShell(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly description: string;
+  readonly headerAction: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const list = useEnvironmentSecretsQuery(props.client);
+  return (
+    <SettingsPanelShell
+      title={SECRETS.page.label}
+      description={
+        !list.isError && list.data?.secrets.length === 0
+          ? undefined
+          : props.description
+      }
+      headerAction={props.headerAction}
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      {props.children}
+    </SettingsPanelShell>
+  );
+}
+
+function HostSecretsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const supported = useHostMethodSupport(
     scope.hostId,
@@ -30,20 +105,36 @@ export function SecretsSettingsPanel(): ReactNode {
   const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
   const principal = status.data?.principal ?? null;
   const teamName = principal?.kind === "team" ? principal.teamName : null;
+  if (teamName === null && supported === true && scope.client !== null) {
+    return (
+      <SecretsListPanelShell
+        client={scope.client}
+        description={SECRETS.page.description}
+        headerAction={undefined}
+      >
+        <SecretsPage
+          client={scope.client}
+          hostId={scope.hostId}
+          hostName={(hostId) =>
+            scope.hosts.find((host) => host.hostId === hostId)?.name ??
+            "a sandbox"
+          }
+        />
+      </SecretsListPanelShell>
+    );
+  }
   let body: ReactNode = null;
   if (teamName !== null) body = <TeamSecretsView teamName={teamName} />;
-  else if (supported === true && scope.client !== null) {
+  else if (supported === false) {
     body = (
-      <SecretsPage
-        client={scope.client}
-        hostId={scope.hostId}
-        hostName={(hostId) =>
-          scope.hosts.find((host) => host.hostId === hostId)?.name ??
-          "a sandbox"
-        }
-      />
+      <p
+        className="text-ui-sm text-muted-foreground"
+        data-testid="secrets-update-host"
+      >
+        Update this host to use your secrets here.
+      </p>
     );
-  } else if (supported === false) body = <SecretsDashboardGroup />;
+  }
   return (
     <SettingsPanelShell
       title={SECRETS.page.label}
@@ -66,27 +157,5 @@ function TeamSecretsView(props: { readonly teamName: string }): ReactNode {
         {TEAM_SECRETS_LINE}
       </p>
     </div>
-  );
-}
-
-function SecretsDashboardGroup(): ReactNode {
-  return (
-    <SettingsGroup
-      group={SECRETS.definitions.dashboard}
-      showTitle={false}
-      tone="default"
-      dataTestId="settings-secrets"
-      fill={false}
-    >
-      <SettingsRow
-        row={SECRETS.definitions.manageSecrets}
-        control={
-          <SecretsDashboardLink
-            testId="settings-secrets-dashboard-link"
-            className={undefined}
-          />
-        }
-      />
-    </SettingsGroup>
   );
 }

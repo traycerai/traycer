@@ -1,3 +1,4 @@
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   createContext,
   useContext,
@@ -40,7 +41,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import { AccountManagedCredentialsLine } from "@/components/providers/secrets-dashboard-link";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
 import {
@@ -54,6 +54,7 @@ import {
 } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import {
   HostScopeConnecting,
@@ -64,6 +65,9 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
+import { LocalRowNote } from "@/components/settings/environment/local-row-note";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { providerRailStateWord } from "./provider-rail-state-word";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -110,13 +114,13 @@ import {
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderNativeSubagentsGroup } from "./provider-native-subagents-group";
+import { ClaudeSessionNameGroup } from "./claude-session-name-group";
 import { ProviderAutoJudgeSection } from "./provider-auto-judge-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
   providerTabInputs,
-  providerTabLabel,
   supportedTabsFor as resolveSupportedTabs,
   tabsForView,
   type ProviderTabKey,
@@ -127,6 +131,16 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 type ProviderId = ProviderCliState["providerId"];
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
+import { EnvironmentProviderMcpTab } from "@/components/settings/environment/environment-provider-mcp-tab";
+import {
+  EnvironmentProviderSkillsTab,
+  EnvironmentSkillsPage,
+} from "@/components/settings/environment/environment-skills";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+
 type ProviderProfile = ProviderCliState["profiles"][number];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -140,8 +154,8 @@ type ProvidersListQuery = UseQueryResult<
 // cannot parse fails the enum and drops that ENTIRE object, silently taking
 // MCP/Plugins/Skills with it. So every rename lands here, on the label, and
 // never on the id - `general` shows as "CLI & Args" and `usage` as
-// "Profiles & Limits". "General" said nothing about what the tab holds; each
-// label now names its own content.
+// "Profiles & Limits", for every provider: the design names the tab the same
+// everywhere, whether or not this provider has profiles to put in it.
 const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
   general: "CLI & Args",
   permissions: "Permissions",
@@ -199,7 +213,7 @@ const VIEW_COPY: Readonly<
   providers: {
     title: "Providers",
     description:
-      "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent.",
+      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
     empty: "No providers on this host.",
   },
   "mcp-servers": {
@@ -215,6 +229,14 @@ const VIEW_COPY: Readonly<
     empty: "No provider on this host supports skills.",
   },
 };
+
+/**
+ * Providers on a Local row: the old page whole, about that one computer, so
+ * its subtitle names it.
+ */
+function localProvidersDescription(hostName: string): string {
+  return `Sign-ins, keys and tools for each coding agent on ${hostName}.`;
+}
 
 /**
  * Settings > Personal > MCP servers and Skills: the Providers rail and tab
@@ -399,6 +421,17 @@ function ProviderCheckedTimestamp({
 }
 
 export function ProvidersSettingsPanel() {
+  const source = useConfigurationSource();
+  const view = useContext(ProvidersPanelViewContext);
+  if (source.kind === "pool") {
+    if (view === "mcp-servers") return <EnvironmentMcpServersPage />;
+    if (view === "skills") return <EnvironmentSkillsPage />;
+    return <TeamProviders />;
+  }
+  return <HostProvidersSettingsPanel />;
+}
+
+function HostProvidersSettingsPanel() {
   const scope = usePersonalHostScope();
   const setHostId = scope.setHostId;
   // A deep link that already knows which machine needs attention — the
@@ -490,7 +523,13 @@ function ProvidersSettingsPanelInner({
   readonly isSelectedHostLocal: boolean;
 }) {
   const isMobile = useIsMobileViewport();
-  const copy = VIEW_COPY[useContext(ProvidersPanelViewContext)];
+  const view = useContext(ProvidersPanelViewContext);
+  const copy = VIEW_COPY[view];
+  const pick = useEnvironmentPick();
+  const description =
+    view === "providers" && pick.kind === "local"
+      ? localProvidersDescription(pick.hostName)
+      : copy.description;
   return (
     <SettingsPanelShell
       title={copy.title}
@@ -500,7 +539,7 @@ function ProvidersSettingsPanelInner({
       // size is its max-content width, which on a phone exceeds the row on its
       // own, so the action wraps to a line of its own and spends a whole row of
       // the shortest viewport restating what the panel's contents already show.
-      description={isMobile ? undefined : copy.description}
+      description={isMobile ? undefined : description}
       // Desktop only, and this is the whole mobile scroll model. `fillHeight`
       // stretches the card to the settings scroll container and lets the ACTIVE
       // PANE own an internal scroll, which needs `min-h-0` at every level
@@ -1100,7 +1139,7 @@ function ProvidersRailLayout({
                   enabled: state.enabled,
                   badge: null,
                   description: null,
-                  trailing: null,
+                  trailing: <ProviderRailStateWord state={state} />,
                   disabledReason: null,
                   phoneDescription: null,
                   onSelect: onSelectProvider,
@@ -1127,6 +1166,17 @@ function ProvidersRailLayout({
         permissionsTab={permissionsTab}
       />
     </SettingsMasterDetail>
+  );
+}
+
+/** The rail row's one word of state, where the row has one. */
+function ProviderRailStateWord(props: {
+  readonly state: ProviderCliState;
+}): ReactNode {
+  const word = providerRailStateWord(props.state);
+  if (word === null) return null;
+  return (
+    <span className="shrink-0 text-ui-xs text-muted-foreground">{word}</span>
   );
 }
 
@@ -1329,14 +1379,8 @@ function ProviderDetail({
     hostId,
     "providers.setProfileEnabled",
   );
-  const supportsProfileStatusRefresh = useHostSupportsMethod(
-    hostId,
-    "providers.refreshProfileStatus",
-  );
   const profileEnablementAvailable =
     hasManagedProfiles && supportsProfileEnablement;
-  const profileStatusRefreshAvailable =
-    hasManagedProfiles && supportsProfileStatusRefresh;
   const anyProfileEnablementPending = state.profiles.some((profile) =>
     profileEnablementPending(profileCommitId(profile)),
   );
@@ -1406,7 +1450,6 @@ function ProviderDetail({
     selectedProfileId,
     onSelectedProfileIdChange: setSelectedProfileId,
     profileEnablementAvailable,
-    profileStatusRefreshAvailable,
     profileEnablementPending,
     onSetProfileEnabled: (profileId, enabled) =>
       setProfileEnabled.mutate({
@@ -1470,13 +1513,15 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail. The
+        {/* Nothing renders between the provider header and the tab rail but
+            the Local row's note, which says whose settings these are. The
             API-key card used to sit here, above the bar, so a provider's only
             real setting appeared outside the tabs that were supposed to hold
             its settings; it is now the whole body of the `account` tab. That
             matters more now that the rail is PINNED: anything parked here would
             occupy fixed height at the top of the pane forever, not just until
             you scrolled past it. */}
+        <LocalRowNote />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1506,9 +1551,7 @@ function ProviderDetail({
               tabs={tabs}
               activeTab={activeTab}
               onSelect={onActiveTabChange}
-              labelFor={(tab) =>
-                providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)
-              }
+              labelFor={(tab) => PROVIDER_TAB_LABELS[tab]}
             />
           ) : (
             /* Line (underline) tabs, not the filled default. Seven unrelated
@@ -1526,7 +1569,7 @@ function ProviderDetail({
             >
               {tabs.map((tab) => (
                 <TabsTrigger key={tab} value={tab} className="flex-none">
-                  {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
+                  {PROVIDER_TAB_LABELS[tab]}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -1565,11 +1608,7 @@ function ProviderDetail({
               {...(isMobile
                 ? {
                     "aria-labelledby": undefined,
-                    "aria-label": providerTabLabel(
-                      tab,
-                      PROVIDER_TAB_LABELS,
-                      state.providerId,
-                    ),
+                    "aria-label": PROVIDER_TAB_LABELS[tab],
                   }
                 : {})}
               className={cn(
@@ -1634,7 +1673,6 @@ interface ProviderProfileTabProps {
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
-  readonly profileStatusRefreshAvailable: boolean;
   readonly profileEnablementPending: (profileId: string | null) => boolean;
   readonly onSetProfileEnabled: (
     profileId: string | null,
@@ -1656,6 +1694,53 @@ function CredentialsManagedInAccountOr(props: {
     useProvidersList({ enabled: true, subscribed: true }).data
       ?.credentialsManagedInAccount === true;
   return managedInAccount ? <AccountManagedCredentialsLine /> : props.children;
+}
+
+function AccountManagedCredentialsLine(): ReactNode {
+  return (
+    <div
+      data-testid="credentials-managed-in-account"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground"
+    >
+      <p className="min-w-0">
+        Sign-ins and keys for sandboxes are stored in your account, where agents
+        can use them and never read them.
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="credentials-managed-in-account-link"
+        onClick={() => {
+          navigateToSettingsSection("secrets");
+        }}
+      >
+        Secrets
+      </Button>
+    </div>
+  );
+}
+
+/** The Env tab: a provider with a key sends its own key variable to Account. */
+function ProviderEnvTab(props: {
+  readonly state: ProviderCliState;
+  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
+}): ReactNode {
+  const { state, onActiveTabChange } = props;
+  const configurationKey = useConfigurationKey();
+  return (
+    <ProviderEnvOverridesSection
+      // Keyed by configuration and provider: a row's draft stays with the
+      // configuration it was typed in.
+      key={`${configurationKey}:${state.providerId}`}
+      providerId={state.providerId}
+      overrides={state.envOverrides}
+      envOverrideScope={state.nativeCapabilities.envOverrideScope}
+      onOpenAccount={
+        state.apiKey.supported ? () => onActiveTabChange("account") : null
+      }
+    />
+  );
 }
 
 function ProviderTabBody({
@@ -1696,6 +1781,10 @@ function ProviderTabBody({
               flip while the host's read-back is in flight, and that echo
               belongs to one provider. */}
           <ProviderNativeSubagentsGroup key={state.providerId} state={state} />
+          <ClaudeSessionNameGroup
+            providerId={state.providerId}
+            hostId={hostId}
+          />
           <ProviderCatalogTimeoutGroup
             providerId={state.providerId}
             hostId={hostId}
@@ -1709,11 +1798,7 @@ function ProviderTabBody({
       return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
       return (
-        <ProviderEnvOverridesSection
-          providerId={state.providerId}
-          overrides={state.envOverrides}
-          envOverrideScope={state.nativeCapabilities.envOverrideScope}
-        />
+        <ProviderEnvTab state={state} onActiveTabChange={onActiveTabChange} />
       );
     // The key IS the account for these providers, so it owns a tab rather than
     // floating above the tab bar as its own pre-tab region. `supportedTabsFor`
@@ -1773,29 +1858,8 @@ function ProviderTabBody({
           <FallbackCrossLinkRow />
         </div>
       );
-    case "mcp": {
-      const mcp = state.nativeCapabilities.mcp;
-      if (mcp === null) {
-        return (
-          <ProviderTabPlaceholder
-            title="MCP servers"
-            description="This provider does not support MCP servers."
-          />
-        );
-      }
-      return (
-        <ProviderMcpTab
-          providerId={state.providerId}
-          capabilities={mcp}
-          providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
-          // An old host omits the key entirely; `?? true` matches the schema's
-          // own `.catch(true)` - assume resolved, show no notice - so a host
-          // that cannot report this never accuses a provider of a missing
-          // binary it knows nothing about.
-          cliBinaryResolved={state.cliBinaryResolved ?? true}
-        />
-      );
-    }
+    case "mcp":
+      return <ProviderMcpTabBody state={state} />;
     case "modelProviders": {
       const modelProviders = state.nativeCapabilities.modelProviders;
       if (modelProviders === null) {
@@ -1827,8 +1891,61 @@ function ProviderTabBody({
     case "plugins":
       return <ProviderPluginsTab state={state} />;
     case "skills":
-      return <ProviderSkillsTab state={state} />;
+      return <ProviderSkillsTabBody state={state} />;
   }
+}
+
+/**
+ * The MCP tab. On Personal, read here through the window's host that runs
+ * it, it switches Personal's own servers for this provider; a Local row
+ * keeps that computer's own list.
+ */
+function ProviderMcpTabBody(props: {
+  readonly state: ProviderCliState;
+}): ReactNode {
+  const { state } = props;
+  const personal = useEnvironmentPick().kind === "personal";
+  const mcp = state.nativeCapabilities.mcp;
+  if (mcp === null) {
+    return (
+      <ProviderTabPlaceholder
+        title="MCP servers"
+        description="This provider does not support MCP servers."
+      />
+    );
+  }
+  if (personal)
+    return (
+      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+        <EnvironmentProviderMcpTab providerId={state.providerId} />
+      </ConfigurationSourceBoundary>
+    );
+  return (
+    <ProviderMcpTab
+      providerId={state.providerId}
+      capabilities={mcp}
+      providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+      // An old host omits the key entirely; `?? true` matches the schema's
+      // own `.catch(true)` - assume resolved, show no notice - so a host
+      // that cannot report this never accuses a provider of a missing
+      // binary it knows nothing about.
+      cliBinaryResolved={state.cliBinaryResolved ?? true}
+    />
+  );
+}
+
+/** The Skills tab: Personal's skills for this provider, or a Local row's own. */
+function ProviderSkillsTabBody(props: {
+  readonly state: ProviderCliState;
+}): ReactNode {
+  const personal = useEnvironmentPick().kind === "personal";
+  if (personal)
+    return (
+      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+        <EnvironmentProviderSkillsTab providerId={props.state.providerId} />
+      </ConfigurationSourceBoundary>
+    );
+  return <ProviderSkillsTab state={props.state} />;
 }
 
 function ProviderTabPlaceholder({

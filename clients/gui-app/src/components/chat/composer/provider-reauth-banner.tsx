@@ -8,7 +8,6 @@ import {
   type ProviderLoginCapability,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
-import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import type { ProviderReauthReason } from "./use-provider-reauth-gate";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -74,7 +73,35 @@ import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-la
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
+import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import {
+  deviceKeyCustodyLine,
+  hostRunsPersonal,
+  providerKeyIsPersonalSecret,
+  type ProviderKeyPrincipal,
+} from "@/lib/providers/provider-key-custody";
+import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
+import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
+import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
+import { envNamePlaceholder } from "@/components/settings/panels/provider-env-name-placeholder";
+
 function noop(): void {}
+
+/**
+ * The ambient banner's one sentence, for a provider whose own login is out,
+ * naming the configuration the host runs: Personal or the team's name. A
+ * host whose status has not answered, or that runs none, names nothing.
+ */
+function providerSignInSentence(
+  providerId: ProviderId,
+  principal: ProviderKeyPrincipal,
+): string {
+  const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
+  if (principal === null) return `Sign in to ${providerLabel} to run it.`;
+  const configuration =
+    principal.kind === "personal" ? "Personal" : principal.teamName;
+  return `Sign in to ${providerLabel} to run it on ${configuration}.`;
+}
 
 // Static destructive icon shared by every banner state. Hoisted to module scope
 // so it isn't rebuilt on each render.
@@ -237,7 +264,7 @@ function ReauthBannerShell({
             {action}
             <ReportIssueAction
               context={createReportIssueContext({
-                title: "Provider needs to be reconnected",
+                title: "Provider needs a sign-in",
                 message: null,
                 code: `${providerId}:${reason}`,
                 source: "Provider sign-in",
@@ -415,6 +442,11 @@ export function ProviderReauthBanner({
   // The tab's host is a sandbox: no reconnect form (OAuth, terminal, key) is
   // offered, because each one would send a credential to it.
   const credentialRefusal = useHostCredentialRefusal(tabHostId);
+  // The configuration the tab's host runs, which the sentence names and which
+  // decides where a pasted key is stored.
+  const principal =
+    useEnvironmentStatusRead(tabClient, tabHostId, true).data?.principal ??
+    null;
 
   const tabEntry = useMemo(
     () =>
@@ -444,7 +476,9 @@ export function ProviderReauthBanner({
     [tabClient, tabHostId, realBinding],
   );
 
-  const message = providerSignedOutMessage(providerId);
+  // The app cannot tell a terminal login that expired from one that never
+  // existed, so the sentence asks for a sign-in rather than a reconnect.
+  const message = providerSignInSentence(providerId, principal);
 
   // A profile-specific block has no host-scoped OAuth/token mutation to set
   // up (see `ProfileUnavailableBanner`'s comment) - render it standalone,
@@ -476,7 +510,9 @@ export function ProviderReauthBanner({
         providerId={providerId}
         reason={reason}
       >
-        <span className="text-foreground/90">{message}</span>
+        <span className="text-foreground/90">
+          {PROVIDER_DISPLAY_NAMES[providerId]} is signed out.
+        </span>
         <CredentialRefusalNote refusal={credentialRefusal} />
       </ReauthBannerShell>
     );
@@ -494,8 +530,8 @@ export function ProviderReauthBanner({
       >
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
-          This agent&apos;s machine is unavailable. Reconnect once it&apos;s
-          back online.
+          This agent&apos;s host is unavailable. Sign in once it&apos;s back
+          online.
         </span>
       </ReauthBannerShell>
     );
@@ -510,6 +546,10 @@ export function ProviderReauthBanner({
         message={message}
         epicId={epicId}
         viewTabId={viewTabId}
+        keyCustody={{
+          principal,
+          hostName: tabEntry?.label ?? "this computer",
+        }}
       />
     </HostRuntimeContext.Provider>
   );
@@ -522,6 +562,7 @@ function ReauthBannerInner({
   message,
   epicId,
   viewTabId,
+  keyCustody,
 }: {
   readonly providerId: ProviderId;
   readonly state: ProviderCliState | null;
@@ -529,6 +570,7 @@ function ReauthBannerInner({
   readonly message: string;
   readonly epicId: string | null;
   readonly viewTabId: string | null;
+  readonly keyCustody: KeyCustody;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const { envVars, canOauth, canTerminalLogin, signInHostBlock } =
@@ -568,7 +610,7 @@ function ReauthBannerInner({
       >
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
-          Reconnect {providerLabel} from its CLI to continue.
+          Sign in from {providerLabel}&apos;s own CLI, then check again.
         </span>
       </ReauthBannerShell>
     );
@@ -609,6 +651,7 @@ function ReauthBannerInner({
           envVars={envVars}
           secondary={canOauth || terminalRow.kind === "button"}
           apiKeySupported={apiKeySupported}
+          keyCustody={keyCustody}
         />
       ) : null}
     </ReauthBannerShell>
@@ -789,7 +832,7 @@ function OAuthReauthForm({
     );
   }
 
-  // "start" and "cancelled" both fall back to the Authenticate button - a
+  // "start" and "cancelled" both fall back to the Sign in button - a
   // cancelled ambient reconnect reverts straight to it, same as before code
   // paste existed. An ordinary "starting" keeps showing it too,
   // pending/disabled, the same way the original single-mutation form did (no
@@ -804,7 +847,7 @@ function OAuthReauthForm({
           disabled={flow.startPending}
         >
           {flow.startPending ? <MutedAgentSpinner /> : null}
-          Authenticate {providerLabel}
+          Sign in
         </Button>
       </div>
       <p className="text-ui-xs text-muted-foreground">
@@ -995,11 +1038,51 @@ function OAuthWaitingRow({
 // authenticated the gate unmounts this banner; if still unauthenticated (bad
 // token) we stay mounted and show an inline error so the user can retry without a
 // page reload.
+/** Where a key pasted here is stored: read from the tab host's status. */
+interface KeyCustody {
+  readonly principal: ProviderKeyPrincipal;
+  readonly hostName: string;
+}
+
+/**
+ * Under the key field, what saving it does: Personal's custody sentence for a
+ * key the host forwards to Personal, else the line naming the one host that
+ * keeps it. Only for the provider-level key (`providers.setApiKey`); an env
+ * override says nothing here.
+ */
+function PastedKeyCustody(props: {
+  readonly providerId: ProviderId;
+  readonly keyCustody: KeyCustody;
+}): ReactNode {
+  const { providerId, keyCustody } = props;
+  if (providerKeyIsPersonalSecret(providerId, keyCustody.principal)) {
+    return (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {SECRET_CUSTODY_SENTENCE}
+        </p>
+        <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+      </>
+    );
+  }
+  return (
+    <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+      {deviceKeyCustodyLine(
+        keyCustody.hostName,
+        PROVIDER_DISPLAY_NAMES[providerId],
+        envNamePlaceholder(providerId),
+        hostRunsPersonal(keyCustody.principal),
+      )}
+    </p>
+  );
+}
+
 function TokenReauthForm({
   providerId,
   envVars,
   secondary,
   apiKeySupported,
+  keyCustody,
 }: {
   readonly providerId: ProviderId;
   readonly envVars: ReadonlyArray<string>;
@@ -1009,6 +1092,7 @@ function TokenReauthForm({
   // Droid), so the pasted key is saved as that secret instead of a plaintext env
   // override.
   readonly apiKeySupported: boolean;
+  readonly keyCustody: KeyCustody;
 }) {
   const inputId = useId();
   const [draft, setDraft] = useState("");
@@ -1106,7 +1190,7 @@ function TokenReauthForm({
       >
         {secondary
           ? "Or paste an API key or token"
-          : "Reconnect with an API key or token"}
+          : "Sign in with an API key or token"}
       </label>
       <div className="flex flex-wrap items-center gap-2">
         {envVars.length > 1 ? (
@@ -1161,6 +1245,9 @@ function TokenReauthForm({
       </div>
       {tokenError !== null ? (
         <p className="text-ui-xs text-destructive">{tokenError}</p>
+      ) : null}
+      {apiKeySupported ? (
+        <PastedKeyCustody providerId={providerId} keyCustody={keyCustody} />
       ) : null}
     </div>
   );

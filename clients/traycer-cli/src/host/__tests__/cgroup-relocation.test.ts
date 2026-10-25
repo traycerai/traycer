@@ -1016,46 +1016,23 @@ describe("relocateOutOfHostCgroupIfNeeded", () => {
       expect(spawnMocks.recorded).toHaveLength(1);
     });
 
-    it("host uninstall without --all: not-needed, no spawn - the default path tears nothing down", async () => {
+    it("host uninstall relocates with and without --all: both forms stop a running host", async () => {
       mocks.cgroup = V2_HOST_UNIT_CGROUP;
+      mocks.packaged = true;
+      process.argv = packagedArgv() as string[];
+      process.execPath = "/slot/traycer";
+      process.execArgv = [];
+      spawnMocks.respond = acknowledgeThenExit(0);
+
       await expect(
         relocateOutOfHostCgroupIfNeeded("host uninstall", {}),
-      ).resolves.toEqual({ kind: "not-needed" });
-      expect(spawnMocks.recorded).toHaveLength(0);
-    });
-
-    it("host uninstall --all: still relocates (positive control) - the only inverted entry, where true means stop", async () => {
-      mocks.cgroup = V2_HOST_UNIT_CGROUP;
-      mocks.packaged = true;
-      process.argv = packagedArgv() as string[];
-      process.execPath = "/slot/traycer";
-      process.execArgv = [];
-      spawnMocks.respond = acknowledgeThenExit(0);
+      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
+      expect(spawnMocks.recorded).toHaveLength(1);
 
       await expect(
         relocateOutOfHostCgroupIfNeeded("host uninstall", { all: true }),
       ).resolves.toEqual({ kind: "completed", exitCode: 0 });
-      expect(spawnMocks.recorded).toHaveLength(1);
-    });
-
-    it("host uninstall polarity is explicit: {all: false} skips, {all: true} relocates, in the same cgroup", async () => {
-      mocks.cgroup = V2_HOST_UNIT_CGROUP;
-
-      await expect(
-        relocateOutOfHostCgroupIfNeeded("host uninstall", { all: false }),
-      ).resolves.toEqual({ kind: "not-needed" });
-      expect(spawnMocks.recorded).toHaveLength(0);
-
-      mocks.packaged = true;
-      process.argv = packagedArgv() as string[];
-      process.execPath = "/slot/traycer";
-      process.execArgv = [];
-      spawnMocks.respond = acknowledgeThenExit(0);
-
-      await expect(
-        relocateOutOfHostCgroupIfNeeded("host uninstall", { all: true }),
-      ).resolves.toEqual({ kind: "completed", exitCode: 0 });
-      expect(spawnMocks.recorded).toHaveLength(1);
+      expect(spawnMocks.recorded).toHaveLength(2);
     });
   });
 });

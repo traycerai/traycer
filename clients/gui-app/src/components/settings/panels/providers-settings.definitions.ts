@@ -137,6 +137,28 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["subagents", "traycer agents"],
   },
+  // Claude Code's General tab only: the name Traycer gives a Claude session it
+  // starts on the Terminal interface. Host-gated (`config.sessionNames.*`).
+  sessionName: {
+    kind: "group",
+    search: { anchor: null },
+    label: "Session name",
+    description:
+      "What Claude Code calls the sessions Traycer starts in a terminal.",
+    breadcrumb: "Providers",
+    availableWhen: alwaysAvailable,
+    keywords: ["session name", "rename", "title", "template", "terminal"],
+  },
+  sessionNameTemplate: {
+    kind: "row",
+    group: "sessionName",
+    search: { contributesTo: "sessionName" },
+    label: "Name template",
+    description:
+      "Names new Claude Code sessions started on the Terminal interface. Resumed sessions keep their name.",
+    availableWhen: alwaysAvailable,
+    keywords: ["placeholder", "project", "branch", "date"],
+  },
   environmentVariables: {
     kind: "group",
     search: { anchor: null },

@@ -155,6 +155,13 @@ export interface RenderedMessagesDisplayContext {
   readonly resolveUserSenderAvatarUrl: (
     sender: OpenUserMessageSender,
   ) => string | null;
+  /**
+   * The member a user row names as its sender, for a chat that draws its
+   * members (a bot's); absent where a row carries no sender id.
+   */
+  readonly resolveUserSenderId?: (
+    sender: OpenUserMessageSender,
+  ) => string | null;
   readonly resolveAgentSenderDisplay: (
     sender: OpenAgentSender,
   ) => AgentSenderDisplay;
@@ -2376,6 +2383,10 @@ interface AssistantTurnAccumulator {
   costUsd: number | null;
   /** The bot announcement a channel's bot row is; `null` on every other turn. */
   announcement: BotAnnouncement | null;
+  /** The choices a bot reply offers; `null` on every other turn. */
+  options: ReadonlyArray<string> | null;
+  /** The member's post a bot's direct reply answers; `null` on every other turn. */
+  repliesTo: string | null;
   imageResolutionsByBlockId: Map<
     string,
     ReadonlyArray<AssistantMarkdownImageResolution>
@@ -2926,6 +2937,20 @@ function renderPersistedAssistantMessageTurn(
   return models;
 }
 
+/**
+ * A bot row's announcement, options and the post it answers, first non-null:
+ * the host writes them on the one record a bot row is, and a sibling record
+ * never unsets them.
+ */
+function mergeBotRowFields(
+  existing: AssistantTurnAccumulator,
+  message: OpenAssistantMessage,
+): void {
+  existing.announcement = existing.announcement ?? message.announcement ?? null;
+  existing.options = existing.options ?? message.options ?? null;
+  existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
+}
+
 function addAssistantMessageToAccumulator(
   turnAccumulator: Map<string, AssistantTurnAccumulator>,
   message: OpenAssistantMessage,
@@ -2971,8 +2996,7 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
-    existing.announcement =
-      existing.announcement ?? message.announcement ?? null;
+    mergeBotRowFields(existing, message);
     existing.turnMessageIds = [
       ...(existing.turnMessageIds ?? [existing.messageId]),
       message.messageId,
@@ -2997,6 +3021,8 @@ function addAssistantMessageToAccumulator(
     envCredentialVar: message.envCredentialVar,
     costUsd: message.usage?.costUsd ?? null,
     announcement: message.announcement ?? null,
+    options: message.options ?? null,
+    repliesTo: message.repliesTo ?? null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
@@ -3790,6 +3816,10 @@ function renderAssistantTurnSlice(
     ...(input.acc.announcement === null
       ? {}
       : { announcement: input.acc.announcement }),
+    // Only a bot reply that asks carries them; absent everywhere else.
+    ...(input.acc.options === null ? {} : { options: input.acc.options }),
+    // Only a bot's direct reply in its channel carries it; absent everywhere else.
+    ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
     // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
     // sender label to carry here.
@@ -3932,6 +3962,10 @@ function renderSteerBlockUserMessage(
       block.sender === null
         ? null
         : ctx.resolveUserSenderAvatarUrl(block.sender),
+    senderUserId:
+      block.sender === null
+        ? null
+        : (ctx.resolveUserSenderId?.(block.sender) ?? null),
     settings: null,
     steerBadge: {
       status: "steered",
@@ -3948,6 +3982,7 @@ function renderSteeredUserMessage(input: {
   readonly sender: OpenUserMessageSender | null;
   readonly senderLabel: string | null;
   readonly senderAvatarUrl: string | null;
+  readonly senderUserId: string | null;
   readonly settings: ChatMessageModel["settings"];
   readonly steerBadge: ChatMessageSteerBadge;
 }): ChatMessageModel {
@@ -3976,6 +4011,7 @@ function renderSteeredUserMessage(input: {
     persistentMessageId: input.persistentMessageId,
     senderLabel: input.senderLabel,
     ...senderAvatarField(input.senderAvatarUrl),
+    ...senderUserIdField(input.senderUserId),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo:
@@ -4038,6 +4074,7 @@ function renderUserMessage(
     persistentMessageId: message.messageId,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
+    ...senderUserIdField(ctx.resolveUserSenderId?.(message.sender) ?? null),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -4061,6 +4098,13 @@ function senderAvatarField(
   avatarUrl: string | null,
 ): Pick<ChatMessageModel, "senderAvatarUrl"> {
   return avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl };
+}
+
+/** A user row's `senderUserId`: the key only in a chat that draws its members. */
+function senderUserIdField(
+  userId: string | null,
+): Pick<ChatMessageModel, "senderUserId"> {
+  return userId === null ? {} : { senderUserId: userId };
 }
 
 function renderPendingUserMessage(
@@ -4098,6 +4142,7 @@ function renderPendingUserMessage(
     persistentMessageId: null,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
+    ...senderUserIdField(ctx.resolveUserSenderId?.(message.sender) ?? null),
     assistantMeta: null,
     statusLabel: "Pending",
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -4147,8 +4192,11 @@ function renderLiveAssistant(
     // A live turn has no final cost yet; it surfaces once the turn completes
     // and re-renders via the persisted path. The live footer is suppressed.
     costUsd: null,
-    // An announcement is a host-written record, never a streamed turn.
+    // An announcement, like a reply's options, is a host-written record,
+    // never a streamed turn.
     announcement: null,
+    options: null,
+    repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
@@ -5332,6 +5380,7 @@ const BLOCK_HANDLERS: {
   compaction: (block) => ({
     kind: "compaction",
     status: block.status,
+    notApplied: block.notApplied,
     trigger: block.trigger,
     preTokens: block.preTokens,
     postTokens: block.postTokens,

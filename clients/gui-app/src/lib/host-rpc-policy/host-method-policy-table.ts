@@ -1631,8 +1631,24 @@ export const HOST_METHOD_POLL_TABLE = {
   "bot.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.list": { ...LATEST_SCHEDULING, poll: null },
   "bot.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.updateRunSettings": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateDirective": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateReplyMode": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1657,11 +1673,23 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A read of the bound host's thread records. Polled (`poll: true`) only by
-  // the channel on screen, so a thread's reply count and last reply move
-  // while the person watches; a `bot.subscribe` signal on thread replies,
-  // once the host sends one, replaces the poll.
-  "bot.thread.list": { ...LATEST_SCHEDULING, poll: ON_SCREEN_FIXED_POLL },
+  // A read of the bound host's thread records, never polled: the bot's
+  // `bot.subscribe` snapshot moves `conversationsRevision` on every row
+  // written there, and the subscription reads the listing again then.
+  "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
+  // A team's onboarding (T48): the read is refetched when its card mounts or
+  // a choice or completion lands; the two writes persist, so they queue.
+  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.onboarding.choose": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.onboarding.complete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Unary byte channel, same posture as `epic.readChatAttachment` - but the
   // only one of the drafts methods whose BODY is megabytes rather than KB, so
   // it is also the only one that declares a budget. The value is declared once
@@ -2474,6 +2502,123 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The environments redesign: the move, a configuration through the server
+  // pool, members and the retrospective sheet. Reads take the latest answer;
+  // every write is ordered and never joined.
+  "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.items": { ...LATEST_SCHEDULING, poll: null },
+  "environment.history": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.seats": { ...LATEST_SCHEDULING, poll: null },
+  "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.mcpServers.list": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  "environment.configuration.skills.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.items.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.items.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.upload": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setProviders": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.policy.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.invite": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.setRole": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.noticeSeen": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.review.heldApply": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.review.record": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.plans.unlink": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.guide.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.guide.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.env.list": { ...LATEST_SCHEDULING, poll: null },
   "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.env.delete": {
@@ -2495,6 +2640,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
   "config.visualization.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.sessionNames.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.sessionNames.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

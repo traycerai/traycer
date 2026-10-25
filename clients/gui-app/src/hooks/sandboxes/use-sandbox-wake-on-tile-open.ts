@@ -40,6 +40,6 @@ export function useSandboxWakeForOpenedTile(hostId: string): void {
     if (!known || firedRef.current) return;
     firedRef.current = true;
     // No row of its own: the directory entry says whether it asks.
-    if (needsWake) startSandboxWake(queryClient, binding, hostId, false);
+    if (needsWake) void startSandboxWake(queryClient, binding, hostId);
   }, [binding, hostId, known, needsWake, queryClient]);
 }

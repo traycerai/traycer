@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
@@ -718,6 +725,15 @@ async function uninstallService(
   }
 }
 
+// DEBUG: a status read runs on every poll, and saying this at INFO each time
+// would grow the log with the reads. The refused WRITES say it.
+function logOtherOwnersTask(label: ServiceLabel): void {
+  createCliLogger(label.environment).debug(
+    "The host's Scheduled Task is owned by another user; this account has no service registration",
+    { task: windowsTaskName(label) },
+  );
+}
+
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
   const taskName = windowsTaskName(label);
   let registered: boolean;
@@ -744,11 +760,21 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
     // only for a failure the text did not name so an English query pays
     // nothing for it. Without it the install's pre-swap status read threw on a
     // machine with no registration yet, and `host ensure` failed there.
+    //
+    // Another account's task, hidden from this one, fails the query too ("The
+    // system cannot find the path specified."), and neither the text nor Task
+    // Scheduler's code says absent; it is no registration of this account's,
+    // like the other-owner task below. Without this a non-admin's install
+    // beside another user's task failed its pre-swap status read.
+    if (!(err instanceof ProcessRunError)) throw err;
+    if (await taskHiddenProbe(taskName)) {
+      logOtherOwnersTask(label);
+      return statusNotInstalled();
+    }
     if (
-      err instanceof ProcessRunError &&
-      (schtasksNamesMissingTask(err.stderr) ||
-        schtasksNamesCorruptTask(err.stderr) ||
-        (await scheduledTaskProvedAbsent(taskName)))
+      schtasksNamesMissingTask(err.stderr) ||
+      schtasksNamesCorruptTask(err.stderr) ||
+      (await scheduledTaskProvedAbsent(taskName))
     ) {
       registered = false;
     } else {
@@ -768,12 +794,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
   // does not fail closed; every write still does.
   const ownership = await readWindowsServiceTaskOwnership(label);
   if (ownership.kind === "not-owned" && ownership.reason === "other-owner") {
-    // DEBUG: a status read runs on every poll, and saying this at INFO each
-    // time would grow the log with the reads. The refused WRITES say it.
-    createCliLogger(label.environment).debug(
-      "The host's Scheduled Task is owned by another user; this account has no service registration",
-      { task: taskName },
-    );
+    logOtherOwnersTask(label);
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
@@ -3330,13 +3351,26 @@ async function writeHiddenHostLauncher(
   await mkdir(dirname(launcherPath), { recursive: true });
   const body = buildHiddenHostLauncher(options.cli, options.label);
   await verifyServiceMutationAuthority();
-  await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+  try {
+    await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+  } catch (cause) {
+    if (
+      isErrnoException(cause) &&
+      (cause.code === "EPERM" || cause.code === "EACCES")
+    ) {
+      throw new Error(
+        "Windows denied permission to create Traycer's start script. Security software may be blocking it. Allow Traycer's data folder (normally %USERPROFILE%\\.traycer) in your security software, then restart Traycer.",
+        { cause },
+      );
+    }
+    throw cause;
+  }
 }
 
-function windowsSystemExecutable(filename: string): string {
+function windowsSystemPath(relative: string): string {
   const root =
     process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
-  return `${root.replace(/[\\/]+$/, "")}\\System32\\${filename}`;
+  return `${root.replace(/[\\/]+$/, "")}\\System32\\${relative}`;
 }
 
 function buildTaskAction(label: ServiceLabel): TaskExecAction {
@@ -3352,7 +3386,7 @@ function buildTaskAction(label: ServiceLabel): TaskExecAction {
 function buildTaskActionForLauncher(launcherPath: string): TaskExecAction {
   const argv = ["//B", "//Nologo", launcherPath];
   return {
-    command: windowsSystemExecutable("wscript.exe"),
+    command: windowsSystemPath("wscript.exe"),
     argumentsLine: argv.map(quoteWindowsArg).join(" "),
   };
 }
@@ -3477,7 +3511,7 @@ function readCurrentUserSidFromWhoami(): string | null {
   let stdout: string;
   try {
     stdout = execFileSync(
-      windowsSystemExecutable("whoami.exe"),
+      windowsSystemPath("whoami.exe"),
       ["/user", "/fo", "csv", "/nh"],
       // execFileSync copies a failing child's stderr into this process's
       // stderr unless `stdio` is given; captured here, never forwarded.
@@ -3588,7 +3622,44 @@ function taskOwnershipDeps(): WindowsTaskOwnershipDeps {
     queryTaskXml: windowsDefinitionDeps.queryTaskXml,
     callerSid: () => taskUserSidReader(),
     resolveAccountSid: (account) => accountSidResolver(account),
+    taskHiddenFromCaller: (taskName) => taskHiddenProbe(taskName),
   };
+}
+
+// Task Scheduler keeps each task's definition as a file under
+// `%SystemRoot%\System32\Tasks`, at the task's own path, and hides a task -
+// and its folder - from an account that may not read it: a non-admin's
+// `/Query /TN` of another account's task answers "The system cannot find the
+// path specified." The file still answers by code, in every language:
+// opening it fails EPERM/EACCES when it is there and this account may not
+// read it, and ENOENT when there is none - every account may traverse, and a
+// name lookup needs no right to list the folder. A local open, no spawn: it
+// adds nothing a read's bound (`WINDOWS_TASK_OWNERSHIP_READ_BOUND_MS`) counts,
+// and is asked only when the read found no XML, so no name lookup follows it.
+async function scheduledTaskHiddenFromCaller(
+  taskName: string,
+): Promise<boolean> {
+  if (process.platform !== "win32") return false;
+  try {
+    const handle = await open(windowsSystemPath(`Tasks${taskName}`), "r");
+    await handle.close();
+    return false;
+  } catch (cause) {
+    return (
+      isErrnoException(cause) &&
+      (cause.code === "EPERM" || cause.code === "EACCES")
+    );
+  }
+}
+
+let taskHiddenProbe: (taskName: string) => Promise<boolean> =
+  scheduledTaskHiddenFromCaller;
+
+/** Test-only override for the hidden-task probe; `null` restores the file open. */
+export function setWindowsTaskHiddenProbeForTests(
+  probe: ((taskName: string) => Promise<boolean>) | null,
+): void {
+  taskHiddenProbe = probe ?? scheduledTaskHiddenFromCaller;
 }
 
 /**

@@ -45,6 +45,7 @@ import {
 } from "@/components/settings/panels/permissions/rules-edit-store";
 import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   SystemTabModalHost,
@@ -62,6 +63,7 @@ import { ThemeProvider } from "@/providers/theme-provider";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
@@ -144,6 +146,14 @@ vi.mock("@/components/settings/panels/permissions/judge-tab", () => ({
 }));
 vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
   ActivityTab: (): ReactNode => <div data-testid="activity-body" />,
+}));
+// Permissions' Browser agent access region reads its host through the real
+// binding, which the scoped-binding fixture does not carry. The region has its
+// own suite (`browser-agent-access-group.test.tsx`).
+vi.mock("@/components/settings/panels/browser-agent-access-group", () => ({
+  BrowserAgentAccessGroup: (): ReactNode => (
+    <div data-testid="browser-agent-access-probe" />
+  ),
 }));
 
 // ---- shell: real modal host, stand-in strip tab ---------------------------
@@ -245,6 +255,11 @@ function resetStores(): void {
     error: null,
   });
   useSettingsHostScopeStore.setState({ scopedHostId: null });
+  // host-a's own Permissions page, through its Local row: Personal waits on
+  // the window host's environment status, which this harness never answers.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: "host-a", hostName: "host-a" },
+  });
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();
@@ -264,7 +279,9 @@ function renderShell(): void {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ThemeProvider>
-          <RouterProvider router={buildRouter()} />
+          <HostRuntimeTestProvider>
+            <RouterProvider router={buildRouter()} />
+          </HostRuntimeTestProvider>
           <ThemeEditorHost />
         </ThemeProvider>
       </TooltipProvider>
@@ -564,19 +581,21 @@ describe("Rules edit through the system-tab modal shell", () => {
     const view = (open: boolean): ReactNode => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <Lifetime open={open} />
-          <DialogPrimitive.Root open={open}>
-            {open ? (
-              <SystemTabModalSurface
-                active={{ kind: "settings", section: "permissions" }}
-                editingTheme={false}
-                onClose={() => undefined}
-                onPromote={(onRejected) => {
-                  onRejected();
-                }}
-              />
-            ) : null}
-          </DialogPrimitive.Root>
+          <HostRuntimeTestProvider>
+            <Lifetime open={open} />
+            <DialogPrimitive.Root open={open}>
+              {open ? (
+                <SystemTabModalSurface
+                  active={{ kind: "settings", section: "permissions" }}
+                  editingTheme={false}
+                  onClose={() => undefined}
+                  onPromote={(onRejected) => {
+                    onRejected();
+                  }}
+                />
+              ) : null}
+            </DialogPrimitive.Root>
+          </HostRuntimeTestProvider>
         </TooltipProvider>
       </QueryClientProvider>
     );

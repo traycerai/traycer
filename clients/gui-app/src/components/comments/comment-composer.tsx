@@ -1,3 +1,4 @@
+import type { SharedCommentComposerDraft } from "./canvas-comment-drafts";
 import {
   useCallback,
   useEffect,
@@ -7,7 +8,7 @@ import {
   useState,
   type Ref,
 } from "react";
-import { EditorContent, useEditor } from "@tiptap/react";
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
 import Mention from "@tiptap/extension-mention";
@@ -61,6 +62,7 @@ export interface CommentComposerProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** Initial JSONContent. Pass `null` for a blank composer (most flows). */
   readonly initialContent: JsonContent | null;
+  readonly sharedDraft?: SharedCommentComposerDraft;
   readonly placeholder: string;
   /** Whether to grab focus on mount. Used by the floating draft popover and
    *  by inline reply composers. */
@@ -127,12 +129,15 @@ export function CommentComposer(props: CommentComposerProps) {
     ref,
   } = props;
 
+  const sharedDraftRef = useRef(props.sharedDraft);
+  useEffect(() => {
+    sharedDraftRef.current = props.sharedDraft;
+  }, [props.sharedDraft]);
   const collaborators = useMentionCollaboratorsForClient(hostClient, epicId);
   const collaboratorsRef = useStableCollaboratorRef(collaborators);
   const suggestionHandleRef = useRef<MentionSuggestionListHandle | null>(null);
   const [suggestionState, setSuggestionState] =
     useState<SuggestionRenderState | null>(null);
-  const [isEmpty, setIsEmpty] = useState(initialContent === null);
   // "The user has changed this document", which is NOT "the document is
   // non-empty": an edit composer opens holding a saved comment, and closing it
   // untouched loses nothing. Tiptap fires `onUpdate` only for a transaction
@@ -155,10 +160,6 @@ export function CommentComposer(props: CommentComposerProps) {
   // only a new composer that has returned to its opening empty state is
   // released.
   const isEditingSavedComment = initialContent !== null;
-  useEpicDraftGuard(
-    epicId,
-    hasUserEdits && (isEditingSavedComment || !isEmpty),
-  );
 
   // Stable refs so closures inside `useEditor`'s deps-`[]` capture do not
   // see a stale callback once the parent re-renders with new handlers.
@@ -263,7 +264,7 @@ export function CommentComposer(props: CommentComposerProps) {
         }),
         mentionExtension,
       ],
-      content: initialContent ?? "",
+      content: props.sharedDraft?.content ?? initialContent ?? "",
       autofocus: focusOnMount ? "end" : false,
       immediatelyRender: false,
       editorProps: {
@@ -291,8 +292,8 @@ export function CommentComposer(props: CommentComposerProps) {
         },
       },
       onUpdate({ editor: e }) {
-        setIsEmpty(e.isEmpty);
         setHasUserEdits(true);
+        sharedDraftRef.current?.onChange(e.getJSON(), e.isEmpty);
       },
     },
     // Editor identity is intentionally tile-stable: rebuilding would lose
@@ -301,13 +302,40 @@ export function CommentComposer(props: CommentComposerProps) {
     [],
   );
 
+  const isEmpty = useEditorState({
+    editor,
+    // Before the editor mounts, answer from the content it will open with:
+    // an edit composer's Save must not flash disabled on the first frames.
+    selector: ({ editor: current }) =>
+      current?.isEmpty ??
+      (props.sharedDraft?.content ?? initialContent) === null,
+  });
+  useEpicDraftGuard(
+    epicId,
+    (props.sharedDraft?.dirty ?? hasUserEdits) &&
+      (isEditingSavedComment || !isEmpty),
+  );
+
+  useEffect(() => {
+    const draft = props.sharedDraft;
+    if (editor === null || draft === undefined) return;
+    const content = draft.content ?? {
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    };
+    if (JSON.stringify(editor.getJSON()) !== JSON.stringify(content))
+      editor.commands.setContent(content, { emitUpdate: false });
+    editor.setEditable(!draft.pending, false);
+  }, [editor, props.sharedDraft]);
+
   const submitFromEditor = useCallback(async () => {
     const e = editor;
     if (
       e === null ||
       e.isEmpty ||
       submittingRef.current ||
-      isPendingRef.current
+      isPendingRef.current ||
+      sharedDraftRef.current?.pending === true
     )
       return;
     submittingRef.current = true;
@@ -345,11 +373,10 @@ export function CommentComposer(props: CommentComposerProps) {
         return editor !== null && !editor.isEmpty;
       },
       reset() {
-        if (editor === null) return;
+        if (editor === null || sharedDraftRef.current !== undefined) return;
         editor.commands.clearContent();
-        setIsEmpty(true);
-        // AFTER the command, for the same reason `setIsEmpty` is: whether
-        // `clearContent` emits an update is Tiptap's business, and if it does,
+        // AFTER the command: whether `clearContent` emits an update is
+        // Tiptap's business, and if it does,
         // its `onUpdate` has already latched `hasUserEdits` by the time this
         // line runs. Stating the post-reset answer here is what makes the
         // caller's success path withdraw the park veto rather than hold it

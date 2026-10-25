@@ -871,7 +871,7 @@ describe("JudgeTab against the real query stack", () => {
       await pending;
       await waitFor(() =>
         expect(screen.getByTestId("auto-judge-warning").textContent).toContain(
-          "is turned off on this machine",
+          "is turned off on this host",
         ),
       );
     });

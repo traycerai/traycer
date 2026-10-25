@@ -3,9 +3,16 @@ import { z } from "zod";
 import {
   agentFailureSchema,
   contentBlockSchema,
+  contentBlockSchemaPreBrowser,
   contentBlockSchemaPreFallback,
+  contentBlockSchemaPreHtml,
   contentBlockSchemaPreImage,
+  contentBlockSchemaPreMcpApp,
+  contentBlockSchemaPreReasonix,
+  contentBlockSchemaPreReceipt,
   contentBlockSchemaPreSettlement,
+  contentBlockSchemaPreShellHost,
+  contentBlockSchemaV18,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
   errorBlockSchema,
@@ -36,6 +43,7 @@ import {
   chatSubscribeV18,
   chatSubscribeV19,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 describe("fileChangeBlockSchema backward-compat", () => {
   it("parses a pre-compaction file_change block (no hashes/counts) via defaults", () => {
@@ -510,8 +518,14 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   };
 
   it("freezes delivery placement out of chat.subscribe 1.8 and includes it in 1.9", () => {
-    const frozen = z.toJSONSchema(chatSubscribeV18.serverFrameSchema);
-    const current = z.toJSONSchema(chatSubscribeV19.serverFrameSchema);
+    const frozen = toCanonicalJsonSchema(
+      chatSubscribeV18.serverFrameSchema,
+      {},
+    );
+    const current = toCanonicalJsonSchema(
+      chatSubscribeV19.serverFrameSchema,
+      {},
+    );
     expect(JSON.stringify(frozen)).not.toContain("deliveryPlacement");
     expect(JSON.stringify(current)).toContain("deliveryPlacement");
   });
@@ -858,9 +872,9 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     expect(() =>
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
     ).not.toThrow();
-    expect(() => z.toJSONSchema(contentBlockSchema)).not.toThrow();
+    expect(() => toCanonicalJsonSchema(contentBlockSchema, {})).not.toThrow();
     expect(() =>
-      z.toJSONSchema(contentBlockSchema, { io: "input" }),
+      toCanonicalJsonSchema(contentBlockSchema, { io: "input" }),
     ).not.toThrow();
   });
 });
@@ -1521,5 +1535,54 @@ describe("toolCallBlockSchema agentMessageDelivery (cross-host send state)", () 
     });
     expect(Object.hasOwn(block, "agentMessageDelivery")).toBe(false);
     expect(block.toolName).toBe("traycer_send_message");
+  });
+});
+
+describe("compaction notApplied across the frozen epic block chains", () => {
+  const erroredCompaction = {
+    blockId: "compaction-1",
+    status: "errored",
+    timestamp: 1,
+    type: "compaction",
+    trigger: "auto",
+    preTokens: 900,
+    postTokens: null,
+    durationMs: null,
+    summary: null,
+    error: "Copilot did not apply this compaction.",
+  };
+
+  const frozenUnions = [
+    { name: "PreHtml", schema: contentBlockSchemaPreHtml },
+    { name: "PreReasonix", schema: contentBlockSchemaPreReasonix },
+    { name: "PreImage", schema: contentBlockSchemaPreImage },
+    { name: "PreSettlement", schema: contentBlockSchemaPreSettlement },
+    { name: "PreFallback", schema: contentBlockSchemaPreFallback },
+    { name: "PreShellHost", schema: contentBlockSchemaPreShellHost },
+    { name: "PreBrowser", schema: contentBlockSchemaPreBrowser },
+    { name: "PreReceipt", schema: contentBlockSchemaPreReceipt },
+    { name: "PreMcpApp", schema: contentBlockSchemaPreMcpApp },
+    { name: "V18", schema: contentBlockSchemaV18 },
+  ] as const;
+
+  it.each(frozenUnions)(
+    "contentBlockSchema$name drops the flag and keeps the failure",
+    ({ schema }) => {
+      const block = schema.parse({ ...erroredCompaction, notApplied: true });
+      expect(Object.hasOwn(block, "notApplied")).toBe(false);
+      expect(block.status).toBe("errored");
+    },
+  );
+
+  it("the live union carries true and defaults absent input to false", () => {
+    const notAppliedOf = (input: object): boolean => {
+      const block = contentBlockSchema.parse(input);
+      if (block.type !== "compaction") {
+        throw new Error("expected a compaction block");
+      }
+      return block.notApplied;
+    };
+    expect(notAppliedOf({ ...erroredCompaction, notApplied: true })).toBe(true);
+    expect(notAppliedOf(erroredCompaction)).toBe(false);
   });
 });

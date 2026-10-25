@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -33,7 +33,7 @@ const EMPTY_PARAMS = {};
 export function useEnvironmentListQuery(
   client: HostClient<HostRpcRegistry> | null,
   enabled: boolean,
-): UseQueryResult<EnvironmentListResponse, HostRpcError> {
+): UseQueryResult<EnvironmentListResponseV11, HostRpcError> {
   const servingClient = useMemo(
     () => (client === null ? null : resolvePoolTierHostClient(client)),
     [client],

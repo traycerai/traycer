@@ -7,10 +7,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Hash } from "lucide-react";
+import { EllipsisVertical, Hash } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -28,16 +27,32 @@ import {
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
+import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
+import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
+import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  useBotOpenThread,
+  useBotOpenThreadStore,
+  type BotOpenThread,
+} from "@/stores/bots/bot-open-thread-store";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
-import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
-import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
+import {
+  BotIdentityContext,
+  type BotIdentity,
+  type BotOwner,
+} from "@/components/bots/bot-identity-context";
+import { BotAvatar } from "@/components/bots/bot-avatars";
+import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -47,12 +62,10 @@ import {
 } from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
 
-type BotTabView = "messages" | "under-the-hood" | "settings";
+type BotTabView = "messages" | "under-the-hood";
 
 function isBotTabView(value: string): value is BotTabView {
-  return (
-    value === "messages" || value === "under-the-hood" || value === "settings"
-  );
+  return value === "messages" || value === "under-the-hood";
 }
 
 /**
@@ -66,9 +79,17 @@ function isBotTabView(value: string): value is BotTabView {
  * - nobody can serve it from here: the paused state, which names no machine;
  *   the channel list and a queued post keep working through this host.
  *
+ * While its team's onboarding locks the team's chat (`teamOnboardingGate`,
+ * as the sidebar's channel rows read it) the tab is not opened and shows the
+ * onboarding instead of the channel, so a restored tab or a direct
+ * navigation is no way around the lock. Until the gate is known - the bot
+ * and environment lists and the onboarding read answered - the tab neither
+ * opens nor shows the channel.
+ *
  * Laid out as Slack is (decision 41): the person's environments and their
  * bots as channels down the side, and the bot's channel beside them, with
- * its under-the-hood view and its settings as the channel's tabs.
+ * its under-the-hood view as the channel's other tab and its settings
+ * behind the header's ⋮.
  *
  * Bound to ONE host at a time through `TabHostProvider`; everything below
  * reads that host - the stream, the conversation list, every write. A tab
@@ -124,6 +145,12 @@ function BotTabBody(props: {
   const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
   const [view, setView] = useState<BotTabView>("messages");
 
+  const botList = useBotListQuery(client, true);
+  const listedBots = botList.data?.bots;
+  const environments = useEnvironmentListQuery(client, true);
+  const onboarding = useBotTeamOnboarding(botId, hostId, botList, environments);
+  const clear = onboarding.kind === "clear";
+
   // Open once per (bot, tab host) - this body remounts with the host - and
   // again on Retry or when the tab comes back into view. A mutation, not a
   // query: an open may claim the bot onto this host, which a background
@@ -148,8 +175,8 @@ function BotTabBody(props: {
     [botId, openBot],
   );
   useEffect(() => {
-    reopen();
-  }, [reopen]);
+    if (clear) reopen();
+  }, [clear, reopen]);
 
   const openState = botTabOpenState({
     response: answer,
@@ -171,11 +198,9 @@ function BotTabBody(props: {
   // that no longer carries the bot, which is how a delete made while this
   // stream was down reaches the tab, and how a `bot.open` that found no bot
   // does (every open invalidates the list).
-  const botList = useBotListQuery(client, true);
   // A teammate's rename, claim or delete reaches the list (and so this tab)
   // without waiting for focus, through the tab's own host.
   useBotListChangedSubscriptionForHost(hostId, true);
-  const listedBots = botList.data?.bots;
   const goneFromList =
     listedBots !== undefined && !listedBots.some((bot) => bot.botId === botId);
   useEffect(() => {
@@ -196,9 +221,9 @@ function BotTabBody(props: {
   // mounted, hidden).
   const { resubscribe } = subscription;
   const refresh = useCallback(() => {
-    reopen();
+    if (clear) reopen();
     resubscribe();
-  }, [reopen, resubscribe]);
+  }, [clear, reopen, resubscribe]);
   const paneVisible = usePaneVisible();
   const wasVisibleRef = useRef(paneVisible);
   useEffect(() => {
@@ -219,6 +244,21 @@ function BotTabBody(props: {
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
 
+  if (onboarding.kind === "locked") {
+    return (
+      <div
+        className="flex h-full justify-center overflow-y-auto p-4"
+        data-testid="bot-tab-onboarding"
+      >
+        <div className="flex w-full max-w-md flex-col">
+          <LockedTeamOnboarding
+            {...onboarding.team}
+            connectable={connectable}
+          />
+        </div>
+      </div>
+    );
+  }
   if (openState.kind === "failed") {
     return (
       <ErrorNotice
@@ -238,7 +278,11 @@ function BotTabBody(props: {
       />
     );
   }
-  if (snapshot === null || openState.kind === "opening") {
+  if (
+    onboarding.kind === "settling" ||
+    snapshot === null ||
+    openState.kind === "opening"
+  ) {
     return (
       <div
         className="flex h-full items-center justify-center text-muted-foreground"
@@ -303,19 +347,20 @@ function BotTabContent(props: {
   const client = useTabHostClient();
   const isMain = isMainBot(mainBotIds, snapshot.bot);
   const environments = useEnvironmentListQuery(client, true);
-  const environmentLabel = useMemo(() => {
-    const match = environments.data?.environments.find(
-      (environment) => environment.environmentId === snapshot.bot.environmentId,
-    );
-    return match?.label ?? snapshot.bot.environmentId;
-  }, [environments.data, snapshot.bot.environmentId]);
+  const environment =
+    environments.data?.environments.find(
+      (entry) => entry.environmentId === snapshot.bot.environmentId,
+    ) ?? null;
+  const environmentLabel = environment?.label ?? snapshot.bot.environmentId;
+  // Only a personal environment's bot may answer posts itself; a list not
+  // read yet draws no reply-mode control.
+  const personal = environment?.ownerKind === "user";
   const botList = useBotListQuery(client, true);
-  const environmentBotIds = useMemo(
+  const environmentBots = useMemo(
     () =>
-      environmentBotIdsOf(
-        botList.data?.bots ?? NO_BOTS,
-        snapshot.bot.environmentId,
-      ),
+      botList.data === undefined
+        ? null
+        : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
   const paused = pausedReason !== null;
@@ -323,14 +368,21 @@ function BotTabContent(props: {
   // members by id.
   const membersSupported =
     useHostMethodSupport(hostId, "environment.members") === true;
-  const resolveMember = useEnvironmentMembers(
+  const directory = useEnvironmentMemberDirectory(
     client,
     snapshot.bot.environmentId,
     membersSupported,
   );
-  // Held here, above the views, so the open thread and the session shown
-  // under the hood survive a switch between the channel's tabs.
-  const [openThreadPostId, setOpenThreadPostId] = useState<string | null>(null);
+  const resolveMember = directory.resolve;
+  // The open thread is held in its store and the session shown under the
+  // hood here, above the views, so both survive a switch between the
+  // channel's tabs.
+  const openThread = useBotOpenThread(botId);
+  const setOpenThreadFor = useBotOpenThreadStore((s) => s.setOpenThread);
+  const setOpenThread = useCallback(
+    (open: BotOpenThread | null) => setOpenThreadFor(botId, open),
+    [botId, setOpenThreadFor],
+  );
   const [sessionChatId, setSessionChatId] = useState<string | null>(null);
   const openUnderTheHood = useCallback(
     (threadSessionChatId: string) => {
@@ -339,103 +391,250 @@ function BotTabContent(props: {
     },
     [onViewChange],
   );
+  const openBotActivity = useCallback(() => {
+    setSessionChatId(null);
+    onViewChange("under-the-hood");
+  }, [onViewChange]);
+  // The channel's settings open beside it from the header's ⋮.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const toggleSettings = useCallback(
+    () => setSettingsOpen((open) => !open),
+    [],
+  );
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const viewer = useAuthStore((s) => s.profile);
+  const owner = useMemo((): BotOwner | null => {
+    if (environment === null) return null;
+    if (environment.ownerKind === "organization") {
+      return {
+        kind: "team",
+        environmentId: environment.environmentId,
+        name: environment.label,
+        members: directory.members,
+      };
+    }
+    // A personal environment the list names is the viewer's own.
+    if (viewer === null) return null;
+    const name = viewer.userName.trim();
+    return {
+      kind: "person",
+      userId: viewer.userId,
+      name: name.length > 0 ? name : "You",
+      avatarUrl: viewer.avatarUrl ?? null,
+    };
+  }, [directory.members, environment, viewer]);
+  const identity = useMemo(
+    (): BotIdentity => ({
+      botId,
+      title: snapshot.bot.title,
+      owner,
+      openActivity: openBotActivity,
+    }),
+    [botId, openBotActivity, owner, snapshot.bot.title],
+  );
 
   return (
-    <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-      <aside className="hidden min-h-0 w-1/5 max-w-64 shrink-0 flex-col border-r border-border/60 @3xl:flex">
-        <BotChannelSidebar activeBotId={botId} hostId={hostId} />
-      </aside>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <Tabs
-          value={view}
-          onValueChange={(next) => {
-            if (isBotTabView(next)) onViewChange(next);
-          }}
-          className="flex min-h-0 flex-1 flex-col gap-0"
-        >
-          <BotChannelHeader
-            snapshot={snapshot}
-            environmentLabel={environmentLabel}
-            isMain={isMain === true}
-          />
-          {streamError === null ? null : (
-            // A fatal close AFTER a snapshot: the last reading stays on
-            // screen, marked as such, and the retry sits on top of it.
-            <ErrorNotice
-              text={`Couldn't reach this bot: ${streamError}`}
-              onRetry={onRetry}
-              className="mx-4 mt-2"
-            />
-          )}
-          {reopenError === null ? null : (
-            <ErrorNotice
-              text={`Couldn't open this bot: ${reopenError}`}
-              onRetry={onReopen}
-              className="mx-4 mt-2"
-            />
-          )}
-          {pausedReason === null ? null : (
-            <PausedBanner
-              reason={pausedReason}
-              environmentLabel={environmentLabel}
-              onRetry={onReopen}
-            />
-          )}
-          <TabsContent
-            value="messages"
-            className="flex min-h-0 flex-1 flex-col"
+    <BotIdentityContext value={identity}>
+      <div className="@container flex h-full min-h-0" data-testid="bot-tab">
+        <aside className="hidden min-h-0 w-1/5 max-w-64 shrink-0 flex-col border-r border-border/60 @3xl:flex">
+          <BotChannelSidebar activeBotId={botId} hostId={hostId} />
+        </aside>
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <Tabs
+            value={view}
+            onValueChange={(next) => {
+              if (isBotTabView(next)) onViewChange(next);
+            }}
+            className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
           >
-            <BotChannelView
-              botId={botId}
-              hostId={hostId}
-              botTitle={snapshot.bot.title}
-              paused={paused}
-              resolveMember={resolveMember}
-              openThreadPostId={openThreadPostId}
-              onOpenThread={setOpenThreadPostId}
-              onOpenUnderTheHood={openUnderTheHood}
+            <BotChannelHeader
+              title={snapshot.bot.title}
+              settingsOpen={settingsOpen}
+              onToggleSettings={toggleSettings}
             />
-          </TabsContent>
-          <TabsContent
-            value="under-the-hood"
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <BotUnderTheHoodPanel
-              botId={botId}
-              hostId={hostId}
-              botTitle={snapshot.bot.title}
-              trunkChatId={snapshot.bot.trunkChatId}
-              tasks={snapshot.tasks}
-              openRequestCount={snapshot.openRequestCount}
-              paused={paused}
-              environmentLabel={environmentLabel}
-              environmentBotIds={environmentBotIds}
-              sessionChatId={sessionChatId}
-              onSelectSession={setSessionChatId}
+            {streamError === null ? null : (
+              // A fatal close AFTER a snapshot: the last reading stays on
+              // screen, marked as such, and the retry sits on top of it.
+              <ErrorNotice
+                text={`Couldn't reach this bot: ${streamError}`}
+                onRetry={onRetry}
+                className="mx-4 mt-2"
+              />
+            )}
+            {reopenError === null ? null : (
+              <ErrorNotice
+                text={`Couldn't open this bot: ${reopenError}`}
+                onRetry={onReopen}
+                className="mx-4 mt-2"
+              />
+            )}
+            {pausedReason === null ? null : (
+              <PausedBanner
+                reason={pausedReason}
+                environmentLabel={environmentLabel}
+                onRetry={onReopen}
+              />
+            )}
+            <TabsContent
+              value="messages"
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <BotChannelView
+                botId={botId}
+                hostId={hostId}
+                botTitle={snapshot.bot.title}
+                directive={snapshot.bot.directive}
+                appConversationChatId={snapshot.bot.appConversationChatId}
+                paused={paused}
+                resolveMember={resolveMember}
+                openThread={openThread}
+                onOpenThread={setOpenThread}
+                onOpenUnderTheHood={openUnderTheHood}
+              />
+            </TabsContent>
+            <TabsContent
+              value="under-the-hood"
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <BotUnderTheHoodPanel
+                botId={botId}
+                hostId={hostId}
+                botTitle={snapshot.bot.title}
+                trunkChatId={snapshot.bot.trunkChatId}
+                tasks={snapshot.tasks}
+                openRequestCount={snapshot.openRequestCount}
+                paused={paused}
+                environmentLabel={environmentLabel}
+                environmentBots={environmentBots}
+                sessionChatId={sessionChatId}
+                onSelectSession={setSessionChatId}
+              />
+            </TabsContent>
+          </Tabs>
+          {settingsOpen ? (
+            <BotChannelSettingsPanel
+              bot={snapshot.bot}
+              isMain={isMain}
+              personal={personal}
+              channelId={snapshot.bot.appConversationChatId}
+              environmentBots={environmentBots}
+              onClose={closeSettings}
             />
-          </TabsContent>
-          <TabsContent
-            value="settings"
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <BotSettingsPanel bot={snapshot.bot} isMain={isMain} />
-          </TabsContent>
-        </Tabs>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </BotIdentityContext>
   );
 }
 
-const NO_BOTS: ReadonlyArray<BotRecord> = [];
+/** A team whose onboarding locks its chat, as its card reads it. */
+type LockedTeam = {
+  readonly environmentId: string;
+  readonly teamName: string;
+  readonly botCount: number;
+};
 
-/** The bots of one environment, by id, as the list names them. */
-function environmentBotIdsOf(
+/**
+ * Whether the bot's team's onboarding keeps its channel closed: the same
+ * gate, on the same host's read, as the sidebar's channel rows. `settling`
+ * until the lists that name the bot's team and the team's onboarding read
+ * have answered; a list that failed never locks, as a failed read does not.
+ */
+type BotTabOnboarding =
+  | { readonly kind: "settling" }
+  | { readonly kind: "locked"; readonly team: LockedTeam }
+  | { readonly kind: "clear" };
+
+function useBotTeamOnboarding(
+  botId: string,
+  hostId: string,
+  botList: {
+    readonly status: "pending" | "error" | "success";
+    readonly data: { readonly bots: ReadonlyArray<BotRecord> } | undefined;
+  },
+  environmentList: {
+    readonly status: "pending" | "error" | "success";
+    readonly data:
+      | { readonly environments: ReadonlyArray<EnvironmentDescriptor> }
+      | undefined;
+  },
+): BotTabOnboarding {
+  const client = useTabHostClient();
+  const { environment, botCount } = botTeamOf(
+    botId,
+    botList.data?.bots ?? [],
+    environmentList.data?.environments ?? [],
+  );
+  // Read only for a team the list names: anything else is never locked.
+  const { gate } = useTeamOnboardingGate({
+    client,
+    hostId,
+    environmentId: environment?.environmentId ?? "",
+    isTeam: environment?.ownerKind === "organization",
+    botCount,
+  });
+  if (
+    botList.status === "pending" ||
+    environmentList.status === "pending" ||
+    gate === "pending"
+  ) {
+    return { kind: "settling" };
+  }
+  if (gate !== "locked" || environment === null) return { kind: "clear" };
+  return {
+    kind: "locked",
+    team: {
+      environmentId: environment.environmentId,
+      teamName: environment.label,
+      botCount,
+    },
+  };
+}
+
+/** The environment the lists name for a bot, with its live bots' count. */
+type BotTeam = {
+  readonly environment: EnvironmentDescriptor | null;
+  readonly botCount: number;
+};
+
+function botTeamOf(
+  botId: string,
+  bots: ReadonlyArray<BotRecord>,
+  environments: ReadonlyArray<EnvironmentDescriptor>,
+): BotTeam {
+  const environmentId =
+    bots.find((bot) => bot.botId === botId)?.environmentId ?? null;
+  if (environmentId === null) return { environment: null, botCount: 0 };
+  return {
+    environment:
+      environments.find((entry) => entry.environmentId === environmentId) ??
+      null,
+    botCount: environmentBotsOf(bots, environmentId).filter(
+      (bot) => bot.archivedAt === null,
+    ).length,
+  };
+}
+
+function LockedTeamOnboarding(
+  props: LockedTeam & { readonly connectable: ConnectableHosts },
+): ReactNode {
+  const { connectable, ...team } = props;
+  const bindings = useHostEnvironmentBindings(connectable.hostIds, true);
+  return (
+    <BotOnboardingCard
+      {...team}
+      connectableHostIds={connectable.hostIds}
+      environmentBindings={bindings}
+    />
+  );
+}
+
+/** The bots of one environment, as the list names them. */
+function environmentBotsOf(
   bots: ReadonlyArray<BotRecord>,
   environmentId: string,
-): ReadonlyArray<string> {
-  return bots
-    .filter((bot) => bot.environmentId === environmentId)
-    .map((bot) => bot.botId);
+): ReadonlyArray<BotRecord> {
+  return bots.filter((bot) => bot.environmentId === environmentId);
 }
 
 function ErrorNotice(props: {
@@ -461,41 +660,57 @@ function ErrorNotice(props: {
 }
 
 /**
- * Slack's channel header: `# name`, the environment it belongs to, the
- * open-request hint, and the channel's tabs under it.
+ * Slack's channel header: the bot's picture (its card on hover and click),
+ * `# name`, the ⋮ that opens the channel's settings, and the channel's views
+ * under it. What the bot is for is the top of its channel; nothing else
+ * sits here.
  */
 function BotChannelHeader(props: {
-  readonly snapshot: BotSubscriptionSnapshot;
-  readonly environmentLabel: string;
-  readonly isMain: boolean;
+  readonly title: string;
+  readonly settingsOpen: boolean;
+  readonly onToggleSettings: () => void;
 }): ReactNode {
-  const { snapshot, environmentLabel, isMain } = props;
-  const openRequests = snapshot.openRequestCount;
+  const { settingsOpen } = props;
+  // Focus goes back to the ⋮ when the settings close.
+  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const wasOpenRef = useRef(settingsOpen);
+  useEffect(() => {
+    if (wasOpenRef.current && !settingsOpen) settingsButtonRef.current?.focus();
+    wasOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
   return (
     <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <BotIdentityTrigger>
+          <button
+            type="button"
+            aria-label={props.title}
+            className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+            data-testid="bot-tab-avatar"
+          >
+            <BotAvatar size="sm" />
+          </button>
+        </BotIdentityTrigger>
         <h1
           className="flex min-w-0 items-center gap-1 text-ui-md font-bold text-foreground"
           data-testid="bot-tab-title"
         >
           <Hash className="size-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">{snapshot.bot.title}</span>
+          <span className="truncate">{props.title}</span>
         </h1>
-        {isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
-        <span className="truncate text-ui-xs text-muted-foreground">
-          {environmentLabel}
-        </span>
-        {openRequests !== null && openRequests > 0 ? (
-          <Badge
-            variant="warning"
-            size="sm"
-            data-testid="bot-tab-open-requests"
-          >
-            {openRequests === 1
-              ? "1 open request"
-              : `${openRequests} open requests`}
-          </Badge>
-        ) : null}
+        <Button
+          ref={settingsButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Channel settings"
+          aria-expanded={settingsOpen}
+          data-testid="bot-channel-settings-open"
+          className="ml-auto"
+          onClick={props.onToggleSettings}
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Button>
       </div>
       <TabsList variant="line" aria-label="Channel view">
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
@@ -506,9 +721,6 @@ function BotChannelHeader(props: {
           data-testid="bot-tab-view-under-the-hood"
         >
           Under the hood
-        </TabsTrigger>
-        <TabsTrigger value="settings" data-testid="bot-tab-view-settings">
-          Settings
         </TabsTrigger>
       </TabsList>
     </header>

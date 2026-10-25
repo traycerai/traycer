@@ -7,7 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  rebindUnreachableBotTab,
+  useBotTabsStore,
+} from "@/stores/bots/bot-tabs-store";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import {
   buildHomeBotRow,
@@ -67,6 +70,8 @@ export function HomeBotRow(props: {
   readonly createdBy: string | null;
   /** Whether the bot is its environment's main bot (decision 30). */
   readonly isMain: boolean;
+  /** The team's chat is locked by its onboarding (`teamOnboardingGate`): the row does not open. */
+  readonly entryLocked: boolean;
 }): ReactNode {
   const {
     bot,
@@ -90,7 +95,6 @@ export function HomeBotRow(props: {
   const working = useEpicAgentActivity(bot.botId).working.size > 0;
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
   const state = homeBotState({
     working,
     boundHostId: row.boundHostId,
@@ -108,26 +112,17 @@ export function HomeBotRow(props: {
       type="button"
       data-testid="home-bot-row"
       data-bot-id={row.botId}
-      disabled={hostId === null}
+      disabled={hostId === null || props.entryLocked}
       className="group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       onClick={() => {
-        if (hostId === null) return;
-        // An open tab keeps its host - unless this client can no longer
-        // dial it (a restored tab, a host gone since): then it opens again
-        // through this window's host, which finds the one serving the bot.
-        // A directory that has not answered yet says nothing about the tab's
-        // host, so the tab keeps it.
-        const existing = lookupBotTab(
-          useBotTabsStore.getState().tabs,
+        if (hostId === null || props.entryLocked) return;
+        rebindUnreachableBotTab(
           row.botId,
+          hostId,
+          hostReach.connectableResolved
+            ? (id) => hostReach.connectableHostIds.has(id)
+            : null,
         );
-        if (
-          existing !== null &&
-          hostReach.connectableResolved &&
-          !hostReach.connectableHostIds.has(existing.hostId)
-        ) {
-          rebindBotTab(row.botId, hostId);
-        }
         openBotTab({ botId: row.botId, hostId, title: row.title });
         navigateToTabIntent(navigate, botTabIntent(row.botId), undefined);
       }}

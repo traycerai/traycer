@@ -204,7 +204,7 @@ describe("SupportEnvironmentBridge's states", () => {
           return environmentStatusFixture({ reachability: "connected" });
         },
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ secrets: [] }),
+        "environment.secrets.list": () => ({ removed: [], secrets: [] }),
       },
     });
     mountBridge(client);
@@ -232,7 +232,7 @@ describe("SupportEnvironmentBridge's states", () => {
         "environment.status": () =>
           environmentStatusFixture({ reachability: "connected" }),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ secrets: [] }),
+        "environment.secrets.list": () => ({ removed: [], secrets: [] }),
       },
     });
     harness.hostId = "host-a";
@@ -262,6 +262,7 @@ describe("SupportEnvironmentBridge's states", () => {
         "environment.status": () => environmentStatusFixture({}),
         "environment.setup.attempts": () => ({ attempts: [] }),
         "environment.secrets.list": () => ({
+          removed: [],
           secrets: [secret("sec-1", "STRIPE_KEY")],
         }),
         "environment.secrets.rotation": () => ({
@@ -282,6 +283,7 @@ describe("SupportEnvironmentBridge's states", () => {
         "environment.status": () => environmentStatusFixture({}),
         "environment.setup.attempts": () => ({ attempts: [] }),
         "environment.secrets.list": () => ({
+          removed: [],
           secrets: [secret("sec-1", "STRIPE_KEY")],
         }),
         "environment.secrets.rotation": () => NEVER,
@@ -311,7 +313,7 @@ describe("SupportEnvironmentBridge's states", () => {
         },
         "environment.secrets.list": () => {
           listed += 1;
-          return { secrets: [] };
+          return { removed: [], secrets: [] };
         },
       },
     });
@@ -361,7 +363,7 @@ describe("SupportEnvironmentBridge's states", () => {
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ secrets: [] }),
+        "environment.secrets.list": () => ({ removed: [], secrets: [] }),
       },
     });
 
@@ -401,7 +403,7 @@ describe("SupportEnvironmentBridge's states", () => {
         handlers: {
           "environment.status": () => environmentStatusFixture({}),
           "environment.setup.attempts": () => ({ attempts: [] }),
-          "environment.secrets.list": () => ({ secrets: [] }),
+          "environment.secrets.list": () => ({ removed: [], secrets: [] }),
         },
       });
 
@@ -436,7 +438,7 @@ describe("SupportEnvironmentBridge's states", () => {
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ secrets: [] }),
+        "environment.secrets.list": () => ({ removed: [], secrets: [] }),
       },
     });
 
@@ -460,7 +462,7 @@ describe("SupportEnvironmentBridge's states", () => {
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({ secrets }),
+        "environment.secrets.list": () => ({ removed: [], secrets }),
         "environment.secrets.rotation": () => ({
           rotation: rotation("enforced", true),
           lastVerify: null,
@@ -499,6 +501,7 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
         "environment.status": () => environmentStatusFixture({}),
         "environment.setup.attempts": () => ({ attempts: [] }),
         "environment.secrets.list": () => ({
+          removed: [],
           secrets: [secret("sec-1", "STRIPE_KEY")],
         }),
         "environment.secrets.rotation": () => {

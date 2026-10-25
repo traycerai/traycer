@@ -442,7 +442,9 @@ describe("<TuiAgentTile /> cross-host replica", () => {
     const banner = await screen.findByTestId("terminal-agent-tile-tile-1");
     expect(banner.textContent).toContain("is not running on");
     // The remedy names the machine, because that is the only place it exists.
-    expect(banner.textContent).toContain("can only be started on that machine");
+    expect(banner.textContent).toContain(
+      "can only be started on that computer",
+    );
     expect(
       within(banner).getByRole("button", { name: "Close tab" }),
     ).toBeDefined();

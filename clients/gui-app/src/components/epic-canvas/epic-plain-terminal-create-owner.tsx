@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useTerminalWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import {
   useEpicTerminalDurableCreateJobs,
   useEpicTerminalDurableCreateJobViews,
@@ -151,6 +152,21 @@ function EpicPlainTerminalCreateHostOwner(props: {
   const unmarkTerminalPendingCreate = useEpicCanvasStore(
     (state) => state.unmarkTerminalPendingCreate,
   );
+  // A tile opened before its host could answer (a resting sandbox's Open
+  // terminal) is accepted with no cwd, and dispatches on the host's
+  // folderless cwd once the host serves it: `undefined` until it answers,
+  // `null` when the read failed, so the dispatch reads it again (a Retry
+  // included) instead of failing on a cached error.
+  const needsFolderlessCwd = jobs.some((job) => job.cwd === "");
+  const bindings = useTerminalWorkspaceBindingsForClient({
+    client: hostClient,
+    epicId: props.epicId,
+    enabled: needsFolderlessCwd && ready,
+  });
+  const refetchBindings = bindings.refetch;
+  let folderlessCwd: string | null | undefined;
+  if (bindings.isSuccess) folderlessCwd = bindings.data.folderlessCwd ?? "";
+  else if (bindings.isError) folderlessCwd = null;
 
   useEffect(() => {
     for (const job of jobViews) {
@@ -187,14 +203,22 @@ function EpicPlainTerminalCreateHostOwner(props: {
   useEffect(() => {
     const scope = { kind: "epic" as const, epicId: props.epicId };
     for (const job of jobs) {
+      const cwd = job.cwd === "" ? folderlessCwd : job.cwd;
       let createdTerminal: PlainTerminalProjection | undefined;
       let createdSession: CreatedTerminalSession | undefined;
       let createBarrier: PlainTerminalProjectionBarrier | undefined;
       const pending = requestEpicTerminalDurableCreate({
         hostId: job.hostId,
         terminalId: job.terminalId,
-        ready,
+        ready: ready && cwd !== undefined,
         create: async () => {
+          const resolved =
+            cwd ?? (await refetchBindings()).data?.folderlessCwd ?? "";
+          // No folderless cwd: the host predates folderless workspaces, and
+          // `terminal.plain.create` refuses an empty one.
+          if (resolved === "") {
+            throw new Error("Couldn't resolve terminal directory.");
+          }
           if (capability === "legacy") {
             createdSession = await runSilentLegacyEpicTerminalCreate({
               client: hostClientRef.current,
@@ -202,7 +226,7 @@ function EpicPlainTerminalCreateHostOwner(props: {
                 scope,
                 sessionKind: "terminal",
                 tuiHarnessId: null,
-                cwd: job.cwd,
+                cwd: resolved,
                 shellCommand: null,
                 shellArgs: null,
                 cols: job.cols,
@@ -228,7 +252,7 @@ function EpicPlainTerminalCreateHostOwner(props: {
             request: {
               terminalId: job.terminalId,
               scope,
-              cwd: job.cwd,
+              cwd: resolved,
               cols: job.cols,
               rows: job.rows,
             },
@@ -294,7 +318,15 @@ function EpicPlainTerminalCreateHostOwner(props: {
       });
       if (pending !== null) void pending.catch(() => undefined);
     }
-  }, [capability, jobs, props.epicId, queryClient, ready]);
+  }, [
+    capability,
+    folderlessCwd,
+    jobs,
+    props.epicId,
+    queryClient,
+    ready,
+    refetchBindings,
+  ]);
 
   return null;
 }

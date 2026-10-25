@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  DESKTOP_SECRET_KINDS,
   SECRET_DIALECT_LABEL,
-  isDesktopSecretKind,
   secretDefaultVariableName,
   secretKindHint,
   secretKindLabel,
@@ -26,7 +24,6 @@ import {
   type SecretFormState,
 } from "@/lib/sandboxes/secret-intake-form";
 import { secretVerifyLine } from "@/lib/sandboxes/secret-verify-copy";
-import { secretSaveConfirmationLines } from "@/lib/sandboxes/secrets-page-copy";
 
 /** A database form that passes `secretFormProblem`, brokered and consented. */
 function validDatabaseForm(): SecretFormState {
@@ -123,33 +120,6 @@ describe("what the picker greys", () => {
     expect(secretKindHint("api_key")).toBe(
       "A key or token for an HTTPS service",
     );
-  });
-});
-
-describe("the kinds added on the desktop", () => {
-  it("are exactly api_key, provider and database", () => {
-    expect([...DESKTOP_SECRET_KINDS].sort()).toEqual(
-      ["api_key", "database", "provider"].sort(),
-    );
-    expect(isDesktopSecretKind("api_key")).toBe(true);
-    expect(isDesktopSecretKind("provider")).toBe(true);
-    expect(isDesktopSecretKind("database")).toBe(true);
-  });
-
-  it("leave every other form kind to the web", () => {
-    for (const kind of [
-      "ssh",
-      "aws",
-      "azure_storage",
-      "azure_sp",
-      "gcp_sa",
-      "client_certificate",
-      "broker",
-      "mail",
-      "rdp",
-    ] as const) {
-      expect(isDesktopSecretKind(kind), kind).toBe(false);
-    }
   });
 });
 
@@ -428,6 +398,7 @@ describe("secretCreateRequest", () => {
   it("shapes a brokered, consented PostgreSQL login", () => {
     const request = secretCreateRequest(validDatabaseForm());
     expect(request).toEqual({
+      environmentId: null,
       name: "PROD_DB",
       kind: "database",
       protocol: "postgres",
@@ -712,36 +683,5 @@ describe("secretVerifyLine", () => {
       tone: "warning",
       text: "Couldn't check right now. Try again in a moment.",
     });
-  });
-});
-
-describe("secretSaveConfirmationLines", () => {
-  it("names the secret and where it becomes readable, brokered and granted by default", () => {
-    const lines = secretSaveConfirmationLines("STRIPE_KEY", "brokered", true);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("STRIPE_KEY");
-    expect(lines[0]).toContain("plain value on every host you own");
-    expect(lines[1]).toBe(
-      "On your sandboxes agents use it without reading it. Every sandbox you have now and later gets it.",
-    );
-  });
-
-  it("changes the second line for an exposed secret", () => {
-    const lines = secretSaveConfirmationLines("STRIPE_KEY", "exposed", true);
-    expect(lines[0]).toContain("plain value on every host you own");
-    expect(lines[1]).toBe(
-      "On your sandboxes any process can read it. Every sandbox you have now and later gets it.",
-    );
-  });
-
-  it("changes the second line when sandboxes do not get it by default", () => {
-    expect(
-      secretSaveConfirmationLines("STRIPE_KEY", "brokered", false)[1],
-    ).toBe(
-      "On your sandboxes agents use it without reading it. A sandbox gets it only when you approve one.",
-    );
-    expect(secretSaveConfirmationLines("STRIPE_KEY", "exposed", false)[1]).toBe(
-      "On your sandboxes any process can read it. A sandbox gets it only when you approve one.",
-    );
   });
 });

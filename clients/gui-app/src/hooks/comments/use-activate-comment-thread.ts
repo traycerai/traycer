@@ -35,31 +35,18 @@ export interface ActivateCommentThreadTarget {
 export function useActivateCommentThread(
   target: ActivateCommentThreadTarget,
 ): (threadId: string) => void {
-  const { epicId, artifactId, viewTabId, artifactType } = target;
-  const isMobileViewport = useIsMobileViewport();
+  const { epicId, artifactId, artifactType } = target;
+  const openComments = useOpenArtifactComments(target);
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
-  const revealCommentsPanel = useLeftPanelStore((s) => s.revealCommentsPanel);
-  const setActivePanelId = useLeftPanelStore((s) => s.setActivePanelId);
-  const setActivePanelIdAndExpand = useLeftPanelStore(
-    (s) => s.setActivePanelIdAndExpand,
-  );
-  const setSwitcherOpen = useMobileSwitcherStore((s) => s.setOpen);
-
   return useCallback(
     (threadId: string) => {
       setActiveThread(epicId, threadId);
       setFlashThread(epicId, threadId);
+      openComments();
       if (artifactType === "html" || artifactType === "canvas") {
         requestCommentThreadAnchorReveal(epicId, artifactId, threadId);
         return;
-      }
-      revealCommentsPanel(viewTabId);
-      if (isMobileViewport) {
-        setActivePanelId(viewTabId, "comments");
-        setSwitcherOpen(viewTabId, true);
-      } else {
-        setActivePanelIdAndExpand(viewTabId, "comments");
       }
       revealCommentThreadAnchor(epicId, artifactId, threadId);
     },
@@ -67,14 +54,30 @@ export function useActivateCommentThread(
       epicId,
       artifactId,
       artifactType,
-      viewTabId,
-      isMobileViewport,
+      openComments,
       setActiveThread,
       setFlashThread,
-      revealCommentsPanel,
-      setActivePanelId,
-      setActivePanelIdAndExpand,
-      setSwitcherOpen,
     ],
   );
+}
+
+/** Reveal the shared comments sidebar without changing document interaction mode. */
+function useOpenArtifactComments(
+  target: ActivateCommentThreadTarget,
+): () => void {
+  const { epicId, artifactId, viewTabId } = target;
+  const mobile = useIsMobileViewport();
+  return useCallback(() => {
+    useCommentThreadsStore.getState().setCurrentArtifact(epicId, artifactId);
+    const panels = useLeftPanelStore.getState();
+    panels.revealCommentsPanel(viewTabId);
+    // The sheet layers over everything the tile shows, a fullscreen board
+    // included - the sidebar panel alone is not mounted on a narrow
+    // viewport, so selecting it without the sheet would look like nothing
+    // happened.
+    if (mobile) {
+      panels.setActivePanelId(viewTabId, "comments");
+      useMobileSwitcherStore.getState().setOpen(viewTabId, true);
+    } else panels.setActivePanelIdAndExpand(viewTabId, "comments");
+  }, [epicId, artifactId, viewTabId, mobile]);
 }

@@ -1,17 +1,19 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, Hash, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
-import { CreateBotForm } from "@/components/home/bots/create-bot-form";
+import {
+  TeamBotSetupDialog,
+  type TeamBotSetupTarget,
+} from "@/components/bots/team-bot-setup-dialog";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import {
-  useHostEnvironmentBindings,
-  type HostEnvironmentBindings,
-} from "@/hooks/bots/use-host-environment-bindings-query";
+import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   buildHomeBotsModel,
@@ -19,7 +21,10 @@ import {
 } from "@/lib/home-bots/bots-model";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  rebindUnreachableBotTab,
+  useBotTabsStore,
+} from "@/stores/bots/bot-tabs-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
@@ -30,9 +35,13 @@ const NO_CHAT_IDS: ReadonlyArray<string> = [];
  * Slack's sidebar for a bot tab (Tracy Bots, decision 41): every environment
  * the person belongs to is a section, every bot in it a channel, `# name`.
  * A channel with a reply the person has not read is bold, as Slack marks an
- * unread channel. Each section ends with "Add a bot", which opens the create
- * form for that environment, so the environment is the section's and never
- * a default; the form picks the machine itself.
+ * unread channel. The sections list channels and nothing else. A team's
+ * header carries a + that opens the team's setup (`TeamBotSetupDialog`):
+ * its onboarding while that is open, else the create form for one more bot,
+ * so the environment is the section's and never a default. A team with no
+ * bots says so once, with the same way in. The personal section has no +:
+ * Tracy is the strip's fixed entry. While a team's onboarding locks its chat
+ * (`teamOnboardingGate`), its channels do not open.
  *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
@@ -81,19 +90,14 @@ export function BotChannelSidebar(props: {
 
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
+  const [setup, setSetup] = useState<TeamBotSetupTarget | null>(null);
   const openChannel = (bot: BotRecord): void => {
     if (bot.botId === activeBotId) return;
-    // An open tab keeps its host unless this client can no longer dial it,
-    // as Home's row decides.
-    const existing = lookupBotTab(useBotTabsStore.getState().tabs, bot.botId);
-    if (
-      existing !== null &&
-      connectable.resolved &&
-      !connectable.hostIds.includes(existing.hostId)
-    ) {
-      rebindBotTab(bot.botId, hostId);
-    }
+    rebindUnreachableBotTab(
+      bot.botId,
+      hostId,
+      connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
+    );
     openBotTab({ botId: bot.botId, hostId, title: bot.title });
     navigateToTabIntent(navigate, botTabIntent(bot.botId), undefined);
   };
@@ -110,11 +114,16 @@ export function BotChannelSidebar(props: {
           group={group}
           activeBotId={activeBotId}
           unreadBotIds={unreadBotIds}
-          connectableHostIds={connectable.hostIds}
-          environmentBindings={bindings}
           onOpenChannel={openChannel}
+          onSetUp={setSetup}
         />
       ))}
+      <TeamBotSetupDialog
+        team={setup}
+        connectableHostIds={connectable.hostIds}
+        environmentBindings={bindings}
+        onClose={() => setSetup(null)}
+      />
     </nav>
   );
 }
@@ -123,20 +132,29 @@ function SidebarSection(props: {
   readonly group: HomeBotsGroup;
   readonly activeBotId: string;
   readonly unreadBotIds: ReadonlySet<string>;
-  readonly connectableHostIds: ReadonlyArray<string>;
-  readonly environmentBindings: HostEnvironmentBindings;
   readonly onOpenChannel: (bot: BotRecord) => void;
+  readonly onSetUp: (team: TeamBotSetupTarget) => void;
 }): ReactNode {
-  const {
-    group,
-    activeBotId,
-    unreadBotIds,
-    connectableHostIds,
-    environmentBindings,
-    onOpenChannel,
-  } = props;
+  const { group, activeBotId, unreadBotIds, onOpenChannel, onSetUp } = props;
   const [collapsed, setCollapsed] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const isTeam = group.canCreate && group.ownerKind === "organization";
+  const client = useTabHostClient();
+  const tabHostId = useTabHostId();
+  const { gate } = useTeamOnboardingGate({
+    client,
+    hostId: tabHostId,
+    environmentId: group.environmentId,
+    isTeam,
+    botCount: group.bots.length,
+  });
+  const locked = gate === "locked";
+  const setUp = (event: MouseEvent<HTMLButtonElement>): void =>
+    onSetUp({
+      environmentId: group.environmentId,
+      teamName: group.label,
+      botCount: group.bots.length,
+      opener: event.currentTarget,
+    });
   // A collapsed section still lists the channel in view and the unread ones,
   // as Slack's does.
   const shown = collapsed
@@ -151,19 +169,46 @@ function SidebarSection(props: {
       data-environment-id={group.environmentId}
       className="flex flex-col gap-0.5"
     >
-      <button
-        type="button"
-        aria-expanded={!collapsed}
-        onClick={() => setCollapsed((value) => !value)}
-        className="flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-left text-ui-sm font-medium text-muted-foreground transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-      >
-        {collapsed ? (
-          <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
-        )}
-        <span className="truncate">{group.label}</span>
-      </button>
+      <div className="group/section flex min-w-0 items-center gap-0.5">
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed((value) => !value)}
+          className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-1 text-left text-ui-sm font-medium text-muted-foreground transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+        >
+          {collapsed ? (
+            <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+          )}
+          <span className="truncate">{group.label}</span>
+        </button>
+        {isTeam ? (
+          // Drawn on the header's hover and on keyboard focus, as the
+          // section's own control rather than a row of it; always drawn on a
+          // touch screen, which has no hover.
+          <button
+            type="button"
+            aria-label={`Set up ${group.label}'s bots`}
+            data-testid="bot-channel-section-add"
+            onClick={setUp}
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100 pointer-coarse:opacity-100"
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+      {collapsed || !isTeam || group.bots.length > 0 ? null : (
+        <button
+          type="button"
+          data-testid="bot-channel-section-set-up"
+          onClick={setUp}
+          className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+        >
+          <Plus className="size-3.5 shrink-0" aria-hidden="true" />
+          Set up your team's bots
+        </button>
+      )}
       <ul className="flex flex-col gap-0.5">
         {shown.map((bot) => (
           <li key={bot.botId}>
@@ -171,32 +216,12 @@ function SidebarSection(props: {
               bot={bot}
               active={bot.botId === activeBotId}
               unread={unreadBotIds.has(bot.botId)}
+              locked={locked}
               onOpen={() => onOpenChannel(bot)}
             />
           </li>
         ))}
       </ul>
-      {collapsed || !group.canCreate ? null : (
-        <button
-          type="button"
-          aria-expanded={creating}
-          data-testid="bot-channel-add"
-          onClick={() => setCreating((open) => !open)}
-          className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-        >
-          <Plus className="size-3.5 shrink-0" aria-hidden="true" />
-          Add a bot
-        </button>
-      )}
-      {creating && !collapsed && group.canCreate ? (
-        <CreateBotForm
-          environmentId={group.environmentId}
-          environmentLabel={group.label}
-          connectableHostIds={connectableHostIds}
-          environmentBindings={environmentBindings}
-          onDone={() => setCreating(false)}
-        />
-      ) : null}
     </section>
   );
 }
@@ -205,12 +230,14 @@ function ChannelRow(props: {
   readonly bot: BotRecord;
   readonly active: boolean;
   readonly unread: boolean;
+  readonly locked: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, active, unread, onOpen } = props;
+  const { bot, active, unread, locked, onOpen } = props;
   return (
     <button
       type="button"
+      disabled={locked}
       data-testid="bot-channel-row"
       data-bot-id={bot.botId}
       data-unread={unread ? "true" : "false"}

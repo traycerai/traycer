@@ -7,6 +7,7 @@ import {
   setHostCredentialMintRunner,
 } from "@/lib/auth/host-credential-provisioning";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { appLogger } from "@/lib/logger";
 
 const mintHostCredentialMock = vi.hoisted(() =>
   vi.fn(
@@ -201,5 +202,86 @@ describe("<HostCredentialProvisionProvider /> silent provisioning", () => {
     await expect(
       appHostCredentialMintFlow({ hostId: HOST_ID, reason: "missing" }),
     ).resolves.toEqual({ kind: "unavailable" });
+  });
+
+  describe("a host the cloud refuses on every mint", () => {
+    const REFUSED_HOST_ID = "host-refused";
+
+    beforeEach(() => {
+      mintHostCredentialMock.mockResolvedValue({ kind: "superseded" });
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("climbs the escalation ladder instead of minting on every ask", async () => {
+      renderProvider();
+      const ask = () =>
+        appHostCredentialMintFlow({
+          hostId: REFUSED_HOST_ID,
+          reason: "missing",
+        });
+
+      await expect(ask()).resolves.toEqual({ kind: "unavailable" });
+      expect(mintHostCredentialMock).toHaveBeenCalledTimes(1);
+
+      // The first refusal waits 0: the next transport's ask still mints.
+      vi.setSystemTime(1_000);
+      await expect(ask()).resolves.toEqual({ kind: "unavailable" });
+      expect(mintHostCredentialMock).toHaveBeenCalledTimes(2);
+
+      // Two refusals in: the rung is 120s counted from the second one (t=1s).
+      vi.setSystemTime(2_000);
+      await expect(ask()).resolves.toEqual({
+        kind: "pending-elsewhere",
+        retryAfterMs: 119_000,
+      });
+      expect(mintHostCredentialMock).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(1_000 + 120_000);
+      await expect(ask()).resolves.toEqual({ kind: "unavailable" });
+      expect(mintHostCredentialMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("logs each spent mint with its attempt and the wait that follows, and no user identity", async () => {
+      const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
+      renderProvider();
+      const ask = () =>
+        appHostCredentialMintFlow({
+          hostId: REFUSED_HOST_ID,
+          reason: "missing",
+        });
+
+      await ask();
+      vi.setSystemTime(1_000);
+      await ask();
+      vi.setSystemTime(1_000 + 120_000);
+      await ask();
+
+      const spentLines = info.mock.calls.filter(
+        ([message]) => message === "Host credential mint handed nothing back",
+      );
+      expect(spentLines).toEqual([
+        [
+          "Host credential mint handed nothing back",
+          { hostId: REFUSED_HOST_ID, attempt: 1, nextMintWaitMs: 0 },
+        ],
+        [
+          "Host credential mint handed nothing back",
+          { hostId: REFUSED_HOST_ID, attempt: 2, nextMintWaitMs: 120_000 },
+        ],
+        [
+          "Host credential mint handed nothing back",
+          { hostId: REFUSED_HOST_ID, attempt: 3, nextMintWaitMs: 240_000 },
+        ],
+      ]);
+      const logged = JSON.stringify(spentLines);
+      expect(logged).not.toContain("user-a");
+      expect(logged).not.toContain("example.com");
+    });
   });
 });

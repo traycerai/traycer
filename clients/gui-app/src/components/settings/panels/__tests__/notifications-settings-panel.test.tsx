@@ -57,6 +57,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return {
     useHostScope,
     usePersonalHostScope: useHostScope,
+    useAccountHostScope: useHostScope,
   };
 });
 
@@ -709,6 +710,83 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
       expect(fixture.saveRequests).toHaveLength(1);
     });
     expect(fixture.saveRequests[0].hooks).toEqual([]);
+  });
+});
+
+describe("<NotificationsSettingsPanel /> editing a saved hook", () => {
+  async function renamedSave(hook: HookEntry): Promise<SaveHooksRequest> {
+    const fixture = renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({ hooks: [hook] }),
+      hooksStatusError: undefined,
+      deferTest: undefined,
+    });
+    await screen.findByTestId(`notification-hook-row-${hook.id}`);
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    await screen.findByRole("heading", { name: "Edit hook" });
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save hook" }));
+    await waitFor(() => {
+      expect(fixture.saveRequests).toHaveLength(1);
+    });
+    return fixture.saveRequests[0];
+  }
+
+  it("saves a command and its arguments exactly as held when only the name changes", async () => {
+    const request = await renamedSave(
+      makeHook({
+        id: "padded",
+        name: "Pager",
+        action: {
+          type: "command",
+          command: " /usr/local/bin/notify ",
+          args: ["--label", " padded ", ""],
+        },
+      }),
+    );
+
+    expect(request.hooks).toHaveLength(1);
+    expect(request.hooks[0].name).toBe("Renamed");
+    expect(request.hooks[0].action).toEqual({
+      type: "command",
+      command: " /usr/local/bin/notify ",
+      args: ["--label", " padded ", ""],
+    });
+  });
+
+  it("saves headers exactly as held when only the name changes", async () => {
+    const request = await renamedSave(
+      makeHook({
+        id: "tagged",
+        name: "Webhook",
+        action: {
+          type: "http",
+          url: "https://hooks.example.com/traycer",
+          headers: { "X-Tag": " a  b " },
+        },
+      }),
+    );
+
+    expect(request.hooks).toHaveLength(1);
+    expect(request.hooks[0].name).toBe("Renamed");
+    expect(request.hooks[0].action).toEqual({
+      type: "http",
+      url: "https://hooks.example.com/traycer",
+      headers: { "X-Tag": " a  b " },
+    });
+  });
+
+  it("keeps a hook set to every severity at every severity when only the name changes", async () => {
+    const request = await renamedSave({
+      ...makeHook({ id: "everything", name: "All" }),
+      severities: null,
+    });
+
+    expect(request.hooks).toHaveLength(1);
+    expect(request.hooks[0].name).toBe("Renamed");
+    expect(request.hooks[0].severities).toBeNull();
   });
 });
 

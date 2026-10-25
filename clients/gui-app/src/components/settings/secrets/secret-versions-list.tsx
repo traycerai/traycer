@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentSecret,
@@ -8,11 +8,16 @@ import type {
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
+import { useSecretVersionActions } from "@/components/settings/secrets/use-secret-version-actions";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
-import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  SECRET_SCOPE_LINE,
+  SECRETS_NEED_UPDATED_HOST,
+} from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * A secret's versions: each with when it was made,
@@ -37,55 +42,45 @@ function refusalText(operation: "undo" | "destroy", code: string): string {
   return secretChangeRefusalLine(operation, code) ?? "That didn't go through.";
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : "That didn't go through.";
+/** A failed Undo or Destroy: an old host by name, else the host's words. */
+function errorNote(error: Error | null): string | null {
+  if (error === null) return null;
+  return error instanceof HostMethodVersionUnsatisfiedError
+    ? SECRETS_NEED_UPDATED_HOST
+    : error.message;
+}
+
+function versionActionNote(
+  undo:
+    | ResponseOfMethod<HostRpcRegistry, "environment.secrets.undo">
+    | undefined,
+  destroy:
+    | ResponseOfMethod<HostRpcRegistry, "environment.secrets.destroy">
+    | undefined,
+): string | null {
+  if (undo?.outcome === "refused") return refusalText("undo", undo.code);
+  if (destroy?.outcome === "refused")
+    return refusalText("destroy", destroy.code);
+  return null;
 }
 
 function VersionRow(props: {
   readonly version: SecretVersion;
   readonly secret: EnvironmentSecret;
   readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
   readonly onChanged: () => void;
 }): ReactNode {
   const { version, secret } = props;
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
   const [confirmingDestroy, setConfirmingDestroy] = useState(false);
   const destroyed = version.destroyedAt !== null;
 
-  const run = async (operation: "undo" | "destroy"): Promise<void> => {
-    setBusy(true);
-    setNote(null);
-    try {
-      if (operation === "undo") {
-        const answer = await props.client.request("environment.secrets.undo", {
-          secretId: secret.secretId,
-          versionId: version.versionId,
-          regrant: secret.revoked,
-        });
-        if (answer.outcome === "refused") {
-          setNote(refusalText("undo", answer.code));
-          return;
-        }
-      } else {
-        const answer = await props.client.request(
-          "environment.secrets.destroy",
-          { secretId: secret.secretId, versionId: version.versionId },
-        );
-        if (answer.outcome === "refused") {
-          setNote(refusalText("destroy", answer.code));
-          return;
-        }
-      }
-      props.onChanged();
-    } catch (error) {
-      setNote(errorText(error));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { environmentId, undo, destroy } = useSecretVersionActions(props);
+  const busy = undo.isPending || destroy.isPending;
+  const note =
+    errorNote(undo.error) ??
+    errorNote(destroy.error) ??
+    versionActionNote(undo.data, destroy.data);
 
   return (
     <li
@@ -109,22 +104,44 @@ function VersionRow(props: {
                 size="sm"
                 variant="ghost"
                 disabled={busy}
-                onClick={() => void run("undo")}
+                onClick={() => {
+                  destroy.reset();
+                  undo.mutate({
+                    secretId: secret.secretId,
+                    versionId: version.versionId,
+                    regrant: secret.revoked,
+                    environmentId,
+                  });
+                }}
                 data-testid="secret-version-undo"
               >
                 {secret.revoked ? "Restore" : "Undo"}
+                {undo.isPending ? (
+                  <AgentSpinningDots
+                    className={undefined}
+                    testId={undefined}
+                    variant={undefined}
+                    tone="muted"
+                  />
+                ) : null}
               </Button>
             )}
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setConfirmingDestroy(true)}
-              data-testid="secret-version-destroy"
-            >
-              Destroy
-            </Button>
+            {version.current ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  undo.reset();
+                  destroy.reset();
+                  setConfirmingDestroy(true);
+                }}
+                data-testid="secret-version-destroy"
+              >
+                Destroy
+              </Button>
+            )}
           </span>
         )}
       </div>
@@ -147,10 +164,29 @@ function VersionRow(props: {
         isPending={busy}
         blockedReason={null}
         onConfirm={() => {
-          setConfirmingDestroy(false);
-          void run("destroy");
+          destroy.mutate(
+            {
+              secretId: secret.secretId,
+              versionId: version.versionId,
+              environmentId,
+            },
+            {
+              onSuccess: (answer) => {
+                if (answer.outcome !== "refused") setConfirmingDestroy(false);
+              },
+            },
+          );
         }}
-      />
+      >
+        {note === null ? null : (
+          <p
+            role="alert"
+            className="px-5 pb-3 text-ui-xs text-warning-foreground"
+          >
+            {note}
+          </p>
+        )}
+      </ConfirmDestructiveDialog>
     </li>
   );
 }
@@ -162,7 +198,7 @@ export function SecretVersionsList(props: {
   /** Undo made another version current: the list's row re-reads too. */
   readonly onChanged: () => void;
 }): ReactNode {
-  const queryClient = useQueryClient();
+  const { environmentId, resolved } = useAddressedEnvironment();
   const versions = useHostQuery<
     HostRpcRegistry,
     "environment.secrets.versions"
@@ -170,20 +206,16 @@ export function SecretVersionsList(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.secrets.versions",
-    params: { secretId: props.secret.secretId },
-    options: { enabled: true },
+    params: { secretId: props.secret.secretId, environmentId },
+    requiredHostMethodVersion: () =>
+      environmentId === null
+        ? null
+        : {
+            method: "environment.secrets.versions",
+            version: { major: 1, minor: 1 },
+          },
+    options: { enabled: resolved },
   });
-  const reread = (): void => {
-    void queryClient
-      .invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          props.hostId,
-          "environment.secrets.versions",
-        ),
-      })
-      .catch(ignoreError);
-    props.onChanged();
-  };
   if (versions.isError) {
     return (
       <p
@@ -205,7 +237,8 @@ export function SecretVersionsList(props: {
             version={version}
             secret={props.secret}
             client={props.client}
-            onChanged={reread}
+            hostId={props.hostId}
+            onChanged={props.onChanged}
           />
         ))}
       </ul>

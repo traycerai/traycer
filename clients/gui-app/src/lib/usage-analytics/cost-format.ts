@@ -118,7 +118,7 @@ export function servedByScopeNote(
   hostScopeName: string | null,
 ): string | null {
   if (servedBy === "local") {
-    return "This machine's usage only — not synced across your other devices.";
+    return "This computer's usage only — not synced across your other devices.";
   }
   if (hostScopeName === null) return null;
   return `${hostScopeName} only — your other hosts aren't included.`;

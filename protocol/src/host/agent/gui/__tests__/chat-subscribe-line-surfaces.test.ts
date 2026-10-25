@@ -62,6 +62,7 @@ import {
   chatActionSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { providerNoticeKindSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
 // The minor each surface was minted on. A line carries a surface from its own
@@ -104,9 +105,13 @@ const CLAUDE_PARITY_MINOR = 20;
 // `checkpoint-artifact-kinds.test.ts`). `1.34` adds the optional `sendWouldQueue` bit (pinned by
 // `chat-subscribe-send-would-queue-v134.test.ts`). `1.35` adds the
 // `memory-curation` queue item (pinned by
-// `chat-subscribe-memory-curation-v135.test.ts`). Every threshold above still
+// `chat-subscribe-memory-curation-v135.test.ts`). `1.36` has `1.35`'s frames
+// and marks a client that shows both Managed OpenCode rows. `1.37` adds the
+// errored-compaction `notApplied` flag (pinned by
+// `chat-subscribe-compaction-not-applied-v137.test.ts`). `1.38` adds the
+// snapshot's `opencodeLineHeld` (pinned below). Every threshold above still
 // reads `>=` against the live line.
-const LIVE_MINOR = 35;
+const LIVE_MINOR = 38;
 // `1.28`: the host's sign-in park mark on a queued prompt, server frames only
 // (the host sets it; a client never sends a queue item).
 const SIGN_IN_PARK_MINOR = 28;
@@ -133,6 +138,15 @@ const TASK_OVERDUE_NEEDLES = ['"task-overdue"'];
 // needle for the same reason as the check-in's.
 const MEMORY_CURATION_MINOR = 35;
 const MEMORY_CURATION_NEEDLES = ['"memory-curation"'];
+// `1.37`: the errored-compaction `notApplied` flag. A property name, so its one
+// needle is the quoted key; every earlier line is frozen on the historical
+// compaction block and event and must not name it anywhere.
+const COMPACTION_NOT_APPLIED_MINOR = 37;
+const COMPACTION_NOT_APPLIED_NEEDLES = ['"notApplied"'];
+// `1.38`: why a chat stays on its recorded OpenCode line. A property name, so
+// its one needle is the quoted key.
+const OPENCODE_LINE_HELD_MINOR = 38;
+const OPENCODE_LINE_HELD_NEEDLES = ['"opencodeLineHeld"'];
 // `1.26`: the task check-in surface - the queue item's discriminant. The item
 // is content-free (it carries no key of its own beside the shared queue-item
 // fields), so the discriminant is its one needle.
@@ -178,7 +192,9 @@ const MINORS = Object.keys(chatSubscribeLine.versions)
 function schemaText(schema: z.ZodType): string {
   return (["input", "output"] as const)
     .map((io) =>
-      JSON.stringify(z.toJSONSchema(schema, { io, unrepresentable: "any" })),
+      JSON.stringify(
+        toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }),
+      ),
     )
     .join("\n");
 }
@@ -264,7 +280,7 @@ function shellShapes(schema: z.ZodType): {
     for (const value of Object.values(record)) visit(value);
   };
   for (const io of ["input", "output"] as const) {
-    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
   }
   return tally;
 }
@@ -298,7 +314,7 @@ function toolCallArtifactStampPresent(schema: z.ZodType): boolean {
     for (const value of Object.values(record)) visit(value);
   };
   for (const io of ["input", "output"] as const) {
-    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
     if (found) return true;
   }
   return found;
@@ -345,7 +361,7 @@ function artifactOperationKinds(schema: z.ZodType): string[] {
     for (const value of Object.values(record)) visit(value);
   };
   for (const io of ["input", "output"] as const) {
-    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
   }
   return [...kinds];
 }
@@ -362,7 +378,7 @@ const literalSchema = z.object({ const: z.string() });
 
 function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
   const json = unionArmsSchema.parse(
-    z.toJSONSchema(serverFrameSchema, {
+    toCanonicalJsonSchema(serverFrameSchema, {
       io: "output",
       unrepresentable: "any",
     }),
@@ -378,13 +394,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.35 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.38 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -521,6 +537,46 @@ describe("chat.subscribe line surfaces", () => {
         const text = schemaText(contract.clientFrameSchema);
         expect(
           MEMORY_CURATION_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
+
+      const carriesCompactionNotApplied = minor >= COMPACTION_NOT_APPLIED_MINOR;
+
+      it(`server frames ${carriesCompactionNotApplied ? "carry" : "hold back"} the compaction notApplied flag`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = COMPACTION_NOT_APPLIED_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(
+          carriesCompactionNotApplied ? COMPACTION_NOT_APPLIED_NEEDLES : [],
+        );
+      });
+
+      it("client frames hold back the compaction notApplied flag on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          COMPACTION_NOT_APPLIED_NEEDLES.filter((needle) =>
+            text.includes(needle),
+          ),
+        ).toEqual([]);
+      });
+
+      const carriesOpencodeLineHeld = minor >= OPENCODE_LINE_HELD_MINOR;
+
+      it(`server frames ${carriesOpencodeLineHeld ? "carry" : "hold back"} the snapshot's opencodeLineHeld`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = OPENCODE_LINE_HELD_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(
+          carriesOpencodeLineHeld ? OPENCODE_LINE_HELD_NEEDLES : [],
+        );
+      });
+
+      it("client frames hold back opencodeLineHeld on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          OPENCODE_LINE_HELD_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual([]);
       });
 

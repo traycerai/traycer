@@ -28,6 +28,7 @@ import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
 import { Route as SettingsBrowserAgentAccessRouteImport } from "./routes/settings.browser-agent-access";
+import { Route as SettingsCreditsRouteImport } from "./routes/settings.credits";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevArtifactProofRouteImport } from "./routes/settings.dev-artifact-proof";
 import { Route as SettingsDevCanvasProofRouteImport } from "./routes/settings.dev-canvas-proof";
@@ -42,10 +43,12 @@ import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsMachineSetupRouteImport } from "./routes/settings.machine-setup";
 import { Route as SettingsMcpServersRouteImport } from "./routes/settings.mcp-servers";
+import { Route as SettingsMembersRouteImport } from "./routes/settings.members";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
 import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
+import { Route as SettingsSandboxesRouteImport } from "./routes/settings.sandboxes";
 import { Route as SettingsSecretsRouteImport } from "./routes/settings.secrets";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
@@ -152,6 +155,11 @@ const SettingsBrowserAgentAccessRoute =
     path: "/browser-agent-access",
     getParentRoute: () => SettingsRoute,
   } as any);
+const SettingsCreditsRoute = SettingsCreditsRouteImport.update({
+  id: "/credits",
+  path: "/credits",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
   id: "/delete-account",
   path: "/delete-account",
@@ -223,6 +231,11 @@ const SettingsMcpServersRoute = SettingsMcpServersRouteImport.update({
   path: "/mcp-servers",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsMembersRoute = SettingsMembersRouteImport.update({
+  id: "/members",
+  path: "/members",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   id: "/notifications",
   path: "/notifications",
@@ -241,6 +254,11 @@ const SettingsPermissionsRoute = SettingsPermissionsRouteImport.update({
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: "/providers",
   path: "/providers",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsSandboxesRoute = SettingsSandboxesRouteImport.update({
+  id: "/sandboxes",
+  path: "/sandboxes",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsSecretsRoute = SettingsSecretsRouteImport.update({
@@ -297,6 +315,7 @@ export interface FileRoutesByFullPath {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
+  "/settings/credits": typeof SettingsCreditsRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
   "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
@@ -311,10 +330,12 @@ export interface FileRoutesByFullPath {
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/machine-setup": typeof SettingsMachineSetupRoute;
   "/settings/mcp-servers": typeof SettingsMcpServersRoute;
+  "/settings/members": typeof SettingsMembersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
   "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -341,6 +362,7 @@ export interface FileRoutesByTo {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
+  "/settings/credits": typeof SettingsCreditsRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
   "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
@@ -355,10 +377,12 @@ export interface FileRoutesByTo {
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/machine-setup": typeof SettingsMachineSetupRoute;
   "/settings/mcp-servers": typeof SettingsMcpServersRoute;
+  "/settings/members": typeof SettingsMembersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
   "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -388,6 +412,7 @@ export interface FileRoutesById {
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
+  "/settings/credits": typeof SettingsCreditsRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
   "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
@@ -402,10 +427,12 @@ export interface FileRoutesById {
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/machine-setup": typeof SettingsMachineSetupRoute;
   "/settings/mcp-servers": typeof SettingsMcpServersRoute;
+  "/settings/members": typeof SettingsMembersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
   "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -436,6 +463,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/browser"
     | "/settings/browser-agent-access"
+    | "/settings/credits"
     | "/settings/delete-account"
     | "/settings/dev-artifact-proof"
     | "/settings/dev-canvas-proof"
@@ -450,10 +478,12 @@ export interface FileRouteTypes {
     | "/settings/link-phone"
     | "/settings/machine-setup"
     | "/settings/mcp-servers"
+    | "/settings/members"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
     | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
@@ -480,6 +510,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/browser"
     | "/settings/browser-agent-access"
+    | "/settings/credits"
     | "/settings/delete-account"
     | "/settings/dev-artifact-proof"
     | "/settings/dev-canvas-proof"
@@ -494,10 +525,12 @@ export interface FileRouteTypes {
     | "/settings/link-phone"
     | "/settings/machine-setup"
     | "/settings/mcp-servers"
+    | "/settings/members"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
     | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
@@ -526,6 +559,7 @@ export interface FileRouteTypes {
     | "/settings/appearance"
     | "/settings/browser"
     | "/settings/browser-agent-access"
+    | "/settings/credits"
     | "/settings/delete-account"
     | "/settings/dev-artifact-proof"
     | "/settings/dev-canvas-proof"
@@ -540,10 +574,12 @@ export interface FileRouteTypes {
     | "/settings/link-phone"
     | "/settings/machine-setup"
     | "/settings/mcp-servers"
+    | "/settings/members"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
     | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
@@ -703,6 +739,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsBrowserAgentAccessRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/credits": {
+      id: "/settings/credits";
+      path: "/credits";
+      fullPath: "/settings/credits";
+      preLoaderRoute: typeof SettingsCreditsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/delete-account": {
       id: "/settings/delete-account";
       path: "/delete-account";
@@ -801,6 +844,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsMcpServersRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/members": {
+      id: "/settings/members";
+      path: "/members";
+      fullPath: "/settings/members";
+      preLoaderRoute: typeof SettingsMembersRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/notifications": {
       id: "/settings/notifications";
       path: "/notifications";
@@ -827,6 +877,13 @@ declare module "@tanstack/react-router" {
       path: "/providers";
       fullPath: "/settings/providers";
       preLoaderRoute: typeof SettingsProvidersRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/sandboxes": {
+      id: "/settings/sandboxes";
+      path: "/sandboxes";
+      fullPath: "/settings/sandboxes";
+      preLoaderRoute: typeof SettingsSandboxesRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/secrets": {
@@ -901,6 +958,7 @@ interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsBrowserRoute: typeof SettingsBrowserRoute;
   SettingsBrowserAgentAccessRoute: typeof SettingsBrowserAgentAccessRoute;
+  SettingsCreditsRoute: typeof SettingsCreditsRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevArtifactProofRoute: typeof SettingsDevArtifactProofRoute;
   SettingsDevCanvasProofRoute: typeof SettingsDevCanvasProofRoute;
@@ -915,10 +973,12 @@ interface SettingsRouteChildren {
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsMachineSetupRoute: typeof SettingsMachineSetupRoute;
   SettingsMcpServersRoute: typeof SettingsMcpServersRoute;
+  SettingsMembersRoute: typeof SettingsMembersRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
   SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
+  SettingsSandboxesRoute: typeof SettingsSandboxesRoute;
   SettingsSecretsRoute: typeof SettingsSecretsRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
@@ -936,6 +996,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsBrowserAgentAccessRoute: SettingsBrowserAgentAccessRoute,
+  SettingsCreditsRoute: SettingsCreditsRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevArtifactProofRoute: SettingsDevArtifactProofRoute,
   SettingsDevCanvasProofRoute: SettingsDevCanvasProofRoute,
@@ -950,10 +1011,12 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsMachineSetupRoute: SettingsMachineSetupRoute,
   SettingsMcpServersRoute: SettingsMcpServersRoute,
+  SettingsMembersRoute: SettingsMembersRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
   SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsSandboxesRoute: SettingsSandboxesRoute,
   SettingsSecretsRoute: SettingsSecretsRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,

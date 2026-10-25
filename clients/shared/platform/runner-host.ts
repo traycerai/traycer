@@ -49,6 +49,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -404,6 +405,15 @@ export interface IRunnerHost {
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
   runSandboxVerb(
     bearerToken: string,
     sandboxId: string,
@@ -582,9 +592,10 @@ export interface IRunnerHost {
 
   /**
    * Why this build cannot reach the sandbox control plane at all, or `null`
-   * when it can. Set on a staging build (`SANDBOXES_UNAVAILABLE_IN_STAGING`):
-   * every sandbox call is refused there before it is sent, and the sandbox
-   * surfaces show this line instead of failing one request at a time.
+   * when it can. Set on a staging mobile build
+   * (`SANDBOXES_UNAVAILABLE_IN_STAGING`): every sandbox call is refused there
+   * before it is sent, and the sandbox surfaces show this line instead of
+   * failing one request at a time.
    */
   readonly sandboxControlUnavailableReason: string | null;
 
@@ -1669,7 +1680,10 @@ export interface IDeviceFlowHost {
  * that plane grants nothing new.
  *
  *   - `credential` — 400/401. A verdict about the token.
- *   - `account`    — 403/404. A verdict about the account.
+ *   - `account`    — 403/404 answered by authn itself (its error envelope on
+ *                    the body). A verdict about the account. The same status
+ *                    from anything else at the URL is an outage, not a verdict,
+ *                    and reads as `network-error`.
  *
  * BOTH hold the local plane. The distinction is real and worth carrying, but it
  * decides the COPY and the recovery policy, not whether local data renders:

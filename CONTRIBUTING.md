@@ -43,6 +43,12 @@ bunx nx run @traycer-clients/traycer-cli:build
 | `clients/gui-app/`     | GUI renderer                                    |
 | `clients/desktop/`     | Electron shell                                  |
 
+## Provider authentication
+
+When integrating a coding agent or changing auth consumers, read the
+[provider authentication evidence contract](protocol/provider-auth.md) for
+status semantics, runtime failures, profile scope and recovery.
+
 ## Config targets and releases
 
 Each client's `src/config.ts` holds the **dev** values in source. Release

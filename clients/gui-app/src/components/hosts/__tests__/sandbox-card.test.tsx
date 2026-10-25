@@ -75,6 +75,14 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+// The destroy dialog reads the host's running-session count; this suite has no
+// host runtime.
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
 // The secrets section's live parts talk to the sandbox host itself; the card's
 // own suite has no host runtime, and they have their own tests.
 vi.mock("@/hooks/sandboxes/use-sandbox-egress-events", () => ({
@@ -114,6 +122,12 @@ vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs, isError: false }),
@@ -160,7 +174,6 @@ function renderCardOnHost(
         hostName="Host name"
         hostState={hostState}
         sandbox={sandbox}
-        likeThis={{ kind: "personal" }}
         onDestroyed={onDestroyed}
       />
     </QueryClientProvider>,
@@ -203,6 +216,7 @@ const COST: SandboxCost = {
   },
   pendingMillicredits: 500,
   segments: [],
+  todayMillicredits: 0,
 };
 
 beforeEach(() => {
@@ -382,6 +396,7 @@ describe("<SandboxCard /> per state", () => {
           suspendFidelity: "memory",
           stoppedStorage: "snapshot",
           wakeClass: "resume",
+          shapes: null,
           dockerInGuest: true,
           creatable: true,
           notCreatableReason: null,
@@ -417,6 +432,7 @@ describe("<SandboxCard /> per state", () => {
         diskDefaultMb: 10240,
       },
       stoppedStorage: "disk",
+      shapes: null,
       dockerInGuest: false,
       creatable: true,
       notCreatableReason: null,
@@ -452,7 +468,11 @@ describe("<SandboxCard /> per state", () => {
   });
 
   it("shows the cost view and the runway warning when the figures and the warning are in", () => {
-    mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+    };
     mocks.warning = { kind: "critical", runwayMinutes: 20 };
     renderCard(sandboxOf("awake", false, {}));
     expect(screen.getByTestId("sandbox-card-cost-now").textContent).toBe(
@@ -522,6 +542,7 @@ function resolvedSandbox(input: {
     localService: undefined,
     hasLiveSession: () => false,
     localHostSettingUp: false,
+    localHostTerminalRunNote: null,
     sandboxes: [
       sandboxSummaryFixture({
         id: "sbx_1",
@@ -814,7 +835,7 @@ describe("<SandboxCard /> Automations row", () => {
       "Running. Automations aren't billed.",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
-      "Released after a day with no shell",
+      "Stops after 30 min idle · files kept · the next shell starts it",
     );
   });
 
@@ -840,6 +861,11 @@ describe("<SandboxCard /> destroy", () => {
   function openDestroy(): void {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
+  function typeName(): void {
+    fireEvent.change(screen.getByTestId("sandbox-confirm-destroy-typed"), {
+      target: { value: NAME },
+    });
+  }
 
   it("asks for confirmation on a non-burst row and destroys nothing until it is given", async () => {
     renderCard(sandboxOf("suspended", false, { burst: false }));
@@ -847,11 +873,12 @@ describe("<SandboxCard /> destroy", () => {
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(within(dialog).getByText(`Destroy ${NAME}?`)).toBeDefined();
-    expect(within(dialog).getByText(/can't be recovered/)).toBeDefined();
-    // No typed confirmation on a row that is not frozen.
-    expect(screen.queryByTestId("sandbox-card-destroy-typed")).toBeNull();
+    expect(
+      within(dialog).getByText(/The disk is not recoverable/),
+    ).toBeDefined();
     expect(mocks.binding?.auth.destroySandbox).not.toHaveBeenCalled();
 
+    typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
@@ -880,6 +907,7 @@ describe("<SandboxCard /> destroy", () => {
     renderCard(sandboxOf("suspended", false, {}));
     openDestroy();
     await screen.findByTestId("confirm-destructive-dialog");
+    typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
@@ -895,6 +923,7 @@ describe("<SandboxCard /> destroy", () => {
     renderCard(sandboxOf("suspended", false, {}));
     openDestroy();
     await screen.findByTestId("confirm-destructive-dialog");
+    typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(`Destroyed ${NAME}`);
@@ -905,6 +934,7 @@ describe("<SandboxCard /> destroy", () => {
     async function confirmDestroy(): Promise<void> {
       openDestroy();
       await screen.findByTestId("confirm-destructive-dialog");
+      typeName();
       fireEvent.click(screen.getByTestId("confirm-action"));
     }
 
@@ -963,12 +993,12 @@ describe("<SandboxCard /> destroy", () => {
     });
   });
 
-  describe("the typed-name gate on a frozen row", () => {
+  describe("the typed-name gate", () => {
     async function openFrozen(): Promise<HTMLElement> {
       renderCard(sandboxOf("suspended", true, {}));
       openDestroy();
       await screen.findByTestId("confirm-destructive-dialog");
-      const input = screen.getByTestId("sandbox-card-destroy-typed");
+      const input = screen.getByTestId("sandbox-confirm-destroy-typed");
       if (!(input instanceof HTMLInputElement)) {
         throw new Error("the typed confirmation is not an input");
       }
@@ -1017,7 +1047,9 @@ describe("<SandboxCard /> destroy", () => {
         expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
       });
       openDestroy();
-      const reopened = await screen.findByTestId("sandbox-card-destroy-typed");
+      const reopened = await screen.findByTestId(
+        "sandbox-confirm-destroy-typed",
+      );
       expect(reopened).toHaveProperty("value", "");
     });
   });

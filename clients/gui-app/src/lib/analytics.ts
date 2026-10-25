@@ -115,7 +115,9 @@ export type AnalyticsSettingsSection =
   | "getting-started"
   | "browser"
   | "browser-agent-access"
+  | "credits"
   | "mcp-servers"
+  | "members"
   | "skills"
   | "agent-definitions"
   | "machine-setup"
@@ -127,6 +129,7 @@ export type AnalyticsSettingsSection =
   | "opening-behavior"
   | "permissions"
   | "providers"
+  | "sandboxes"
   | "secrets"
   | "shell"
   | "usage"
@@ -334,6 +337,7 @@ export type AnalyticsSetting =
   | "catalogProbeTimeout"
   | "catalogProbeTimeoutSameForAll"
   | "chatAutoArchive"
+  | "claudeSessionName"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
@@ -356,6 +360,7 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGreeting"
   | "showRecentHistory"
+  | "showTracy"
   | "startPageWallpaper"
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
@@ -1412,9 +1417,12 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "opening-behavior": true,
     permissions: true,
     providers: true,
+    sandboxes: true,
+    members: true,
     secrets: true,
     shell: true,
     usage: true,
+    credits: true,
     worktrees: true,
   } satisfies Record<AnalyticsSettingsSection, true>),
 );
@@ -1440,6 +1448,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     catalogProbeTimeout: true,
     catalogProbeTimeoutSameForAll: true,
     chatAutoArchive: true,
+    claudeSessionName: true,
     codeFontFamily: true,
     codeFontSize: true,
     composerMode: true,
@@ -1459,6 +1468,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     quoteReplyEnabled: true,
     showGreeting: true,
     showRecentHistory: true,
+    showTracy: true,
     startPageWallpaper: true,
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,

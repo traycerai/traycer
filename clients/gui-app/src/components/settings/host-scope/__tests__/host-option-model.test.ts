@@ -50,6 +50,7 @@ function option(overrides: {
   return hostScopeOptionFixture({
     hostId: "host-a",
     settingUp: overrides.settingUp ?? false,
+    terminalRunNote: null,
     connectable: overrides.connectable ?? true,
     health: {
       state: overrides.state ?? "online",
@@ -171,12 +172,12 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
 });
 
 describe("hostOptionKindLabel — unchanged, and deliberately route-side", () => {
-  it("names this machine", () => {
+  it("names this computer", () => {
     expect(
       hostOptionKindLabel(
         hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
       ),
-    ).toBe("This machine");
+    ).toBe("This computer");
   });
 
   it("falls back to Host when no directory entry says otherwise", () => {
@@ -449,9 +450,9 @@ describe("hostOptionPickerGroup by directory kind", () => {
       entry: entryOf(kind),
     });
     for (const listsAgentSandboxes of [false, true]) {
-      for (const offersAutomations of [false, true]) {
+      for (const composerViewer of [null, { userId: "u" }]) {
         expect(
-          hostOptionPickerGroup(option, listsAgentSandboxes, offersAutomations),
+          hostOptionPickerGroup(option, listsAgentSandboxes, composerViewer),
         ).toBe(GROUP_BY_KIND[kind]);
       }
     }

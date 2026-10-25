@@ -69,11 +69,21 @@ export const botConversationSendRequestSchema = lazySchema(() =>
     text: z.string().min(1).max(100_000),
     /**
      * `null` (or absent) posts at the channel's top level, which opens a
-     * thread run by a thread session of the bot (T41); a thread id puts the
+     * thread run by a thread session of the bot (T41), or, for a bot in
+     * reply mode `direct`, is answered by the bot itself at the top level
+     * and opens no thread; a thread id puts the
      * message in that thread of `conversationId`, delivered to the thread's
      * session.
      */
     threadId: z.string().min(1).max(36).nullable().default(null),
+    /**
+     * A reply under a `question` or `proposal` announcement of `conversationId`
+     * (decision 55), or under a member's post its bot answered at the top
+     * level (a `direct` post): the message opens, or joins, the thread hung
+     * off that row, as its first request when it opens it. `null` (or absent)
+     * otherwise; never set with `threadId`.
+     */
+    announcementId: z.string().min(1).max(255).nullable().default(null),
   }),
 );
 export type BotConversationSendRequest = z.infer<
@@ -95,9 +105,11 @@ export const botConversationSendResponseSchema = lazySchema(() =>
     /**
      * The thread the message is in: the request's own thread when it was a
      * top-level post (derived from the message, so it is known even while
-     * the message waits in the mailbox), the named one otherwise.
+     * the message waits in the mailbox), the named one otherwise. `null` for
+     * a top-level post the bot answers itself (reply mode `direct`): its
+     * answer lands on the channel, and no thread opens.
      */
-    threadId: z.string().min(1),
+    threadId: z.string().min(1).nullable(),
   }),
 );
 export type BotConversationSendResponse = z.infer<
@@ -138,7 +150,10 @@ export const botThreadSummarySchema = lazySchema(() =>
     lastReplyAt: z.number().int().nullable(),
     /** Open requests of the thread, the anchor's included while it is open. */
     openRequestCount: z.number().int().nonnegative(),
-    /** The thread session's cost in USD; `null` when this host cannot say. */
+    /**
+     * What the thread's sessions have cost in USD on the bound host, every
+     * member's turns; `null` when this host cannot say.
+     */
     costUsd: z.number().nonnegative().nullable(),
   }),
 );
@@ -153,6 +168,12 @@ export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 export const botThreadListResponseSchema = lazySchema(() =>
   z.object({
     threads: z.array(botThreadSummarySchema),
+    /**
+     * What the bot's trunk has cost in USD on the bound host, every member's
+     * turns; `null` when this host cannot say. The bot's figure is this plus
+     * its threads'.
+     */
+    trunkCostUsd: z.number().nonnegative().nullable(),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;
