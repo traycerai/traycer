@@ -25,6 +25,7 @@ export function useCanvasPresentation({
   size,
   viewport,
   settledViewport,
+  playingBoard,
 }: {
   readonly snapshot: CanvasLayoutSnapshot;
   readonly items: CanvasPageItems;
@@ -33,6 +34,7 @@ export function useCanvasPresentation({
   readonly size: { readonly width: number; readonly height: number };
   readonly viewport: Viewport;
   readonly settledViewport: Viewport;
+  readonly playingBoard: string | null;
 }) {
   const [fullscreen, setFullscreen] = useState<string | null>(null);
   const [sizing, setSizing] = useState<CanvasFullscreenSizing>("fit");
@@ -72,6 +74,8 @@ export function useCanvasPresentation({
     // working set. The remaining slots go to the boards nearest the viewport.
     const candidates = [
       ...(activeFullscreen === null ? [] : [activeFullscreen]),
+      // The playing board keeps its running document whatever the camera does.
+      ...(playingBoard === null ? [] : [playingBoard]),
       ...recentBoards.slice(0, 1),
       ...[...nearest].slice(0, Math.max(1, Math.floor(liveFrameLimit / 2))),
       ...recentBoards.slice(1),
@@ -90,6 +94,7 @@ export function useCanvasPresentation({
     settledViewport,
     liveFrameLimit,
     activeFullscreen,
+    playingBoard,
     recentBoards,
     snapshot.boards,
     boardFiles,

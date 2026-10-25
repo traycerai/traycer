@@ -14,8 +14,9 @@ import {
   type NodeProps,
   type OnResizeEnd,
 } from "@xyflow/react";
-import { Expand, Play } from "lucide-react";
+import { Expand, Play, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CanvasBoardFrame } from "./canvas-frame";
@@ -94,11 +95,10 @@ function CanvasBoardOverlay({
   readonly interactive: boolean;
   readonly actions: CanvasNodeActions;
 }) {
-  if (interactive && !actions.selectionEnabled)
-    return <CanvasPlayPins actions={actions} path={path} />;
   // The self variant enables hits without adding xyflow's no-pan marker, so
   // a hand drag that starts here pans the canvas instead of reaching the page.
   // Comment pins and an open thread stay above it and keep their own markers.
+  // An armed hand tool claims the pointer even over the playing board.
   if (actions.panMode)
     return (
       <>
@@ -106,6 +106,8 @@ function CanvasBoardOverlay({
         {actions.frameEvents?.renderOverlay?.(path, false)}
       </>
     );
+  if (interactive && !actions.commentMode)
+    return <CanvasPlayPins actions={actions} path={path} />;
   return (
     <CanvasEditShield
       path={path}
@@ -134,7 +136,24 @@ function CanvasBoardButtons({
 }) {
   return (
     <div className="touch-auto flex items-center gap-0.5">
-      {actions.play ? null : (
+      {actions.playingBoard === path ? (
+        <TooltipWrapper
+          label="Stop · Esc"
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`Stop ${title} (Escape)`}
+            onClick={() => actions.stopPlay()}
+          >
+            <Square className="fill-current" />
+          </Button>
+        </TooltipWrapper>
+      ) : (
         <Button
           type="button"
           size="icon-xs"
@@ -201,7 +220,8 @@ function CanvasBoardHeader({
           <span
             className="block truncate text-ui-sm"
             onDoubleClick={() => {
-              if (!actions.viewOnly && !actions.play) setRenaming(true);
+              if (!actions.viewOnly && actions.playingBoard !== path)
+                setRenaming(true);
             }}
           >
             {title}
@@ -276,13 +296,16 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
   if (board === null) return null;
   const frame = boardFrame(board);
   const title = board.title || boardName(data.path);
-  const interactive = data.play;
   const fullscreen = actions.fullscreenPath === data.path;
+  // Fullscreen is its own play surface, orthogonal to the in-place play state.
+  const interactive = data.play || fullscreen;
   return (
     <div
       className={cn(
         "relative h-full w-full rounded-(--canvas-radius) bg-card shadow-md ring-1 ring-foreground/25",
         selected && !data.play && "ring-2 ring-ring",
+        // A quiet "this board is live" marker; the stop icon carries the rest.
+        data.play && "ring-2 ring-ring/45",
       )}
       style={
         {
@@ -367,13 +390,13 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
   );
   if (note === null) return null;
   const type = note.type ?? "sticky";
-  const readOnly = actions.viewOnly || data.play;
+  const readOnly = actions.viewOnly;
   const editing = !readOnly && actions.editingNote === data.path;
   return (
     <div
       className={cn(
         "relative h-full w-full",
-        selected && !data.play && "outline outline-1 outline-ring",
+        selected && "outline outline-1 outline-ring",
         type === "sticky" &&
           "rounded-sm border border-border bg-(--canvas-note-fill) p-3 shadow-sm",
         type === "title" && "p-1",
@@ -392,7 +415,7 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
       <NodeResizer
         handleClassName="z-10"
         lineClassName="z-10"
-        isVisible={!actions.viewOnly && !data.play && selected}
+        isVisible={!actions.viewOnly && selected}
         minWidth={12}
         minHeight={12}
         onResizeEnd={onResizeEnd}

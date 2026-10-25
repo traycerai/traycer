@@ -21,6 +21,7 @@ import type {
 import type {
   CanvasMode,
   CanvasPageError,
+  CanvasPanGesture,
   CanvasElement,
   CanvasTextSelection,
 } from "@/lib/sandbox/canvas-bridge";
@@ -34,6 +35,9 @@ export interface CanvasFrameEvents {
     delta: number,
     point: { readonly x: number; readonly y: number },
   ) => void;
+  /** A wheel gesture the playing board could not scroll by, handed over as a
+   * canvas pan. */
+  readonly onPan?: (gesture: CanvasPanGesture) => void;
   readonly commentsEnabled?: boolean;
   readonly onCanvasView?: (view: CanvasCommentView | null) => void;
   /** A comment-mode click on blank canvas: its screen spot for the composer,
@@ -179,13 +183,17 @@ export function CanvasBoardFrame({
   const [remountEpoch, setRemountEpoch] = useState(0);
   const navigate = useCallback((): void => {
     const bridge = bridgeRef.current;
-    if (
-      bridge === null ||
-      navigation === null ||
-      navigation === undefined ||
-      navigation === appliedNavigation.current
-    )
+    // A cleared navigation entry (play stopped) discards wherever the played
+    // document went: the board comes back as a fresh mount of its own source.
+    if (navigation === null || navigation === undefined) {
+      if (appliedNavigation.current !== null) {
+        appliedNavigation.current = null;
+        adoptedDocument.current = false;
+        setRemountEpoch((epoch) => epoch + 1);
+      }
       return;
+    }
+    if (bridge === null || navigation === appliedNavigation.current) return;
     // A query change reloads the document. An adopted document must not
     // reload from its stale mount: give it a fresh mount from the current
     // manifest, and apply the navigation once that document is ready.
@@ -319,6 +327,9 @@ export function CanvasBoardFrame({
           x: bounds.left + (gesture.x * bounds.width) / frame.clientWidth,
           y: bounds.top + (gesture.y * bounds.height) / frame.clientHeight,
         });
+      }}
+      onCanvasPan={(gesture) => {
+        if (!fullscreen) events?.onPan?.(gesture);
       }}
       onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
       ref={onFrame}

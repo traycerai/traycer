@@ -41,6 +41,7 @@ import {
   boardFrame,
   canvasPageItems,
   canvasToolForKey,
+  CANVAS_INSPECTOR_ENABLED,
   isCanvasTextInput,
   noteDimensions,
   type CanvasPoint,
@@ -53,11 +54,7 @@ import {
 } from "./canvas-node-context";
 import { CanvasBoardNode, CanvasNoteNode } from "./canvas-nodes";
 import { CanvasPageMenu } from "./canvas-pages";
-import {
-  CanvasPlayExitButton,
-  CanvasToolbar,
-  CanvasViewControls,
-} from "./canvas-toolbar";
+import { CanvasToolbar, CanvasViewControls } from "./canvas-toolbar";
 import {
   useCanvasSelectionStore,
   type CanvasSelection,
@@ -153,23 +150,14 @@ function canvasToolAllowed(
 }
 function canvasDrawingEnabled(
   readOnly: boolean,
-  play: boolean,
   tool: CanvasTool,
 ): tool is Exclude<CanvasTool, "select" | "hand" | "comment"> {
   return (
-    !readOnly &&
-    !play &&
-    tool !== "select" &&
-    tool !== "hand" &&
-    tool !== "comment"
+    !readOnly && tool !== "select" && tool !== "hand" && tool !== "comment"
   );
 }
-function canvasSelectionEnabled(
-  readOnly: boolean,
-  play: boolean,
-  tool: CanvasTool,
-): boolean {
-  return !readOnly && !play && tool === "select";
+function canvasSelectionEnabled(readOnly: boolean, tool: CanvasTool): boolean {
+  return !readOnly && tool === "select";
 }
 function handleCanvasUndo(
   event: KeyboardEvent,
@@ -295,13 +283,11 @@ function renderCanvasPointPins(
 
 function canvasInteractionMode({
   readOnly,
-  play,
   commenting,
   spaceHeld,
   tool,
 }: {
   readonly readOnly: boolean;
-  readonly play: boolean;
   readonly commenting: boolean;
   readonly spaceHeld: boolean;
   readonly tool: CanvasTool;
@@ -311,9 +297,8 @@ function canvasInteractionMode({
   if (commenting) activeTool = "comment";
   return {
     activeTool,
-    editingDisabled: readOnly || play || commenting,
-    playing: play && !commenting,
-    toolsHidden: play || commenting,
+    editingDisabled: readOnly || commenting,
+    toolsHidden: commenting,
     cursorClassName: commenting ? "cursor-crosshair" : undefined,
   };
 }
@@ -353,7 +338,9 @@ export function CanvasArtifactEditor({
   const [chosenPage, setChosenPage] = useState<string | null>(null);
   const page = resolveCanvasPage(snapshot, chosenPage);
   const [tool, setTool] = useState<CanvasTool>("select");
-  const [play, setPlay] = useState(false);
+  // One board plays in place at a time. The state is ephemeral by design:
+  // never persisted or synced, and a page switch or reload stops it.
+  const [playingBoard, setPlayingBoard] = useState<string | null>(null);
   const [commenting, setCommenting] = useState(false);
   const [pageErrors, setPageErrors] = useState<
     Readonly<Record<string, CanvasPageError | null | undefined>>
@@ -423,6 +410,7 @@ export function CanvasArtifactEditor({
     size,
     viewport,
     settledViewport,
+    playingBoard,
   });
   useLayoutEffect(() => {
     const stage = stageRef.current;
@@ -430,17 +418,15 @@ export function CanvasArtifactEditor({
     stage.scrollTop = 0;
     stage.scrollLeft = 0;
   }, [activeFullscreen, sizing]);
-  const { activeTool, editingDisabled, playing, toolsHidden, cursorClassName } =
-    useMemo(
-      () =>
-        canvasInteractionMode({ readOnly, play, commenting, spaceHeld, tool }),
-      [readOnly, play, commenting, spaceHeld, tool],
-    );
+  const { activeTool, editingDisabled, toolsHidden, cursorClassName } = useMemo(
+    () => canvasInteractionMode({ readOnly, commenting, spaceHeld, tool }),
+    [readOnly, commenting, spaceHeld, tool],
+  );
   const commentSurfaces = canvasCommentSurfaces(
     frameEvents,
     presentation.fullscreen,
   );
-  const selectEnabled = canvasSelectionEnabled(readOnly, play, activeTool);
+  const selectEnabled = canvasSelectionEnabled(readOnly, activeTool);
   const nodes = useMemo<CanvasFlowNode[]>(
     () => [
       ...renderedBoards.map(([path, board], index): CanvasFlowNode => {
@@ -474,7 +460,7 @@ export function CanvasArtifactEditor({
             board,
             note: null,
             live: liveBoards.has(path),
-            play: playing,
+            play: playingBoard === path,
           },
         };
       }),
@@ -494,7 +480,7 @@ export function CanvasArtifactEditor({
           style: {
             visibility: activeFullscreen === null ? "visible" : "hidden",
           },
-          data: { path, board: null, note, live: false, play },
+          data: { path, board: null, note, live: false, play: false },
         };
       }),
     ],
@@ -503,9 +489,8 @@ export function CanvasArtifactEditor({
       renderedBoards,
       interactions,
       liveBoards,
-      play,
       editingDisabled,
-      playing,
+      playingBoard,
       activeFullscreen,
     ],
   );
@@ -637,24 +622,38 @@ export function CanvasArtifactEditor({
       return next;
     });
   }, []);
-  // Deliberately no camera move: Play applies to the boards where they lie,
-  // and the person keeps the viewport they had.
+  // Deliberately no camera move: Play applies to the board where it lies,
+  // and the person keeps the viewport they had. Playing another board stops
+  // the first — one board plays at a time.
   const startPlay = useCallback(
     (path: string): void => {
       clearNodeSelection();
       frameEvents?.onBoardSelect?.(null);
-      setPlay(true);
+      setPlayingBoard(path);
       setCommenting(false);
       setSpaceHeld(false);
       rememberBoard(path);
     },
     [clearNodeSelection, frameEvents, rememberBoard],
   );
+  const stopPlay = useCallback((): void => {
+    if (playingBoard === null) return;
+    setPlayingBoard(null);
+    // Clearing the entry resets a board the played document navigated away
+    // from; its frame remounts its own source.
+    setNavigation((previous) => {
+      if (previous[playingBoard] === undefined) return previous;
+      const next = { ...previous };
+      delete next[playingBoard];
+      return next;
+    });
+  }, [playingBoard]);
+  // Fullscreen is orthogonal to in-place play: it is its own play surface and
+  // leaving it changes nothing on the canvas.
   const openFullscreen = useCallback(
     (path: string): void => {
       clearNodeSelection();
       frameEvents?.onBoardSelect?.(null);
-      setPlay(true);
       setSpaceHeld(false);
       rememberBoard(path);
       setFullscreen(path);
@@ -664,7 +663,9 @@ export function CanvasArtifactEditor({
   useEffect(() => {
     frameEvents?.onCanvasView?.({
       tool: commenting ? "comment" : tool,
-      play,
+      // Only fullscreen covers the canvas; an in-place playing board leaves
+      // the rest of the page editable, pasting included.
+      play: activeFullscreen !== null,
       commenting,
       setCommenting,
       viewOnly: readOnly,
@@ -679,7 +680,7 @@ export function CanvasArtifactEditor({
   }, [
     frameEvents,
     tool,
-    play,
+    activeFullscreen,
     commenting,
     readOnly,
     snapshot.order,
@@ -713,25 +714,75 @@ export function CanvasArtifactEditor({
     },
     [activeFullscreen, flow],
   );
+  // Wheel panning is our own handler, not xyflow's panOnScroll: each event's
+  // delta is capped so momentum tails cannot sling the canvas, while the
+  // uncapped per-pixel gain stays 1. One feel everywhere — the same path takes
+  // the playing board's forwarded fall-through gestures.
+  const settleTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (settleTimer.current !== null)
+        window.clearTimeout(settleTimer.current);
+    },
+    [],
+  );
+  const panBy = useCallback(
+    (dx: number, dy: number): void => {
+      if (flow === null || activeFullscreen !== null) return;
+      const cap = (delta: number): number =>
+        Math.sign(delta) * Math.min(Math.abs(delta), 80);
+      const current = flow.getViewport();
+      const next = {
+        x: current.x - cap(dx),
+        y: current.y - cap(dy),
+        zoom: current.zoom,
+      };
+      void flow.setViewport(next);
+      setViewport(next);
+      if (settleTimer.current !== null)
+        window.clearTimeout(settleTimer.current);
+      settleTimer.current = window.setTimeout(() => {
+        settleTimer.current = null;
+        setSettledViewport(flow.getViewport());
+      }, 200);
+    },
+    [flow, activeFullscreen],
+  );
   useEffect(() => {
     const stage = stageRef.current;
     if (stage === null) return;
     const wheel = (event: WheelEvent): void => {
-      if (!event.ctrlKey) return;
+      const unit = wheelUnit(event.deltaMode, stage.clientHeight);
+      if (event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        zoomAt(event.deltaY * unit, { x: event.clientX, y: event.clientY });
+        return;
+      }
+      if (activeFullscreen !== null) return;
+      // The playing board's document takes its own wheel; what it cannot
+      // scroll by comes back through the bridge as a pan.
+      if (
+        event.target instanceof Element &&
+        event.target.closest(".canvas-nowheel") !== null
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
-      zoomAt(event.deltaY * wheelUnit(event.deltaMode, stage.clientHeight), {
-        x: event.clientX,
-        y: event.clientY,
-      });
+      const dx = event.deltaX * unit;
+      const dy = event.deltaY * unit;
+      // Shift turns a mouse's vertical wheel into a horizontal pan.
+      if (event.shiftKey && dx === 0) panBy(dy, 0);
+      else panBy(dx, dy);
     };
     stage.addEventListener("wheel", wheel, { passive: false, capture: true });
     return () => stage.removeEventListener("wheel", wheel, true);
-  }, [zoomAt, activeFullscreen]);
+  }, [zoomAt, panBy, activeFullscreen]);
   const boardEvents = useMemo<CanvasFrameEvents>(
     () => ({
       ...frameEvents,
       onZoom: zoomAt,
+      onPan: (gesture) => panBy(gesture.dx, gesture.dy),
       onPageError: (path, error) => {
         setPageErrors((previous) => ({ ...previous, [path]: error }));
         frameEvents?.onPageError?.(path, error);
@@ -766,16 +817,27 @@ export function CanvasArtifactEditor({
         );
         if (target !== null) {
           rememberBoard(target.path);
-          setNavigation((previous) => ({
-            ...previous,
-            [target.path]: {
-              search: target.search,
-              hash: target.hash,
-              visit: (previous[target.path]?.visit ?? 0) + 1,
-            },
-          }));
+          const hop = playingBoard === path && target.path !== path;
+          setNavigation((previous) => {
+            const next = {
+              ...previous,
+              [target.path]: {
+                search: target.search,
+                hash: target.hash,
+                visit: (previous[target.path]?.visit ?? 0) + 1,
+              },
+            };
+            // Play leaving the source board resets it, like a stop would.
+            if (hop) delete next[path];
+            return next;
+          });
           if (activeFullscreen !== null) setFullscreen(target.path);
-          else centerBoard(target.path);
+          else if (hop) {
+            // A link hop moves play to the target and reveals it once; a
+            // same-board link navigates inside the frame with no camera move.
+            setPlayingBoard(target.path);
+            centerBoard(target.path);
+          }
         }
         frameEvents?.onRelativeLink?.(path, href);
       },
@@ -787,9 +849,11 @@ export function CanvasArtifactEditor({
       snapshot.boards,
       snapshot.pages,
       activeFullscreen,
+      playingBoard,
       centerBoard,
       rememberBoard,
       zoomAt,
+      panBy,
       setFullscreen,
     ],
   );
@@ -802,7 +866,9 @@ export function CanvasArtifactEditor({
         (!readOnly &&
           activeTool === "comment" &&
           frameEvents?.commentsEnabled === true),
-      panMode: activeTool === "hand" && !play && !readOnly,
+      commentMode:
+        activeTool === "comment" && frameEvents?.commentsEnabled === true,
+      panMode: activeTool === "hand" && !readOnly,
       onAddError: (path, error) => {
         if (readOnly) return;
         onAddError?.(path, error);
@@ -812,7 +878,8 @@ export function CanvasArtifactEditor({
       fullscreen: openFullscreen,
       fullscreenPath: activeFullscreen,
       startPlay,
-      play,
+      stopPlay,
+      playingBoard,
       navigation,
       renameBoard: (path, title) =>
         store.transact((layout) =>
@@ -886,7 +953,6 @@ export function CanvasArtifactEditor({
       sourceForBoard,
       selectEnabled,
       activeTool,
-      play,
       frameEvents,
       boardEvents,
       readOnly,
@@ -898,22 +964,24 @@ export function CanvasArtifactEditor({
       openFullscreen,
       activeFullscreen,
       startPlay,
+      stopPlay,
+      playingBoard,
       navigation,
     ],
   );
   const setPage = (id: string): void => {
     pointer.clear();
+    stopPlay();
     setChosenPage(id);
     setInteractions({});
   };
   const moveOrder = (path: string, before: string | null): void =>
     store.transact((layout) => moveBoardOrder(layout, path, before));
+  // Arming a tool never stops play; only the stop icon, Escape with nothing
+  // more local to do, a play elsewhere, a link hop or a page switch does.
   const chooseTool = (next: CanvasTool): void => {
     setCommenting(next === "comment");
-    if (next !== "comment") {
-      setPlay(false);
-      setTool(next);
-    }
+    if (next !== "comment") setTool(next);
   };
   const createNote = (note: CanvasNote): void => {
     const id = crypto.randomUUID();
@@ -950,13 +1018,24 @@ export function CanvasArtifactEditor({
       for (const node of selectedNotes) removeNote(layout, node.data.path);
     });
   };
-  const chooseToolForKey = (event: KeyboardEvent): void => {
-    // Escape also steps the selection out (element, then board), which the
-    // selection provider handles further along, so it is let through.
-    if (event.code === "Escape") {
+  // Most-local first: an armed tool disarms, then the selection steps out
+  // (element, then board — the selection provider handles that further
+  // along, so the event is let through), and only an Escape with nothing
+  // closer to undo stops the playing board.
+  const escapeCanvas = (event: KeyboardEvent): void => {
+    if (!readOnly && tool !== "select") {
       chooseTool("select");
       return;
     }
+    const selectionHeld =
+      elementSelection !== null || nodes.some((node) => node.selected);
+    if (!selectionHeld && playingBoard !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      stopPlay();
+    }
+  };
+  const chooseToolForKey = (event: KeyboardEvent): void => {
     const next = canvasToolForKey(
       event.code.startsWith("Key") ? event.code.slice(3) : event.code,
     );
@@ -973,12 +1052,11 @@ export function CanvasArtifactEditor({
         >
           <div
             ref={setSurface}
-            popover="manual"
             data-canvas-fullscreen={presentation.fullscreen || undefined}
             role="application"
             tabIndex={-1}
             aria-label="Canvas"
-            className="relative inset-auto m-0 flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-0 bg-canvas p-0 text-foreground outline-none open:fixed open:inset-0 open:size-full open:pt-safe-top open:pr-safe-right open:pb-safe-bottom open:pl-safe-left"
+            className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-canvas text-foreground outline-none"
             onPointerDownCapture={(event) => {
               if (!isCanvasTextInput(event.target, event.currentTarget))
                 event.currentTarget.focus({ preventScroll: true });
@@ -991,15 +1069,13 @@ export function CanvasArtifactEditor({
                 setSpaceHeld(false);
             }}
             onKeyDownCapture={(event) => {
-              if (play && !commenting && event.code === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                setPlay(false);
+              if (activeFullscreen !== null || commenting) return;
+              if (isCanvasTextInput(event.target, event.currentTarget)) return;
+              if (event.code === "Escape") {
+                escapeCanvas(event);
                 return;
               }
-              if (readOnly || activeFullscreen !== null || play || commenting)
-                return;
-              if (isCanvasTextInput(event.target, event.currentTarget)) return;
+              if (readOnly) return;
               if (event.code === "Space") {
                 event.preventDefault();
                 setSpaceHeld(true);
@@ -1055,11 +1131,11 @@ export function CanvasArtifactEditor({
                     nodeTypes={NODE_TYPES}
                     onNodesChange={changeNodes}
                     onNodeClick={(_event, node) => {
-                      if (!readOnly && !play && node.data.board !== null)
+                      if (!readOnly && node.data.board !== null)
                         frameEvents?.onBoardSelect?.(node.data.path);
                     }}
                     onPaneClick={(event) => {
-                      if (readOnly || (play && !commenting)) return;
+                      if (readOnly) return;
                       if (
                         activeTool === "comment" &&
                         frameEvents?.commentsEnabled === true
@@ -1092,14 +1168,12 @@ export function CanvasArtifactEditor({
                     selectionOnDrag={selectEnabled}
                     panOnDrag={canvasPanButtons(
                       activeFullscreen !== null,
-                      !commenting &&
-                        (readOnly || play || activeTool === "hand"),
+                      !commenting && (readOnly || activeTool === "hand"),
                     )}
-                    panOnScroll={!presentation.fullscreen}
+                    panOnScroll={false}
                     preventScrolling={!presentation.fullscreen}
                     zoomOnPinch={!presentation.fullscreen}
                     zoomActivationKeyCode={null}
-                    panOnScrollSpeed={1}
                     zoomOnScroll={false}
                     zoomOnDoubleClick={false}
                     deleteKeyCode={null}
@@ -1159,7 +1233,7 @@ export function CanvasArtifactEditor({
                     />
                   </ReactFlow>
                 </div>
-                {canvasDrawingEnabled(readOnly, play, activeTool) ? (
+                {canvasDrawingEnabled(readOnly, activeTool) ? (
                   <CanvasDrawingLayer
                     key={activeTool}
                     tool={activeTool}
@@ -1183,12 +1257,6 @@ export function CanvasArtifactEditor({
                   <div className="pointer-events-none absolute inset-0 flex">
                     <div className="flex min-w-0 flex-1 items-start justify-between gap-2 p-2">
                       <div className="min-w-0 [&]:pointer-events-auto">
-                        {playing ? (
-                          <CanvasPlayExitButton
-                            viewOnly={readOnly}
-                            onExit={() => setPlay(false)}
-                          />
-                        ) : null}
                         {toolsHidden ? null : (
                           <CanvasToolbar
                             viewOnly={readOnly}
@@ -1196,7 +1264,6 @@ export function CanvasArtifactEditor({
                               frameEvents?.commentsEnabled === true
                             }
                             tool={tool}
-                            play={play}
                             onTool={chooseTool}
                             pages={
                               <CanvasPageMenu
@@ -1237,24 +1304,7 @@ export function CanvasArtifactEditor({
                       <div className="shrink-0 [&]:pointer-events-auto">
                         <CanvasViewControls
                           viewOnly={readOnly}
-                          play={play}
                           commenting={commenting}
-                          prototypes={snapshot.order
-                            .filter(
-                              (path) =>
-                                Object.hasOwn(snapshot.boards, path) &&
-                                (boardFiles === null || boardFiles.has(path)),
-                            )
-                            .map((path) => ({
-                              path,
-                              title: snapshot.boards[path].title || path,
-                            }))}
-                          onStart={(path) => {
-                            // A prototype picked from the menu is an explicit
-                            // destination, unlike a board's own play button.
-                            startPlay(path);
-                            centerBoard(path);
-                          }}
                           trailing={frameEvents?.renderToolbarControls?.()}
                           undo={store.undo}
                           redo={store.redo}
@@ -1292,7 +1342,9 @@ export function CanvasArtifactEditor({
                         />
                       </div>
                     </div>
-                    {editingDisabled || !inspectorOpen ? null : (
+                    {!CANVAS_INSPECTOR_ENABLED ||
+                    editingDisabled ||
+                    !inspectorOpen ? null : (
                       <CanvasInspectorOverlay
                         store={store}
                         frameEvents={frameEvents}

@@ -1,5 +1,7 @@
 import {
+  parseCanvasPanGesture,
   parseCanvasZoomGesture,
+  type CanvasPanGesture,
   type CanvasZoomGesture,
 } from "./canvas-bridge";
 import {
@@ -108,6 +110,8 @@ const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
   readonly onCanvasZoom?: (gesture: CanvasZoomGesture) => void;
+  /** A playing board's wheel gesture it had no room to scroll by. */
+  readonly onCanvasPan?: (gesture: CanvasPanGesture) => void;
   readonly onHtmlZoom?: (scale: number) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
@@ -651,6 +655,16 @@ export class SandboxBridgeHost {
     if (gesture !== null) this.options.events.onCanvasZoom?.(gesture);
   }
 
+  private receiveCanvasPan(params: unknown): void {
+    const gesture = parseCanvasPanGesture(params);
+    if (gesture !== null) this.options.events.onCanvasPan?.(gesture);
+  }
+
+  private receiveCanvasDoubleClick(value: unknown): void {
+    const element = parseCanvasElement(value);
+    if (element !== null) this.options.events.onDoubleClick?.(element);
+  }
+
   private receiveCanvasNotification(method: string, params: unknown): void {
     if (
       !this.canvasDocumentProven() ||
@@ -667,12 +681,13 @@ export class SandboxBridgeHost {
     }
     if (!this.canvasEnabled()) return;
     if (method === "traycer/canvas/double-click") {
-      const element = parseCanvasElement(params.element);
-      if (element !== null) this.options.events.onDoubleClick?.(element);
+      this.receiveCanvasDoubleClick(params.element);
     } else if (method === "traycer/canvas/text-selection") {
       this.receiveCanvasTextSelection(params);
     } else if (method === "traycer/canvas/zoom") {
       this.receiveCanvasZoom(params);
+    } else if (method === "traycer/canvas/pan") {
+      this.receiveCanvasPan(params);
     } else if (method === "traycer/canvas/relative-link") {
       const href = parseCanvasRelativeLink(params);
       if (href !== null) this.options.events.onRelativeLink?.(href);

@@ -113,38 +113,38 @@ test.describe("fullscreen keeps the same running board", () => {
   });
 });
 
-test.describe("global Play vs. editing", () => {
-  test("Play from one board's button makes every board interactive, with no editing chrome", async ({
+test.describe("per-board Play vs. editing", () => {
+  test("Play from one board's button plays that board alone and keeps the editing chrome", async ({
     page,
   }) => {
     await open(page);
 
     await page.getByRole("button", { name: "Play A on canvas" }).click();
 
-    // The way back replaces the per-board Play buttons; there is no longer
-    // one specifically for "A" or "B" because play is a canvas-wide mode.
+    // Play is per board: A's button becomes its stop control, B keeps its
+    // own Play, and the edit toolbar stays up throughout.
     await expect(
-      page.getByRole("button", { name: "Playing · Back to editing" }),
+      page.getByRole("button", { name: "Stop A (Escape)" }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Play A on canvas" }),
-    ).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Play B on canvas" }),
-    ).toHaveCount(0);
-    // The edit toolbar (tools, pages) is gone while playing.
-    await expect(
-      page.getByRole("toolbar", { name: "Canvas tools" }),
-    ).toHaveCount(0);
-
-    await page
-      .getByRole("button", { name: "Playing · Back to editing" })
-      .click();
+    ).toBeVisible();
     await expect(
       page.getByRole("toolbar", { name: "Canvas tools" }),
     ).toBeVisible();
+
+    // One board plays at a time: playing B moves the stop control there.
+    await page.getByRole("button", { name: "Play B on canvas" }).click();
     await expect(
       page.getByRole("button", { name: "Play A on canvas" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Stop B (Escape)" }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Stop B (Escape)" }).click();
+    await expect(
+      page.getByRole("button", { name: "Play B on canvas" }),
     ).toBeVisible();
   });
 });
@@ -291,10 +291,13 @@ test.describe("ctrl-wheel zoom", () => {
     // `traycer/canvas/zoom`, and canvas-frame.tsx re-maps its iframe-local
     // coordinates into page coordinates before the editor applies the same
     // anchored-zoom math. This is the one path the empty-canvas case above
-    // never exercises.
+    // never exercises. Starting play moves no camera, and both boards are in
+    // view at the initial viewport, so A's box is readable right away.
     await open(page);
     await page.getByRole("button", { name: "Play A on canvas" }).click();
-    await waitForBoardCentred(page, "A");
+    await expect(
+      page.getByRole("button", { name: "Stop A (Escape)" }),
+    ).toBeVisible();
 
     const iframeBox = await page.locator('iframe[title="A"]').boundingBox();
     if (iframeBox === null) throw new Error("board A has no box");
@@ -333,45 +336,34 @@ test.describe("comments mode and the shared sidebar", () => {
   // canvas itself while fullscreen (`presentation.sidebar`); outside it,
   // the page around the canvas owns that slot, which is why the sidebar
   // claim below is proven in fullscreen specifically.
-  test("comments mode pauses Play's own display without resetting it, and the pin comes and goes with the mode", async ({
+  test("comments mode shows the pin without touching the playing board", async ({
     page,
   }) => {
     await open(page);
     await page.getByRole("button", { name: "Play A on canvas" }).click();
     await expect(
-      page.getByRole("button", { name: "Playing · Back to editing" }),
+      page.getByRole("button", { name: "Stop A (Escape)" }),
     ).toBeVisible();
 
-    // Entering comment mode pauses Play's own banner (`canvasInteractionMode`:
-    // `playing: play && !commenting`) without clearing `play` itself - it
-    // shows the pin instead, which is comment mode's own affordance.
+    // Comment mode wins the pointer over the playing board, but never clears
+    // play itself: the pin appears while A's stop control stays.
     await commentsToggle(page).click();
     await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
     await expect(commentPin(page, 1)).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Playing · Back to editing" }),
-    ).toHaveCount(0);
+      page.getByRole("button", { name: "Stop A (Escape)" }),
+    ).toBeVisible();
 
-    // Comments off: the pin goes, and Play's banner returns on its own -
-    // proof that `play` itself was never touched.
+    // Comments off: the pin goes; play was untouched throughout.
     await commentsToggle(page).click();
     await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "false");
     await expect(commentPin(page, 1)).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Playing · Back to editing" }),
+      page.getByRole("button", { name: "Stop A (Escape)" }),
     ).toBeVisible();
 
-    // Comments back on: the pin returns, the banner pauses again - the same
-    // pair, every time, never drifting into each other's state.
-    await commentsToggle(page).click();
-    await expect(commentPin(page, 1)).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Playing · Back to editing" }),
-    ).toHaveCount(0);
-
-    // A trip through fullscreen (its own Play, internally) and back leaves
-    // `play` exactly as it was before the trip, once comment mode (which was
-    // still on) is turned off again to let the banner speak for it.
+    // A trip through fullscreen (its own play surface, orthogonal to the
+    // in-place state) and back leaves the playing board exactly as it was.
     await page.getByRole("button", { name: "Play A fullscreen" }).click();
     await expect(canvasSurface(page)).toHaveAttribute(
       "data-canvas-fullscreen",
@@ -382,9 +374,8 @@ test.describe("comments mode and the shared sidebar", () => {
       "data-canvas-fullscreen",
       "true",
     );
-    await commentsToggle(page).click();
     await expect(
-      page.getByRole("button", { name: "Playing · Back to editing" }),
+      page.getByRole("button", { name: "Stop A (Escape)" }),
     ).toBeVisible();
   });
 
@@ -495,10 +486,17 @@ test.describe("relative links and the query-navigation reload", () => {
   }) => {
     await open(page);
     await page.getByRole("button", { name: "Play A on canvas" }).click();
+    await expect(
+      page.getByRole("button", { name: "Stop A (Escape)" }),
+    ).toBeVisible();
 
-    await waitForBoardCentred(page, "A");
     // Keyboard activation avoids cross-frame pointer rounding at canvas zoom.
     await board(page, "A").locator('[data-tid="link"]').press("Enter");
+    // The hop moves play to B and reveals it once.
+    await expect(
+      page.getByRole("button", { name: "Stop B (Escape)" }),
+    ).toBeVisible();
+    await waitForBoardCentred(page, "B");
     // The reload lands with the query applied, not dropped.
     await expect
       .poll(() =>

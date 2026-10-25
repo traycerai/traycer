@@ -349,49 +349,6 @@ if (typeof globalThis.IntersectionObserver === "undefined") {
   });
 }
 
-// jsdom 30 recognises the `popover` attribute enough to apply the UA
-// stylesheet's `[popover]:not(:popover-open) { display: none }`, but
-// implements neither the interactive methods (`showPopover` is `undefined`)
-// nor `:popover-open` matching. A production element that always renders and
-// is only promoted into the top layer on demand - the canvas surface - calls
-// `showPopover()`/`hidePopover()` unconditionally, which throws here, and
-// sits `display: none` by this rule's default otherwise. In a real browser
-// the app's own `flex` utility (author origin) overrides that UA default; in
-// these suites no stylesheet loads (`css: false`), so nothing does.
-//
-// Stub the methods so they do not throw, and neutralise the default-closed
-// display for that one element only - by role and label, not by giving every
-// `[popover]` display back. A popover that is genuinely meant to render
-// nothing until shown keeps doing exactly that.
-if (typeof HTMLElement.prototype.showPopover !== "function") {
-  const openAttribute = "data-test-popover-open";
-  HTMLElement.prototype.showPopover = function (this: HTMLElement): void {
-    this.setAttribute(openAttribute, "");
-  };
-  HTMLElement.prototype.hidePopover = function (this: HTMLElement): void {
-    this.removeAttribute(openAttribute);
-  };
-  HTMLElement.prototype.togglePopover = function (
-    this: HTMLElement,
-    force: boolean | undefined,
-  ): boolean {
-    const open = force ?? !this.hasAttribute(openAttribute);
-    if (open) this.setAttribute(openAttribute, "");
-    else this.removeAttribute(openAttribute);
-    return open;
-  };
-}
-// Re-injected unconditionally, even once the prototype guard above has
-// already run in an earlier test file sharing this worker's environment:
-// `document` (and its `<head>`) is recreated per test file, so the rule has
-// to be re-added there every time, independent of the one-time method stub.
-const alwaysVisiblePopover = document.createElement("style");
-// jsdom's own `display: none` for a closed `[popover]` outranks an ordinary
-// author rule - empirically, only `!important` beats it here - so this stays
-// scoped to the one selector that must win it.
-alwaysVisiblePopover.textContent = `[role="application"][aria-label="Canvas"][popover] { display: flex !important; }`;
-document.head.appendChild(alwaysVisiblePopover);
-
 // jsdom implements no image decoder, so `createImageBitmap` (ADV-I4's
 // attach-time decodability check in use-report-issue-attachments.ts) is
 // absent. Default to a successful decode - tests exercising a genuine

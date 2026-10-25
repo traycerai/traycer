@@ -715,6 +715,78 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     },
     { passive: false },
   );
+  // A playing board keeps the wheel only while something under the cursor can
+  // still scroll in the gesture's direction; otherwise the gesture pans the
+  // canvas. One continuous gesture (wheel events under 250ms apart) keeps the
+  // target it started with, so momentum never flips a scroll into a fling.
+  // True when the element still has room to move by delta on that axis; null
+  // when it has nothing to scroll there at all.
+  const scrollRoom = (
+    target: Element,
+    vertical: boolean,
+    delta: number,
+  ): boolean | null => {
+    const size = vertical
+      ? target.scrollHeight - target.clientHeight
+      : target.scrollWidth - target.clientWidth;
+    if (size <= 1) return null;
+    const position = vertical ? target.scrollTop : target.scrollLeft;
+    return delta > 0 ? position < size - 1 : position > 1;
+  };
+  const scrollableHere = (start: Element | null, dx: number, dy: number) => {
+    const vertical = Math.abs(dy) >= Math.abs(dx);
+    const delta = vertical ? dy : dx;
+    if (delta === 0) return false;
+    for (
+      let el: Element | null = start;
+      el !== null;
+      el =
+        el.parentElement ??
+        (el === document.documentElement ? null : document.documentElement)
+    ) {
+      const root = el === document.documentElement || el === document.body;
+      if (!root) {
+        const overflow =
+          getComputedStyle(el)[vertical ? "overflowY" : "overflowX"];
+        if (overflow !== "auto" && overflow !== "scroll") continue;
+      }
+      const room = scrollRoom(
+        root ? (document.scrollingElement ?? el) : el,
+        vertical,
+        delta,
+      );
+      if (room === true) return true;
+      if (root && room === false) return false;
+    }
+    return false;
+  };
+  let wheelTarget: "page" | "canvas" | null = null;
+  let wheelAt = 0;
+  document.addEventListener(
+    "wheel",
+    (event) => {
+      if (config.canvasLinks === "native" || mode !== "play" || event.ctrlKey)
+        return;
+      const now = Date.now();
+      if (wheelTarget === null || now - wheelAt > 250)
+        wheelTarget = scrollableHere(
+          event.target instanceof Element ? event.target : null,
+          event.deltaX,
+          event.deltaY,
+        )
+          ? "page"
+          : "canvas";
+      wheelAt = now;
+      if (wheelTarget !== "canvas") return;
+      event.preventDefault();
+      const unit = [1, 16, innerHeight][event.deltaMode] ?? 1;
+      notify("traycer/canvas/pan", {
+        dx: event.deltaX * unit,
+        dy: event.deltaY * unit,
+      });
+    },
+    { passive: false },
+  );
   // Before the ordinary bootstrap's window-bubble link handler drops custom
   // schemes. Page target handlers still get their normal turn in Play.
   document.addEventListener("click", (event) => {

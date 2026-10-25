@@ -7,7 +7,6 @@ import {
   MousePointer2,
   MessageSquarePlus,
   Pen,
-  Play,
   Square,
   StickyNote,
   Type,
@@ -61,7 +60,6 @@ export function CanvasToolbar(props: {
   readonly commentsEnabled: boolean;
   readonly pages: ReactNode;
   readonly tool: CanvasTool;
-  readonly play: boolean;
   readonly onTool: (tool: CanvasTool) => void;
 }) {
   return (
@@ -90,18 +88,10 @@ export function CanvasToolbar(props: {
   );
 }
 
-/** Prototypes, comments and the zoom menu at the top right. Entering Play must
- * not change this toolbar's contents, so the exit control lives at the top
- * left ({@link CanvasPlayExitButton}) instead of a button appearing here. */
+/** Comments and the zoom menu at the top right. */
 export function CanvasViewControls(props: {
   readonly viewOnly: boolean;
-  readonly play: boolean;
   readonly commenting?: boolean;
-  readonly prototypes: readonly {
-    readonly path: string;
-    readonly title: string;
-  }[];
-  readonly onStart: (path: string) => void;
   readonly trailing: ReactNode;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -115,54 +105,11 @@ export function CanvasViewControls(props: {
       aria-label="Canvas view"
       className="flex items-center gap-0.5 rounded-lg border bg-popover p-1 shadow-sm"
     >
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm">
-            <Play />
-            Prototypes
-            <ChevronDown />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {props.prototypes.map(({ path, title }) => (
-            <DropdownMenuItem key={path} onSelect={() => props.onStart(path)}>
-              {title}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
       {props.trailing}
       <ZoomMenu
         {...props}
-        viewOnly={props.viewOnly || props.play || props.commenting === true}
+        viewOnly={props.viewOnly || props.commenting === true}
       />
-    </div>
-  );
-}
-
-/** Replaces the editing toolbar at the top left while Play is on. */
-export function CanvasPlayExitButton(props: {
-  readonly viewOnly: boolean;
-  readonly onExit: () => void;
-}) {
-  const label = props.viewOnly ? "Back to canvas" : "Edit";
-  return (
-    <div className="flex items-center rounded-lg border bg-popover p-1 shadow-sm">
-      <TooltipWrapper
-        label={`${label} · Esc`}
-        side="bottom"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`${label} (Escape)`}
-          onClick={props.onExit}
-        >
-          <MousePointer2 />
-        </Button>
-      </TooltipWrapper>
     </div>
   );
 }
@@ -223,7 +170,6 @@ function ZoomMenu(props: {
 
 function ToolButton(props: {
   readonly tool: CanvasTool;
-  readonly play: boolean;
   readonly onTool: (tool: CanvasTool) => void;
   readonly item: {
     readonly tool: CanvasTool;
@@ -233,7 +179,7 @@ function ToolButton(props: {
   };
 }) {
   const { item } = props;
-  const active = props.tool === item.tool && !props.play;
+  const active = props.tool === item.tool;
   const Icon = item.icon;
   return (
     <TooltipWrapper
@@ -258,7 +204,6 @@ function ToolButton(props: {
 /** The four shapes share one slot showing the last one used, as in design tools. */
 function ShapeTools(props: {
   readonly tool: CanvasTool;
-  readonly play: boolean;
   readonly onTool: (tool: CanvasTool) => void;
 }) {
   const [lastShape, setLastShape] = useState<ShapeTool>("rect");

@@ -65,6 +65,7 @@ vi.mock("../canvas-comments", () => ({
   CanvasCommentAction: () => null,
   CanvasCommentIndex: () => null,
   CanvasCommentPins: () => null,
+  CanvasCommentPointPins: () => null,
 }));
 vi.mock("@/components/comments/frame-comments", () => ({
   FrameCommentsToolbar: () => null,
@@ -141,7 +142,6 @@ const PARSED = parseHtmlSource(HTML);
 const H1_MARKER = HTML.indexOf("<h1");
 const P_MARKER = HTML.indexOf("<p>");
 const B_MARKER = HTML.indexOf("<b>");
-const HTML_MARKER = HTML.indexOf("<html");
 
 /** What the page would report for the element whose start tag is at `marker`. */
 function pageElement(marker: number): CanvasElement | null {
@@ -504,75 +504,6 @@ describe("the editing stack over a real canvas document", () => {
       expect(
         screen.queryByRole("textbox", { name: "Edit element text" }),
       ).toBeNull();
-    });
-  });
-
-  describe("the panels beside the canvas", () => {
-    // The inspector is opened from the toolbar, and shows the picked board.
-    async function openPanels() {
-      const view = mountEditing();
-      select(selectionOf(headline()));
-      await loadPage(view.bridge);
-      fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
-      fireEvent.click(screen.getByRole("button", { name: /^Pick / }));
-      return view;
-    }
-
-    it("lists the page's tweaks once its source is read, and saves one against the root", async () => {
-      await openPanels();
-      fireEvent.mouseDown(screen.getByRole("tab", { name: "Tweaks" }));
-      const tweaks = await screen.findByRole("region", { name: "Tweaks" });
-      expect(tweaks).toBeDefined();
-
-      const gap = screen.getByLabelText("--gap");
-      fireEvent.change(gap, { target: { value: "20" } });
-      fireEvent.blur(gap);
-      await vi.waitFor(() => expect(pendingSaves).toHaveLength(1));
-
-      expect(pendingSaves[0].variables.edit).toEqual({
-        kind: "set-css-variable",
-        name: "--gap",
-        value: "20px",
-      });
-      expect(pendingSaves[0].variables.selection).toMatchObject({
-        servedSha256: SHA,
-        element: { marker: HTML_MARKER, tagName: "html" },
-      });
-    });
-
-    it("lists the page's elements beside the properties on Design and selects one through the page", async () => {
-      const { describeElement } = await openPanels();
-
-      const tree = await screen.findByRole("tree", { name: "Artboard layers" });
-      expect(tree).toBeDefined();
-      const row = await screen.findByRole("button", {
-        name: /^Paragraph Plain/,
-      });
-      fireEvent.click(row);
-      await waitFor(() =>
-        expect(useCanvasSelectionStore.getState().selection).toMatchObject({
-          boardPath: HOME,
-          servedSha256: SHA,
-          element: { marker: P_MARKER, tagName: "p" },
-        }),
-      );
-
-      expect(describeElement).toHaveBeenCalledWith({ marker: P_MARKER });
-    });
-
-    it("lists the layers of the document's content, not its html, head or body", async () => {
-      await openPanels();
-      await screen.findByRole("tree", { name: "Artboard layers" });
-      for (const name of [
-        /^Heading Welcome home/,
-        /^Paragraph Plain/,
-        /^Text mixed/,
-      ])
-        expect(await screen.findByRole("button", { name })).toBeDefined();
-      expect(
-        screen.queryByRole("button", { name: /^(html|head|style|body)\b/i }),
-      ).toBeNull();
-      expect(screen.getAllByRole("treeitem")).toHaveLength(3);
     });
   });
 

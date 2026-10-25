@@ -1,4 +1,7 @@
-import type { CanvasZoomGesture } from "@/lib/sandbox/canvas-bridge";
+import type {
+  CanvasPanGesture,
+  CanvasZoomGesture,
+} from "@/lib/sandbox/canvas-bridge";
 import type {
   CanvasPageError,
   CanvasElement,
@@ -193,6 +196,7 @@ function artifactUnavailable(
 export interface SandboxFrameProps {
   readonly onHtmlZoom?: (scale: number) => void;
   readonly onCanvasZoom?: (gesture: CanvasZoomGesture) => void;
+  readonly onCanvasPan?: (gesture: CanvasPanGesture) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
@@ -531,6 +535,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
   const onCanvasZoom = useEffectEvent((gesture: CanvasZoomGesture) =>
     props.onCanvasZoom?.(gesture),
   );
+  const onCanvasPan = useEffectEvent((gesture: CanvasPanGesture) =>
+    props.onCanvasPan?.(gesture),
+  );
   const onHtmlZoom = useEffectEvent((scale: number) =>
     props.onHtmlZoom?.(scale),
   );
@@ -692,6 +699,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       events: {
         onHtmlZoom,
         onCanvasZoom,
+        onCanvasPan,
         onDoubleClick,
         onTextSelection,
         onPageError,

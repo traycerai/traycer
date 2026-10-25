@@ -653,6 +653,74 @@ describe("the canvas bootstrap in a running page", () => {
     });
   });
 
+  describe("a wheel on the playing page", () => {
+    const panPosts = (page: Page) =>
+      page.posted.filter((message) => message.method === "traycer/canvas/pan");
+    /** Returns true when the page kept the event (not cancelled). */
+    function wheel(page: Page, target: Element, deltaY: number): boolean {
+      return target.dispatchEvent(
+        new page.window.WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY,
+        }),
+      );
+    }
+    function playing(markup: string): Page {
+      const page = runCanvasPage(markup);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      return page;
+    }
+    /** jsdom has no layout, so scrollability is written onto the element. */
+    function scroller(page: Page): Element {
+      const element = page.window.document.querySelector("#scroller");
+      if (element === null) throw new Error("no scroller in the fixture");
+      Object.defineProperty(element, "scrollHeight", { value: 200 });
+      Object.defineProperty(element, "clientHeight", { value: 50 });
+      return element;
+    }
+    const SCROLLER = `<div id="scroller" style="overflow-y: auto"><p>tall</p></div>`;
+
+    it("hands a gesture nothing under the cursor can scroll to the canvas as a pan", () => {
+      const page = playing(MARKUP);
+      expect(wheel(page, page.window.document.body, 40)).toBe(false);
+      expect(panPosts(page)).toEqual([
+        {
+          jsonrpc: "2.0",
+          method: "traycer/canvas/pan",
+          params: { dx: 0, dy: 40, nonce: NONCE },
+        },
+      ]);
+    });
+
+    it("leaves the wheel to an element that can still scroll that way, momentum included", () => {
+      const page = playing(SCROLLER);
+      const target = scroller(page);
+      expect(wheel(page, target, 40)).toBe(true);
+      // The element reaches its end mid-gesture: the 250ms latch keeps the
+      // rest of this gesture off the canvas instead of flipping it into a pan.
+      target.scrollTop = 150;
+      wheel(page, target, 40);
+      expect(panPosts(page)).toEqual([]);
+    });
+
+    it("pans with the next gesture once the element sits at its end", () => {
+      const page = playing(SCROLLER);
+      const target = scroller(page);
+      target.scrollTop = 150;
+      expect(wheel(page, target, 40)).toBe(false);
+      expect(panPosts(page)).toHaveLength(1);
+    });
+
+    it("never pans while editing; the base wheel chaining keeps the event", () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      wheel(page, page.window.document.body, 40);
+      expect(panPosts(page)).toEqual([]);
+    });
+  });
+
   describe("text selection refresh", () => {
     const selectionPosts = (page: Page) =>
       page.posted.filter(

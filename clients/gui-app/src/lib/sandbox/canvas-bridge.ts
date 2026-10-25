@@ -306,6 +306,22 @@ export interface CanvasZoomGesture {
   readonly y: number;
 }
 
+/** A wheel gesture a playing board could not scroll by, handed to the canvas
+ * as a pan. Deltas are the event's own units, already deltaMode-scaled. */
+export interface CanvasPanGesture {
+  readonly dx: number;
+  readonly dy: number;
+}
+
+export function parseCanvasPanGesture(value: unknown): CanvasPanGesture | null {
+  if (!canvasRecord(value) || !coordinate(value.dx) || !coordinate(value.dy))
+    return null;
+  return {
+    dx: Math.max(-600, Math.min(600, value.dx)),
+    dy: Math.max(-600, Math.min(600, value.dy)),
+  };
+}
+
 export function parseCanvasZoomGesture(
   value: unknown,
 ): CanvasZoomGesture | null {

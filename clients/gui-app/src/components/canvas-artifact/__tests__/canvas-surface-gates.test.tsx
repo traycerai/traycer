@@ -346,7 +346,6 @@ describe("a view-only canvas (the phone)", () => {
       expect(screen.queryByRole("button", { name: label })).toBeNull();
     // The reading aids stay.
     expect(screen.getByRole("button", { name: "Pages" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Prototypes" })).toBeDefined();
     await user.click(screen.getByRole("button", { name: /, zoom$/ }));
     expect(
       screen.getByRole("menuitem", { name: "Fit to screen" }),
@@ -366,22 +365,14 @@ describe("a view-only canvas (the phone)", () => {
       expect(screen.getByRole("menuitem", { name: label })).toBeDefined();
   });
 
-  it("plays from a board's own Play button and labels the way back for a reader", () => {
+  it("swaps the board's Play for its own stop control, for a reader too", () => {
     mount({ viewOnly: true });
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
     expect(
-      screen.getByRole("button", { name: "Back to canvas (Escape)" }),
+      screen.getByRole("button", { name: "Stop Home (Escape)" }),
     ).toBeDefined();
-  });
-
-  it("labels the way back to editing, not to a view-only canvas, when editing is allowed", () => {
-    mount({ viewOnly: false });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Play Home on canvas" }),
-    );
-    expect(screen.getByRole("button", { name: "Edit (Escape)" })).toBeDefined();
   });
 
   it("still lets the reader move between pages but not change them", () => {
@@ -526,8 +517,8 @@ describe("a view-only canvas (the phone)", () => {
     const shield = document.querySelector("[data-canvas-frame-overlay]");
     if (shield !== null) fireEvent.pointerDown(shield);
     expect(onEditPointer).toHaveBeenCalledOnce();
-    // The panel stays out of the way until an element is picked.
-    expect(screen.queryByLabelText("Annotations")).toBeNull();
+    // The inspector is parked behind its flag: picking an element still never
+    // opens the panel.
     act(() => {
       useCanvasSelectionStore.getState().select({
         artifactId: ARTIFACT_ID,
@@ -538,7 +529,7 @@ describe("a view-only canvas (the phone)", () => {
         textRange: null,
       });
     });
-    expect(screen.getByLabelText("Annotations")).toBeDefined();
+    expect(screen.queryByLabelText("Annotations")).toBeNull();
   });
 });
 
@@ -642,10 +633,7 @@ describe("the frame's mode", () => {
     expect(setMode).not.toHaveBeenCalledWith("play");
   });
 
-  it("plays every board, not only the one that started play", () => {
-    // Play has no per-board "is_interactive" gate any more: starting it from
-    // Home's own button is enough to switch every board on the canvas, since
-    // the whole canvas is now either editing or playing.
+  it("puts the board in play mode from its own button", () => {
     mount({ live: true, onlyBoard: null });
     const setMode = ready("Home");
     setMode.mockClear();
@@ -657,7 +645,7 @@ describe("the frame's mode", () => {
     expect(setMode).toHaveBeenLastCalledWith("play");
   });
 
-  it("returns every board to edit mode on the way back", () => {
+  it("returns the board to edit mode when its stop control is used", () => {
     mount({ live: true });
     const setMode = ready("Home");
     fireEvent.click(
@@ -665,12 +653,40 @@ describe("the frame's mode", () => {
     );
     setMode.mockClear();
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit (Escape)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Home (Escape)" }));
 
     expect(setMode).toHaveBeenLastCalledWith("edit");
   });
 
-  it("starts play for a view-only reader too, with the reader's own way back", () => {
+  it("remounts a board that navigated during play once play stops", async () => {
+    mount({ live: true });
+    const { bridge, navigateCanvas } = canvasBridge();
+    fromPage("Home", (props) => props.onBridge?.(bridge));
+    fromPage("Home", (props) => props.onStatus("ready"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+    const before = frameOf("Home").remountKey;
+
+    // A same-board link navigates inside the frame.
+    await act(async () => {
+      frameOf("Home").onRelativeLink?.("home.html#next");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(navigateCanvas).toHaveBeenCalledWith({
+      search: "",
+      hash: "#next",
+      visit: 1,
+    });
+
+    // Stopping discards wherever the document went: a fresh mount of the
+    // board's own source.
+    fireEvent.click(screen.getByRole("button", { name: "Stop Home (Escape)" }));
+    expect(frameOf("Home").remountKey).not.toBe(before);
+  });
+
+  it("starts and stops play for a view-only reader too", () => {
     mount({ viewOnly: true, live: true });
     const setMode = ready("Home");
     setMode.mockClear();
@@ -680,9 +696,7 @@ describe("the frame's mode", () => {
     );
     expect(setMode).toHaveBeenLastCalledWith("play");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Back to canvas (Escape)" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop Home (Escape)" }));
     expect(setMode).toHaveBeenLastCalledWith("edit");
   });
 

@@ -418,18 +418,37 @@ describe("CanvasArtifactEditor pages and boards", () => {
 
     // Play is a view, not a document edit: nothing about the board changed.
     expect(store.getSnapshot().layout.boards[HOME]).toEqual(before);
-    // The per-board Play button is gone once the canvas is playing; the way
-    // back is the compact exit button that takes the toolbar's place.
+    // Play is per board: this board's button becomes its stop control while
+    // every other board keeps its own Play, and the toolbar stays up.
     expect(
-      screen.queryByRole("button", { name: "Play Home on canvas" }),
-    ).toBeNull();
-    expect(screen.getByRole("button", { name: "Edit (Escape)" })).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Select (V)" })).toBeNull();
+      screen.getByRole("button", { name: "Stop Home (Escape)" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Play Checkout on canvas" }),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Select (V)" })).toBeDefined();
     // Starting play leaves the camera where the reader put it.
     expect(flow.setCenter).not.toHaveBeenCalled();
   });
 
-  it("leaves play on Escape, with the camera untouched either way", () => {
+  it("plays one board at a time: playing another moves the stop control", () => {
+    mountEditor();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Checkout on canvas" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Stop Checkout (Escape)" }),
+    ).toBeDefined();
+  });
+
+  it("stops play on Escape, with the camera untouched either way", () => {
     mountEditor();
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
@@ -437,8 +456,12 @@ describe("CanvasArtifactEditor pages and boards", () => {
 
     fireEvent.keyDown(screen.getByLabelText("Canvas"), { code: "Escape" });
 
-    expect(screen.queryByRole("button", { name: "Edit (Escape)" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Select (V)" })).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Stop Home (Escape)" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    ).toBeDefined();
     expect(flow.setCenter).not.toHaveBeenCalled();
     expect(flow.fitView).not.toHaveBeenCalled();
   });
@@ -685,20 +708,20 @@ describe("CanvasArtifactEditor board frames in play", () => {
     expect(overlayCount()).toBe(2);
   });
 
-  it("lifts the shield from every board once any board starts play, with no per-board gate", () => {
+  it("lifts the shield from the playing board only; the others stay editable", () => {
     mountEditor();
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
-    expect(overlayCount()).toBe(0);
+    expect(overlayCount()).toBe(1);
   });
 
-  it("brings the shield back on every board on the way back to editing", () => {
+  it("brings the playing board's shield back when its stop control is used", () => {
     mountEditor();
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Edit (Escape)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Home (Escape)" }));
     expect(overlayCount()).toBe(2);
   });
 });
@@ -1342,39 +1365,19 @@ describe("CanvasArtifactEditor inspector", () => {
     act(() => useCanvasSelectionStore.getState().clear());
   });
 
-  it("stays hidden until an element is selected, and Close hides it until the selection moves", () => {
+  it("stays parked behind its flag whatever is selected", () => {
     mountWithPanel();
-    expect(annotations()).toBeNull();
 
     selectElement("first");
-    expect(annotations()).not.toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Close annotations" }));
     expect(annotations()).toBeNull();
-
-    // Re-picking the same element keeps the dismissal; another one reopens.
-    selectElement("first");
-    expect(annotations()).toBeNull();
-    selectElement("second");
-    expect(annotations()).not.toBeNull();
-  });
-
-  it("opens for a single selected board, whose panel holds its size and fit controls", () => {
-    mountWithPanel();
 
     streamChanges([{ type: "select", id: `board:${HOME}`, selected: true }]);
-
-    expect(annotations()).not.toBeNull();
-  });
-
-  it("shows the note's own inspector when one note is selected", () => {
-    mountWithPanel();
-    streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
-
-    expect(
-      screen.getByRole("complementary", { name: "Note inspector" }),
-    ).toBeDefined();
     expect(annotations()).toBeNull();
+
+    streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+    expect(
+      screen.queryByRole("complementary", { name: "Note inspector" }),
+    ).toBeNull();
   });
 });
 
@@ -1451,9 +1454,6 @@ describe("CanvasArtifactEditor zoom menu", () => {
       screen.getByRole("button", { name: "Play Specs fullscreen" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
-    // Fullscreen leaves the canvas playing; back to editing is what brings
-    // the Pages menu (and the rest of the edit toolbar) back.
-    fireEvent.click(screen.getByRole("button", { name: "Edit (Escape)" }));
     openPageMenu();
     fireEvent.click(screen.getByRole("button", { name: "Flow" }));
 
