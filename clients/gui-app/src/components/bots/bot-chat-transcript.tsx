@@ -2,9 +2,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useMutationState } from "@tanstack/react-query";
+import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { repliedPostOf, replyRowIdFor } from "@/lib/bots/reply-row";
@@ -82,6 +85,54 @@ export type BotTranscriptSurface =
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
+const CHAT_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
+
+/** When the last send to `chatId` that succeeded was submitted; `null` for none. */
+function useLastSendTo(chatId: string): number | null {
+  const submitted = useMutationState({
+    filters: {
+      mutationKey: botMutationKeys.conversationSend(),
+      status: "success",
+    },
+    select: (mutation) => {
+      const variables: unknown = mutation.state.variables;
+      const conversationId =
+        typeof variables === "object" &&
+        variables !== null &&
+        "conversationId" in variables
+          ? variables.conversationId
+          : null;
+      return conversationId === chatId ? mutation.state.submittedAt : null;
+    },
+  });
+  return submitted.reduce<number | null>(
+    (latest, at) =>
+      at !== null && (latest === null || at > latest) ? at : latest,
+    null,
+  );
+}
+
+/**
+ * While `waiting`, re-subscribes once for each send to `chatId` that
+ * succeeds: the send is the write that creates the chat on the host.
+ */
+function useResubscribeOnNextSend(input: {
+  readonly chatId: string;
+  readonly waiting: boolean;
+  readonly retry: () => void;
+}): void {
+  const { chatId, waiting, retry } = input;
+  const lastSend = useLastSendTo(chatId);
+  const seenSend = useRef(lastSend);
+  useEffect(() => {
+    if (!waiting || lastSend === seenSend.current) {
+      seenSend.current = lastSend;
+      return;
+    }
+    seenSend.current = lastSend;
+    retry();
+  }, [lastSend, retry, waiting]);
+}
 
 /**
  * A bot chat's transcript (Tracy Bots): the conversation a person has with
@@ -193,8 +244,21 @@ function BotChatTranscriptBody(props: {
       reportVisibleTranscriptRange: s.reportVisibleTranscriptRange,
       requestFindReadOrdinal: s.requestFindReadOrdinal,
       requestTranscriptOrdinal: s.requestTranscriptOrdinal,
+      fatalClose: s.fatalClose,
+      retry: s.retry,
     })),
   );
+  // A host that creates the channel chat only on its first post answers a
+  // subscribe before it with CHAT_NOT_VISIBLE: the channel is empty, not
+  // broken, so it is drawn empty, and the next post sent to it re-subscribes.
+  const channelNotHereYet =
+    surface?.kind === "channel" &&
+    state.fatalClose?.code === CHAT_NOT_VISIBLE_CODE;
+  useResubscribeOnNextSend({
+    chatId,
+    waiting: channelNotHereYet,
+    retry: state.retry,
+  });
   const profile = useAuthStore((s) => s.profile);
   const tabClient = useTabHostClient();
   // Label-only, cache-only: whoever fetched this host's catalog (a composer,
@@ -372,6 +436,19 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+
+  if (channelNotHereYet) {
+    return (
+      <div
+        data-testid="bot-channel-not-here-yet"
+        className="flex min-h-0 flex-1 flex-col items-center justify-center p-4"
+      >
+        <p role="status" className="text-ui-sm text-muted-foreground">
+          No messages yet. Your first message starts the channel.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <ChatContainerContext.Provider value={botId}>
