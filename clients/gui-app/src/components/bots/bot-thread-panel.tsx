@@ -12,12 +12,13 @@ import {
 import { TextSegment } from "@/components/chat/segments/text-segment";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
+import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotActivity } from "@/hooks/bots/use-bot-activity";
-import { toastFromHostError } from "@/lib/host-error-toast";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -141,26 +142,43 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   }
   if (thread.kind === "unopened") {
     return (
-      <>
-        <p
-          className="flex-1 px-4 py-3 text-ui-sm text-muted-foreground"
-          data-testid="bot-thread-unopened"
-        >
-          Reply to start a thread. The bot answers there.
-        </p>
-        <BotMessageComposer
-          botId={props.botId}
-          conversationId={thread.conversationId}
-          threadId={null}
-          announcementId={thread.announcementId}
-          placeholder="Reply…"
-          label="Reply in a new thread"
-          testId="bot-thread-composer"
-        />
-      </>
+      <UnopenedThread
+        botId={props.botId}
+        conversationId={thread.conversationId}
+        announcementId={thread.announcementId}
+      />
     );
   }
   return <UnlistedThread thread={thread} />;
+}
+
+/** A question, proposal or direct post nobody has replied under yet. */
+function UnopenedThread(props: {
+  readonly botId: string;
+  readonly conversationId: string;
+  readonly announcementId: string;
+}): ReactNode {
+  const sendFailure = useBotSendFailure();
+  return (
+    <>
+      <p
+        className="flex-1 px-4 py-3 text-ui-sm text-muted-foreground"
+        data-testid="bot-thread-unopened"
+      >
+        Reply to start a thread. The bot answers there.
+      </p>
+      <BotMessageComposer
+        botId={props.botId}
+        conversationId={props.conversationId}
+        threadId={null}
+        announcementId={props.announcementId}
+        placeholder="Reply…"
+        label="Reply in a new thread"
+        testId="bot-thread-composer"
+        failure={sendFailure}
+      />
+    </>
+  );
 }
 
 /** The anchor, the replies and the box of a listed thread. */
@@ -174,16 +192,19 @@ function ListedThread(
   const client = useTabHostClient();
   const { mutate: send, isPending: sending } =
     useBotConversationSendMutation(client);
+  const sendFailure = useBotSendFailure();
+  const { fail: failSend, clear: clearSendFailure } = sendFailure;
   const { threadId, conversationId } = thread;
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent, and a pick that
-  // fails says so.
+  // fails says so where a failed message does.
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
       chooseOption: sending
         ? null
-        : (choice: string) =>
+        : (choice: string) => {
+            clearSendFailure();
             send(
               {
                 botId,
@@ -192,16 +213,23 @@ function ListedThread(
                 threadId,
                 announcementId: null,
               },
-              {
-                onError: (error) =>
-                  toastFromHostError(error, "Couldn't send your choice."),
-              },
-            ),
+              { onError: failSend },
+            );
+          },
     }),
-    [botId, conversationId, send, sending, threadId],
+    [
+      botId,
+      clearSendFailure,
+      conversationId,
+      failSend,
+      send,
+      sending,
+      threadId,
+    ],
   );
   // The thread's own session answers in it; its running turn is the
-  // thread's typing line.
+  // thread's typing line, and an answer it holds or fails the notice under
+  // the last row.
   const activity = useBotActivity(botId)?.threads[threadId] ?? null;
   return (
     <>
@@ -244,6 +272,11 @@ function ListedThread(
         activity={activity}
         testId="bot-thread-replying-strip"
       />
+      <BotUnansweredNotice
+        botTitle={botTitle}
+        activity={activity}
+        testId="bot-thread-unanswered"
+      />
       <BotMessageComposer
         botId={botId}
         conversationId={thread.conversationId}
@@ -252,6 +285,7 @@ function ListedThread(
         placeholder="Reply…"
         label="Reply in the thread"
         testId="bot-thread-composer"
+        failure={sendFailure}
       />
     </>
   );

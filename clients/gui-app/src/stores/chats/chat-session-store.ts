@@ -2305,6 +2305,15 @@ export interface ChatSessionStoreOptions {
    * `IHostStreamClient.isSilentFor?` makes for the same reason.
    */
   readonly transportSilentFor?: ((ms: number) => boolean) | null;
+  /**
+   * Whether an adjudicated fatal close raises the app's "Agent stream closed
+   * unexpectedly" notification. `silent` for a session whose surface says the
+   * failure itself, in its own view: a bot's channel and threads, whose
+   * opener sets it. OPTIONAL for the reason {@link transportSilentFor} is:
+   * absent is `raise`, the behaviour every other session and the suites that
+   * build these options by hand already have.
+   */
+  readonly fatalCloseNotification?: "raise" | "silent";
 }
 
 /**
@@ -10121,16 +10130,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
           fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          notificationDependencies.appLocalNotifications
-            .getState()
-            .upsertRecurringFailure(
-              chatStreamErrorNotification({
-                hostId: options.hostId,
-                epicId: options.epicId,
-                chatId: options.chatId,
-                details: reason.details,
-              }),
-            );
+          if (options.fatalCloseNotification !== "silent") {
+            notificationDependencies.appLocalNotifications
+              .getState()
+              .upsertRecurringFailure(
+                chatStreamErrorNotification({
+                  hostId: options.hostId,
+                  epicId: options.epicId,
+                  chatId: options.chatId,
+                  details: reason.details,
+                }),
+              );
+          }
         }
         callbacks.onConnectionStatus(status, reason, retryCause);
       };

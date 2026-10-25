@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
+import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 
 const MESSAGE_MAX = 100_000;
 
@@ -19,6 +21,10 @@ const MESSAGE_MAX = 100_000;
  * nothing to approve and nothing to attach, and the bot may be paused - the
  * host then accepts the message as `queued` and the bot reads it once it can
  * be reached. The box says so, once, for the send that was queued.
+ *
+ * A send that fails before the host takes it leaves the text in the box and
+ * says so above it (`failure`, which an option the person clicks reports to
+ * as well), until they edit or send again.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -32,6 +38,7 @@ export function BotMessageComposer(props: {
   /** The accessible name of the box. */
   readonly label: string;
   readonly testId: string;
+  readonly failure: BotSendFailure;
 }): ReactNode {
   const {
     botId,
@@ -41,6 +48,7 @@ export function BotMessageComposer(props: {
     placeholder,
     label,
     testId,
+    failure,
   } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
@@ -54,6 +62,7 @@ export function BotMessageComposer(props: {
 
   const submit = (): void => {
     if (!canSend) return;
+    failure.clear();
     send.mutate(
       { botId, conversationId, text: trimmed, threadId, announcementId },
       {
@@ -61,6 +70,7 @@ export function BotMessageComposer(props: {
           setText("");
           setLastDelivery(response.delivery);
         },
+        onError: failure.fail,
       },
     );
   };
@@ -103,6 +113,7 @@ export function BotMessageComposer(props: {
           onChange={(event) => {
             setText(event.target.value);
             if (lastDelivery !== null) setLastDelivery(null);
+            failure.clear();
           }}
           onKeyDown={onKeyDown}
         />
@@ -127,7 +138,7 @@ export function BotMessageComposer(props: {
         </div>
       </div>
       <ComposerStatus
-        error={send.error === null ? null : send.error.message}
+        failed={failure.failed}
         queued={lastDelivery === "queued"}
         testId={testId}
       />
@@ -136,16 +147,12 @@ export function BotMessageComposer(props: {
 }
 
 function ComposerStatus(props: {
-  readonly error: string | null;
+  readonly failed: boolean;
   readonly queued: boolean;
   readonly testId: string;
 }): ReactNode {
-  if (props.error !== null) {
-    return (
-      <p role="alert" className="text-ui-xs text-destructive">
-        {props.error}
-      </p>
-    );
+  if (props.failed) {
+    return <BotSendFailedNotice testId={`${props.testId}-send-failed`} />;
   }
   if (!props.queued) return null;
   return (

@@ -181,6 +181,7 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     announcementId: string | null;
     placeholder: string;
     testId: string;
+    failure: { readonly failed: boolean };
   }) => (
     <div
       data-testid={`stub-${props.testId}`}
@@ -188,7 +189,11 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
       data-thread-id={props.threadId ?? "none"}
       data-announcement-id={props.announcementId ?? "none"}
       data-placeholder={props.placeholder}
-    />
+    >
+      {props.failure.failed ? (
+        <BotSendFailedNotice testId={`${props.testId}-send-failed`} />
+      ) : null}
+    </div>
   ),
 }));
 
@@ -246,6 +251,7 @@ function PostStub(props: {
 }
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
+import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -603,10 +609,11 @@ describe("<BotChannelView /> channel", () => {
     expect(screen.queryByTestId("stub-choose")).toBeNull();
   });
 
-  it("tells the person when a pick could not be sent", async () => {
+  it("says in the channel's box when a pick could not be sent, and raises no toast", async () => {
     const user = userEvent.setup();
     mount({ paused: false, openThreadPostId: null });
     await user.click(screen.getByTestId("stub-choose"));
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     const failure = new HostRpcError({
       code: "RPC_ERROR",
       message: "host refused the pick",
@@ -615,13 +622,14 @@ describe("<BotChannelView /> channel", () => {
       fatalDetails: null,
     });
 
-    mocks.send.mock.calls[0][1].onError(failure);
+    act(() => {
+      mocks.send.mock.calls[0][1].onError(failure);
+    });
 
-    expect(mocks.toastFromHostError).toHaveBeenCalledTimes(1);
-    expect(mocks.toastFromHostError).toHaveBeenCalledWith(
-      failure,
-      "Couldn't send your choice.",
-    );
+    expect(
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toBe("Couldn't send. Edit and try again.");
+    expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 });
 

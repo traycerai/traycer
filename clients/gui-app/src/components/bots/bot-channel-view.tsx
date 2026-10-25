@@ -22,6 +22,8 @@ import {
   type BotTranscriptSurface,
 } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
+import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import {
@@ -40,7 +42,6 @@ import {
   type BotActivity,
   type BotSessionActivity,
 } from "@/hooks/bots/use-bot-activity";
-import { toastFromHostError } from "@/lib/host-error-toast";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import {
@@ -172,13 +173,17 @@ export function BotChannelView(props: {
   const activity = useBotActivity(botId);
 
   // A direct reply's option, clicked, is the person's next post: offered
-  // only while no earlier pick is still being sent.
+  // only while no earlier pick is still being sent. A pick that fails says so
+  // where a failed message does.
   const { mutate: send, isPending: sending } =
     useBotConversationSendMutation(client);
+  const sendFailure = useBotSendFailure();
+  const { fail: failSend, clear: clearSendFailure } = sendFailure;
   const channelId = channel?.conversationId ?? null;
   const chooseOption = useCallback(
     (choice: string) => {
       if (channelId === null) return;
+      clearSendFailure();
       send(
         {
           botId,
@@ -187,13 +192,10 @@ export function BotChannelView(props: {
           threadId: null,
           announcementId: null,
         },
-        {
-          onError: (error) =>
-            toastFromHostError(error, "Couldn't send your choice."),
-        },
+        { onError: failSend },
       );
     },
-    [botId, channelId, send],
+    [botId, channelId, clearSendFailure, failSend, send],
   );
 
   // A question, a proposal or a direct post with no thread yet shows a box
@@ -373,6 +375,11 @@ export function BotChannelView(props: {
             activity={trunkReply}
             testId="bot-channel-replying"
           />
+          <BotUnansweredNotice
+            botTitle={botTitle}
+            activity={trunkReply}
+            testId="bot-channel-unanswered"
+          />
           <BotMessageComposer
             botId={botId}
             conversationId={channel.conversationId}
@@ -381,6 +388,7 @@ export function BotChannelView(props: {
             placeholder={`Message #${botTitle}`}
             label={`Message #${botTitle}`}
             testId="bot-channel-composer"
+            failure={sendFailure}
           />
         </section>
         {threadOpen ? (
@@ -405,8 +413,9 @@ export function BotChannelView(props: {
 
 /**
  * The trunk answers a direct post at the channel's top level; its running
- * turn is the channel's typing line while it answers one, and its other work
- * (a routine, a check-in) is not a reply.
+ * turn is the channel's typing line while it answers one, and an answer it
+ * holds or fails is the notice under the last row. Its other work (a
+ * routine, a check-in) is not a reply.
  */
 function channelReply(activity: BotActivity | null): BotSessionActivity | null {
   const trunk = activity?.trunk ?? null;
