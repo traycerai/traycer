@@ -19,7 +19,6 @@ import {
   EPIC_NODE_LABELS,
   isEpicArtifactKind,
   isMarkdownArtifactKind,
-  EPIC_NODE_ICONS,
   EPIC_NODE_SENTENCE_NOUNS,
 } from "@/lib/artifacts/node-display";
 import {
@@ -110,11 +109,12 @@ function ArtifactDiffToggle(props: {
  * the grip, is the drag node. The column is reserved even for a non-draggable
  * card (rendered empty) so icons stay aligned across a mixed list.
  *
- * Only `setNodeRef` + `listeners` are attached: the row wraps a real open
- * button, so spreading dnd-kit's default `attributes` (which set `role="button"`
- * + `tabIndex` on this div) would nest interactive/focusable elements, and the
- * root DnD system ships no keyboard sensor. The card stays keyboard-openable via
- * its inner buttons.
+ * Only `setNodeRef` + the pointer listeners are attached: the row wraps a
+ * real open button, so spreading dnd-kit's default `attributes` (which set
+ * `role="button"` + `tabIndex` on this div) would nest interactive/focusable
+ * elements, and the keyboard activator is stripped because keydowns from the
+ * nested buttons bubble here. The card stays keyboard-openable via its inner
+ * buttons.
  */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
@@ -145,8 +145,13 @@ function ArtifactCardHeaderRow(props: {
     sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
     draggable && (isDragging ? "cursor-grabbing" : "cursor-grab"),
   );
+  // The KeyboardSensor's Enter/Space activator rides in the listeners, and
+  // keydowns from the nested open/diff buttons bubble to this row: strip it
+  // so those keys keep operating the buttons.
+  const pointerDragListeners = { ...dragListeners };
+  delete pointerDragListeners.onKeyDown;
   return (
-    <div ref={dragRef} className={className} {...dragListeners}>
+    <div ref={dragRef} className={className} {...pointerDragListeners}>
       <span
         aria-hidden
         className="flex w-4 shrink-0 items-center justify-center"
@@ -527,10 +532,12 @@ type ObjectArtifactCardProps = ArtifactCardSegmentProps & {
 };
 
 function ObjectArtifactCardLabel(props: ObjectArtifactCardProps) {
-  const Icon = EPIC_NODE_ICONS[props.artifactKind];
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <Icon className="size-4 shrink-0" />
+      <StaticEpicNodeIcon
+        type={props.artifactKind}
+        className="size-4 shrink-0"
+      />
       <span className="min-w-0 flex-1 truncate">
         {props.title || EPIC_NODE_LABELS[props.artifactKind]}
       </span>
@@ -541,42 +548,215 @@ function ObjectArtifactCardLabel(props: ObjectArtifactCardProps) {
   );
 }
 
+type ObjectCardKind = "html" | "canvas";
+
+function isObjectCardKind(kind: EpicArtifactKind): kind is ObjectCardKind {
+  return kind === "html" || kind === "canvas";
+}
+
+// The same card language as the markdown kinds above, in the hues the icon
+// colors already give these kinds: html sky, canvas violet.
+const OBJECT_KIND_CARD_CLASSES: Readonly<Record<ObjectCardKind, string>> = {
+  html: "border-sky-400/45 border-l-2 shadow-sm shadow-sky-950/5 dark:border-sky-300/45",
+  canvas:
+    "border-violet-400/45 border-l-2 shadow-sm shadow-violet-950/5 dark:border-violet-300/45",
+};
+const OBJECT_KIND_SURFACE_CLASSES: Readonly<Record<ObjectCardKind, string>> = {
+  html: "bg-sky-400/[0.07] dark:bg-sky-300/[0.08]",
+  canvas: "bg-violet-400/[0.07] dark:bg-violet-300/[0.08]",
+};
+const OBJECT_KIND_ICON_CLASSES: Readonly<Record<ObjectCardKind, string>> = {
+  html: "border-sky-400/25 bg-sky-400/10 text-sky-700 dark:border-sky-300/25 dark:bg-sky-300/10 dark:text-sky-300",
+  canvas:
+    "border-violet-400/25 bg-violet-400/10 text-violet-700 dark:border-violet-300/25 dark:bg-violet-300/10 dark:text-violet-300",
+};
+const OBJECT_KIND_HOVER_CLASSES: Readonly<Record<ObjectCardKind, string>> = {
+  html: "group-hover/artifact-card:bg-sky-400/[0.11]",
+  canvas: "group-hover/artifact-card:bg-violet-400/[0.11]",
+};
+
+// A file artifact keeps the simpler visual treatment, but opening it from
+// the transcript card and dragging it to the canvas work the same as for
+// the object kinds.
+function FileArtifactCardShell(props: {
+  readonly findUnitId: string | undefined;
+  readonly canOpen: boolean;
+  readonly openTitle: string;
+  readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
+  readonly dragRef: (element: HTMLElement | null) => void;
+  readonly dragListeners: DraggableSyntheticListeners;
+  readonly isDragging: boolean;
+  readonly children: ReactNode;
+}) {
+  const {
+    findUnitId,
+    canOpen,
+    openTitle,
+    onOpen,
+    dragRef,
+    dragListeners,
+    isDragging,
+    children,
+  } = props;
+  // The KeyboardSensor's Enter/Space activator rides in the listeners; on a
+  // focusable open button it would start a drag where the key must open the
+  // artifact, so only the pointer activators are attached.
+  const pointerDragListeners = { ...dragListeners };
+  delete pointerDragListeners.onKeyDown;
+  if (!canOpen)
+    return (
+      <div
+        data-chat-find-unit={findUnitId}
+        className="w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm opacity-60"
+      >
+        {children}
+      </div>
+    );
+  return (
+    <button
+      type="button"
+      ref={dragRef}
+      data-chat-find-unit={findUnitId}
+      onClick={onOpen}
+      onAuxClick={onMiddleClick(onOpen)}
+      aria-label={`Open ${openTitle}`}
+      className={cn(
+        "w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        isDragging ? "cursor-grabbing" : "cursor-pointer",
+      )}
+      {...pointerDragListeners}
+    >
+      {children}
+    </button>
+  );
+}
+
 function ObjectArtifactCard(props: ObjectArtifactCardProps) {
   const live = useArtifactById(props.artifactId);
   const tombstone = useEpicDeletedArtifact(props.artifactId);
   const epicId = useOpenEpicId();
   const hostId = useTabHostId();
+  const viewTabId = useEpicViewTabId();
   const { openTile } = useEpicTileNavigation();
-  const disabled =
-    live === null || tombstone !== null || props.operation === "delete";
+  const kind = props.artifactKind;
+  const unavailable = tombstone !== null || props.operation === "delete";
+  const canOpen = live !== null && !unavailable;
   const title = live?.title ?? tombstone?.title ?? props.title;
+  const openTitle =
+    title !== null && title.length > 0 ? title : EPIC_NODE_LABELS[kind];
+  const {
+    isDraggable: canDrag,
+    setNodeRef: dragRef,
+    listeners: dragListeners,
+    isDragging,
+  } = useArtifactDragSource({
+    epicId,
+    viewTabId,
+    identity: {
+      id: props.artifactId,
+      type: kind,
+      name: openTitle,
+      hostId,
+    },
+    enabled: canOpen,
+  });
+  const openArtifact = (event: MouseEvent<HTMLButtonElement>): void => {
+    if (live === null || !canOpen) return;
+    openTile({
+      ...tileIntent(
+        {
+          id: live.id,
+          instanceId: uuidv4(),
+          type: live.kind,
+          name: live.title,
+          hostId,
+        },
+        { epicId },
+        "single",
+        "direct_ui",
+      ),
+      modifiers: modifiersFromMouseEvent(event),
+    });
+  };
+  if (!isObjectCardKind(kind))
+    return (
+      <FileArtifactCardShell
+        findUnitId={props.findUnitId ?? undefined}
+        canOpen={canOpen}
+        openTitle={openTitle}
+        onOpen={openArtifact}
+        dragRef={dragRef}
+        dragListeners={dragListeners}
+        isDragging={isDragging}
+      >
+        <ObjectArtifactCardLabel {...props} title={title} />
+      </FileArtifactCardShell>
+    );
+  const content = (
+    <>
+      <span
+        className={cn(
+          "flex size-7 shrink-0 items-center justify-center rounded-md border",
+          OBJECT_KIND_ICON_CLASSES[kind],
+        )}
+        aria-hidden
+      >
+        <StaticEpicNodeIcon type={kind} className="size-3.5" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-ui-base font-semibold text-foreground/95",
+            unavailable && "text-muted-foreground line-through",
+          )}
+        >
+          {openTitle}
+        </span>
+        <span className="truncate text-ui-xs text-muted-foreground">
+          {unavailable
+            ? `${EPIC_NODE_LABELS[kind]} · Unavailable`
+            : EPIC_NODE_LABELS[kind]}
+        </span>
+      </span>
+    </>
+  );
   return (
-    <button
-      type="button"
-      disabled={disabled}
+    <div
       data-chat-find-unit={props.findUnitId ?? undefined}
-      className="w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm disabled:opacity-60"
-      onClick={(event) => {
-        if (live === null || disabled) return;
-        openTile({
-          ...tileIntent(
-            {
-              id: live.id,
-              instanceId: uuidv4(),
-              type: live.kind,
-              name: live.title,
-              hostId,
-            },
-            { epicId },
-            "single",
-            "direct_ui",
-          ),
-          modifiers: modifiersFromMouseEvent(event),
-        });
-      }}
+      className={cn(
+        "group/artifact-card rounded-md border text-ui-sm transition-colors",
+        OBJECT_KIND_CARD_CLASSES[kind],
+        OBJECT_KIND_SURFACE_CLASSES[kind],
+      )}
     >
-      <ObjectArtifactCardLabel {...props} title={title} />
-    </button>
+      <ArtifactCardHeaderRow
+        sticky={false}
+        surfaceClassName={OBJECT_KIND_SURFACE_CLASSES[kind]}
+        stickySurfaceClassName={OBJECT_KIND_SURFACE_CLASSES[kind]}
+        hoverClassName={canOpen ? OBJECT_KIND_HOVER_CLASSES[kind] : null}
+        dragRef={dragRef}
+        dragListeners={dragListeners}
+        draggable={canDrag}
+        isDragging={isDragging}
+      >
+        {canOpen ? (
+          <button
+            type="button"
+            onClick={openArtifact}
+            onAuxClick={onMiddleClick(openArtifact)}
+            aria-label={`Open ${openTitle}`}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {content}
+          </button>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+            {content}
+          </span>
+        )}
+        <ArtifactOperationBadge operation={props.operation} />
+      </ArtifactCardHeaderRow>
+    </div>
   );
 }
 

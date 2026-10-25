@@ -24,6 +24,8 @@ export function CanvasClipboardBoundary(props: {
     <div
       className="relative h-full w-full"
       onPaste={(event) => {
+        if (props.registry.view?.play || props.registry.view?.commenting)
+          return;
         if (useCanvasSelectionStore.getState().additionalElements.length === 0)
           clipboard.onPaste(event);
       }}

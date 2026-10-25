@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { FrameFullscreenContext } from "@/components/comments/frame-comment-surface-context";
+import { useCallback, useContext } from "react";
 import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
@@ -35,31 +36,18 @@ export interface ActivateCommentThreadTarget {
 export function useActivateCommentThread(
   target: ActivateCommentThreadTarget,
 ): (threadId: string) => void {
-  const { epicId, artifactId, viewTabId, artifactType } = target;
-  const isMobileViewport = useIsMobileViewport();
+  const { epicId, artifactId, artifactType } = target;
+  const openComments = useOpenArtifactComments(target);
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
-  const revealCommentsPanel = useLeftPanelStore((s) => s.revealCommentsPanel);
-  const setActivePanelId = useLeftPanelStore((s) => s.setActivePanelId);
-  const setActivePanelIdAndExpand = useLeftPanelStore(
-    (s) => s.setActivePanelIdAndExpand,
-  );
-  const setSwitcherOpen = useMobileSwitcherStore((s) => s.setOpen);
-
   return useCallback(
     (threadId: string) => {
       setActiveThread(epicId, threadId);
       setFlashThread(epicId, threadId);
+      openComments();
       if (artifactType === "html" || artifactType === "canvas") {
         requestCommentThreadAnchorReveal(epicId, artifactId, threadId);
         return;
-      }
-      revealCommentsPanel(viewTabId);
-      if (isMobileViewport) {
-        setActivePanelId(viewTabId, "comments");
-        setSwitcherOpen(viewTabId, true);
-      } else {
-        setActivePanelIdAndExpand(viewTabId, "comments");
       }
       revealCommentThreadAnchor(epicId, artifactId, threadId);
     },
@@ -67,14 +55,27 @@ export function useActivateCommentThread(
       epicId,
       artifactId,
       artifactType,
-      viewTabId,
-      isMobileViewport,
+      openComments,
       setActiveThread,
       setFlashThread,
-      revealCommentsPanel,
-      setActivePanelId,
-      setActivePanelIdAndExpand,
-      setSwitcherOpen,
     ],
   );
+}
+
+/** Reveal the shared comments sidebar without changing document interaction mode. */
+function useOpenArtifactComments(
+  target: ActivateCommentThreadTarget,
+): () => void {
+  const { epicId, artifactId, viewTabId } = target;
+  const mobile = useIsMobileViewport();
+  const fullscreen = useContext(FrameFullscreenContext);
+  return useCallback(() => {
+    useCommentThreadsStore.getState().setCurrentArtifact(epicId, artifactId);
+    const panels = useLeftPanelStore.getState();
+    panels.revealCommentsPanel(viewTabId);
+    if (mobile && fullscreen === null) {
+      panels.setActivePanelId(viewTabId, "comments");
+      useMobileSwitcherStore.getState().setOpen(viewTabId, true);
+    } else panels.setActivePanelIdAndExpand(viewTabId, "comments");
+  }, [epicId, artifactId, viewTabId, mobile, fullscreen]);
 }

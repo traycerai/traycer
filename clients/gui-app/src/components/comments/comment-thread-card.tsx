@@ -1,5 +1,20 @@
+import { FrameFullscreenContext } from "./frame-comment-surface-context";
 import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
-import { useCallback, useRef, useState, type Ref } from "react";
+import {
+  useCallback,
+  useContext,
+  useSyncExternalStore,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
+import {
+  CanvasCommentDraftContext,
+  EMPTY_CANVAS_THREAD_DRAFT,
+  submitCanvasCommentDraft,
+  type SharedCommentComposerDraft,
+  type CanvasCommentDraftStore,
+} from "./canvas-comment-drafts";
 import {
   MoreHorizontal,
   CheckCircle2,
@@ -37,6 +52,62 @@ import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 
+function sharedComposerDraft(
+  store: CanvasCommentDraftStore | null,
+  threadId: string,
+  commentId: string | null,
+): SharedCommentComposerDraft | undefined {
+  if (store === null) return undefined;
+  const draft = store.getState().threads[threadId] ?? EMPTY_CANVAS_THREAD_DRAFT;
+  const edit = draft.edit;
+  if (commentId !== null && edit?.commentId !== commentId) return undefined;
+  return {
+    content: commentId === null ? draft.reply : (edit?.content ?? null),
+    dirty: commentId === null ? draft.reply !== null : edit?.dirty === true,
+    pending: draft.pending,
+    onChange: (content, empty) => {
+      const current =
+        store.getState().threads[threadId] ?? EMPTY_CANVAS_THREAD_DRAFT;
+      if (current.pending) return;
+      if (commentId === null)
+        store
+          .getState()
+          .update(threadId, { ...current, reply: empty ? null : content });
+      else if (current.edit?.commentId === commentId)
+        store.getState().update(threadId, {
+          ...current,
+          edit: { commentId, content, dirty: true },
+        });
+    },
+  };
+}
+
+function useCommentDraft(
+  threadId: string,
+  replySaving: boolean,
+  editSaving: boolean,
+) {
+  const sharedStore = useContext(CanvasCommentDraftContext);
+  const shared = useSyncExternalStore(
+    (listener) => sharedStore?.subscribe(listener) ?? (() => undefined),
+    () =>
+      sharedStore?.getState().threads[threadId] ?? EMPTY_CANVAS_THREAD_DRAFT,
+  );
+  const [localEditingComment, setEditingComment] = useState<{
+    readonly commentId: string;
+  } | null>(null);
+  const editingComment =
+    sharedStore === null ? localEditingComment : shared.edit;
+  return {
+    sharedStore,
+    shared,
+    editingComment,
+    setEditingComment,
+    replyPending: replySaving || shared.pending,
+    editPending: editSaving || shared.pending,
+  };
+}
+
 export interface CommentThreadCardProps {
   readonly epicId: string;
   /** The host serving the surface this card was mounted from - the Epic
@@ -62,6 +133,18 @@ export interface CommentThreadCardProps {
     readonly label: string;
     readonly onClose: () => void;
   };
+}
+
+/** What the card quotes: canvas-wide anchors carry a label, not page text. */
+function threadQuotedText(
+  artifactType: CommentArtifactKind,
+  thread: CommentThreadWire,
+): string {
+  if (artifactType !== "canvas") return thread.data.quotedText ?? "";
+  if (thread.data.anchorKind === "artifact") return "Whole canvas";
+  if (thread.data.anchorKind === "canvas-point")
+    return thread.data.label ?? "Pinned on canvas";
+  return thread.data.quotedText ?? "";
 }
 
 /**
@@ -99,9 +182,18 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
   const deleteThreadMutation = useDeleteCommentThreadForClient(hostClient);
   const setResolvedMutation = useSetCommentThreadResolvedForClient(hostClient);
 
-  const [editingComment, setEditingComment] = useState<{
-    readonly commentId: string;
-  } | null>(null);
+  const {
+    sharedStore,
+    shared,
+    editingComment,
+    setEditingComment,
+    replyPending,
+    editPending,
+  } = useCommentDraft(
+    thread.threadId,
+    replyMutation.isPending,
+    editMutation.isPending,
+  );
   const replyHandleRef = useRef<CommentComposerHandle | null>(null);
   const editHandleRef = useRef<CommentComposerHandle | null>(null);
 
@@ -112,19 +204,33 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
   const handleReplySubmit = useCallback(
     async (content: JsonContent) => {
       const submittedComposer = replyHandleRef.current;
-      await replyMutation.mutateAsync({
-        epicId,
-        artifactType,
-        artifactId,
-        threadId: thread.threadId,
-        content,
-      });
-      if (replyHandleRef.current === submittedComposer) {
+      const saved = await submitCanvasCommentDraft(
+        sharedStore,
+        thread.threadId,
+        "reply",
+        async () => {
+          await replyMutation.mutateAsync({
+            epicId,
+            artifactType,
+            artifactId,
+            threadId: thread.threadId,
+            content,
+          });
+        },
+      );
+      if (saved && replyHandleRef.current === submittedComposer) {
         submittedComposer?.reset();
         submittedComposer?.focus();
       }
     },
-    [replyMutation, epicId, artifactType, artifactId, thread.threadId],
+    [
+      replyMutation,
+      epicId,
+      artifactType,
+      artifactId,
+      thread.threadId,
+      sharedStore,
+    ],
   );
 
   const handleToggleResolved = useCallback(() => {
@@ -162,7 +268,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
     onExpandedChange(false);
   }, [isExpanded, onExpandedChange, onActivateAnchor]);
 
-  const quotedText = thread.data.quotedText ?? "";
+  const quotedText = threadQuotedText(artifactType, thread);
 
   return (
     <article
@@ -239,23 +345,60 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
                 hostClient={hostClient}
                 currentUserId={currentUserId}
                 isEditing={editingComment?.commentId === comment.commentId}
-                isPending={editMutation.isPending}
+                isPending={editPending}
                 editComposerRef={editHandleRef}
-                onStartEdit={() =>
-                  setEditingComment({ commentId: comment.commentId })
-                }
-                onCancelEdit={() => setEditingComment(null)}
+                sharedDraft={sharedComposerDraft(
+                  sharedStore,
+                  thread.threadId,
+                  comment.commentId,
+                )}
+                onStartEdit={() => {
+                  if (sharedStore === null)
+                    setEditingComment({ commentId: comment.commentId });
+                  // Choosing Edit again while this comment's edit is already
+                  // open must not reseed it: that would discard the typing.
+                  else if (
+                    !shared.pending &&
+                    shared.edit?.commentId !== comment.commentId
+                  )
+                    sharedStore.getState().update(thread.threadId, {
+                      ...shared,
+                      edit: {
+                        commentId: comment.commentId,
+                        content: comment.content,
+                        dirty: false,
+                      },
+                    });
+                }}
+                onCancelEdit={() => {
+                  if (sharedStore === null) setEditingComment(null);
+                  else if (!shared.pending)
+                    sharedStore
+                      .getState()
+                      .update(thread.threadId, { ...shared, edit: null });
+                }}
                 onSubmitEdit={async (next) => {
                   const submittedComposer = editHandleRef.current;
-                  await editMutation.mutateAsync({
-                    epicId,
-                    artifactType,
-                    artifactId,
-                    threadId: thread.threadId,
-                    commentId: comment.commentId,
-                    content: next,
-                  });
-                  if (editHandleRef.current === submittedComposer) {
+                  const saved = await submitCanvasCommentDraft(
+                    sharedStore,
+                    thread.threadId,
+                    "edit",
+                    async () => {
+                      await editMutation.mutateAsync({
+                        epicId,
+                        artifactType,
+                        artifactId,
+                        threadId: thread.threadId,
+                        commentId: comment.commentId,
+                        content: next,
+                      });
+                    },
+                  );
+                  if (
+                    saved &&
+                    sharedStore === null &&
+                    editHandleRef.current === submittedComposer
+                  ) {
                     setEditingComment((current) =>
                       current === editingComment ? null : current,
                     );
@@ -279,10 +422,15 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
             epicId={epicId}
             hostClient={hostClient}
             initialContent={null}
+            sharedDraft={sharedComposerDraft(
+              sharedStore,
+              thread.threadId,
+              null,
+            )}
             placeholder="Reply…"
             focusOnMount={false}
             submitLabel="Reply"
-            isPending={replyMutation.isPending}
+            isPending={replyPending}
             onSubmit={handleReplySubmit}
             onCancel={null}
             className={undefined}
@@ -359,6 +507,7 @@ function FrameThreadHeader(
     readonly hasAnchor: boolean;
   } & ThreadActionsProps,
 ) {
+  const fullscreenContainer = useContext(FrameFullscreenContext);
   return (
     <>
       <header className="flex items-center gap-2">
@@ -379,7 +528,7 @@ function FrameThreadHeader(
             >
               {props.resolved ? <RotateCcw /> : <CheckCircle2 />}
             </Button>
-            <DropdownMenu>
+            <DropdownMenu modal={fullscreenContainer === null}>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
@@ -389,7 +538,7 @@ function FrameThreadHeader(
                   <MoreHorizontal />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align="end" container={fullscreenContainer}>
                 <DropdownMenuItem
                   variant="destructive"
                   disabled={props.deleting}
@@ -487,6 +636,7 @@ interface CommentEntryProps {
   readonly isEditing: boolean;
   readonly isPending: boolean;
   readonly editComposerRef: Ref<CommentComposerHandle>;
+  readonly sharedDraft: SharedCommentComposerDraft | undefined;
   readonly onStartEdit: () => void;
   readonly onCancelEdit: () => void;
   readonly onSubmitEdit: (content: JsonContent) => Promise<void>;
@@ -494,6 +644,7 @@ interface CommentEntryProps {
 }
 
 function CommentEntry(props: CommentEntryProps) {
+  const fullscreenContainer = useContext(FrameFullscreenContext);
   const {
     comment,
     epicId,
@@ -529,7 +680,7 @@ function CommentEntry(props: CommentEntryProps) {
           <span className="text-ui-xs text-muted-foreground">(edited)</span>
         ) : null}
         {isCommentAuthor ? (
-          <DropdownMenu>
+          <DropdownMenu modal={fullscreenContainer === null}>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -540,7 +691,7 @@ function CommentEntry(props: CommentEntryProps) {
                 <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" container={fullscreenContainer}>
               <DropdownMenuItem onSelect={onStartEdit}>Edit</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={onDelete}>
@@ -556,8 +707,9 @@ function CommentEntry(props: CommentEntryProps) {
           epicId={epicId}
           hostClient={hostClient}
           initialContent={comment.content}
+          sharedDraft={props.sharedDraft}
           placeholder="Edit comment…"
-          focusOnMount
+          focusOnMount={props.sharedDraft === undefined}
           submitLabel="Save"
           isPending={isPending}
           onSubmit={onSubmitEdit}

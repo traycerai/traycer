@@ -86,14 +86,18 @@ function SelectionActionBar(props: {
   );
 }
 
-export function SelectionOutline(props: {
+function SelectionOutline(props: {
   readonly box: CanvasBox;
   readonly generated: boolean;
+  readonly emphasized: boolean;
   readonly hideHandles: boolean | undefined;
 }) {
   return (
     <div
-      className="absolute border border-primary"
+      className={cn(
+        "absolute border border-primary",
+        props.emphasized && "ring-1 ring-primary bg-primary/5",
+      )}
       style={{
         left: props.box.x,
         top: props.box.y,
@@ -126,6 +130,7 @@ export function CanvasSelectionOverlay(props: {
   readonly actionControls?: ReactNode;
   readonly menuControls?: ReactNode;
   readonly hideAction?: boolean;
+  readonly commenting?: boolean;
   readonly hideHandles?: boolean;
   readonly scope: CanvasAnnotationScope;
   readonly boardPath: string;
@@ -354,7 +359,10 @@ export function CanvasSelectionOverlay(props: {
     >
       <div
         role="presentation"
-        className="absolute inset-0 touch-auto [&]:pointer-events-auto"
+        className={cn(
+          "absolute inset-0 touch-auto [&]:pointer-events-auto",
+          props.commenting && "cursor-crosshair",
+        )}
         tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -372,7 +380,7 @@ export function CanvasSelectionOverlay(props: {
           event.stopPropagation();
           event.currentTarget.focus({ preventScroll: true });
           event.currentTarget.setPointerCapture(event.pointerId);
-          if (selection !== null)
+          if (selection !== null && !props.commenting)
             void bridge?.selectTextRange({ start, end: start });
           setPointerDown(true);
           setHovered(null);
@@ -380,9 +388,10 @@ export function CanvasSelectionOverlay(props: {
           gesture.current = {
             x: event.clientX,
             y: event.clientY,
-            additive: event.shiftKey,
+            additive: !props.commenting && event.shiftKey,
             start,
             textDrag:
+              !props.commenting &&
               !event.shiftKey &&
               !multiple &&
               box !== null &&
@@ -437,11 +446,16 @@ export function CanvasSelectionOverlay(props: {
           event.preventDefault();
           event.stopPropagation();
           const point = pointInFrame(event);
-          if (point !== null) void bridge?.retypeAt(point);
+          if (point !== null && !props.commenting) void bridge?.retypeAt(point);
         }}
       />
       {hoverBox === null || pointerDown ? null : (
-        <SelectionOutline box={hoverBox} generated={false} hideHandles />
+        <SelectionOutline
+          box={hoverBox}
+          generated={false}
+          emphasized={false}
+          hideHandles
+        />
       )}
       <CanvasSelectionPaint
         selection={selection}
@@ -487,6 +501,7 @@ function CanvasSelectionPaint(props: {
       <SelectionOutline
         box={props.box}
         generated={props.selection.element.generated}
+        emphasized
         hideHandles={props.hideHandles}
       />
       {props.hideAction || props.frame === null ? null : (

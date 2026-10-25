@@ -25,6 +25,7 @@ import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { parseArtifactAddress } from "@/lib/sandbox/artifact-serving/artifact-address";
 import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
+import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
 import { CanvasArtifactFixtureProvider } from "@/components/canvas-artifact/canvas-surface-context";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
@@ -81,6 +82,13 @@ interface SelectionProbe {
   readonly ready: boolean;
   /** The kinds of the edit requests the fake host received, oldest first. */
   readonly editKinds: () => readonly string[];
+  /** The selected element's tid: the inspector sits behind its flag, so the
+   * spec reads the selection itself instead of a panel describing it. */
+  readonly selectedTid: () => string | null;
+  /** Elements added to the selection beyond the first. */
+  readonly additionalCount: () => number;
+  /** The note a refused multi-pick leaves, e.g. the same-container rule. */
+  readonly selectionNote: () => string | null;
   /** Answers one request for a mounted board file, as a native handler would. */
   readonly serve: (url: string) => Promise<ServedFile>;
 }
@@ -322,6 +330,11 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
 probeWindow.__selectionProbe = {
   ready: true,
   editKinds: () => edits.map((request) => request.edit.kind),
+  selectedTid: () =>
+    useCanvasSelectionStore.getState().selection?.element.tid ?? null,
+  additionalCount: () =>
+    useCanvasSelectionStore.getState().additionalElements.length,
+  selectionNote: () => useCanvasSelectionStore.getState().selectionMessage,
   serve: (url) => artifactBridge.serve(url),
 };
 

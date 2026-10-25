@@ -1,3 +1,15 @@
+import {
+  useActiveThreadId,
+  useCommentThreadsStore,
+} from "@/stores/comments/comment-threads-store";
+import { Button } from "@/components/ui/button";
+import { FrameCommentsToolbar } from "@/components/comments/frame-comments";
+import { CommentSidebarPanel } from "@/components/comments/comment-sidebar-panel";
+import {
+  useLeftPanelStore,
+  DEFAULT_LEFT_PANEL_ID,
+} from "@/stores/epics/left-panel-store";
+import { X } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   queryOptions,
@@ -15,8 +27,9 @@ import { deriveFrameCommentPositions } from "@/lib/comments/frame-comment-positi
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import { canvasQueryKeys } from "@/lib/query-keys/canvas-query-keys";
 import { FrameCommentPins } from "@/components/comments/frame-comment-pins";
+import { cn } from "@/lib/utils";
 import { useOrderedFrameThreads } from "@/components/comments/use-ordered-frame-threads";
-import { Button } from "@/components/ui/button";
+import { ToolbarActionButton } from "@/editor-core/toolbar/toolbar-action-button";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
 import { useCanvasBoardDocument } from "./use-canvas-board-document";
@@ -39,10 +52,17 @@ export function CanvasCommentAction(props: {
   if (!enabled) return null;
   return (
     <>
-      <Button
-        size="xs"
-        variant="ghost"
+      <ToolbarActionButton
+        label="Comment"
+        tooltip={null}
+        className="tc-editor-toolbar-action"
+        icon={<MessageSquarePlus className="size-4" aria-hidden="true" />}
+        onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
+          useCommentThreadsStore
+            .getState()
+            .setActiveThread(props.scope.epicId, null);
+          props.registry.view?.setCommenting(true);
           const entry = props.registry.get(props.selection.boardPath);
           if (entry.bridge === null || entry.frame === null) return;
           void openFrameCommentDraft({
@@ -70,10 +90,7 @@ export function CanvasCommentAction(props: {
               setMessage("The page changed. Select the element again."),
             );
         }}
-      >
-        <MessageSquarePlus />
-        Comment
-      </Button>
+      />
       {message === null ? null : (
         <span role="status" className="text-ui-xs text-muted-foreground">
           {message}
@@ -118,6 +135,59 @@ export function CanvasCommentPins(props: {
     ...props.scope,
     artifactType: "canvas",
   });
+  const commenting = useSyncExternalStore(
+    props.registry.subscribe,
+    () => props.registry.view?.commenting === true,
+  );
+  const activeThreadId = useActiveThreadId(props.scope.epicId);
+  const targetId = threads.find((thread) => thread.threadId === activeThreadId)
+    ?.data.elementId;
+  // Depend on the board fields the reveal reads, not the registry's whole
+  // entry object: geometry updates rebuild that object on every size or
+  // frame change and must not re-run the reveal.
+  const { bridge, sha256, page } = entry;
+  useEffect(() => {
+    if (
+      !commenting ||
+      targetId === undefined ||
+      bridge === null ||
+      sha256 === null
+    )
+      return;
+    if (
+      useCanvasSelectionStore.getState().selection?.artifactId ===
+      props.scope.artifactId
+    )
+      useCanvasSelectionStore.getState().clear();
+    let active = true;
+    void bridge
+      .revealElement({ tid: targetId })
+      .then(() => bridge.describeElement({ tid: targetId }))
+      .then((element) => {
+        if (!active || element === null) return;
+        useCanvasSelectionStore.getState().select({
+          artifactId: props.scope.artifactId,
+          boardPath: props.boardPath,
+          page,
+          servedSha256: sha256,
+          element,
+          textRange: null,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [
+    commenting,
+    targetId,
+    bridge,
+    sha256,
+    page,
+    props.scope.artifactId,
+    props.boardPath,
+  ]);
+  if (!commenting) return null;
   return (
     <FrameCommentPins
       epicId={props.scope.epicId}
@@ -132,6 +202,91 @@ export function CanvasCommentPins(props: {
       frame={entry.frame}
       onActivate={activate}
     />
+  );
+}
+
+/** The canvas-space pins outside every board, on the page being shown. */
+export function CanvasCommentPointPins(props: {
+  readonly scope: CanvasAnnotationScope;
+  readonly page: string;
+  readonly viewport: {
+    readonly x: number;
+    readonly y: number;
+    readonly zoom: number;
+  };
+  readonly registry: CanvasFrameRegistry;
+}) {
+  const { scope, page, viewport, registry } = props;
+  const threads = useFrameCommentThreads(
+    scope.epicId,
+    scope.artifactId,
+    "canvas",
+  );
+  const ordered = useOrderedFrameThreads(
+    scope.epicId,
+    scope.artifactId,
+    "canvas",
+  );
+  const activate = useActivateCommentThread({
+    ...scope,
+    artifactType: "canvas",
+  });
+  const commenting = useSyncExternalStore(
+    registry.subscribe,
+    () => registry.view?.commenting === true,
+  );
+  const activeThreadId = useActiveThreadId(scope.epicId);
+  if (!commenting) return null;
+  const pins =
+    threads?.filter(
+      (thread) =>
+        thread.data.anchorKind === "canvas-point" &&
+        thread.data.page === page &&
+        thread.data.x !== undefined &&
+        thread.data.y !== undefined &&
+        (!thread.resolved || thread.threadId === activeThreadId),
+    ) ?? [];
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-30 overflow-hidden"
+      data-slot="canvas-point-pins"
+    >
+      {pins.map((thread) => {
+        const entry = ordered?.find(
+          (candidate) => candidate.thread.threadId === thread.threadId,
+        );
+        if (
+          entry === undefined ||
+          thread.data.x === undefined ||
+          thread.data.y === undefined
+        )
+          return null;
+        return (
+          <button
+            key={thread.threadId}
+            type="button"
+            data-comment-pin={thread.threadId}
+            aria-label={`Open comment ${entry.number}`}
+            className={cn(
+              "canvas-nopan touch-auto pointer-events-auto absolute flex size-6 -translate-x-full items-center justify-center rounded-full border border-primary bg-primary text-xs font-medium text-primary-foreground shadow-sm",
+              activeThreadId === thread.threadId &&
+                "ring-2 ring-ring ring-offset-2",
+            )}
+            style={{
+              left: thread.data.x * viewport.zoom + viewport.x,
+              top: thread.data.y * viewport.zoom + viewport.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              activate(thread.threadId);
+            }}
+          >
+            {entry.number}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -198,11 +353,82 @@ export function CanvasCommentIndex(props: {
             (candidate) => candidate.threadId === threadId,
           );
           if (thread === undefined) return false;
-          if (thread.data.artboard === undefined) return true;
+          view?.setCommenting(true);
+          if (thread.data.anchorKind === "canvas-point") {
+            return thread.data.page !== undefined &&
+              thread.data.x !== undefined &&
+              thread.data.y !== undefined
+              ? (view?.revealCanvasPoint(
+                  thread.data.page,
+                  thread.data.x,
+                  thread.data.y,
+                ) ?? false)
+              : false;
+          }
+          if (thread.data.artboard === undefined) {
+            if (
+              useCanvasSelectionStore.getState().selection?.artifactId ===
+              scope.artifactId
+            )
+              useCanvasSelectionStore.getState().clear();
+            return true;
+          }
           return view?.revealBoard(thread.data.artboard) ?? false;
         },
       }),
     [scope.epicId, scope.artifactId, tileId, focused, threads, view],
   );
   return null;
+}
+
+export function CanvasCommentsControl(props: {
+  readonly registry: CanvasFrameRegistry;
+}) {
+  const view = useSyncExternalStore(
+    props.registry.subscribe,
+    () => props.registry.view,
+  );
+  return (
+    <FrameCommentsToolbar
+      active={view?.commenting === true}
+      onToggle={() => view?.setCommenting(!view.commenting)}
+    />
+  );
+}
+
+export function CanvasCommentsSidebar(props: {
+  readonly scope: CanvasAnnotationScope;
+}) {
+  const { epicId, artifactId, viewTabId } = props.scope;
+  const open = useLeftPanelStore(
+    (state) =>
+      state.activePanelIdByTabId[viewTabId] === "comments" &&
+      !state.mainCollapsedByTabId[viewTabId],
+  );
+  if (!open) return null;
+  return (
+    <aside
+      aria-label="Comments sidebar"
+      className="flex h-full w-1/3 min-w-0 max-w-sm shrink-0 flex-col border-r bg-background"
+    >
+      <div className="flex shrink-0 items-center justify-between p-2">
+        <span className="text-ui-sm font-medium">Comments</span>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Close comments"
+          onClick={() =>
+            useLeftPanelStore
+              .getState()
+              .setActivePanelId(viewTabId, DEFAULT_LEFT_PANEL_ID)
+          }
+        >
+          <X />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1">
+        <CommentSidebarPanel epicId={epicId} activeArtifactId={artifactId} />
+      </div>
+    </aside>
+  );
 }
