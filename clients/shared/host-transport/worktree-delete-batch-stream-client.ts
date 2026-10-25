@@ -1,9 +1,9 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
   worktreeDeleteBatchTargetSchemaV11,
-  worktreeDeleteBatchByPathServerFrameSchemaV13,
+  worktreeDeleteBatchByPathServerFrameSchemaV14,
   type WorktreeDeleteBatchByPathOpenRequestV11,
-  type WorktreeDeleteBatchByPathServerFrameV13,
+  type WorktreeDeleteBatchByPathServerFrameV14,
   type WorktreeDeleteBatchOutputChannel,
   type WorktreeDeleteBatchPhase,
   type WorktreeDeleteDeclinedKind,
@@ -44,19 +44,24 @@ export interface WorktreeDeleteBatchStreamCallbacks {
   /**
    * Terminal for one target; `deleted` is its outcome. `declined` says why a
    * `deleted: false` target was left in place, and is `undefined` for a
-   * deletion and for a host older than `@1.3`.
+   * deletion and for a host older than `@1.3`. `errorTail` is optional failure
+   * detail from `@1.4`, absent for a successful deletion or an older host.
    */
   readonly onTargetComplete: (
     worktreePath: string,
     deleted: boolean,
     declined: WorktreeDeleteDeclinedKind | undefined,
+    errorTail: string | undefined,
   ) => void;
   /** Terminal for one target; the host declined or the removal threw. */
   readonly onTargetFailed: (
     worktreePath: string,
     reason: string,
-    holders: readonly WorktreeBusyHolder[] | undefined,
-    code: "WORKTREE_BUSY" | undefined,
+    details: {
+      readonly holders: readonly WorktreeBusyHolder[] | undefined;
+      readonly code: "WORKTREE_BUSY" | undefined;
+      readonly errorTail: string | undefined;
+    },
   ) => void;
   /** Terminal for the COMMAND, after every target settled. */
   readonly onCommandComplete: (counts: {
@@ -295,14 +300,14 @@ export class WorktreeDeleteBatchStreamClient {
     _binaryPayload: Uint8Array | null,
   ): void {
     // Parse with the newest frame shape so a `chatTier` on a `target.failed`
-    // holder and a `declined` on a `target.complete` reach the caller; an
-    // older host simply never sends the keys.
+    // holder, a `declined` on a `target.complete`, and an error tail on either
+    // failed-target frame reach the caller; an older host omits the keys.
     const parsed =
-      worktreeDeleteBatchByPathServerFrameSchemaV13.safeParse(envelope);
+      worktreeDeleteBatchByPathServerFrameSchemaV14.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: WorktreeDeleteBatchByPathServerFrameV13 = parsed.data;
+    const frame: WorktreeDeleteBatchByPathServerFrameV14 = parsed.data;
     switch (frame.kind) {
       case "target.started": {
         this.callbacks.onTargetStarted(frame.worktreePath, frame.hasTeardown);
@@ -325,16 +330,16 @@ export class WorktreeDeleteBatchStreamClient {
           frame.worktreePath,
           frame.deleted,
           frame.declined,
+          frame.deleted ? undefined : frame.errorTail,
         );
         return;
       }
       case "target.failed": {
-        this.callbacks.onTargetFailed(
-          frame.worktreePath,
-          frame.reason,
-          frame.holders,
-          frame.code,
-        );
+        this.callbacks.onTargetFailed(frame.worktreePath, frame.reason, {
+          holders: frame.holders,
+          code: frame.code,
+          errorTail: frame.errorTail,
+        });
         return;
       }
       case "command.complete": {

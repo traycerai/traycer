@@ -530,7 +530,7 @@ describe("WorktreeDeleteBatchStreamClient target.complete decline kind", () => {
       hasBinaryPayload: false,
     });
 
-    expect(completions).toEqual([["/wt/a", false, "not_managed"]]);
+    expect(completions).toEqual([["/wt/a", false, "not_managed", undefined]]);
     batch.close();
   });
 
@@ -544,7 +544,7 @@ describe("WorktreeDeleteBatchStreamClient target.complete decline kind", () => {
       hasBinaryPayload: false,
     });
 
-    expect(completions).toEqual([["/wt/a", true, undefined]]);
+    expect(completions).toEqual([["/wt/a", true, undefined, undefined]]);
     batch.close();
   });
 });
@@ -602,7 +602,9 @@ describe("WorktreeDeleteBatchStreamClient decline kind on a force-delete retry",
       declined: "teardown_failed",
       hasBinaryPayload: false,
     });
-    expect(completions).toEqual([["/wt/a", false, "teardown_failed"]]);
+    expect(completions).toEqual([
+      ["/wt/a", false, "teardown_failed", undefined],
+    ]);
     batch.close();
   });
 
@@ -631,7 +633,121 @@ describe("WorktreeDeleteBatchStreamClient decline kind on a force-delete retry",
       deleted: false,
       hasBinaryPayload: false,
     });
-    expect(completions).toEqual([["/wt/a", false, undefined]]);
+    expect(completions).toEqual([["/wt/a", false, undefined, undefined]]);
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient error tail", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openWithTerminalSpies(): {
+    readonly socket: StubStreamWebSocket;
+    readonly completions: ReadonlyArray<readonly unknown[]>;
+    readonly failures: ReadonlyArray<readonly unknown[]>;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+  } {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const completions: unknown[][] = [];
+    const failures: unknown[][] = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onTargetComplete: (...args) => {
+          completions.push(args);
+        },
+        onTargetFailed: (...args) => {
+          failures.push(args);
+        },
+      },
+    });
+    completeHandshake(sockets[0]);
+    return { socket: sockets[0], completions, failures, batch };
+  }
+
+  it("passes the error tail of a failed deletion through target.complete", () => {
+    const { socket, completions, batch } = openWithTerminalSpies();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "removal_failed",
+      errorTail: "fatal: cannot remove",
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([
+      ["/wt/a", false, "removal_failed", "fatal: cannot remove"],
+    ]);
+    batch.close();
+  });
+
+  it("passes the error tail of a failed target through target.failed", () => {
+    const { socket, failures, batch } = openWithTerminalSpies();
+
+    socket.fireText({
+      kind: "target.failed",
+      worktreePath: "/wt/a",
+      reason: "git worktree remove failed",
+      errorTail: "error: unable to unlink",
+      hasBinaryPayload: false,
+    });
+
+    expect(failures).toEqual([
+      [
+        "/wt/a",
+        "git worktree remove failed",
+        {
+          holders: undefined,
+          code: undefined,
+          errorTail: "error: unable to unlink",
+        },
+      ],
+    ]);
+    batch.close();
+  });
+
+  it("delivers the terminal frame with an undefined tail when the host sends a malformed one", () => {
+    const { socket, completions, failures, batch } = openWithTerminalSpies();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "removal_failed",
+      errorTail: { not: "a string" },
+      hasBinaryPayload: false,
+    });
+    socket.fireText({
+      kind: "target.failed",
+      worktreePath: "/wt/b",
+      reason: "boom",
+      errorTail: 7,
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([
+      ["/wt/a", false, "removal_failed", undefined],
+    ]);
+    expect(failures).toEqual([
+      [
+        "/wt/b",
+        "boom",
+        { holders: undefined, code: undefined, errorTail: undefined },
+      ],
+    ]);
     batch.close();
   });
 });

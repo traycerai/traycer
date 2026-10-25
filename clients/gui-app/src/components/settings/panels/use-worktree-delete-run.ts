@@ -43,6 +43,8 @@ export interface WorktreeDeleteRunState {
    */
   readonly declined: WorktreeDeleteDeclinedKind | null;
   readonly error: string | null;
+  /** Bounded, scrubbed failure detail from a @1.4 batch stream. */
+  readonly errorTail?: string;
   /**
    * Typed `WORKTREE_BUSY` inventory from a 1.1 refusal. Non-null means the
    * GUI should confirm stop-and-delete instead of showing the generic error.
@@ -123,8 +125,13 @@ interface WorktreeDeleteRunStore {
     key: string,
     deleted: boolean,
     declined: WorktreeDeleteDeclinedKind | null,
+    errorTail: string | undefined,
   ) => void;
-  readonly failRun: (key: string, error: string) => void;
+  readonly failRun: (
+    key: string,
+    error: string,
+    errorTail: string | undefined,
+  ) => void;
   readonly setBackgrounded: (key: string, backgrounded: boolean) => void;
   readonly backgroundForegroundForHost: (hostId: string) => void;
   readonly clearTerminalBackgroundedForHost: (hostId: string) => void;
@@ -162,7 +169,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
         record.key === key ? { ...record, run: updater(record.run) } : record,
       ),
     })),
-  completeRun: (key, deleted, declined) => {
+  completeRun: (key, deleted, declined, errorTail) => {
     // Emission rides the natural non-terminal -> terminal transition (state
     // read before the synchronous update); a replayed/duplicate settle can't
     // double-count and no reporting ledger is needed.
@@ -181,6 +188,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
           status: "complete",
           deleted,
           declined: deleted ? null : declined,
+          errorTail: deleted ? undefined : errorTail,
           activePhase: null,
           pendingBusyHolders: null,
         },
@@ -206,7 +214,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
       );
     }
   },
-  failRun: (key, error) => {
+  failRun: (key, error, errorTail) => {
     const existing = useWorktreeDeleteRunStore
       .getState()
       .runs.find((candidate) => candidate.key === key);
@@ -227,6 +235,7 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
                   ...candidate.run,
                   status: "failed",
                   error,
+                  errorTail,
                   pendingBusyHolders: null,
                 },
               }
@@ -716,7 +725,9 @@ function startBatchDeleteCommand(
     activeCommandCount = Math.max(0, activeCommandCount - 1);
     closeCommandClient(commandId);
     unsettled.forEach((key) => {
-      useWorktreeDeleteRunStore.getState().failRun(key, unsettledReason);
+      useWorktreeDeleteRunStore
+        .getState()
+        .failRun(key, unsettledReason, undefined);
       releaseTargetKey(key);
     });
     unsettled.clear();
@@ -813,15 +824,19 @@ function startBatchDeleteCommand(
                     { id: run.log.length, channel, text: chunk },
                   ],
                 })),
-            onTargetComplete: (worktreePath, deleted, declined) => {
+            onTargetComplete: (worktreePath, deleted, declined, errorTail) => {
               const key = keyFor(worktreePath);
               useWorktreeDeleteRunStore
                 .getState()
-                .completeRun(key, deleted, declined ?? null);
+                .completeRun(key, deleted, declined ?? null, errorTail);
               unsettled.delete(key);
               releaseTargetKey(key);
             },
-            onTargetFailed: (worktreePath, reason, holders, code) => {
+            onTargetFailed: (
+              worktreePath,
+              reason,
+              { holders, code, errorTail },
+            ) => {
               const key = keyFor(worktreePath);
               const item = batchTargets.find(
                 (candidate) => candidate.target.worktreePath === worktreePath,
@@ -837,7 +852,9 @@ function startBatchDeleteCommand(
                 releaseTargetKey(key);
                 return;
               }
-              useWorktreeDeleteRunStore.getState().failRun(key, reason);
+              useWorktreeDeleteRunStore
+                .getState()
+                .failRun(key, reason, errorTail);
               unsettled.delete(key);
               releaseTargetKey(key);
             },
@@ -1064,7 +1081,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
             onComplete: (deleted) => {
               useWorktreeDeleteRunStore
                 .getState()
-                .completeRun(item.key, deleted, null);
+                .completeRun(item.key, deleted, null, undefined);
               closeDeleteClient(item.key);
               settle();
             },
@@ -1077,7 +1094,9 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
                 settle();
                 return;
               }
-              useWorktreeDeleteRunStore.getState().failRun(item.key, reason);
+              useWorktreeDeleteRunStore
+                .getState()
+                .failRun(item.key, reason, undefined);
               closeDeleteClient(item.key);
               settle();
             },
@@ -1087,7 +1106,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
               if (status !== "closed" || reason === null) return;
               useWorktreeDeleteRunStore
                 .getState()
-                .failRun(item.key, CONNECTION_LOST_MESSAGE);
+                .failRun(item.key, CONNECTION_LOST_MESSAGE, undefined);
               closeDeleteClient(item.key);
               settle();
             },
@@ -1098,7 +1117,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
   } catch (error) {
     useWorktreeDeleteRunStore
       .getState()
-      .failRun(item.key, startStreamErrorMessage(error));
+      .failRun(item.key, startStreamErrorMessage(error), undefined);
     settle();
   }
 }
