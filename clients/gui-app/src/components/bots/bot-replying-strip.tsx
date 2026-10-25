@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BotAvatar } from "@/components/chat/chat-bot-message";
+import { BotAvatar } from "@/components/bots/bot-avatars";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
 

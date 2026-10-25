@@ -54,7 +54,8 @@ import {
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
+import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
@@ -171,6 +172,7 @@ export function BotChannelView(props: {
     isUnread,
   } = useChannelThreads({ client, botId, hostId, paused });
   const activity = useBotActivity(botId);
+  const viewer = useAuthStore((s) => s.profile);
 
   // A direct reply's option, clicked, is the person's next post: offered
   // only while no earlier pick is still being sent. A pick that fails says so
@@ -214,6 +216,7 @@ export function BotChannelView(props: {
         const thread = threadsByPost.get(postMessageId);
         if (thread === undefined) return null;
         return {
+          participants: threadParticipants(thread, viewer, resolveMember),
           replyCount: thread.replyCount,
           lastReplyAt: thread.lastReplyAt,
           unread: isUnread(thread.threadId),
@@ -246,9 +249,11 @@ export function BotChannelView(props: {
       onOpenThread,
       openAnnouncementThread,
       openThreadPostId,
+      resolveMember,
       sending,
       threadListSupported,
       threadsByPost,
+      viewer,
     ],
   );
 
@@ -295,7 +300,6 @@ export function BotChannelView(props: {
     section: channelSection,
   });
 
-  const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(
     (senderUserId: string | null): string =>
       senderUserId === null
@@ -409,6 +413,30 @@ export function BotChannelView(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * Who is in a thread, as its line under the post stacks them: the post's
+ * writer, and the bot once the thread has a reply.
+ */
+function threadParticipants(
+  thread: BotThreadSummary,
+  viewer: AuthProfile | null,
+  resolveMember: BotMemberResolver,
+): ReadonlyArray<StackedIdentity> {
+  const writerId = thread.anchor?.senderUserId ?? null;
+  const writer: ReadonlyArray<StackedIdentity> =
+    writerId === null
+      ? []
+      : [
+          {
+            kind: "person",
+            userId: writerId,
+            name: botMemberName(writerId, viewer, resolveMember),
+            avatarUrl: resolveMember(writerId)?.avatarUrl ?? null,
+          },
+        ];
+  return thread.replyCount > 0 ? [...writer, { kind: "bot" }] : writer;
 }
 
 type ChannelTrunk = {
