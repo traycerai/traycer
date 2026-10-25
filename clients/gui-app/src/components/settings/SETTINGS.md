@@ -879,7 +879,10 @@ signed-in viewer's identity. Generic item mutations also retain environmentId
 in their variables so paused-save status belongs to the picked team.
 
 Live facts, native skills and the guide share `useTeamViewingHost()`: an
-explicit reachable host registered to that team, or no host. Picking it does
+explicit reachable host registered to that team, or no host. The window's own
+host (`useEffectiveHostId()`) counts as reachable whenever the team's list
+holds it, since the cloud's flag lapses for a desktop host that is not
+relay-attached. Picking it does
 not activate or wake it. Skills and the guide use the team's room through
 that host; no-host states offer the common picker. Skill edits and removal
 capture the team id and require `providers.nativeMutate@1.4` at dispatch. A
