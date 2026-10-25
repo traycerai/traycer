@@ -45,6 +45,11 @@ import {
   useBotOpenThreadStore,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
+import {
+  StubHostStreamClient,
+  StubSession,
+} from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -75,8 +80,7 @@ const mocks = vi.hoisted(() => ({
     }>,
   },
   bot: null as BotRecord | null,
-  subscription: null as object | null,
-  subscriptionListeners: new Set<() => void>(),
+  streamClient: null as StubHostStreamClient | null,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -120,17 +124,22 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: null,
   }),
 }));
-// The bot's subscription as its host streams it: the case replaces it, and
-// every reader re-renders.
-vi.mock("@/hooks/bots/use-bot-subscription", async () => {
-  const { useSyncExternalStore } = await import("react");
-  const subscribe = (listener: () => void): (() => void) => {
-    mocks.subscriptionListeners.add(listener);
-    return () => mocks.subscriptionListeners.delete(listener);
-  };
+// The real shared `bot.subscribe` subscription, over a stub session the case
+// drives with the host's frames and the transport's status lines.
+vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/bots/use-bot-subscription")>();
   return {
-    useBotSubscriptionForHost: () =>
-      useSyncExternalStore(subscribe, () => mocks.subscription),
+    ...actual,
+    useBotSubscriptionForHost: (args: {
+      readonly hostId: string;
+      readonly botId: string;
+      readonly enabled: boolean;
+    }) =>
+      actual.useBotSubscriptionForClient({
+        ...args,
+        client: mocks.streamClient,
+      }),
   };
 });
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
@@ -306,17 +315,37 @@ const IDLE_ACTIVITY: BotSessionActivity = {
   requestId: null,
 };
 
-/** The bot's activity as the host's latest snapshot or frame leaves it. */
+let botStream = new StubSession();
+
+/** The host's `bot.subscribe` snapshot, carrying `activity`. */
 function emitActivity(activity: BotActivity): void {
-  const current = mocks.subscription as {
-    readonly snapshot: object;
-  } & Record<string, unknown>;
-  mocks.subscription = {
-    ...current,
-    snapshot: { ...current.snapshot, activity },
-  };
   act(() => {
-    for (const listener of [...mocks.subscriptionListeners]) listener();
+    botStream.emit({
+      kind: "snapshot",
+      bot: botRecord(),
+      tasks: [],
+      openRequestCount: null,
+      conversationsRevision: null,
+      boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
+      activity,
+      hasBinaryPayload: false,
+    });
+  });
+}
+
+/** The bot stream's transport closing, to redial (`retryable`) or for good. */
+function closeBotStream(retryable: boolean): void {
+  act(() => {
+    botStream.status("closed", {
+      kind: "fatalError",
+      details: {
+        code: retryable ? "HOST_RESTARTING" : "BOT_NOT_FOUND",
+        reason: retryable ? "The host is restarting." : "The bot is gone.",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable,
+      },
+    });
   });
 }
 
@@ -499,20 +528,8 @@ beforeEach(() => {
       },
     ],
   };
-  mocks.subscription = {
-    snapshot: {
-      bot: botRecord(),
-      tasks: [],
-      openRequestCount: null,
-      conversationsRevision: null,
-      boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
-      activity: { trunk: null, threads: {} },
-    },
-    error: null,
-    deleted: false,
-    isPending: false,
-    resubscribe: vi.fn(),
-  };
+  botStream = new StubSession();
+  mocks.streamClient = new StubHostStreamClient(botStream);
   useBotTabsStore
     .getState()
     .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
@@ -526,7 +543,8 @@ afterEach(() => {
   mocks.threadListData = { threads: [] };
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
-  mocks.subscriptionListeners.clear();
+  __resetBotSubscriptionsForTesting();
+  mocks.streamClient = null;
 });
 
 describe("<BotChannelView /> the channel's typing line", () => {
@@ -590,6 +608,28 @@ describe("<BotChannelView /> the channel's typing line", () => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
     expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+  });
+
+  it("clears when the bot's stream closes for good with the trunk still replying, and reports no failure", async () => {
+    await mountAwaitingDirectReply(replying("request-1", null));
+    await screen.findByTestId("bot-channel-replying");
+
+    closeBotStream(false);
+
+    // No frame will clear a closed stream's last reading.
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
+    });
+    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+  });
+
+  it("keeps replying while the bot's stream reconnects, as the turn may yet be running", async () => {
+    await mountAwaitingDirectReply(replying("request-1", null));
+    await screen.findByTestId("bot-channel-replying");
+
+    closeBotStream(true);
+
+    expect(screen.getByTestId("bot-channel-replying")).toBeTruthy();
   });
 
   it("stays out while the trunk runs with no direct post waiting", async () => {

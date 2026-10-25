@@ -407,10 +407,16 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
 });
 
 describe("<BotChannelView /> an answer the bot does not give", () => {
-  it.each(["failed", "parked"] as const)(
-    "says the bot couldn't answer a post it holds when its trunk is %s, with nothing to send again",
-    (state) => {
-      mocks.state.activity = activity(session(state, "req-1"), {});
+  // The host's frames: a failure keeps the post it answered, a park (a
+  // delivery the host could not start) carries none, and a failure may too.
+  it.each([
+    ["failed", "req-1"],
+    ["parked", null],
+    ["failed", null],
+  ] as const)(
+    "says the bot couldn't answer a post it holds when its trunk is %s (request %s), with nothing to send again",
+    (state, requestId) => {
+      mocks.state.activity = activity(session(state, requestId), {});
       mount(null);
 
       const notice = screen.getByTestId("bot-channel-unanswered");
@@ -431,11 +437,6 @@ describe("<BotChannelView /> an answer the bot does not give", () => {
 
   it.each([
     ["idle", activity(session("idle", "req-1"), {})],
-    [
-      "a routine that failed (no post to answer)",
-      activity(session("failed", null), {}),
-    ],
-    ["a routine that is parked", activity(session("parked", null), {})],
     ["a trunk this client cannot read", activity(null, {})],
     ["no activity at all", null],
   ])("draws neither for %s", (_name, current) => {

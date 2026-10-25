@@ -252,7 +252,7 @@ export function BotChannelView(props: {
     ],
   );
 
-  const trunkReply = channelReply(activity);
+  const trunk = channelTrunk(activity);
 
   const threadOpen =
     openThreadPostId !== null && !paused && threadListSupported;
@@ -372,12 +372,12 @@ export function BotChannelView(props: {
           )}
           <BotReplyingStrip
             botTitle={botTitle}
-            activity={trunkReply}
+            activity={trunk.reply}
             testId="bot-channel-replying"
           />
           <BotUnansweredNotice
             botTitle={botTitle}
-            activity={trunkReply}
+            activity={trunk.session}
             testId="bot-channel-unanswered"
           />
           <BotMessageComposer
@@ -411,15 +411,22 @@ export function BotChannelView(props: {
   );
 }
 
+type ChannelTrunk = {
+  readonly session: BotSessionActivity | null;
+  readonly reply: BotSessionActivity | null;
+};
+
 /**
- * The trunk answers a direct post at the channel's top level; its running
- * turn is the channel's typing line while it answers one, and an answer it
- * holds or fails is the notice under the last row. Its other work (a
- * routine, a check-in) is not a reply.
+ * The trunk answers a direct post at the channel's top level: its running
+ * turn is the channel's typing line (`reply`) only while it answers one, so
+ * its other work (a routine, a check-in) and a turn whose post is answered
+ * draw none. The notice under the last row reads the trunk's state alone
+ * (`session`).
  */
-function channelReply(activity: BotActivity | null): BotSessionActivity | null {
-  const trunk = activity?.trunk ?? null;
-  return trunk !== null && trunk.requestId !== null ? trunk : null;
+function channelTrunk(activity: BotActivity | null): ChannelTrunk {
+  const session = activity?.trunk ?? null;
+  const reply = session !== null && session.requestId !== null ? session : null;
+  return { session, reply };
 }
 
 /**

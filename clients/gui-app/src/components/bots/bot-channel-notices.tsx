@@ -24,9 +24,9 @@ export function BotSendFailedNotice(props: {
  * The bot's answer to a message the conversation already holds failed or is
  * held: said under the last row until a later message gets a reply, with
  * nothing to send again. Its reason is in "Under the hood". Drawn only while
- * the session answering it is parked or failed (the channel passes the trunk
- * only while it owes a post an answer); the typing line is drawn only while
- * it replies, so the two never show together.
+ * the session answering it is parked (a delivery it could not start) or
+ * failed, read from its state alone; the typing line is drawn only while it
+ * replies, so the two never show together.
  */
 export function BotUnansweredNotice(props: {
   readonly botTitle: string;

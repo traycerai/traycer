@@ -6,6 +6,8 @@ import type {
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
+  StreamCloseReason,
+  StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   IHostStreamClient,
@@ -17,9 +19,13 @@ import type {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 
-/** A `bot.subscribe` session the test drives: `emit` delivers a server frame. */
+/**
+ * A `bot.subscribe` session the test drives: `emit` delivers a server frame,
+ * `status` a transport status line.
+ */
 export class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
+  private statusChangeHandler: StatusChangeHandler = () => undefined;
   readonly close = vi.fn();
 
   sendClientFrame(): void {}
@@ -28,7 +34,9 @@ export class StubSession implements IStreamSession {
     this.serverFrameHandler = handler;
   }
 
-  onStatusChange(_handler: StatusChangeHandler): void {}
+  onStatusChange(handler: StatusChangeHandler): void {
+    this.statusChangeHandler = handler;
+  }
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
     return null;
@@ -38,6 +46,13 @@ export class StubSession implements IStreamSession {
 
   emit(frame: BotSubscribeServerFrame): void {
     this.serverFrameHandler(frame, null);
+  }
+
+  status(
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+  ): void {
+    this.statusChangeHandler(status, reason, null);
   }
 }
 

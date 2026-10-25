@@ -189,6 +189,39 @@ describe("useBotActivity", () => {
     });
   });
 
+  it("keeps the activity while the stream reconnects, and reads nothing once it closed for good", () => {
+    const tab = mount();
+    act(() => tab.session.emit(snapshot({ trunk: REPLYING, threads: {} })));
+
+    act(() =>
+      tab.session.status("closed", {
+        kind: "fatalError",
+        details: {
+          code: "HOST_RESTARTING",
+          reason: "The host is restarting.",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        },
+      }),
+    );
+    expect(tab.current()).toEqual({ trunk: REPLYING, threads: {} });
+
+    act(() =>
+      tab.session.status("closed", {
+        kind: "fatalError",
+        details: {
+          code: "BOT_NOT_FOUND",
+          reason: "The bot is gone.",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: false,
+        },
+      }),
+    );
+    expect(tab.current()).toBeNull();
+  });
+
   it("reads nothing while the bot has no tab, and opens no stream", () => {
     useBotTabsStore.setState({ tabs: {} });
     const tab = mount();
