@@ -373,7 +373,7 @@ describe("The MCP server dialog", () => {
       await choose(dialog, "Credential", "Secret");
       if (variable.length > 0) {
         await userEvent.type(
-          within(dialog).getByLabelText("Environment variable name"),
+          within(dialog).getByLabelText("Variable name"),
           variable,
         );
       }

@@ -366,7 +366,7 @@ export class BrowserViewDownloads {
     void this.confirm({
       title: "Confirm download",
       message: `Save ${filename}?`,
-      detail: `${identity.dangerType} files can run code or change settings on your machine.\n\nSource: ${latest.url}`,
+      detail: `${identity.dangerType} files can run code or change settings on your computer.\n\nSource: ${latest.url}`,
       confirmLabel: "Save anyway",
     }).then(answerQuestion, (error: unknown) => {
       log.warn("[browser-view] download confirmation failed", {

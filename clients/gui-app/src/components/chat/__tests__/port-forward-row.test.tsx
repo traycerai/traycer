@@ -318,7 +318,7 @@ describe("<PortForwardRow />", () => {
 
       fireEvent.click(screen.getByTestId("port-forward-row-forward-1"));
 
-      expect(screen.getByText(/this machine:8080/)).not.toBeNull();
+      expect(screen.getByText(/this computer:8080/)).not.toBeNull();
       expect(screen.getByText(/Build box:3000/)).not.toBeNull();
     });
 
@@ -334,7 +334,7 @@ describe("<PortForwardRow />", () => {
 
       fireEvent.click(screen.getByTestId("port-forward-row-forward-1"));
 
-      expect(screen.getByText(/another machine:3000/)).not.toBeNull();
+      expect(screen.getByText(/another computer:3000/)).not.toBeNull();
     });
 
     it("shows the stateReason when non-null", () => {

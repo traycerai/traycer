@@ -39,7 +39,7 @@ function dialogCopy(request: StepUpPromptRequest): {
     };
   }
   if (request.purpose === "host-provision") {
-    const machine = request.subjectLabel ?? "this machine";
+    const machine = request.subjectLabel ?? "this computer";
     return {
       title: "Authorize background work",
       description: `Enter the code sent to your email so ${machine} can keep running your work after you disconnect.`,

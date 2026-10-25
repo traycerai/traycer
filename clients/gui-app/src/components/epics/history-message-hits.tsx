@@ -213,7 +213,7 @@ function HistoryMessageHitsSection(
       <HistoryGroupHeader
         kind="messages"
         id={headingId}
-        hostLabel={hostEntry?.label ?? "this machine"}
+        hostLabel={hostEntry?.label ?? "this computer"}
         targetRef={groupRef}
         pinBottom={!standalone}
         actions={
