@@ -12,7 +12,6 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -69,12 +68,14 @@ interface TeamViewingHost {
 }
 
 /**
- * Configuration reads stay on the pool. Live facts and room files share this
- * explicit team host, or no host; neither can fall through to Personal.
+ * The team's host inventory is read through the surface's own host, which
+ * forwards it on the viewer's session (the server pool does not serve it).
+ * Live facts and room files share the explicit team host picked from it, or
+ * no host; neither can fall through to Personal.
  */
 export function useTeamViewingHost(): TeamViewingHost {
   const source = useConfigurationSource();
-  const poolClient = usePoolTierHostClient(useHostClient());
+  const surfaceClient = useHostClient();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -82,7 +83,7 @@ export function useTeamViewingHost(): TeamViewingHost {
   const environmentId = source.kind === "pool" ? source.environmentId : "";
   const hosts = useHostQuery({
     cacheKeyIdentity: [viewerId],
-    client: poolClient,
+    client: surfaceClient,
     method: "environment.host.list",
     params: { environmentId },
     preflight: cloudVerdictPreflight("environment.host.list"),

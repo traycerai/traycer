@@ -273,6 +273,7 @@ function installDeps(
       queryTaskXml,
       callerSid: () => CALLER_SID,
       resolveAccountSid: () => Promise.resolve(null),
+      taskHiddenFromCaller: () => Promise.resolve(false),
     },
     run,
     isRegularFile: (path) => Promise.resolve(regularFiles.has(path)),

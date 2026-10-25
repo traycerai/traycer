@@ -3,7 +3,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import log from "electron-log";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -40,8 +48,15 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type {
+  createSandboxViaHttp,
+  destroySandboxViaHttp,
+  fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
   getSandboxAutomationViaHttp,
+  keepSandboxViaHttp,
+  listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
+  patchSandboxViaHttp,
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
@@ -73,6 +88,35 @@ const runSandboxVerbViaHttpMock = vi.hoisted(() =>
     settled: true,
     state: "awake",
   })),
+);
+/** The IAP token the (mocked) provider mints; every sandbox call must carry it. */
+const IAP_PROXY_TOKEN = "proxy-token-fixture";
+vi.mock("../../auth/iap-proxy-token", () => ({
+  createCachedIapTokenProvider: () => async () => IAP_PROXY_TOKEN,
+  resolveIapKeyFilePath: () => null,
+}));
+/** The seven control-plane calls with no scripted behaviour of their own, observed. */
+const NETWORK_ERROR = { kind: "network-error", detail: "unscripted" } as const;
+const listSandboxesViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof listSandboxesViaHttp>(async () => NETWORK_ERROR),
+);
+const fetchSandboxCostsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSandboxCostsViaHttp>(async () => NETWORK_ERROR),
+);
+const fetchSandboxCatalogueViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSandboxCatalogueViaHttp>(async () => NETWORK_ERROR),
+);
+const createSandboxViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof createSandboxViaHttp>(async () => NETWORK_ERROR),
+);
+const destroySandboxViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof destroySandboxViaHttp>(async () => NETWORK_ERROR),
+);
+const patchSandboxViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof patchSandboxViaHttp>(async () => NETWORK_ERROR),
+);
+const keepSandboxViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof keepSandboxViaHttp>(async () => NETWORK_ERROR),
 );
 /** The Automations read and open the two new handlers make, observed. */
 const getSandboxAutomationViaHttpMock = vi.hoisted(() =>
@@ -120,6 +164,13 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@traycer-clients/shared/host-client/sandbox-control")
     >()),
+    listSandboxesViaHttp: listSandboxesViaHttpMock,
+    fetchSandboxCostsViaHttp: fetchSandboxCostsViaHttpMock,
+    fetchSandboxCatalogueViaHttp: fetchSandboxCatalogueViaHttpMock,
+    createSandboxViaHttp: createSandboxViaHttpMock,
+    destroySandboxViaHttp: destroySandboxViaHttpMock,
+    patchSandboxViaHttp: patchSandboxViaHttpMock,
+    keepSandboxViaHttp: keepSandboxViaHttpMock,
     runSandboxVerbViaHttp: runSandboxVerbViaHttpMock,
     getSandboxAutomationViaHttp: getSandboxAutomationViaHttpMock,
     openSandboxAutomationViaHttp: openSandboxAutomationViaHttpMock,
@@ -1029,6 +1080,7 @@ describe("RunnerIpcBridge", () => {
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
       config.serverBaseUrl,
       "bearer-1",
+      IAP_PROXY_TOKEN,
       "sbx_1",
       "resume",
       119_000,
@@ -1044,6 +1096,90 @@ describe("RunnerIpcBridge", () => {
       handler(bareEvent(), "bearer-1", "sbx_1", "resume"),
     ).rejects.toThrow("runSandboxVerb.timeoutMs");
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("passes the IAP proxy token as the third argument of every sandbox control-plane call", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const createRequest = {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: null,
+      displayName: "build-box",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: null,
+      clientRequestId: null,
+    };
+    const patchRequest = {
+      displayName: null,
+      idleMinutes: null,
+      destroyAfterRestingMinutes: null,
+    };
+    const calls: ReadonlyArray<readonly [string, Mock, readonly unknown[]]> = [
+      [RunnerHostInvoke.listSandboxes, listSandboxesViaHttpMock, []],
+      [RunnerHostInvoke.getSandboxCosts, fetchSandboxCostsViaHttpMock, []],
+      [
+        RunnerHostInvoke.getSandboxCatalogue,
+        fetchSandboxCatalogueViaHttpMock,
+        [],
+      ],
+      [
+        RunnerHostInvoke.createSandbox,
+        createSandboxViaHttpMock,
+        [createRequest],
+      ],
+      [RunnerHostInvoke.destroySandbox, destroySandboxViaHttpMock, ["sbx_1"]],
+      [
+        RunnerHostInvoke.patchSandbox,
+        patchSandboxViaHttpMock,
+        ["sbx_1", patchRequest],
+      ],
+      [RunnerHostInvoke.keepSandbox, keepSandboxViaHttpMock, ["sbx_1"]],
+      [
+        RunnerHostInvoke.runSandboxVerb,
+        runSandboxVerbViaHttpMock,
+        ["sbx_1", "resume", 60_000],
+      ],
+      [
+        RunnerHostInvoke.getSandboxAutomation,
+        getSandboxAutomationViaHttpMock,
+        [null],
+      ],
+      [
+        RunnerHostInvoke.openSandboxAutomation,
+        openSandboxAutomationViaHttpMock,
+        [null],
+      ],
+    ];
+    for (const [channel, mock, args] of calls) {
+      const handler = ipcMainState.handlers.get(channel);
+      if (handler === undefined) throw new Error(`${channel} handler missing`);
+      await handler(bareEvent(), "bearer-1", ...args);
+      expect(mock, channel).toHaveBeenCalledTimes(1);
+      expect(mock.mock.calls[0].slice(0, 3), channel).toEqual([
+        config.serverBaseUrl,
+        "bearer-1",
+        IAP_PROXY_TOKEN,
+      ]);
+    }
     bridge.dispose();
   });
 
@@ -1077,6 +1213,7 @@ describe("RunnerIpcBridge", () => {
     expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
       config.serverBaseUrl,
       "bearer-1",
+      IAP_PROXY_TOKEN,
       null,
     );
     expect(openSandboxAutomationViaHttpMock).not.toHaveBeenCalled();
@@ -1085,6 +1222,7 @@ describe("RunnerIpcBridge", () => {
     expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
       config.serverBaseUrl,
       "bearer-1",
+      IAP_PROXY_TOKEN,
       "env-team",
     );
 
@@ -1095,6 +1233,7 @@ describe("RunnerIpcBridge", () => {
     expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
       config.serverBaseUrl,
       "bearer-2",
+      IAP_PROXY_TOKEN,
       null,
     );
 
@@ -1105,6 +1244,7 @@ describe("RunnerIpcBridge", () => {
     expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
       config.serverBaseUrl,
       "bearer-2",
+      IAP_PROXY_TOKEN,
       { environmentId: "env-team", ordinal: 1 },
     );
 

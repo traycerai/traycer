@@ -6,6 +6,7 @@ import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-
 import type { DetailsHostStatus } from "@/lib/settings-details-entry";
 import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
+import { chipReportsKind } from "@/components/settings/environment/status-chip-page-kinds";
 
 interface ChipHostIdentity {
   readonly hostId: string;
@@ -78,8 +79,7 @@ export function hostConfigurationChip(input: {
   const { host, status, version, kinds, lastReportedAt } = input;
   const unsupported = statusVersionNeedsUpdate(version);
   const items =
-    status?.items.filter((item) => kinds === null || kinds.has(item.kind)) ??
-    [];
+    status?.items.filter((item) => chipReportsKind(kinds, item.kind)) ?? [];
   const problems = items
     .filter((item) => item.status !== "applied")
     .map((item) => itemRow(host, item, lastReportedAt));

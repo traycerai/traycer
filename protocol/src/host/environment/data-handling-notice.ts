@@ -9,7 +9,7 @@ export const DATA_HANDLING_NOTICE = {
   title: "How Traycer handles this",
   recipients: [
     "Traycer's cloud broker stores the value encrypted.",
-    "The sandboxes running this configuration use the value through the broker.",
+    "The sandboxes running this configuration use the value without seeing it.",
   ],
   destinations:
     "A Personal value also reaches the computers that run your Personal configuration, and their tools and agents can read it. A team value reaches no computer.",

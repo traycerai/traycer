@@ -2504,9 +2504,15 @@ export const HOST_METHOD_POLL_TABLE = {
   "environment.configuration.items": { ...LATEST_SCHEDULING, poll: null },
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.seats": { ...LATEST_SCHEDULING, poll: null },
   "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.mcpServers.list": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  "environment.configuration.skills.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2533,6 +2539,26 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.configuration.skills.upload": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setProviders": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

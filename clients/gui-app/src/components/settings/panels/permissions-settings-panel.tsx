@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Permissions).
  * Update that file whenever this settings surface changes.
  */
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
@@ -42,7 +43,9 @@ import {
 } from "@/stores/tabs/settings-open-intent-store";
 
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened -
@@ -74,8 +77,11 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
  */
 export function PermissionsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
   return source.kind === "pool" ? (
-    <TeamPermissionsUnlessMachineAsked />
+    <TeamPermissionsUnlessMachineAsked key={configurationKey} />
   ) : (
     <HostPermissionsSettingsPanel />
   );
@@ -104,7 +110,25 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
       hostId === windowHostId ? null : { kind: "local", hostId, hostName },
     );
   }, [hostId, hostName, windowHostId, setPick]);
-  return hostId === null ? <TeamPermissions /> : null;
+  return hostId === null ? (
+    <TeamPermissions>
+      <PermissionsBrowserAgentAccess />
+    </TeamPermissions>
+  ) : null;
+}
+
+/**
+ * The page's Browser agent access region, below its policy. It reads the
+ * ambient binding, so a Local row's pick re-provides it to that computer.
+ */
+function PermissionsBrowserAgentAccess(): ReactNode {
+  return (
+    <div className="pt-5">
+      <EnvironmentHostBinding>
+        <BrowserAgentAccessGroup />
+      </EnvironmentHostBinding>
+    </div>
+  );
 }
 
 function HostPermissionsSettingsPanel(): ReactNode {
@@ -255,6 +279,7 @@ function HostPermissionsSettingsPanel(): ReactNode {
           )}
         </TabsContent>
       </Tabs>
+      <PermissionsBrowserAgentAccess />
     </SettingsPanelShell>
   );
 }

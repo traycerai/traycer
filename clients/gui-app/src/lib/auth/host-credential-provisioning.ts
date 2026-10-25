@@ -5,6 +5,7 @@ import type {
   HostCredentialMintOutcome,
   HostCredentialMintRequest,
 } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
+import { appLogger } from "@/lib/logger";
 
 /**
  * App-wide policy for delegated host-credential provisioning.
@@ -27,7 +28,21 @@ import type {
  */
 export type HostCredentialMintRunner = (
   request: HostCredentialMintRequest,
-) => Promise<HostCredentialMintOutcome>;
+) => Promise<HostCredentialMintRunnerOutcome>;
+
+/**
+ * What a runner reports: a flow outcome, or `spent` - a mint request went out
+ * and handed nothing back (the 409 the server answers a host it will not
+ * provision for this caller, a 401/403, a 400, a 429 or a failed request).
+ *
+ * `spent` reaches every caller as `unavailable`; it is split out here only so
+ * the escalation ladder can count it. A refused mint is answered the same way
+ * on every retry, and a transport that is told `unavailable` has spent only
+ * ITS attempt - the next transport to see the host asks again at once.
+ */
+export type HostCredentialMintRunnerOutcome =
+  | HostCredentialMintOutcome
+  | { readonly kind: "spent" };
 
 let runner: HostCredentialMintRunner | null = null;
 /**
@@ -69,7 +84,8 @@ export function resetHostCredentialProvisioning(): void {
 }
 
 /**
- * Escalating floor between COMPLETED mints for one host.
+ * Escalating floor between COMPLETED mint attempts for one host: every mint
+ * that provisioned, and every mint request that came back `spent`.
  *
  * The re-arm edge (`ws-stream-client` clears its per-host attempt marker on
  * every transition back into `missing`/`needs-reauth`) deliberately makes the
@@ -83,6 +99,12 @@ export function resetHostCredentialProvisioning(): void {
  * is deliberately free beyond the adoption TTL: one burn-and-replace is the
  * ordinary recovery this whole flow exists for, and every rung is strictly
  * above the TTL so the ladder always adds something).
+ *
+ * A `spent` mint climbs it too. A host the cloud will not provision for this
+ * caller (registered to another account) is refused on every mint, and a
+ * refusal holds no adoption claim, so without the ladder each transport that
+ * sees the host asks again at once: one mint per `openAck`, until the
+ * per-user mint budget answers 429.
  *
  * The quiet-period reset is a FIXED window, decaying ONE rung at a time. A
  * threshold derived from the current rung, or a reset-to-zero, lets any flap
@@ -175,7 +197,8 @@ function remainingBackoffMs(hostId: string): number {
   );
 }
 
-function recordCompletedMint(hostId: string): void {
+/** Climbs one rung and returns the host's completed attempts so far. */
+function recordCompletedMint(hostId: string): number {
   const entry = mintBackoffByHostId.get(hostId);
   const completedMints =
     entry !== undefined && entry.generation === generation
@@ -186,6 +209,7 @@ function recordCompletedMint(hostId: string): void {
     lastMintedAt: Date.now(),
     generation,
   });
+  return completedMints;
 }
 
 /**
@@ -370,6 +394,16 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
           generation: startedAt,
         });
         recordCompletedMint(hostId);
+        return outcome;
+      }
+      if (outcome.kind === "spent") {
+        const completedMints = recordCompletedMint(hostId);
+        appLogger.info("Host credential mint handed nothing back", {
+          hostId,
+          attempt: completedMints,
+          nextMintWaitMs: mintBackoffWaitMs(completedMints),
+        });
+        return { kind: "unavailable" };
       }
       return outcome;
     });

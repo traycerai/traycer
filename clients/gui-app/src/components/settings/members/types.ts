@@ -11,23 +11,30 @@ export type MemberInviteState = "accepted" | "pending" | null;
 
 export type MemberRemovalState = "none" | "pending" | "done";
 
+/**
+ * `failed` is this client's own: the request got no answer (it was refused
+ * unsent, or the connection failed), so nothing about the team is known.
+ */
 export type MembersInviteOutcome =
   | { readonly outcome: "sent"; readonly seatDelta: SeatDelta | null }
   | { readonly outcome: "forbidden" }
-  | { readonly outcome: "seat_limit" };
+  | { readonly outcome: "seat_limit" }
+  | { readonly outcome: "failed" };
 
 export type MembersSetRoleOutcome =
   | { readonly outcome: "changed" }
   | { readonly outcome: "last_admin" }
   | { readonly outcome: "forbidden" }
-  | { readonly outcome: "plan_required" };
+  | { readonly outcome: "plan_required" }
+  | { readonly outcome: "failed" };
 
 export type MembersRemoveOutcome =
   | { readonly outcome: "revoked" }
   | { readonly outcome: "pending"; readonly receiptId: string }
   | { readonly outcome: "last_admin" }
   | { readonly outcome: "forbidden" }
-  | { readonly outcome: "plan_required" };
+  | { readonly outcome: "plan_required" }
+  | { readonly outcome: "failed" };
 
 export interface SeatDelta {
   readonly used: number;

@@ -142,7 +142,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/members": "Settings - Members",
   "/settings/secrets": "Settings - Secrets",
   "/settings/service": "Settings - Service",
-  "/settings/shell": "Settings - Variables and shells",
+  "/settings/shell": "Settings - Variables & shells",
   "/settings/usage": "Settings - Usage",
   "/settings/credits": "Settings - Credits",
   "/settings/worktrees": "Settings - Worktrees",

@@ -75,6 +75,7 @@ import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
   shouldMountChatTurnMinimap,
 } from "@/components/chat/chat-turn-minimap-logic";
+import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { resolveScrollToEndPillState } from "@/components/chat/chat-scroll-to-end-pill-state";
@@ -4266,6 +4267,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const turnRunning =
     lastAssistantMessage !== undefined &&
     lastAssistantMessage.completedAt === null;
+  useStopReadingOnNewReply(instanceId, lastAssistantMessage?.id ?? null);
   const contextWorkingVerb = use(WorkingVerbContext);
   const workingVerb =
     contextWorkingVerb ??

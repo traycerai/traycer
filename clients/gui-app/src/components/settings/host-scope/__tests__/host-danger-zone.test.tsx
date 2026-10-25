@@ -488,11 +488,11 @@ describe("HostDangerZone", () => {
     fireEvent.click(screen.getByTestId("settings-remove-host-from-account"));
     const dialog = screen.getByRole("dialog");
     const copy = dialog.textContent;
-    expect(copy).toMatch(/nothing on that machine changes/i);
+    expect(copy).toMatch(/nothing on that computer changes/i);
     // The two negatives, stated rather than implied.
     expect(copy).toMatch(/won't rejoin on its own/i);
     expect(copy).toMatch(
-      /signing in on that machine again won't bring it back/i,
+      /signing in on that computer again won't bring it back/i,
     );
     // ...and the one positive that IS true: the row is deregistered, not
     // revoked, so the id survives and a re-setup restores name and settings.

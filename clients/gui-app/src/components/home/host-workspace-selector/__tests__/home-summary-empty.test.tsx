@@ -382,6 +382,8 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
     mocks.hostQueries(args);
     return [];
   },
+  // The composer's sandbox defaults, combined by environment: none read yet.
+  useHostQueriesWithResponseMap: () => new Map(),
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({

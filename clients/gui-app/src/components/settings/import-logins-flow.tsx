@@ -204,18 +204,18 @@ function PickStep(props: {
               testId={undefined}
               variant={undefined}
             />
-            Looking for browsers on this machine
+            Looking for browsers on this computer
           </p>
         ) : null}
         {sources.isError ? (
           <p className="py-2 text-destructive">
-            Couldn't list the browsers on this machine. You can still import a
+            Couldn't list the browsers on this computer. You can still import a
             cookie file.
           </p>
         ) : null}
         {sources.isSuccess && listed.length === 0 ? (
           <p className="py-2 text-muted-foreground">
-            No browser profiles were found on this machine. You can import a
+            No browser profiles were found on this computer. You can import a
             cookie file instead.
           </p>
         ) : null}
@@ -836,20 +836,20 @@ function describeImported(
   const cookies = `${result.importedCookies} ${result.importedCookies === 1 ? "cookie" : "cookies"}`;
   const replaced =
     result.replacedSites > 0
-      ? `, replacing the logins this machine already had for ${result.replacedSites} of them`
+      ? `, replacing the logins this computer already had for ${result.replacedSites} of them`
       : "";
-  return `Signed in to ${sites} on this machine (${cookies})${replaced}.`;
+  return `Signed in to ${sites} on this computer (${cookies})${replaced}.`;
 }
 
 /**
  * How far main's push got, counted in hosts that ACKED the jar. Zero is the
  * ordinary opportunistic outcome - no host has a live browser stream right now
  * - and says so rather than reading as a failure: the logins are on this
- * machine either way, and the next capture carries them.
+ * computer either way, and the next capture carries them.
  */
 function describePush(notifiedHosts: number): string {
   if (notifiedHosts === 0) {
-    return "Saved on this machine. Hosts pick it up at the next capture.";
+    return "Saved on this computer. Hosts pick it up at the next capture.";
   }
   const hosts = `${notifiedHosts} ${notifiedHosts === 1 ? "host" : "hosts"}`;
   return `Sent to ${hosts}. Hosts apply it when they next open a browser session.`;
@@ -904,7 +904,7 @@ function BlockedExplainer(props: {
     case "keyring-unavailable":
       return (
         <Notice tone="warning">
-          The browser's encryption key isn't available in this machine's
+          The browser's encryption key isn't available in this computer's
           keyring, so its cookies can't be decrypted. Export them with a cookie
           extension and import the file instead.
         </Notice>
@@ -919,8 +919,8 @@ function BlockedExplainer(props: {
     case "saved-logins-off":
       return (
         <Notice tone="warning">
-          Turn on "Save website logins on this machine" first; imported logins
-          go into the saved jar.
+          Turn on "Save website sessions on this computer" first; imported
+          logins go into the saved jar.
         </Notice>
       );
     case "unreadable":
@@ -959,7 +959,7 @@ function BlockedExplainer(props: {
       return (
         <Notice tone="warning">
           Traycer stopped before every site was written. The logins it did
-          import are kept on this machine; import again to finish the rest.
+          import are kept on this computer; import again to finish the rest.
         </Notice>
       );
     case "too-many-sites":

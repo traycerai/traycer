@@ -5,6 +5,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { SPOKEN_CONTROL_ATTR } from "@/lib/speech/spoken-reply-dom";
 
 export interface NextStepActionHandler {
   readonly canSend: boolean;
@@ -91,6 +92,8 @@ function NextStepAction(props: NextStepActionProps) {
         size="sm"
         className="h-auto min-h-7 w-full min-w-0 items-start justify-start whitespace-normal py-2 pr-10 pl-1 text-left"
         disabled={props.disabled}
+        // Read aloud with the reply: the label is the step's prose.
+        {...{ [SPOKEN_CONTROL_ATTR]: "" }}
         onClick={() => {
           if (props.actionHandler === null || props.disabled) return;
           if (props.actionHandler.onSend(option)) {

@@ -289,10 +289,10 @@ describe("sandboxFrozenLine", () => {
 });
 
 describe("sandboxIdleLine", () => {
-  it("states the release rule for an Automations row, not its idle period", () => {
+  it("states the release rule for an Automations row on its idle period, files kept", () => {
     expect(
       sandboxIdleLine(summaryOf({ kind: "automation", idleMinutes: 30 })),
-    ).toBe("Released after a day with no shell");
+    ).toBe("Stops after 30 min idle · files kept · the next shell starts it");
   });
 
   it("says Suspends for a normal row and Destroyed for a burst row", () => {

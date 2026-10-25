@@ -49,3 +49,13 @@ export function secretChangeRefusalLine(
       return lineFor(CREATE_REFUSAL_LINES, code);
   }
 }
+
+/**
+ * Save's line when the server address has no address of its own
+ * (`destination_unresolvable`): it names what the person typed.
+ */
+export function secretDestinationUnreachableLine(
+  hosts: readonly string[],
+): string {
+  return `Couldn't reach ${hosts.join(", ")}. Check the server address, then save again.`;
+}

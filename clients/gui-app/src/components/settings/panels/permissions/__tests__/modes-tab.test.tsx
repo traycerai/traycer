@@ -66,21 +66,23 @@ describe("ModesTab", () => {
     ).toBeNull();
   });
 
-  it("labels the row as applying to all machines", () => {
-    renderTab();
-
-    expect(screen.getByText("All machines")).not.toBeNull();
-    expect(screen.getByText(/New conversations start in/)).not.toBeNull();
-  });
-
-  it("says the machine picker above changes nothing on this tab", () => {
+  it("captions the row as this app only", () => {
     renderTab();
 
     expect(
-      screen.getByText(
-        "The machine picker above doesn't change anything on this tab.",
-      ),
-    ).not.toBeNull();
+      screen.getByTestId("permissions-default-permission-scope").textContent,
+    ).toBe("This app only");
+    expect(screen.queryByText("All machines")).toBeNull();
+    expect(screen.getByText(/New conversations start in/)).not.toBeNull();
+  });
+
+  it("carries no note about the host picker; its caption says this app only", () => {
+    renderTab();
+
+    expect(screen.queryByText(/picker above/)).toBeNull();
+    expect(
+      screen.getByTestId("permissions-default-permission-scope").textContent,
+    ).toBe("This app only");
   });
 
   it("renders one card per mode, each listing what it runs without asking", () => {

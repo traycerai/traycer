@@ -17,7 +17,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
+import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
@@ -37,10 +37,6 @@ const support = vi.hoisted(
   }),
 );
 const tracked = vi.hoisted(() => vi.fn());
-/** A label to report for every host in place of its own; `null` keeps it. */
-const labelOverride = vi.hoisted((): { current: string | null } => ({
-  current: null,
-}));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => active.hostId,
@@ -51,17 +47,6 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     return method === "config.browser.set" ? support.set : support.current;
   },
   useHostSupportsMethod: () => support.current === true,
-}));
-
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string | null) => {
-    for (const entry of [mockLocalHostEntry, mockRemoteHostEntry]) {
-      if (entry.hostId === hostId) {
-        return { label: labelOverride.current ?? entry.label };
-      }
-    }
-    return null;
-  },
 }));
 
 vi.mock("@/lib/analytics", async (importOriginal) => ({
@@ -158,7 +143,7 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
 }
 
 function agentAccessPanel(): ReactNode {
-  return <BrowserAgentAccessSettingsPanel />;
+  return <BrowserAgentAccessGroup />;
 }
 
 function row(): HTMLElement {
@@ -190,13 +175,12 @@ afterEach(() => {
   support.set = true;
   active.hostId = null;
   client.current = null;
-  labelOverride.current = null;
   tracked.mockClear();
 });
 
 const UPDATE_HOST_STATUS = "Update this host to change this setting.";
 
-describe("<BrowserAgentAccessSettingsPanel />", () => {
+describe("<BrowserAgentAccessGroup />", () => {
   it("shows a disabled switch and the update-host status on a host that cannot answer", async () => {
     support.current = false;
     const fixture = createFixture({});
@@ -250,7 +234,7 @@ describe("<BrowserAgentAccessSettingsPanel />", () => {
     expect(screen.queryByText(UPDATE_HOST_STATUS)).toBeNull();
   });
 
-  it("renders the live switch alone on the page, naming the addressable host", async () => {
+  it("renders the live switch alone on the page, without naming a host", async () => {
     const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
@@ -260,28 +244,9 @@ describe("<BrowserAgentAccessSettingsPanel />", () => {
     expect(screen.queryByText(UPDATE_HOST_STATUS)).toBeNull();
     expect(screen.queryByText("Detected dev origins")).toBeNull();
     expect(
-      screen.getByText(
-        /^On Mock Mac\..*Running agents pick this up on their next turn\.$/,
-      ),
-    ).not.toBeNull();
-  });
-
-  it("does not name a host whose label is blank", async () => {
-    labelOverride.current = "  ";
-    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
-    render(agentAccessPanel(), { wrapper: fixture.Wrapper });
-
-    await waitFor(() => {
-      expect(row().getAttribute("data-state")).toBe("checked");
-    });
-    expect(
-      screen.getByText(
-        new RegExp(
-          `^On ${mockLocalHostEntry.hostId}\\..*Running agents pick this up on their next turn\\.$`,
-        ),
-      ),
-    ).not.toBeNull();
-    expect(screen.queryByText(/^On\s*\./)).toBeNull();
+      screen.getByText(/ Running agents pick this up on their next turn\.$/)
+        .textContent,
+    ).not.toMatch(/^On /);
   });
 
   it("writes the flip to the addressable host and re-reads it", async () => {
@@ -329,9 +294,7 @@ describe("<BrowserAgentAccessSettingsPanel />", () => {
     });
     expect(fixture.gets()).toContain(mockRemoteHostEntry.hostId);
     expect(
-      screen.getByText(
-        /^On Mock Remote Host\..*Running agents pick this up on their next turn\.$/,
-      ),
+      screen.getByText(/ Running agents pick this up on their next turn\.$/),
     ).not.toBeNull();
   });
 

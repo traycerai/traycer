@@ -33,8 +33,9 @@ import {
   type EpicCollaboratorsView,
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
-  rememberedOrDefaultStageShape,
+  configurationStageShape,
   stageBalanceMc,
   stageConfigurationCopy,
   stageConfigurationKey,
@@ -43,6 +44,7 @@ import {
   stagePrice,
   stageProviderFor,
   type ConsequencesInput,
+  type SandboxConfigurationDefaults,
   type StageAudience,
   type StageConfiguration,
   type StagePrice,
@@ -51,7 +53,6 @@ import {
 import {
   SANDBOXES_CANT_BE_CREATED,
   NEEDS_CREDITS,
-  configurationLabel,
   needsCreditsRow,
   newSandboxRowLabel,
   reachRemedyLine,
@@ -192,9 +193,11 @@ interface NewRowFacts {
  * block's input and the shape sheet. A pick only stages; the surface's first
  * action runs the create or wake.
  *
- * `memoryHostId` buckets the person's remembered shapes, as every composer
- * memory is bucketed by the composer's host. A `null` surface stages nothing
- * (a picker that is not a composer's) and returns `null`.
+ * A New row stages its configuration's defaults (Settings › Sandboxes); the
+ * person's remembered pick only seeds their gear. `memoryHostId` buckets
+ * those picks, as every composer memory is bucketed by the composer's host.
+ * A `null` surface stages nothing (a picker that is not a composer's) and
+ * returns `null`.
  */
 export function useSandboxStaging(input: {
   readonly surface: SandboxStagingSurface | null;
@@ -207,6 +210,7 @@ export function useSandboxStaging(input: {
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
   const catalogue = useSandboxCatalogue(input.surface !== null).data ?? null;
+  const defaultsFor = useSandboxDefaultsLookup(input.surface !== null);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,
@@ -222,14 +226,8 @@ export function useSandboxStaging(input: {
   );
 
   const rows = useMemo(
-    () =>
-      newRowFacts({
-        user,
-        catalogue,
-        remembered: (key) =>
-          rememberedSandboxShape(remembered, memoryHostId, key),
-      }),
-    [catalogue, memoryHostId, remembered, user],
+    () => newRowFacts({ user, catalogue, defaults: defaultsFor }),
+    [catalogue, defaultsFor, user],
   );
   const audienceFor = useCallback(
     (configuration: StageConfiguration): StageAudience =>
@@ -418,8 +416,15 @@ export function useSandboxStaging(input: {
           if (!open) setSheetKey(null);
         }}
         configuration={sheetFacts.configuration}
+        defaults={defaultsFor(stageConfigurationKey(sheetFacts.configuration))}
         initialShape={
-          stagedNewTarget === null ? sheetFacts.shape : stagedNewTarget.shape
+          stagedNewTarget === null
+            ? rememberedSandboxShape(
+                remembered,
+                memoryHostId,
+                stageConfigurationKey(sheetFacts.configuration),
+              )
+            : stagedNewTarget.shape
         }
         initialName={stagedNewTarget === null ? "" : stagedNewTarget.name}
         context={{
@@ -454,15 +459,17 @@ export function useSandboxStaging(input: {
 function newRowFacts(input: {
   readonly user: AuthenticatedUser | null;
   readonly catalogue: SandboxCatalogue | null;
-  readonly remembered: (configurationKey: string) => StageShape | null;
+  readonly defaults: (
+    configurationKey: string,
+  ) => SandboxConfigurationDefaults | null;
 }): readonly NewRowFacts[] {
   return stageConfigurations(input.user).map((configuration) => {
     const shape =
       input.catalogue === null
         ? null
-        : rememberedOrDefaultStageShape(
+        : configurationStageShape(
             input.catalogue,
-            input.remembered(stageConfigurationKey(configuration)),
+            input.defaults(stageConfigurationKey(configuration)),
           );
     const price =
       input.catalogue === null || shape === null
@@ -508,7 +515,7 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
       configurationKey: stageConfigurationKey(facts.configuration),
       label: head,
       subLine: SANDBOXES_CANT_BE_CREATED,
-      configurationName: configurationLabel(copy),
+      configuration: copy,
       disabled: true,
     };
   }
@@ -524,7 +531,7 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
     configurationKey: stageConfigurationKey(facts.configuration),
     label: facts.needsCredits ? `${head} · ${NEEDS_CREDITS}` : head,
     subLine: parts.join(" · "),
-    configurationName: configurationLabel(copy),
+    configuration: copy,
     disabled: false,
   };
 }

@@ -10,7 +10,7 @@ import type { RequiredHostMethodVersion } from "@traycer/protocol/host-transport
 import type {
   EnvironmentDescriptorV11,
   EnvironmentListResponseV11,
-  EnvironmentMembersResponseV11,
+  EnvironmentMembersResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
 import type { TeamRole } from "@/components/settings/members/types";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -28,7 +28,8 @@ const METHOD = "environment.members";
 
 /**
  * The members read the GUI needs: `@1.0` names no roles, and its upgrade
- * would show every member as a viewer.
+ * would show every member as a viewer. A `@1.1` host is still read: its
+ * members upgrade with no email, and Members falls back to what it has.
  */
 export const ENVIRONMENT_MEMBERS_FLOOR: RequiredHostMethodVersion = {
   method: METHOD,
@@ -56,7 +57,10 @@ export interface EnvironmentMembersListResult {
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly error: HostRpcError | null;
-  /** Reads every page that failed again. */
+  /**
+   * Reads every page that failed again; with none failed, every page (a row
+   * with nothing to name it by asks for a fresh read).
+   */
   readonly retry: () => void;
 }
 
@@ -68,7 +72,7 @@ type Requested = {
 };
 
 type CombinedPages = {
-  readonly pages: ReadonlyArray<EnvironmentMembersResponseV11 | undefined>;
+  readonly pages: ReadonlyArray<EnvironmentMembersResponseV12 | undefined>;
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly error: HostRpcError | null;
@@ -88,9 +92,10 @@ const EMPTY_LIST: EnvironmentMembersListResult = {
 };
 
 /**
- * Every page of `environment.members@1.1` for `environmentId`. The id is
- * never rewritten to Personal. A page that fails surfaces as `isError`
- * with an empty list, so a truncated admin list is never shown as complete.
+ * Every page of `environment.members` (`@1.2` once the host serves it) for
+ * `environmentId`. The id is never rewritten to Personal. A page that fails
+ * surfaces as `isError` with an empty list, so a truncated admin list is
+ * never shown as complete.
  * Pages are partitioned by viewer so an account switch cannot serve the
  * previous viewer's invitedAddress rows from the same host cache.
  */
@@ -130,7 +135,7 @@ export function useEnvironmentMembersList(
   const combine = useCallback(
     (
       results: Array<
-        UseQueryResult<EnvironmentMembersResponseV11, HostRpcError>
+        UseQueryResult<EnvironmentMembersResponseV12, HostRpcError>
       >,
     ): CombinedPages => {
       const errorResult = results.find((result) => result.error !== null);
@@ -140,8 +145,9 @@ export function useEnvironmentMembersList(
         isError: results.some((result) => result.isError),
         error: errorResult?.error ?? null,
         retry: () => {
+          const failed = results.some((result) => result.isError);
           for (const result of results) {
-            if (result.isError) void result.refetch();
+            if (!failed || result.isError) void result.refetch();
           }
         },
       };
@@ -224,7 +230,7 @@ export function useEnvironmentMembersList(
         members.push({
           userId: member.userId,
           displayName: member.displayName,
-          email: null,
+          email: member.email,
           effectiveRole: member.effectiveRole,
           linkedPlan: member.linkedPlan,
           inviteState: member.inviteState,
@@ -310,8 +316,8 @@ function descriptorFromListRow(
 
 function cursorsNamedByPages(
   asked: ReadonlyArray<string | null>,
-  pages: ReadonlyArray<EnvironmentMembersResponseV11 | undefined>,
-  cached: (cursor: string | null) => EnvironmentMembersResponseV11 | undefined,
+  pages: ReadonlyArray<EnvironmentMembersResponseV12 | undefined>,
+  cached: (cursor: string | null) => EnvironmentMembersResponseV12 | undefined,
 ): ReadonlyArray<string | null> {
   return walkChain((cursor) => {
     const index = asked.indexOf(cursor);
@@ -324,8 +330,8 @@ function cachedPage(
   hostId: string | null,
   viewerUserId: string,
   params: { readonly environmentId: string; readonly cursor: string | null },
-): EnvironmentMembersResponseV11 | undefined {
-  return queryClient.getQueryData<EnvironmentMembersResponseV11>([
+): EnvironmentMembersResponseV12 | undefined {
+  return queryClient.getQueryData<EnvironmentMembersResponseV12>([
     ...queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
       hostId,
       METHOD,
@@ -336,7 +342,7 @@ function cachedPage(
 }
 
 function walkChain(
-  pageFor: (cursor: string | null) => EnvironmentMembersResponseV11 | undefined,
+  pageFor: (cursor: string | null) => EnvironmentMembersResponseV12 | undefined,
 ): ReadonlyArray<string | null> {
   const chain: Array<string | null> = [null];
   for (;;) {

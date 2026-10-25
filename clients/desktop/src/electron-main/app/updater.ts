@@ -19,6 +19,7 @@ import {
   type LinuxPackageType,
 } from "./linux-update-guidance";
 import { UPDATE_BLOCKED_LOCATION_REASON } from "./relocate-to-applications";
+import { isScoopInstall, scoopUpdateBlockedReason } from "./scoop-install";
 import { showSimpleNotification } from "../notifications";
 import { compareHostVersions } from "../cli/cli-discovery";
 import {
@@ -219,9 +220,17 @@ let currentSnapshot: DesktopAppUpdateSnapshot = {
 // Resolver for the install-blocked reason, injected at `installAutoUpdater` and
 // evaluated fresh for each snapshot (so it tracks the live location).
 let resolveInstallBlockedReason: (() => string | null) | null = null;
+// Set once at `installAutoUpdater` time: a Scoop install never downloads or
+// applies an update itself (see `scoop-install.ts`).
+let scoopInstall = false;
 let updaterDeps: AppUpdaterDeps | null = null;
 
-function currentInstallBlockedReason(): string | null {
+function currentInstallBlockedReason(
+  latestVersion: string | null,
+): string | null {
+  if (scoopInstall) {
+    return scoopUpdateBlockedReason(latestVersion);
+  }
   return resolveInstallBlockedReason === null
     ? null
     : resolveInstallBlockedReason();
@@ -443,9 +452,12 @@ function installWindowsSignatureTolerance(): void {
 async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   updaterDeps = deps;
   resolveInstallBlockedReason = deps.installBlockedReason;
+  scoopInstall = isScoopInstall();
   currentSnapshot = {
     ...currentSnapshot,
-    installBlockedReason: currentInstallBlockedReason(),
+    installBlockedReason: currentInstallBlockedReason(
+      currentSnapshot.latestVersion,
+    ),
   };
   autoUpdater.logger = log;
   // Never download on our own - the user starts the download from the header
@@ -1618,7 +1630,7 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   // disables the trigger, but guard here too. Re-emit so the live blocked
   // reason (resolved lazily) reaches the renderer instead of returning a
   // snapshot frozen at the last emit.
-  if (currentInstallBlockedReason() !== null) {
+  if (currentInstallBlockedReason(currentSnapshot.latestVersion) !== null) {
     return emitSnapshot({});
   }
   if (currentSnapshot.status === "downloading" || downloadInProgress) {
@@ -2241,7 +2253,7 @@ function notifyUpdateWhenUnfocused(
     // instead of telling the user to download something they can't apply.
     showSimpleNotification(
       "Traycer update available",
-      currentInstallBlockedReason() ??
+      currentInstallBlockedReason(version) ??
         `Open Traycer to download${versionLabel}.`,
       focus,
     );
@@ -2301,21 +2313,22 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
         : patch.downloadProgress;
     downloadProgress = nextDownloadProgress ?? 0;
   }
+  const latestVersion =
+    patch.latestVersion === undefined
+      ? currentSnapshot.latestVersion
+      : patch.latestVersion;
   currentSnapshot = {
     ...currentSnapshot,
     sequence,
     status,
     allowPrerelease: patch.allowPrerelease ?? currentSnapshot.allowPrerelease,
-    installBlockedReason: currentInstallBlockedReason(),
+    installBlockedReason: currentInstallBlockedReason(latestVersion),
     installGuidance: linuxInstallGuidance,
     // Derived, like the two above: `installingUpdate` is the single source of
     // truth, so every emit republishes the live value rather than relying on
     // each call site to thread it through the patch.
     installInFlight: installingUpdate,
-    latestVersion:
-      patch.latestVersion === undefined
-        ? currentSnapshot.latestVersion
-        : patch.latestVersion,
+    latestVersion,
     // Carried with `latestVersion` rather than derived from it: the epoch is a
     // property of the resolved CANDIDATE, and a patch that moves the version
     // without moving the epoch would leave the two describing different builds.

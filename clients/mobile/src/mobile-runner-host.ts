@@ -714,31 +714,36 @@ export class MobileRunnerHost implements IRunnerHost {
   // The sandbox control plane, from the phone directly: `fetch` is patched by
   // CapacitorHttp, so traycer-server's CORS allow-list does not apply.
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
-    return listSandboxesViaHttp(this.serverBaseUrl, bearerToken);
+    return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
-    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken);
+    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
-    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken);
+    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult> {
-    return createSandboxViaHttp(this.serverBaseUrl, bearerToken, request);
+    return createSandboxViaHttp(this.serverBaseUrl, bearerToken, null, request);
   }
 
   destroySandbox(
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult> {
-    return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
+    return destroySandboxViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+    );
   }
 
   patchSandbox(
@@ -749,6 +754,7 @@ export class MobileRunnerHost implements IRunnerHost {
     return patchSandboxViaHttp(
       this.serverBaseUrl,
       bearerToken,
+      null,
       sandboxId,
       request,
     );
@@ -758,7 +764,7 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult> {
-    return keepSandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
+    return keepSandboxViaHttp(this.serverBaseUrl, bearerToken, null, sandboxId);
   }
 
   runSandboxVerb(
@@ -770,6 +776,7 @@ export class MobileRunnerHost implements IRunnerHost {
     return runSandboxVerbViaHttp(
       this.serverBaseUrl,
       bearerToken,
+      null,
       sandboxId,
       verb,
       timeoutMs,
@@ -783,6 +790,7 @@ export class MobileRunnerHost implements IRunnerHost {
     return getSandboxAutomationViaHttp(
       this.serverBaseUrl,
       bearerToken,
+      null,
       environmentId,
     );
   }
@@ -794,6 +802,7 @@ export class MobileRunnerHost implements IRunnerHost {
     return openSandboxAutomationViaHttp(
       this.serverBaseUrl,
       bearerToken,
+      null,
       target,
     );
   }

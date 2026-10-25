@@ -46,6 +46,7 @@ export function hostScopeOptionFixture(
     isActive: true,
     connectable: true,
     settingUp: false,
+    terminalRunNote: null,
     registered: true,
     platform: "darwin-arm64",
     version: "1.4.2",

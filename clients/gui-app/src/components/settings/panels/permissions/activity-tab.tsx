@@ -150,8 +150,8 @@ export function ActivityTab(props: {
       method="autoJudge.listRecent"
       unsupported={
         <AutoModeUnsupportedLine>
-          This machine&apos;s host doesn&apos;t record Auto mode decisions yet.
-          Update it to see them.
+          This host doesn&apos;t record Auto mode decisions yet. Update it to
+          see them.
         </AutoModeUnsupportedLine>
       }
     >
@@ -181,8 +181,8 @@ function ActivityList(props: {
   if (entries === undefined) {
     return query.isError ? (
       <p className="px-1 text-ui-sm text-warning-foreground">
-        Couldn&apos;t read this machine&apos;s recent decisions. Reopen Settings
-        to try again.
+        Couldn&apos;t read this host&apos;s recent decisions. Reopen Settings to
+        try again.
       </p>
     ) : null;
   }
@@ -197,7 +197,7 @@ function ActivityList(props: {
           className="px-1 text-ui-sm text-muted-foreground"
           data-testid="auto-judge-activity-empty"
         >
-          No Auto mode decisions on this machine yet.
+          No Auto mode decisions on this host yet.
         </p>
       ) : (
         <>
