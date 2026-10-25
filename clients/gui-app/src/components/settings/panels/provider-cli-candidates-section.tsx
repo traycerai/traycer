@@ -368,7 +368,8 @@ function selectionFollowed(
   chatsFollow: boolean,
 ): boolean {
   return (
-    chatsFollow && !(selection.kind === "bundled" && selection.line === undefined)
+    chatsFollow &&
+    !(selection.kind === "bundled" && selection.line === undefined)
   );
 }
 

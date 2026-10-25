@@ -380,7 +380,6 @@ describe("providers.list@10.7 chatsFollow", () => {
     expect(result.value.providers[0]?.providerId).toBe("cursor");
     expect(result.value.providers[0]).not.toHaveProperty("chatsFollow");
   });
-
 });
 
 /**

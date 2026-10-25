@@ -6549,7 +6549,9 @@ describe("<ChatTile />", () => {
     });
     expect(
       screen.getByTestId("chat-composer-opencode-line-held").textContent,
-    ).toBe("Stays on OpenCode 1.x because OpenCode 2.x can't run this message.");
+    ).toBe(
+      "Stays on OpenCode 1.x because OpenCode 2.x can't run this message.",
+    );
 
     act(() => {
       handle.store.setState({ opencodeLineHeld: undefined });
