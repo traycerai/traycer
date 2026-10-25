@@ -219,8 +219,12 @@ export function CanvasBoardFrame({
   const onBridge = useCallback(
     (bridge: SandboxBridgeHost | null) => {
       bridgeRef.current = bridge;
-      // A new bridge is a freshly served document: never adopted.
-      if (bridge !== null) adoptedDocument.current = false;
+      // A new bridge is a freshly served document: never adopted, and sitting
+      // at the bare entry URL, so a held navigation must be applied again.
+      if (bridge !== null) {
+        adoptedDocument.current = false;
+        appliedNavigation.current = null;
+      }
       onError?.(null);
       let sha256: string | null = null;
       if (
@@ -328,9 +332,7 @@ export function CanvasBoardFrame({
           y: bounds.top + (gesture.y * bounds.height) / frame.clientHeight,
         });
       }}
-      onCanvasPan={(gesture) => {
-        if (!fullscreen) events?.onPan?.(gesture);
-      }}
+      onCanvasPan={(gesture) => events?.onPan?.(gesture)}
       onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
       ref={onFrame}
     />

@@ -765,7 +765,13 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   document.addEventListener(
     "wheel",
     (event) => {
-      if (config.canvasLinks === "native" || mode !== "play" || event.ctrlKey)
+      if (
+        config.canvasLinks === "native" ||
+        mode !== "play" ||
+        event.ctrlKey ||
+        // A page handler that took the wheel (a map, a carousel) keeps it.
+        event.defaultPrevented
+      )
         return;
       const now = Date.now();
       if (wheelTarget === null || now - wheelAt > 250)

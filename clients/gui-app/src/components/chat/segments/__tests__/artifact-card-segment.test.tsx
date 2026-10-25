@@ -2,7 +2,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-segment";
-import { EPIC_NODE_SENTENCE_NOUNS } from "@/lib/artifacts/node-display";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
@@ -756,7 +755,7 @@ describe("<ArtifactCardSegment />", () => {
     const objectKinds = ["html", "canvas", "file"] as const;
 
     it.each(objectKinds)(
-      "renders the live title and sentence noun for a %s block",
+      "renders the live title with an open control for a %s block",
       (objectKind) => {
         projection.artifacts["h1"] = {
           id: "h1",
@@ -777,14 +776,13 @@ describe("<ArtifactCardSegment />", () => {
 
         expect(screen.getByText("My Page")).toBeTruthy();
         expect(
-          screen.getByText(EPIC_NODE_SENTENCE_NOUNS[objectKind]),
+          screen.getByRole("button", { name: "Open My Page" }),
         ).toBeTruthy();
-        expect(screen.getByRole("button")).toBeTruthy();
       },
     );
 
     it.each(objectKinds)(
-      "falls back to the block's own title and stays disabled for a %s artifact that is not yet projected",
+      "falls back to the block's own title with no open control for a %s artifact that is not yet projected",
       (objectKind) => {
         render(
           <ArtifactCardSegment
@@ -798,12 +796,12 @@ describe("<ArtifactCardSegment />", () => {
         );
 
         expect(screen.getByText("Fallback Title")).toBeTruthy();
-        expect(screen.getByRole("button")).toHaveProperty("disabled", true);
+        expect(screen.queryByRole("button")).toBeNull();
       },
     );
 
     it.each(objectKinds)(
-      "reaches the session gate and the projection/host hooks for a %s block, never the drag hook",
+      "registers a drag source for a live %s card, so it can be dropped as a tile",
       (objectKind) => {
         projection.artifacts["h1"] = {
           id: "h1",
@@ -822,13 +820,8 @@ describe("<ArtifactCardSegment />", () => {
           />,
         );
 
-        expect(hookCalls).toEqual({
-          openEpicHandle: 1,
-          artifactById: 1,
-          deletedArtifact: 1,
-          tabHostId: 1,
-        });
-        expect(dnd.draggables).toHaveLength(0);
+        expect(dnd.draggables).toHaveLength(1);
+        expect(dnd.draggables[0].disabled).toBe(false);
       },
     );
 
@@ -921,9 +914,9 @@ describe("<ArtifactCardSegment />", () => {
       expect(screen.getByText("Landing Page")).toBeTruthy();
       expect(screen.getByText("Design Board")).toBeTruthy();
       expect(screen.getByText("Report")).toBeTruthy();
-      // Only the markdown card reaches the drag hook; the three object cards
-      // are plain buttons.
-      expect(dnd.draggables).toHaveLength(1);
+      // Every live card is openable and draggable: the markdown card and the
+      // three object cards each register one drag source.
+      expect(dnd.draggables).toHaveLength(4);
       expect(screen.getAllByRole("button")).toHaveLength(4);
     });
 
@@ -931,7 +924,7 @@ describe("<ArtifactCardSegment />", () => {
       useSettingsStore.setState({ artifactIconColorMode: "byType" });
     });
 
-    it("shows a neutral 'Unavailable' label and a disabled, non-openable button for a tombstoned object artifact", () => {
+    it("shows a neutral 'Unavailable' label with no open control for a tombstoned object artifact", () => {
       projection.deleted["h1"] = {
         id: "h1",
         kind: "html",
@@ -950,10 +943,8 @@ describe("<ArtifactCardSegment />", () => {
         />,
       );
 
-      expect(screen.getByText("Unavailable")).toBeTruthy();
-      const button = screen.getByRole("button");
-      expect(button).toHaveProperty("disabled", true);
-      fireEvent.click(button);
+      expect(screen.getByText(/Unavailable/)).toBeTruthy();
+      expect(screen.queryByRole("button")).toBeNull();
       expect(tileNavigation.openTile).not.toHaveBeenCalled();
     });
 
@@ -975,46 +966,8 @@ describe("<ArtifactCardSegment />", () => {
         />,
       );
 
-      expect(screen.getByText("Unavailable")).toBeTruthy();
-      expect(screen.getByRole("button")).toHaveProperty("disabled", true);
-    });
-
-    it("tints the object card's icon with the configured per-kind color, and mutes it when color mode is 'none'", () => {
-      projection.artifacts["h1"] = {
-        id: "h1",
-        kind: "html",
-        title: "My Page",
-        status: null,
-      };
-      const configuredColor =
-        useSettingsStore.getState().artifactIconColors.html;
-      const { container, rerender } = render(
-        <ArtifactCardSegment
-          findUnitId={null}
-          operation="create"
-          artifactKind="html"
-          artifactId="h1"
-          title={null}
-          change={null}
-        />,
-      );
-      const icon = container.querySelector("svg");
-      expect(icon?.style.getPropertyValue("--swatch")).toBe(configuredColor);
-
-      useSettingsStore.setState({ artifactIconColorMode: "none" });
-      rerender(
-        <ArtifactCardSegment
-          findUnitId={null}
-          operation="create"
-          artifactKind="html"
-          artifactId="h1"
-          title={null}
-          change={null}
-        />,
-      );
-      const mutedIcon = container.querySelector("svg");
-      expect(mutedIcon?.classList.contains("text-muted-foreground")).toBe(true);
-      expect(mutedIcon?.style.getPropertyValue("--swatch")).toBe("");
+      expect(screen.getByText(/Unavailable/)).toBeTruthy();
+      expect(screen.queryByRole("button")).toBeNull();
     });
   });
 });

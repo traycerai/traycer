@@ -95,6 +95,11 @@ function CanvasBoardOverlay({
   readonly interactive: boolean;
   readonly actions: CanvasNodeActions;
 }) {
+  const playSurface = interactive && !actions.commentMode;
+  // The fullscreen board is a play surface whatever tool was armed inline:
+  // there is no toolbar there to disarm a hand tool, so no pan shield either.
+  if (playSurface && actions.fullscreenPath === path)
+    return <CanvasPlayPins actions={actions} path={path} />;
   // The self variant enables hits without adding xyflow's no-pan marker, so
   // a hand drag that starts here pans the canvas instead of reaching the page.
   // Comment pins and an open thread stay above it and keep their own markers.
@@ -106,8 +111,7 @@ function CanvasBoardOverlay({
         {actions.frameEvents?.renderOverlay?.(path, false)}
       </>
     );
-  if (interactive && !actions.commentMode)
-    return <CanvasPlayPins actions={actions} path={path} />;
+  if (playSurface) return <CanvasPlayPins actions={actions} path={path} />;
   return (
     <CanvasEditShield
       path={path}

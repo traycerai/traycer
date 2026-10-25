@@ -569,6 +569,38 @@ const OBJECT_KIND_HOVER_CLASSES: Readonly<Record<ObjectCardKind, string>> = {
   canvas: "group-hover/artifact-card:bg-violet-400/[0.11]",
 };
 
+// A file artifact keeps the simpler visual treatment, but opening it from
+// the transcript card works the same as for the object kinds.
+function FileArtifactCardShell(props: {
+  readonly findUnitId: string | undefined;
+  readonly canOpen: boolean;
+  readonly openTitle: string;
+  readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
+  readonly children: ReactNode;
+}) {
+  if (!props.canOpen)
+    return (
+      <div
+        data-chat-find-unit={props.findUnitId}
+        className="w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm opacity-60"
+      >
+        {props.children}
+      </div>
+    );
+  return (
+    <button
+      type="button"
+      data-chat-find-unit={props.findUnitId}
+      onClick={props.onOpen}
+      onAuxClick={onMiddleClick(props.onOpen)}
+      aria-label={`Open ${props.openTitle}`}
+      className="w-full cursor-pointer rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      {props.children}
+    </button>
+  );
+}
+
 function ObjectArtifactCard(props: ObjectArtifactCardProps) {
   const live = useArtifactById(props.artifactId);
   const tombstone = useEpicDeletedArtifact(props.artifactId);
@@ -598,16 +630,6 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
     },
     enabled: canOpen,
   });
-  if (!isObjectCardKind(kind)) {
-    return (
-      <div
-        data-chat-find-unit={props.findUnitId ?? undefined}
-        className="w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm"
-      >
-        <ObjectArtifactCardLabel {...props} title={title} />
-      </div>
-    );
-  }
   const openArtifact = (event: MouseEvent<HTMLButtonElement>): void => {
     if (live === null || !canOpen) return;
     openTile({
@@ -626,6 +648,17 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
       modifiers: modifiersFromMouseEvent(event),
     });
   };
+  if (!isObjectCardKind(kind))
+    return (
+      <FileArtifactCardShell
+        findUnitId={props.findUnitId ?? undefined}
+        canOpen={canOpen}
+        openTitle={openTitle}
+        onOpen={openArtifact}
+      >
+        <ObjectArtifactCardLabel {...props} title={title} />
+      </FileArtifactCardShell>
+    );
   const content = (
     <>
       <span

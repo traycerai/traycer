@@ -492,7 +492,6 @@ export function CanvasSelectionProvider(
           {editing && props.viewOnly !== true ? (
             <CanvasEditingOverlay
               scope={scope}
-              commenting={registry.view?.commenting === true}
               tileId={draftOwner}
               boardPath={path}
               registry={registry}

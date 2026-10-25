@@ -142,8 +142,11 @@ export function CanvasCommentPins(props: {
   const activeThreadId = useActiveThreadId(props.scope.epicId);
   const targetId = threads.find((thread) => thread.threadId === activeThreadId)
     ?.data.elementId;
+  // Depend on the board fields the reveal reads, not the registry's whole
+  // entry object: geometry updates rebuild that object on every size or
+  // frame change and must not re-run the reveal.
+  const { bridge, sha256, page } = entry;
   useEffect(() => {
-    const { bridge, sha256, page } = entry;
     if (
       !commenting ||
       targetId === undefined ||
@@ -175,7 +178,15 @@ export function CanvasCommentPins(props: {
     return () => {
       active = false;
     };
-  }, [commenting, targetId, entry, props.scope.artifactId, props.boardPath]);
+  }, [
+    commenting,
+    targetId,
+    bridge,
+    sha256,
+    page,
+    props.scope.artifactId,
+    props.boardPath,
+  ]);
   if (!commenting) return null;
   return (
     <FrameCommentPins

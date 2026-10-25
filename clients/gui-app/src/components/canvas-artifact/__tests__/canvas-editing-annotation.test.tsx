@@ -228,7 +228,6 @@ function mountOverlay() {
         tileId="canvas-tile-1"
         boardPath={BOARD_PATH}
         registry={registry}
-        commenting={false}
         onPick={() => undefined}
         onRetire={() => undefined}
         onEscape={() => undefined}

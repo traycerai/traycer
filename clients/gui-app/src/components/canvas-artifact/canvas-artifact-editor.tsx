@@ -550,12 +550,26 @@ export function CanvasArtifactEditor({
     },
     [snapshot, flow, viewport.zoom],
   );
+  const stopPlay = useCallback((): void => {
+    if (playingBoard === null) return;
+    setPlayingBoard(null);
+    // Clearing the entry resets a board the played document navigated away
+    // from; its frame remounts its own source.
+    setNavigation((previous) => {
+      if (previous[playingBoard] === undefined) return previous;
+      const next = { ...previous };
+      delete next[playingBoard];
+      return next;
+    });
+  }, [playingBoard]);
   const revealCanvasPoint = useCallback(
     (pageId: string, x: number, y: number): boolean => {
       // A vanished page keeps the sidebar thread where it is: no silent
       // relocation to another page.
       if (flow === null || !snapshot.pages.some((item) => item.id === pageId))
         return false;
+      // A page switch stops play, here as everywhere.
+      if (pageId !== page) stopPlay();
       // Point pins live outside every board, so a fullscreen board cannot
       // show one: leave fullscreen before revealing the spot.
       setChosenPage(pageId);
@@ -581,6 +595,8 @@ export function CanvasArtifactEditor({
     [
       flow,
       snapshot.pages,
+      page,
+      stopPlay,
       viewport.zoom,
       size,
       activeFullscreen,
@@ -596,7 +612,10 @@ export function CanvasArtifactEditor({
         setFullscreen(path);
         return true;
       }
-      setChosenPage(board.page ?? snapshot.pages.at(0)?.id ?? "");
+      const boardPage = board.page ?? snapshot.pages.at(0)?.id ?? "";
+      // A page switch stops play, here as everywhere.
+      if (boardPage !== page) stopPlay();
+      setChosenPage(boardPage);
       const frame = boardFrame(board);
       void flow.fitBounds(
         { x: frame.x, y: frame.y, width: frame.w, height: frame.h },
@@ -607,6 +626,8 @@ export function CanvasArtifactEditor({
     [
       snapshot.boards,
       snapshot.pages,
+      page,
+      stopPlay,
       flow,
       rememberBoard,
       activeFullscreen,
@@ -636,18 +657,6 @@ export function CanvasArtifactEditor({
     },
     [clearNodeSelection, frameEvents, rememberBoard],
   );
-  const stopPlay = useCallback((): void => {
-    if (playingBoard === null) return;
-    setPlayingBoard(null);
-    // Clearing the entry resets a board the played document navigated away
-    // from; its frame remounts its own source.
-    setNavigation((previous) => {
-      if (previous[playingBoard] === undefined) return previous;
-      const next = { ...previous };
-      delete next[playingBoard];
-      return next;
-    });
-  }, [playingBoard]);
   // Fullscreen is orthogonal to in-place play: it is its own play surface and
   // leaving it changes nothing on the canvas.
   const openFullscreen = useCallback(
@@ -728,7 +737,13 @@ export function CanvasArtifactEditor({
   );
   const panBy = useCallback(
     (dx: number, dy: number): void => {
-      if (flow === null || activeFullscreen !== null) return;
+      // A fullscreen board's fall-through gesture scrolls the stage that
+      // holds it (Fill width overflows there), uncapped like native scroll.
+      if (activeFullscreen !== null) {
+        stageRef.current?.scrollBy({ left: dx, top: dy, behavior: "instant" });
+        return;
+      }
+      if (flow === null) return;
       const cap = (delta: number): number =>
         Math.sign(delta) * Math.min(Math.abs(delta), 80);
       const current = flow.getViewport();
