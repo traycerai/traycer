@@ -248,7 +248,7 @@ function botCreateResponse(): BotCreateResponse {
 }
 
 const retryFailed = vi.fn<() => void>();
-const onDone = vi.fn<() => void>();
+const onCreated = vi.fn<() => void>();
 
 function mountForm(input: Mount): void {
   const byHostId = new Map<string, EnvironmentHostBinding>();
@@ -267,7 +267,8 @@ function mountForm(input: Mount): void {
         environmentLabel={input.environmentLabel}
         connectableHostIds={input.connectableHostIds}
         environmentBindings={environmentBindings}
-        onDone={onDone}
+        onCreated={onCreated}
+        onCancel={() => undefined}
       />
     </StrictMode>,
   );
@@ -530,7 +531,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     expect(record?.hostId).toBe(LOCAL);
     expect(record?.title).toBe("Release Bot");
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
   it("creates through the active host's client when this machine does not run the environment", async () => {
@@ -608,7 +609,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
       LOCAL,
     );
-    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
   it("does not create for a blank name", async () => {
@@ -754,7 +755,7 @@ describe("<CreateBotForm /> a create the transport sends again", () => {
     await createBot(user);
 
     await waitFor(() => {
-      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(onCreated).toHaveBeenCalledTimes(1);
     });
     // Sent twice, and one bot came of it, made by the first send.
     expect(request).toHaveBeenCalledTimes(2);

@@ -52,16 +52,18 @@ export function TeamBotSetupDialog(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const { team, onClose } = props;
-  // Only Escape, Close and an outside press reach `onOpenChange`; a success
+  // Escape, Close, an outside press and the form's Cancel dismiss; a success
   // closes through `onClose` directly and keeps the destination's focus.
   const dismissedRef = useRef(false);
+  const dismiss = (): void => {
+    dismissedRef.current = true;
+    onClose();
+  };
   return (
     <Dialog
       open={team !== null}
       onOpenChange={(open) => {
-        if (open) return;
-        dismissedRef.current = true;
-        onClose();
+        if (!open) dismiss();
       }}
     >
       {team === null ? null : (
@@ -87,7 +89,8 @@ export function TeamBotSetupDialog(props: {
             team={team}
             connectableHostIds={props.connectableHostIds}
             environmentBindings={props.environmentBindings}
-            onClose={onClose}
+            onOpened={onClose}
+            onCancel={dismiss}
           />
         </DialogContent>
       )}
@@ -99,9 +102,11 @@ function TeamBotSetup(props: {
   readonly team: TeamBotSetupTarget;
   readonly connectableHostIds: ReadonlyArray<string>;
   readonly environmentBindings: HostEnvironmentBindings;
-  readonly onClose: () => void;
+  /** Runs once the setup has opened a channel. */
+  readonly onOpened: () => void;
+  readonly onCancel: () => void;
 }): ReactNode {
-  const { team, connectableHostIds, environmentBindings, onClose } = props;
+  const { team, connectableHostIds, environmentBindings, onOpened } = props;
   const { gate, onboarding } = useTeamOnboardingGate({
     client: useTabHostClient(),
     hostId: useTabHostId(),
@@ -138,7 +143,8 @@ function TeamBotSetup(props: {
             environmentLabel={team.teamName}
             connectableHostIds={connectableHostIds}
             environmentBindings={environmentBindings}
-            onDone={onClose}
+            onCreated={onOpened}
+            onCancel={props.onCancel}
           />
         </div>
       </>
@@ -150,7 +156,7 @@ function TeamBotSetup(props: {
       data={data}
       connectableHostIds={connectableHostIds}
       environmentBindings={environmentBindings}
-      onClose={onClose}
+      onOpened={onOpened}
     />
   );
 }
@@ -162,7 +168,7 @@ function TeamOnboardingSetup(props: {
   readonly data: BotOnboardingReadResponse;
   readonly connectableHostIds: ReadonlyArray<string>;
   readonly environmentBindings: HostEnvironmentBindings;
-  readonly onClose: () => void;
+  readonly onOpened: () => void;
 }): ReactNode {
   const { team, data, environmentBindings } = props;
   // A connected team starts at its bots; GitHub stays one step back.
@@ -174,7 +180,7 @@ function TeamOnboardingSetup(props: {
     connectableHostIds: props.connectableHostIds,
     environmentBindings,
     data,
-    onOpened: props.onClose,
+    onOpened: props.onOpened,
   });
   const title = `Set up ${team.teamName}'s bots`;
   if (step === "github") {

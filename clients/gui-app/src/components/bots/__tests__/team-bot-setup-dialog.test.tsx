@@ -156,15 +156,19 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
   CreateBotForm: (props: {
     environmentId: string;
     environmentLabel: string;
-    onDone: () => void;
+    onCreated: () => void;
+    onCancel: () => void;
   }) => (
     <div
       data-testid="stub-create-bot-form"
       data-environment-id={props.environmentId}
       data-environment-label={props.environmentLabel}
     >
-      <button type="button" onClick={props.onDone}>
+      <button type="button" onClick={props.onCancel}>
         Cancel
+      </button>
+      <button type="button" onClick={props.onCreated}>
+        Create bot
       </button>
     </div>
   ),
@@ -596,6 +600,11 @@ describe("<TeamBotSetupDialog /> returning focus", () => {
       dismiss: (user: UserEvent) =>
         user.click(screen.getByRole("button", { name: "Close" })),
     },
+    {
+      label: "the form's Cancel",
+      dismiss: (user: UserEvent) =>
+        user.click(screen.getByRole("button", { name: "Cancel" })),
+    },
   ])(
     "gives focus back to the control that opened it on $label",
     async ({ dismiss }) => {
@@ -625,6 +634,28 @@ describe("<TeamBotSetupDialog /> returning focus", () => {
     const focus = vi.spyOn(opener, "focus");
 
     await user.click(await screen.findByTestId("bot-onboarding-open"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
+    });
+    // The dialog hands focus back one task after it unmounts: run past that.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(focus).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(opener);
+  });
+
+  it("leaves focus off the opener when the form creates the bot and closes", async () => {
+    const user = userEvent.setup();
+    const opener = mountClosed({
+      read: { ...UNLOCKED, choice: completedChoice },
+      botCount: 3,
+    });
+    await user.click(opener);
+    const focus = vi.spyOn(opener, "focus");
+
+    await user.click(await screen.findByRole("button", { name: "Create bot" }));
 
     await waitFor(() => {
       expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();

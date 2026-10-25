@@ -104,7 +104,8 @@ export function HomeBotsGroupCard(props: {
           environmentLabel={group.label}
           connectableHostIds={connectableHostIds}
           environmentBindings={environmentBindings}
-          onDone={() => setCreating(false)}
+          onCreated={() => setCreating(false)}
+          onCancel={() => setCreating(false)}
         />
       ) : null}
       {group.bots.length === 0 ? (
