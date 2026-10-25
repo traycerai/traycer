@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useTeamViewingHost } from "./use-team-viewing-host";
 import { environmentMutationKeys } from "@/lib/query-keys";
@@ -17,7 +17,10 @@ export function useConfigurationSkillsUploadMutation() {
       cloudVerdictPreflight("environment.configuration.skills.upload")();
       return Promise.resolve(request);
     },
+    // The page lists the uploaded skill from `skills.list`, which never polls.
     onSuccess: (_result, request) =>
-      invalidateEnvironmentHostReports(queries, request.environmentId),
+      invalidateConfigurationReads(queries, request.environmentId, [
+        "environment.configuration.skills.list",
+      ]),
   });
 }

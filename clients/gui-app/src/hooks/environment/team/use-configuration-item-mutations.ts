@@ -4,9 +4,9 @@ import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostClient } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 
@@ -19,26 +19,22 @@ export function useConfigurationItemMutations() {
     hostId: string | null,
     result: EnvironmentConfigurationItemWriteResponse,
   ): void => {
-    invalidateEnvironmentHostReports(queries, environmentId);
-    if (hostId === null) return;
-    if (result.outcome === "forbidden")
-      void queries.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          hostRpcServingTierHostId(
-            "environment.list",
-            hostId,
-            readProcessHostRpcTierPlan(),
-            null,
-          ),
-          "environment.list",
-        ),
-      });
-    // Includes every page projection but no other configuration on this host.
+    // Every page projection of this configuration, on every host that read
+    // it, and no other configuration.
+    invalidateConfigurationReads(queries, environmentId, [
+      "environment.configuration.items",
+    ]);
+    if (hostId === null || result.outcome !== "forbidden") return;
     void queries.invalidateQueries({
-      queryKey: hostQueryKeys.method<
-        HostRpcRegistry,
-        "environment.configuration.items"
-      >(hostId, "environment.configuration.items", { environmentId }),
+      queryKey: hostQueryKeys.methodScope(
+        hostRpcServingTierHostId(
+          "environment.list",
+          hostId,
+          readProcessHostRpcTierPlan(),
+          null,
+        ),
+        "environment.list",
+      ),
     });
   };
   const put = useHostScopedMutationForClient(client, {

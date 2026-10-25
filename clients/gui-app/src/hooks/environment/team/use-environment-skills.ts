@@ -5,7 +5,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type { EnvironmentConfigurationSkillsListResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -58,32 +58,30 @@ export function useEnvironmentSkillMutations(
     method: "environment.configuration.skills.remove",
     mutationKey: environmentMutationKeys.configurationSkillsRemove(),
     errorMessage: "Couldn't remove this skill.",
-    invalidateMethods: [
-      "environment.configuration.skills.list",
-      "providers.list",
-    ],
+    invalidateMethods: ["providers.list"],
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.skills.remove")();
       return Promise.resolve(request);
     },
     onSuccess: (_result, request) =>
-      invalidateEnvironmentHostReports(queries, request.environmentId),
+      invalidateConfigurationReads(queries, request.environmentId, [
+        "environment.configuration.skills.list",
+      ]),
   });
   const setProviders = useHostScopedMutationForClient(client, {
     method: "environment.configuration.skills.setProviders",
     mutationKey: environmentMutationKeys.configurationSkillsSetProviders(),
     errorMessage: "Couldn't save these settings.",
     // A stale answer rereads too: the editor saves again against the new revision.
-    invalidateMethods: [
-      "environment.configuration.skills.list",
-      "providers.list",
-    ],
+    invalidateMethods: ["providers.list"],
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.skills.setProviders")();
       return Promise.resolve(request);
     },
     onSuccess: (_result, request) =>
-      invalidateEnvironmentHostReports(queries, request.environmentId),
+      invalidateConfigurationReads(queries, request.environmentId, [
+        "environment.configuration.skills.list",
+      ]),
   });
   return { remove, setProviders };
 }

@@ -6,7 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -120,13 +120,15 @@ const MCP_SERVER_READS = [
 export function useConfigurationMcpServerMutations() {
   const client = useHostClient();
   const queries = useQueryClient();
+  // The list beside a write may have been read on another host: a tool
+  // switch writes through the viewing host, under the surface host's list.
   const reread = (environmentId: string): void =>
-    invalidateEnvironmentHostReports(queries, environmentId);
+    invalidateConfigurationReads(queries, environmentId, MCP_SERVER_READS);
   const put = useHostScopedMutationForClient(client, {
     method: "environment.configuration.mcpServers.put",
     mutationKey: environmentMutationKeys.configurationMcpServersPut(),
     errorMessage: "Couldn't save this server.",
-    invalidateMethods: MCP_SERVER_READS,
+    invalidateMethods: [],
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.mcpServers.put")();
       return Promise.resolve(request);
@@ -137,7 +139,7 @@ export function useConfigurationMcpServerMutations() {
     method: "environment.configuration.mcpServers.delete",
     mutationKey: environmentMutationKeys.configurationMcpServersDelete(),
     errorMessage: "Couldn't remove this server.",
-    invalidateMethods: MCP_SERVER_READS,
+    invalidateMethods: [],
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.mcpServers.delete")();
       return Promise.resolve(request);
@@ -148,7 +150,7 @@ export function useConfigurationMcpServerMutations() {
     method: "environment.configuration.items.put",
     mutationKey: environmentMutationKeys.configurationItemsPut(),
     errorMessage: "Couldn't save these settings.",
-    invalidateMethods: MCP_SERVER_READS,
+    invalidateMethods: [],
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.items.put")();
       return Promise.resolve(request);
@@ -160,7 +162,7 @@ export function useConfigurationMcpServerMutations() {
     mutationKey: environmentMutationKeys.configurationMcpServersSetEnabled(),
     // The toast names the server and the way it was switched.
     errorMessage: null,
-    invalidateMethods: MCP_SERVER_READS,
+    invalidateMethods: [],
     prepareRequest: (request) => {
       cloudVerdictPreflight(
         "environment.configuration.mcpServers.setEnabled",

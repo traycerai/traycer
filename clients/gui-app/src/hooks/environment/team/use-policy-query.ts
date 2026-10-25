@@ -4,7 +4,7 @@ import {
 } from "./use-configuration-items-query";
 import { configurationPolicyValueSchema } from "./configuration-item-values";
 import { useQueryClient } from "@tanstack/react-query";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostClient } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
@@ -33,12 +33,14 @@ export function useConfigurationPolicyMutation() {
     method: "environment.configuration.policy.put",
     mutationKey: environmentMutationKeys.configurationPolicyPut(),
     errorMessage: "Couldn't save the approval policy.",
-    invalidateMethods: ["environment.configuration.items"],
+    invalidateMethods: [],
     prepareRequest: (request) => {
       cloudVerdictPreflight("environment.configuration.policy.put")();
       return Promise.resolve(request);
     },
     onSuccess: (_result, request) =>
-      invalidateEnvironmentHostReports(queries, request.environmentId),
+      invalidateConfigurationReads(queries, request.environmentId, [
+        "environment.configuration.items",
+      ]),
   });
 }

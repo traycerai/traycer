@@ -180,6 +180,36 @@ function listed(
 }
 
 describe("The Skills page", () => {
+  it("shows an uploaded skill without a remount", async () => {
+    negotiateMethods({
+      ...BASE_METHODS,
+      "environment.configuration.skills.upload": LIST,
+    });
+    let uploaded = false;
+    const base = handlers({ list: listed([BUILT_IN]), hostSkills: [] });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...base,
+      "environment.configuration.skills.list": () =>
+        listed(uploaded ? [REVIEW, BUILT_IN] : [BUILT_IN]),
+      "environment.configuration.skills.upload": () => {
+        uploaded = true;
+        return { outcome: "saved" as const, reason: null };
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    await userEvent.upload(
+      screen.getByLabelText("Skill folder archive"),
+      new File([new Uint8Array([1, 2, 3, 4])], "review.tar.gz", {
+        type: "application/gzip",
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add a skill" }));
+
+    expect(await screen.findByText("Review a change.")).toBeTruthy();
+  });
+
   it("reads each skill's name, description, source and providers as the serving host lists them", async () => {
     negotiateMethods(BASE_METHODS);
     const harness = mountTeamPage(
