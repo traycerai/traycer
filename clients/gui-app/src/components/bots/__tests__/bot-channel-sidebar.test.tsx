@@ -1,12 +1,12 @@
 /**
  * The bot tab's sidebar (Tracy Bots, decision 41): every environment is a
- * section, every bot in it a `# name` channel, unread channels are marked, and
- * a section ends with "Add a bot" for that environment, and a team's section
- * opens with its onboarding, whose gate locks a new team's chat until its
- * GitHub set holds a repository. The real sidebar and the real onboarding
- * gate run over mocked reads and the real bot-tabs store; the create form,
- * the onboarding card and the navigation helper are stubs that record what
- * they were given.
+ * section, every bot in it a `# name` channel, unread channels are marked. The
+ * sections list channels only; a team's header carries a + and an empty team
+ * a call to action, both opening that team's setup (T59), and the gate that
+ * locks a new team's chat until its GitHub set holds a repository still
+ * disables its rows. The real sidebar and the real onboarding gate run over
+ * mocked reads and the real bot-tabs store; the setup dialog, the onboarding
+ * card and the navigation helper are stubs that record what they were given.
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -86,17 +86,27 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: mocks.state.epics, chats: {} }),
 }));
-vi.mock("@/components/home/bots/create-bot-form", () => ({
-  CreateBotForm: (props: {
-    environmentId: string;
-    environmentLabel: string;
-  }) => (
-    <div
-      data-testid="stub-create-bot-form"
-      data-environment-id={props.environmentId}
-      data-environment-label={props.environmentLabel}
-    />
-  ),
+vi.mock("@/components/bots/team-bot-setup-dialog", () => ({
+  TeamBotSetupDialog: (props: {
+    team: {
+      environmentId: string;
+      teamName: string;
+      botCount: number;
+    } | null;
+    onClose: () => void;
+  }) =>
+    props.team === null ? null : (
+      <div
+        data-testid="stub-team-bot-setup-dialog"
+        data-environment-id={props.team.environmentId}
+        data-team-name={props.team.teamName}
+        data-bot-count={String(props.team.botCount)}
+      >
+        <button type="button" onClick={props.onClose}>
+          Close setup
+        </button>
+      </div>
+    ),
 }));
 
 vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
@@ -330,38 +340,35 @@ describe("<BotChannelSidebar /> opening a channel", () => {
   });
 });
 
-describe("<BotChannelSidebar /> Add a bot", () => {
-  it("opens the create form for the environment of the section that was clicked", async () => {
-    const user = userEvent.setup();
+describe("<BotChannelSidebar /> team setup", () => {
+  it("draws a + on each team section and on no other", () => {
+    mocks.state.bots = [
+      ...mocks.state.bots,
+      bot("bot-orphan", "env-left", "orphan-bot"),
+    ];
     mount("bot-release");
-    expect(screen.queryByTestId("stub-create-bot-form")).toBeNull();
 
-    await user.click(
-      within(section("env-empty")).getByRole("button", { name: "Add a bot" }),
-    );
-
-    const form = screen.getByTestId("stub-create-bot-form");
-    expect(form.getAttribute("data-environment-id")).toBe("env-empty");
-    expect(form.getAttribute("data-environment-label")).toBe("Quiet team");
     expect(
-      within(section("env-empty")).getByTestId("stub-create-bot-form"),
-    ).toBe(form);
-  });
-
-  it("offers no form for bots of an environment the person is no longer in", () => {
-    mocks.state.bots = [bot("bot-orphan", "env-left", "orphan-bot")];
-    mount("bot-orphan");
-
-    const orphan = section("env-left");
-    expect(within(orphan).getByTestId("bot-channel-row")).toBeTruthy();
+      within(section("env-team")).getByRole("button", {
+        name: "Set up Acme's bots",
+      }),
+    ).toBeTruthy();
     expect(
-      within(orphan).queryByRole("button", { name: "Add a bot" }),
+      within(section("env-empty")).getByRole("button", {
+        name: "Set up Quiet team's bots",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(section("env-me")).queryByTestId("bot-channel-section-add"),
     ).toBeNull();
+    // An environment the person is no longer in has no team to set up.
+    expect(
+      within(section("env-left")).queryByTestId("bot-channel-section-add"),
+    ).toBeNull();
+    expect(screen.getAllByTestId("bot-channel-section-add")).toHaveLength(2);
   });
-});
 
-describe("<BotChannelSidebar /> team onboarding", () => {
-  it("opens each team section with its onboarding, and no other section", async () => {
+  it("gives a team with no bots one call to action, and a team with bots none", async () => {
     const user = userEvent.setup();
     mocks.state.bots = [
       ...mocks.state.bots,
@@ -369,61 +376,74 @@ describe("<BotChannelSidebar /> team onboarding", () => {
     ];
     mount("bot-release");
 
-    const cards = screen.getAllByTestId("stub-bot-onboarding-card");
     expect(
-      cards.map((card) => [
-        card.getAttribute("data-environment-id"),
-        card.getAttribute("data-team-name"),
-      ]),
-    ).toEqual([
-      ["env-team", "Acme"],
-      ["env-empty", "Quiet team"],
-    ]);
-    expect(
-      within(section("env-team")).getByTestId("stub-bot-onboarding-card"),
-    ).toBe(cards[0]);
+      within(section("env-empty")).getByTestId("bot-channel-section-set-up")
+        .textContent,
+    ).toBe("Set up your team's bots");
+    expect(screen.getAllByTestId("bot-channel-section-set-up")).toHaveLength(1);
 
     // A collapsed section hides it with the rest of its body.
     await user.click(
-      within(section("env-team")).getByRole("button", { name: "Acme" }),
+      within(section("env-empty")).getByRole("button", {
+        name: "Quiet team",
+      }),
     );
-    expect(
-      within(section("env-team")).queryByTestId("stub-bot-onboarding-card"),
-    ).toBeNull();
+    expect(screen.queryByTestId("bot-channel-section-set-up")).toBeNull();
   });
 
-  it("locks a new team's chat until its GitHub set holds a repository, leaving a team that pre-dates onboarding open", () => {
+  it("opens the setup for the team of the + or the call to action that was clicked", async () => {
+    const user = userEvent.setup();
+    mount("bot-release");
+    expect(screen.queryByTestId("stub-team-bot-setup-dialog")).toBeNull();
+
+    await user.click(
+      within(section("env-team")).getByTestId("bot-channel-section-add"),
+    );
+    const fromPlus = screen.getByTestId("stub-team-bot-setup-dialog");
+    expect(fromPlus.getAttribute("data-environment-id")).toBe("env-team");
+    expect(fromPlus.getAttribute("data-team-name")).toBe("Acme");
+    expect(fromPlus.getAttribute("data-bot-count")).toBe("2");
+
+    await user.click(screen.getByRole("button", { name: "Close setup" }));
+    expect(screen.queryByTestId("stub-team-bot-setup-dialog")).toBeNull();
+
+    await user.click(
+      within(section("env-empty")).getByTestId("bot-channel-section-set-up"),
+    );
+    const fromCta = screen.getByTestId("stub-team-bot-setup-dialog");
+    expect(fromCta.getAttribute("data-environment-id")).toBe("env-empty");
+    expect(fromCta.getAttribute("data-team-name")).toBe("Quiet team");
+    expect(fromCta.getAttribute("data-bot-count")).toBe("0");
+  });
+
+  it("draws no onboarding card or form in any section, a new team's included", () => {
+    mocks.state.onboarding = {
+      "env-team": onboarding({ unlocked: false, chosen: true }),
+      "env-empty": onboarding({ unlocked: false, chosen: false }),
+    };
+    mount("bot-release");
+
+    expect(screen.queryAllByTestId("stub-bot-onboarding-card")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Add a bot" })).toBeNull();
+  });
+});
+
+describe("<BotChannelSidebar /> team onboarding", () => {
+  it("leaves the channels of a team that pre-dates onboarding open", async () => {
+    const user = userEvent.setup();
+    // A team with bots and no onboarding record pre-dates onboarding.
     mocks.state.onboarding = {
       "env-team": onboarding({ unlocked: false, chosen: false }),
       "env-empty": onboarding({ unlocked: false, chosen: false }),
     };
     mount("bot-release");
 
-    // The new team (no bots, no record) offers no "Add a bot".
-    expect(
-      within(section("env-empty")).queryByRole("button", { name: "Add a bot" }),
-    ).toBeNull();
-    // A team with bots and no onboarding record pre-dates onboarding.
-    expect(
-      within(section("env-team")).getByRole("button", { name: "Add a bot" }),
-    ).toBeTruthy();
     expect(row("bot-triage")).toHaveProperty("disabled", false);
-    expect(
-      within(section("env-me")).getByRole("button", { name: "Add a bot" }),
-    ).toBeTruthy();
-
-    cleanup();
-    mocks.state.onboarding["env-empty"] = onboarding({
-      unlocked: true,
-      chosen: true,
-    });
-    mount("bot-release");
-    expect(
-      within(section("env-empty")).getByRole("button", { name: "Add a bot" }),
-    ).toBeTruthy();
+    await user.click(row("bot-triage"));
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("closes the channels of a team mid-onboarding whose set holds no repository, and offers no create", async () => {
+  it("closes the channels of a team mid-onboarding whose set holds no repository, leaving the + as the way in", async () => {
     const user = userEvent.setup();
     mocks.state.onboarding["env-team"] = onboarding({
       unlocked: false,
@@ -431,11 +451,11 @@ describe("<BotChannelSidebar /> team onboarding", () => {
     });
     mount("bot-notes");
 
-    expect(
-      within(section("env-team")).queryByRole("button", { name: "Add a bot" }),
-    ).toBeNull();
     expect(row("bot-triage")).toHaveProperty("disabled", true);
     await user.click(row("bot-triage"));
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(
+      within(section("env-team")).getByTestId("bot-channel-section-add"),
+    ).toBeTruthy();
   });
 });
