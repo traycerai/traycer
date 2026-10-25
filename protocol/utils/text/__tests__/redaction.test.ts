@@ -298,6 +298,25 @@ describe("redactHomeDirectoryNames", () => {
     ["{/home/Syn Thetic}", "{/home/<redacted>}"],
     ['{"cwd":"/home/Syn Thetic"}', '{"cwd":"/home/<redacted>"}'],
     ["'C:\\Users\\Syn (Work)'", "'C:\\Users\\<redacted>'"],
+    // A closer still closes when punctuation or text follows it.
+    [
+      '{"cwd":"/home/Syn Thetic","pid":1}',
+      '{"cwd":"/home/<redacted>","pid":1}',
+    ],
+    [
+      '{"cwd":"C:\\\\Users\\\\Syn Thetic","pid":1}',
+      '{"cwd":"C:\\\\Users\\\\<redacted>","pid":1}',
+    ],
+    [
+      "failed to open '/Users/Syn Thetic'.",
+      "failed to open '/Users/<redacted>'.",
+    ],
+    ["[ '/Users/Syn Thetic', '/tmp' ]", "[ '/Users/<redacted>', '/tmp' ]"],
+    ["(/home/Syn Thetic), then", "(/home/<redacted>), then"],
+    ["<C:\\Users\\Syn Thetic>.", "<C:\\Users\\<redacted>>."],
+    ['"/Users/Syn Thetic"x', '"/Users/<redacted>"x'],
+    ["{/home/Syn Thetic}x", "{/home/<redacted>}x"],
+    ["'C:\\Users\\Syn (Work)',", "'C:\\Users\\<redacted>',"],
     // Two quoted paths on one line: each path's name is its own.
     [
       "copy '/home/syn a' to '/home/syn b/x'",
@@ -319,11 +338,16 @@ describe("redactHomeDirectoryNames", () => {
     ["'/Users/O'Brien Syn/x'", "'/Users/<redacted>/x'"],
     ["'/Users/O'Brien'", "'/Users/<redacted>'"],
     ["'/Users/O'Brien Syn'", "'/Users/<redacted>'"],
+    ["'/Users/O'Brien Syn',", "'/Users/<redacted>',"],
+    ["'/Users/O'Brien'.", "'/Users/<redacted>'."],
+    ["'/Users/O'Brien", "'/Users/<redacted>"],
     ["C:\\Users\\Syn (Work) Two\\x", "C:\\Users\\<redacted>\\x"],
     ["C:\\Users\\a(b)\\x", "C:\\Users\\<redacted>\\x"],
     // A closer that pairs with no opener ends only the bare name; a route keeps its segment.
     ["at /Users/syn is gone)", "at /Users/<redacted> is gone)"],
+    ["at /Users/syn is gone).", "at /Users/<redacted> is gone)."],
     ["POST /api/collab/users/lookup'", "POST /api/collab/users/lookup'"],
+    ["POST /api/collab/users/lookup',", "POST /api/collab/users/lookup',"],
     [
       "'https://credit.test/api/collab/users/lookup'",
       "'https://credit.test/api/collab/users/lookup'",

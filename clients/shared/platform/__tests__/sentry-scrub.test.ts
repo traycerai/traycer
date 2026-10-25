@@ -169,6 +169,29 @@ describe("shared client Sentry scrub", () => {
       );
     });
 
+    it("redacts a multiword home name a quote closes before punctuation", () => {
+      const line = `[traycer-log] ${JSON.stringify({
+        level: "info",
+        fields: { cwd: "C:\\Users\\Syn Thetic", pid: 1 },
+      })}`;
+      const event: ClientSentryEvent = {
+        breadcrumbs: [{ message: line }],
+        exception: {
+          values: [{ value: "failed to open '/Users/Syn Thetic'." }],
+        },
+      };
+      scrubSentryEventInPlace(event);
+      expect(event.breadcrumbs?.[0]?.message).toBe(
+        `[traycer-log] ${JSON.stringify({
+          level: "info",
+          fields: { cwd: "C:\\Users\\<redacted>", pid: 1 },
+        })}`,
+      );
+      expect(event.exception?.values?.[0]?.value).toBe(
+        "failed to open '/Users/<redacted>'.",
+      );
+    });
+
     it("keeps a module id with a home segment in a console breadcrumb and still redacts a frame path", () => {
       // The line `appLogger.warn` writes for a failed chunk warm-up.
       const line = `[traycer-log] ${JSON.stringify({

@@ -470,8 +470,13 @@ const HOME_PATH_OPENERS: ReadonlySet<string> = new Set(
   HOME_PATH_OPENER_OF_CLOSER.values(),
 );
 
-/** A closer no name letter follows, so not an apostrophe inside a name. */
-const HOME_PATH_CLOSER = String.raw`['"\x60)\]}>](?!${HOME_FOLDER_NAME_LETTER})`;
+/**
+ * A delimiter that closes a path, whatever follows it (`'/Users/a b'.`,
+ * `{"cwd":"/home/a b",...}`). Only `'` and `)` can also stand inside a
+ * name, so those two close only where no letter, digit or `_` follows:
+ * `'/Users/O'Brien` keeps its apostrophe inside the name.
+ */
+const HOME_PATH_CLOSER = String.raw`(?:["\x60\]}>]|[')](?![0-9a-z_\u0080-\uffff]))`;
 
 /**
  * How far before a home root its opener may stand: past a drive, a `\\?\`
