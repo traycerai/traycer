@@ -8,7 +8,7 @@
  * list are stand-ins.
  */
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import {
   defaultScheduler,
   notifyManager,
@@ -230,9 +230,14 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       store.setState({ fatalClose: null, snapshotLoaded: true });
     });
     expect(screen.queryByRole("status")).toBeNull();
-    // The landed snapshot has no rows yet: an empty channel opens with its
-    // intro.
-    expect(screen.getByTestId("bot-channel-intro")).toBeTruthy();
+    // The landed snapshot has no rows yet, so the recovered transcript opens
+    // with the same intro, now inside the transcript itself.
+    expect(screen.queryByTestId("bot-channel-not-here-yet")).toBeNull();
+    expect(
+      within(screen.getByTestId("bot-chat-transcript")).getByTestId(
+        "bot-channel-intro",
+      ),
+    ).toBeTruthy();
   });
 
   it("re-subscribes again on a later send when the first re-subscribe still found no chat", async () => {
