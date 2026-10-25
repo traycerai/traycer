@@ -46,7 +46,7 @@ describe("TeamRoleChangedCard", () => {
       />,
     );
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
-      "Read-only environment settings.",
+      "You can see Acme's settings but not change them.",
     );
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
   });

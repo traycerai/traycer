@@ -14,8 +14,16 @@ import {
   environmentConfigurationItemsDeleteV10,
   environmentConfigurationItemsPutV10,
   environmentConfigurationItemsV10,
+  environmentConfigurationMcpServersDeleteV10,
+  environmentConfigurationMcpServersSetEnabledV10,
+  environmentConfigurationMcpServersListV10,
+  environmentConfigurationMcpServersPutUpgradeV10ToV11,
   environmentConfigurationMcpServersPutV10,
+  environmentConfigurationMcpServersPutV11,
   environmentConfigurationPolicyPutV10,
+  environmentConfigurationSkillsListV10,
+  environmentConfigurationSkillsRemoveV10,
+  environmentConfigurationSkillsSetProvidersV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
@@ -33,16 +41,22 @@ import {
   environmentListV11,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
+  environmentMembersSeatsV10,
   environmentMembersRemovePreviewV10,
   environmentMembersRemoveV10,
   environmentMembersSetRoleV10,
   environmentMembersV10,
   environmentSetMainBotV10,
+  type EnvironmentMembersResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
 import {
   environmentMoveAcceptV10,
+  environmentMovePlanUpgradeV10ToV11,
   environmentMovePlanV10,
+  environmentMovePlanV11,
+  environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
+  environmentMoveStopPreviewV11,
   environmentMoveStopV10,
 } from "@traycer/protocol/host/environment/move-contracts";
 import { ENVIRONMENT_REDESIGN_RPC_METHODS } from "@traycer/protocol/host/environment/redesign-rpc-methods";
@@ -166,11 +180,12 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
       expect(entry.degrade).toEqual({ kind: "unsupported" });
       expect(entry[1].versions[0].contract).toBe(contract);
     }
-    // read and bind stay at @1.0; host.list and members grew an @1.1 MINOR.
+    // read and bind stay at @1.0; host.list grew an @1.1 MINOR, members @1.1
+    // and @1.2.
     expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(0);
     expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(0);
     expect(hostRpcRegistry["environment.host.list"][1].latestMinor).toBe(1);
-    expect(hostRpcRegistry["environment.members"][1].latestMinor).toBe(1);
+    expect(hostRpcRegistry["environment.members"][1].latestMinor).toBe(2);
   });
 });
 
@@ -322,6 +337,7 @@ describe("environment.setMainBot protocol contract", () => {
 describe("environment.list@1.1, environment.host.list@1.1 and environment.members@1.1 upgrade from @1.0 through the registry", () => {
   const ONE_ZERO = { major: 1, minor: 0 } as const;
   const ONE_ONE = { major: 1, minor: 1 } as const;
+  const ONE_TWO = { major: 1, minor: 2 } as const;
 
   it("upgrades environment.list: a user-owned environment is the caller's own personal one, any other is a team they only view", () => {
     const response = environmentListV10.responseSchema.parse({
@@ -484,6 +500,48 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
       legacyRoleNoticeSeenAt: null,
       legacyMembers: [],
     });
+  });
+
+  it("upgrades an environment.members@1.1 page to @1.2 with each member's email null, and parses an @1.2 email", () => {
+    const v11Page: EnvironmentMembersResponseV11 = {
+      members: [
+        {
+          userId: "user-1",
+          displayName: "Ada",
+          avatarUrl: null,
+          effectiveRole: "admin",
+          linkedPlan: false,
+          inviteState: "accepted",
+          invitedAddress: null,
+        },
+      ],
+      nextCursor: null,
+      legacyRoleNoticeSeenAt: 1_700_000_000_000,
+      legacyMembers: ["Grace"],
+    };
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["environment.members"],
+      ONE_ONE,
+      ONE_TWO,
+      v11Page,
+    );
+    expect(upgraded).toEqual({
+      ...v11Page,
+      members: [{ ...v11Page.members[0], email: null }],
+    });
+
+    const v12 = hostRpcRegistry["environment.members"][1].versions[2].contract;
+    const withEmail = {
+      ...v11Page,
+      members: [{ ...v11Page.members[0], email: "ada@example.com" }],
+    };
+    expect(v12.responseSchema.parse(withEmail)).toEqual(withEmail);
+    expect(
+      v12.responseSchema.safeParse({
+        ...v11Page,
+        members: [{ ...v11Page.members[0], email: "" }],
+      }).success,
+    ).toBe(false);
   });
 
   it("parses an @1.1 member carrying an invitation and rejects a role or invite state it does not know", () => {
@@ -688,6 +746,120 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     badResponse: { outcome: "saved" },
   },
   {
+    method: "environment.configuration.mcpServers.list",
+    contract: environmentConfigurationMcpServersListV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: {},
+    response: {
+      servers: [
+        {
+          serverId: "3f1c0d1e-0000-4000-8000-000000000001",
+          name: "docs",
+          transport: "http",
+          url: "https://mcp.example.com",
+          command: null,
+          args: [],
+          env: [],
+          credential: {
+            kind: "secret",
+            secretId: "secret-1",
+            secretName: "DOCS_TOKEN",
+            owned: false,
+          },
+          item: {
+            key: "docs",
+            revision: 4,
+            toolToggles: { claude: { search: false } },
+            offFor: ["codex"],
+          },
+        },
+        {
+          serverId: "3f1c0d1e-0000-4000-8000-000000000002",
+          name: "local",
+          transport: "stdio",
+          url: null,
+          command: "npx",
+          args: ["-y", "server"],
+          env: [],
+          credential: {
+            kind: "none",
+            secretId: null,
+            secretName: null,
+            owned: false,
+          },
+          item: null,
+        },
+      ],
+    },
+    badResponse: { servers: [{ serverId: "s", name: "docs" }] },
+  },
+  {
+    method: "environment.configuration.mcpServers.delete",
+    contract: environmentConfigurationMcpServersDeleteV10,
+    request: { environmentId: TEAM.environmentId, serverId: "s-1" },
+    badRequest: { environmentId: TEAM.environmentId, serverId: "" },
+    response: { outcome: "saved", reason: null },
+    badResponse: { outcome: "not_served", reason: null },
+  },
+  {
+    method: "environment.configuration.mcpServers.setEnabled",
+    contract: environmentConfigurationMcpServersSetEnabledV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      serverId: "s-1",
+      enabled: false,
+    },
+    badRequest: { environmentId: TEAM.environmentId, serverId: "s-1" },
+    response: { outcome: "saved", reason: null },
+    badResponse: { outcome: "not_served", reason: null },
+  },
+  {
+    method: "environment.configuration.skills.list",
+    contract: environmentConfigurationSkillsListV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: { environmentId: "" },
+    response: {
+      outcome: "listed",
+      revision: null,
+      skills: [
+        {
+          name: "release-notes",
+          description: null,
+          origin: "room",
+          edited: false,
+          offFor: ["codex"],
+        },
+      ],
+    },
+    badResponse: { outcome: "listed", skills: [] },
+  },
+  {
+    method: "environment.configuration.skills.remove",
+    contract: environmentConfigurationSkillsRemoveV10,
+    request: { environmentId: TEAM.environmentId, name: "release-notes" },
+    badRequest: { environmentId: TEAM.environmentId, name: "" },
+    response: { outcome: "refused", reason: "not_found" },
+    badResponse: { outcome: "saved", reason: null },
+  },
+  {
+    method: "environment.configuration.skills.setProviders",
+    contract: environmentConfigurationSkillsSetProvidersV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      name: "release-notes",
+      offFor: ["codex"],
+      revision: null,
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      name: "release-notes",
+      offFor: "codex",
+      revision: null,
+    },
+    response: { outcome: "stale", revision: "abc123", reason: null },
+    badResponse: { outcome: "saved", reason: null },
+  },
+  {
     method: "environment.configuration.skills.upload",
     contract: environmentConfigurationSkillsUploadV10,
     request: {
@@ -870,6 +1042,14 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     },
   },
   {
+    method: "environment.members.seats",
+    contract: environmentMembersSeatsV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: { environmentId: "" },
+    response: { seats: { used: 4, total: 5 } },
+    badResponse: { seats: { used: -1, total: 5 } },
+  },
+  {
     method: "environment.members.noticeSeen",
     contract: environmentMembersNoticeSeenV10,
     request: { environmentId: TEAM.environmentId },
@@ -889,7 +1069,13 @@ describe("the environments redesign's new @1.0 methods", () => {
       expect(Object.keys(entry).filter((key) => /^\d+$/.test(key))).toEqual([
         "1",
       ]);
-      expect(entry[1].latestMinor).toBe(0);
+      expect(entry[1].latestMinor).toBe(
+        wire.method === "environment.move.plan" ||
+          wire.method === "environment.move.stopPreview" ||
+          wire.method === "environment.configuration.mcpServers.put"
+          ? 1
+          : 0,
+      );
       expect(entry[1].versions[0].contract).toBe(wire.contract);
       expect(entry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
     },
@@ -912,6 +1098,57 @@ describe("the environments redesign's new @1.0 methods", () => {
       ).toBe(false);
     },
   );
+
+  it("mcpServers.put@1.1 takes a picked secret and names the saved server; a 1.0 answer upgrades with no id", () => {
+    const entry = hostRpcRegistry["environment.configuration.mcpServers.put"];
+    expect(entry[1].versions[1].contract).toBe(
+      environmentConfigurationMcpServersPutV11,
+    );
+    const picked = {
+      environmentId: TEAM.environmentId,
+      serverId: null,
+      name: "docs",
+      transport: "http",
+      url: "https://mcp.example.com",
+      command: null,
+      args: [],
+      env: [],
+      toolToggles: {},
+      offFor: ["codex"],
+      credential: { kind: "secret", secretId: "secret-1" },
+    };
+    expect(
+      environmentConfigurationMcpServersPutV11.requestSchema.safeParse(picked)
+        .success,
+    ).toBe(true);
+    expect(
+      environmentConfigurationMcpServersPutV10.requestSchema.safeParse(picked)
+        .success,
+    ).toBe(false);
+    expect(
+      environmentConfigurationMcpServersPutUpgradeV10ToV11.upgradeResponse({
+        outcome: "saved",
+        reason: null,
+      }),
+    ).toEqual({ outcome: "saved", reason: null, serverId: null });
+    const released = {
+      environmentId: TEAM.environmentId,
+      serverId: null,
+      name: "docs",
+      transport: "http" as const,
+      url: "https://mcp.example.com",
+      command: null,
+      args: [],
+      env: [],
+      toolToggles: {},
+      credential: { kind: "none" as const },
+    };
+    expect(
+      environmentConfigurationMcpServersPutUpgradeV10ToV11.upgradeRequest(
+        released,
+      ),
+    ).toEqual({ ...released, offFor: [] });
+  });
 
   it("registers every redesign method in the host registry, and none of them is missing from this table", () => {
     expect(REDESIGN_WIRE_CASES.map((wire) => wire.method).sort()).toEqual(
@@ -949,6 +1186,134 @@ describe("the environments redesign's new @1.0 methods", () => {
     });
     expect(preview.managed[0]).toEqual(MOVE_ROW);
     expect(preview.needsChoice[0].row).toEqual(MOVE_ROW);
+  });
+
+  it("opens environment.move.plan@1.1 with sameNameInPersonal, which a @1.0 answer upgrades to empty", () => {
+    const line = hostRpcRegistry["environment.move.plan"][1];
+    expect(line.versions[1].contract).toBe(environmentMovePlanV11);
+    expect(line.versions[1].upgradeFromPreviousVersion).toBe(
+      environmentMovePlanUpgradeV10ToV11,
+    );
+    const v10 = environmentMovePlanV10.responseSchema.parse({
+      planHash: "h1",
+      planRevision: 0,
+      hostVersion: "1.39.0",
+      disclosureVersion: 1,
+      rows: {
+        moves: [MOVE_ROW],
+        staysOnThisComputer: [],
+        alreadyInPersonal: [],
+        differsMasked: [],
+        looksLikeAKey: [],
+      },
+    });
+    const upgraded = environmentMovePlanUpgradeV10ToV11.upgradeResponse(v10);
+    expect(upgraded.rows.sameNameInPersonal).toEqual([]);
+    expect(upgraded.guideDiffers).toBe(false);
+    expect(upgraded.rows.moves).toEqual([MOVE_ROW]);
+    const leaky = { ...MOVE_ROW, value: "sk-live-123" };
+    const v11 = environmentMovePlanV11.responseSchema.parse({
+      ...v10,
+      rows: { ...v10.rows, sameNameInPersonal: [leaky] },
+    });
+    expect(v11.rows.sameNameInPersonal).toEqual([MOVE_ROW]);
+    expect(
+      environmentMovePlanV11.responseSchema.parse(v10).rows.sameNameInPersonal,
+    ).toEqual([]);
+    expect(environmentMovePlanV11.responseSchema.parse(v10).guideDiffers).toBe(
+      false,
+    );
+    expect(
+      environmentMovePlanV11.responseSchema.parse({
+        ...v10,
+        guideDiffers: true,
+      }).guideDiffers,
+    ).toBe(true);
+  });
+
+  it("opens environment.move.stopPreview@1.1 with origin and usedBy on each row that needs a choice", () => {
+    const line = hostRpcRegistry["environment.move.stopPreview"][1];
+    expect(line.versions[1].contract).toBe(environmentMoveStopPreviewV11);
+    expect(line.versions[1].upgradeFromPreviousVersion).toBe(
+      environmentMoveStopPreviewUpgradeV10ToV11,
+    );
+    const user = { ...MOVE_ROW, key: "WORK", label: "WORK" };
+    const parsed = environmentMoveStopPreviewV11.responseSchema.parse({
+      managed: [MOVE_ROW],
+      needsChoice: [
+        {
+          row: MOVE_ROW,
+          reason: "edited_here",
+          origin: "from_this_computer",
+          usedBy: [],
+        },
+        {
+          row: MOVE_ROW,
+          reason: "depended_on",
+          origin: "depended_on",
+          usedBy: [{ ...user, value: "sk-live-123" }],
+        },
+      ],
+    });
+    expect(parsed.needsChoice.map((entry) => entry.origin)).toEqual([
+      "from_this_computer",
+      "depended_on",
+    ]);
+    expect(parsed.needsChoice[1].usedBy).toEqual([user]);
+    expect(
+      environmentMoveStopPreviewV11.responseSchema.safeParse({
+        managed: [],
+        needsChoice: [{ row: MOVE_ROW, reason: "edited_here" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      environmentMoveStopPreviewV11.responseSchema.safeParse({
+        managed: [],
+        needsChoice: [
+          {
+            row: MOVE_ROW,
+            reason: "edited_here",
+            origin: "forgotten",
+            usedBy: [],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("upgrades a @1.0 stop preview answer: edited_here becomes changed_here, depended_on gets no usedBy", () => {
+    const v10 = environmentMoveStopPreviewV10.responseSchema.parse({
+      managed: [MOVE_ROW],
+      needsChoice: [
+        { row: MOVE_ROW, reason: "edited_here" },
+        { row: MOVE_ROW, reason: "depended_on" },
+      ],
+    });
+
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["environment.move.stopPreview"],
+      { major: 1, minor: 0 },
+      { major: 1, minor: 1 },
+      v10,
+    );
+
+    expect(upgraded).toEqual({
+      managed: [MOVE_ROW],
+      needsChoice: [
+        {
+          row: MOVE_ROW,
+          reason: "edited_here",
+          origin: "changed_here",
+          usedBy: [],
+        },
+        {
+          row: MOVE_ROW,
+          reason: "depended_on",
+          origin: "depended_on",
+          usedBy: [],
+        },
+      ],
+    });
   });
 
   it("carries a value only on environment.configuration.items", () => {

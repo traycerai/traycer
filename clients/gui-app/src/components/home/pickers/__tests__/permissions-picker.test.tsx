@@ -91,7 +91,7 @@ describe("<PermissionsPicker /> - catalogSupportedModes copy", () => {
     openMenu();
 
     expect(
-      screen.getByText("Needs a newer Traycer on this machine."),
+      screen.getByText("Needs a newer Traycer on this host."),
     ).toBeTruthy();
   });
 
@@ -192,7 +192,7 @@ describe("<PermissionsPicker /> - empty supportedPermissionModes means unconstra
       expect(option.getAttribute("aria-disabled")).not.toBe("true");
     }
     expect(screen.queryByText(/Not supported by/)).toBeNull();
-    expect(screen.queryByText("Needs a newer Traycer on this machine.")).toBe(
+    expect(screen.queryByText("Needs a newer Traycer on this host.")).toBe(
       null,
     );
   });
@@ -465,9 +465,7 @@ describe("<PermissionsPicker /> - mid-turn lock", () => {
     const item = autoMenuItem();
     expect(item.hasAttribute("data-disabled")).toBe(true);
     expect(item.textContent).not.toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
-    expect(item.textContent).toContain(
-      "Needs a newer Traycer on this machine.",
-    );
+    expect(item.textContent).toContain("Needs a newer Traycer on this host.");
   });
 
   it("does not lock Auto for traycer billing, and keeps the mid-turn notice", () => {

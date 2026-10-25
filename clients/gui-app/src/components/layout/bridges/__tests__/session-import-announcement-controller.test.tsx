@@ -243,6 +243,16 @@ describe("<SessionImportAnnouncementController />", () => {
     );
   });
 
+  it("titles the announcement by what it does", () => {
+    render(<SessionImportAnnouncementController />);
+    render(<>{lastToastContent()}</>);
+
+    expect(
+      screen.getByText("Import chats from other coding agents"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Bring your work with you")).toBeNull();
+  });
+
   it("does not show when signed out", () => {
     useAuthStore.setState({ status: "signed-out" });
     render(<SessionImportAnnouncementController />);

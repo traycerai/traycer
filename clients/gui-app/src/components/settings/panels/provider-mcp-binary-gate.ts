@@ -51,5 +51,5 @@ export function mcpBinaryAbsentNotice(
     lost.length === 1
       ? lost[0]
       : `${lost.slice(0, -1).join(", ")} and ${lost[lost.length - 1]}`;
-  return `Traycer couldn't find the ${providerLabel} CLI on this machine, so ${verbs} MCP servers is unavailable here. Point Traycer at a binary under CLI & Args, or install ${providerLabel}.`;
+  return `Traycer couldn't find the ${providerLabel} CLI on this computer, so ${verbs} MCP servers is unavailable here. Point Traycer at a binary under CLI & Args, or install ${providerLabel}.`;
 }

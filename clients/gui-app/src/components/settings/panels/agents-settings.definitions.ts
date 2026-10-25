@@ -4,9 +4,8 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 export const AGENT_SELECTION = defineSettingsSection("agents", {
   page: {
     availableWhen: alwaysAvailable,
-    label: "Agent selection",
-    description:
-      "How Traycer picks a coding agent, model, and reasoning effort for the Traycer agents it creates. Native subagents keep their provider's settings.",
+    label: "Agents",
+    description: "How agents are picked, and the agents a harness can start.",
     keywords: [
       "agents",
       "guide",
@@ -17,6 +16,10 @@ export const AGENT_SELECTION = defineSettingsSection("agents", {
       "delegation",
       "child agent",
       "routing",
+      "agent definition",
+      "subagent",
+      "agents.md",
+      "custom agent",
     ],
   },
 });

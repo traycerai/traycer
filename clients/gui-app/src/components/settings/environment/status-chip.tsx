@@ -22,6 +22,7 @@ const TONES = {
 
 export function ConfigurationStatusChip(props: {
   readonly hosts: readonly ConfigurationChipHost[];
+  readonly emptyText: string;
   readonly savingOffline: boolean;
   readonly local: boolean;
   readonly onDetails: () => void;
@@ -30,7 +31,11 @@ export function ConfigurationStatusChip(props: {
 }): ReactNode {
   const [open, setOpen] = useState(false);
   if (props.local) return null;
-  const state = configurationChipState(props.hosts, props.savingOffline);
+  const state = configurationChipState(
+    props.hosts,
+    props.savingOffline,
+    props.emptyText,
+  );
   const unsupported = props.hosts.find((host) => host.state === "unsupported");
   if (unsupported !== undefined && !props.savingOffline) {
     return (

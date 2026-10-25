@@ -5,10 +5,9 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { AGENT_DEFINITIONS } from "@/components/settings/panels/agent-definitions.definitions";
-import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
@@ -24,30 +23,40 @@ import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
+import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 
 const LIST = "environment.agentDefinitions.list";
 
-export function AgentDefinitionsSettingsPanel(): ReactNode {
+/**
+ * The Agents page's Definitions tab: one file per agent definition, read
+ * through the host binding `EnvironmentHostBinding` re-provides above it, or
+ * the team's configuration under a team pick.
+ */
+export function AgentDefinitionsTab(): ReactNode {
   const source = useConfigurationSource();
   const hostId = useAddressableHostId();
+  const configurationKey = useConfigurationKey();
   const supported = useHostMethodSupport(hostId, LIST);
   return (
-    <SettingsPanelShell
-      title={AGENT_DEFINITIONS.page.label}
-      description={AGENT_DEFINITIONS.page.description}
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
-    >
+    <>
       {source.kind === "pool" || supported === true ? (
-        <AgentDefinitionsBody hostId={hostId} />
+        // Keyed by configuration: a write's outcome and every draft belong
+        // to the configuration they were made in.
+        <AgentDefinitionsBody
+          key={configurationKey}
+          configurationKey={configurationKey}
+        />
       ) : null}
       {source.kind === "host" && supported === false ? (
         <p className="text-ui-sm text-muted-foreground">
           Update this host to use agent definitions.
         </p>
       ) : null}
-    </SettingsPanelShell>
+    </>
   );
 }
 
@@ -74,9 +83,10 @@ function useAgentDefinitionWrites() {
 }
 
 function AgentDefinitionsBody(props: {
-  readonly hostId: string | null;
+  readonly configurationKey: string;
 }): ReactNode {
   const query = useEnvironmentAgentDefinitionsQuery(true);
+  const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
   const [conflict, setConflict] = useState<ConfigurationWriteIssue>(null);
   if (query.isPending) {
@@ -90,7 +100,12 @@ function AgentDefinitionsBody(props: {
     );
   }
   if (query.isError) {
-    return (
+    return source.kind === "pool" ? (
+      <ConfigurationReadFailed
+        page="agent definitions"
+        onRetry={() => void query.refetch()}
+      />
+    ) : (
       <p className="text-ui-sm text-muted-foreground">
         Couldn't read these agent definitions.
       </p>
@@ -106,12 +121,12 @@ function AgentDefinitionsBody(props: {
         </p>
       ) : (
         definitions.map((definition) => (
-          // Keyed by host and revision: a re-read after any save remounts the
-          // editor on the text it now has, and so does the binding moving to
-          // another computer, whose definition may share this name and
-          // revision but not this text.
+          // Keyed by configuration and revision: a re-read after any save
+          // remounts the editor on the text it now has, and so does another
+          // team, Personal or computer, whose definition may share this name
+          // and revision but not this text.
           <AgentDefinitionEditor
-            key={`${props.hostId}:${definition.name}:${definition.revision}`}
+            key={`${props.configurationKey}:${definition.name}:${definition.revision}`}
             definition={definition}
             onOutcome={setConflict}
           />
@@ -127,12 +142,30 @@ function AgentDefinitionsBody(props: {
   );
 }
 
+/**
+ * The delete confirm names where the definition stops starting: the team
+ * (`teamName`), a Local row's computer (`local`), or Personal.
+ */
+function deleteDefinitionDescription(
+  name: string,
+  teamName: string | null,
+  local: boolean,
+): string {
+  if (teamName !== null) {
+    return `Delete “${name}” from ${teamName}? Harnesses on ${teamName}'s hosts can no longer start it.`;
+  }
+  if (local) return `Delete “${name}” from every host you use?`;
+  return `Delete “${name}” from Personal? Harnesses on your computers and sandboxes can no longer start it.`;
+}
+
 function AgentDefinitionEditor(props: {
   readonly definition: AgentDefinition;
   readonly onOutcome: (conflict: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const { definition } = props;
   const source = useConfigurationSource();
+  const teamName = useConfigurationName();
+  const pick = useEnvironmentPick();
   const canEdit = useCanEditConfiguration();
   const team = useConfigurationItemMutations();
   const [text, setText] = useState(definition.text);
@@ -239,11 +272,13 @@ function AgentDefinitionEditor(props: {
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title="Delete agent definition"
-        description={
-          source.kind === "pool"
-            ? `Delete “${definition.name}” from this team?`
-            : `Delete “${definition.name}” from every host you use?`
-        }
+        description={deleteDefinitionDescription(
+          definition.name,
+          source.kind === "pool" && source.configuration === "team"
+            ? teamName
+            : null,
+          pick.kind === "local",
+        )}
         cascadeSummary={null}
         actionLabel="Delete"
         isPending={deleting}

@@ -10,7 +10,6 @@ import {
 import { Hash } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -37,14 +36,15 @@ import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bi
 import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { BotChannelView } from "@/components/bots/bot-channel-view";
 import {
-  BotChannelView,
+  useBotOpenThread,
+  useBotOpenThreadStore,
   type BotOpenThread,
-} from "@/components/bots/bot-channel-view";
+} from "@/stores/bots/bot-open-thread-store";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
-import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -370,9 +370,15 @@ function BotTabContent(props: {
     snapshot.bot.environmentId,
     membersSupported,
   );
-  // Held here, above the views, so the open thread and the session shown
-  // under the hood survive a switch between the channel's tabs.
-  const [openThread, setOpenThread] = useState<BotOpenThread | null>(null);
+  // The open thread is held in its store and the session shown under the
+  // hood here, above the views, so both survive a switch between the
+  // channel's tabs.
+  const openThread = useBotOpenThread(botId);
+  const setOpenThreadFor = useBotOpenThreadStore((s) => s.setOpenThread);
+  const setOpenThread = useCallback(
+    (open: BotOpenThread | null) => setOpenThreadFor(botId, open),
+    [botId, setOpenThreadFor],
+  );
   const [sessionChatId, setSessionChatId] = useState<string | null>(null);
   const openUnderTheHood = useCallback(
     (threadSessionChatId: string) => {
@@ -395,11 +401,7 @@ function BotTabContent(props: {
           }}
           className="flex min-h-0 flex-1 flex-col gap-0"
         >
-          <BotChannelHeader
-            snapshot={snapshot}
-            environmentLabel={environmentLabel}
-            isMain={isMain === true}
-          />
+          <BotChannelHeader title={snapshot.bot.title} />
           {streamError === null ? null : (
             // A fatal close AFTER a snapshot: the last reading stays on
             // screen, marked as such, and the retry sits on top of it.
@@ -431,6 +433,7 @@ function BotTabContent(props: {
               botId={botId}
               hostId={hostId}
               botTitle={snapshot.bot.title}
+              directive={snapshot.bot.directive}
               appConversationChatId={snapshot.bot.appConversationChatId}
               paused={paused}
               resolveMember={resolveMember}
@@ -606,42 +609,19 @@ function ErrorNotice(props: {
 }
 
 /**
- * Slack's channel header: `# name`, the environment it belongs to, the
- * open-request hint, and the channel's tabs under it.
+ * Slack's channel header: `# name` and the channel's tabs under it. What the
+ * bot is for is the top of its channel; nothing else sits here.
  */
-function BotChannelHeader(props: {
-  readonly snapshot: BotSubscriptionSnapshot;
-  readonly environmentLabel: string;
-  readonly isMain: boolean;
-}): ReactNode {
-  const { snapshot, environmentLabel, isMain } = props;
-  const openRequests = snapshot.openRequestCount;
+function BotChannelHeader(props: { readonly title: string }): ReactNode {
   return (
     <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h1
-          className="flex min-w-0 items-center gap-1 text-ui-md font-bold text-foreground"
-          data-testid="bot-tab-title"
-        >
-          <Hash className="size-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">{snapshot.bot.title}</span>
-        </h1>
-        {isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
-        <span className="truncate text-ui-xs text-muted-foreground">
-          {environmentLabel}
-        </span>
-        {openRequests !== null && openRequests > 0 ? (
-          <Badge
-            variant="warning"
-            size="sm"
-            data-testid="bot-tab-open-requests"
-          >
-            {openRequests === 1
-              ? "1 open request"
-              : `${openRequests} open requests`}
-          </Badge>
-        ) : null}
-      </div>
+      <h1
+        className="flex min-w-0 items-center gap-1 text-ui-md font-bold text-foreground"
+        data-testid="bot-tab-title"
+      >
+        <Hash className="size-4 shrink-0" aria-hidden="true" />
+        <span className="truncate">{props.title}</span>
+      </h1>
       <TabsList variant="line" aria-label="Channel view">
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
           Messages

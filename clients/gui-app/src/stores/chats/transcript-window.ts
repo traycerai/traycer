@@ -314,6 +314,28 @@ export interface TranscriptWindow {
    */
   readonly staleSpans: readonly HydratedSpan[];
   /**
+   * The skeleton a void discarded, retained for DISPLAY ONLY.
+   *
+   * A void empties `skeleton`, and a row projection keyed on it then
+   * names every ordinal with a synthetic placeholder key until the replacement
+   * index streams back - so every row in the list changes identity at once,
+   * and a list virtualizer that caches sizes by key re-walks the whole
+   * transcript against sizes it measured for OTHER rows under those synthetic
+   * keys. Nearly every row of the voided index exists in the replacement under
+   * the same row id, so the client is already holding the identities it needs.
+   *
+   * These entries keep their PREVIOUS coordinates and are never written into
+   * `skeleton`: range validation, seating and completeness read `skeleton`
+   * alone, so nothing a carried entry claims can validate a placement. Only an
+   * authoritative `skeleton` ever fills it, so a synthetic key cannot enter it.
+   *
+   * Written at the void - the outgoing skeleton when it names any row,
+   * otherwise the carry already held, so a second void during recovery cannot
+   * replace a useful carry with an empty one; a zero-row authority clears it.
+   * Retired by authority: the moment `skeletonComplete` becomes true.
+   */
+  readonly carriedSkeleton: readonly (RowSkeletonEntry | undefined)[];
+  /**
    * Records the client holds that the INDEX has not placed yet.
    *
    * The client-side mirror of an asymmetry the host cannot avoid: a
@@ -552,6 +574,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     records: { messages: new Map(), events: new Map(), revision: 0 },
     spans: [],
     staleSpans: [],
+    carriedSkeleton: [],
     liveMessages: [],
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
@@ -2542,6 +2565,12 @@ export function applyWindowedSnapshot(
           // {@link TranscriptWindow.staleSpans}. The ledger entries the carry
           // references travel with it, deferred debt included.
           staleSpans: carriedStaleSpans,
+          // The row identities stay displayable the same way. See
+          // {@link TranscriptWindow.carriedSkeleton}.
+          carriedSkeleton: carriedSkeletonAcrossVoid(
+            reconciledWindow,
+            input.rowCount,
+          ),
           records: carriedLedger,
           unsettledByteMessageIds:
             reconciledWindow.unsettledByteMessageIds.filter((id) =>
@@ -3096,13 +3125,25 @@ export function applySkeletonChunk(
     chunk.fromOrdinal,
     chunk.fromOrdinal + chunk.entries.length,
   );
-  return retireUnnamedStaleSpans(
-    reconcileSpansWithSkeleton(
-      unavailableReconciled,
-      chunk.fromOrdinal,
-      chunk.fromOrdinal + chunk.entries.length,
+  return retireCarriedSkeleton(
+    retireUnnamedStaleSpans(
+      reconcileSpansWithSkeleton(
+        unavailableReconciled,
+        chunk.fromOrdinal,
+        chunk.fromOrdinal + chunk.entries.length,
+      ),
     ),
   );
+}
+
+/**
+ * A complete skeleton names every row itself, so the display carry has
+ * nothing left to stand in for. See {@link TranscriptWindow.carriedSkeleton}.
+ */
+function retireCarriedSkeleton(window: TranscriptWindow): TranscriptWindow {
+  return window.skeletonComplete && window.carriedSkeleton.length > 0
+    ? { ...window, carriedSkeleton: [] }
+    : window;
 }
 
 /**
@@ -4058,6 +4099,8 @@ function voidedTranscriptWindow(
     // The ledger entries the carry references travel with it, deferred debt
     // included - see {@link retainLedgerForSpans}.
     staleSpans: carriedStaleSpans,
+    // The row identities stay displayable the same way - see the field.
+    carriedSkeleton: carriedSkeletonAcrossVoid(window, input.rowCount),
     records,
     unsettledByteMessageIds: window.unsettledByteMessageIds.filter((id) =>
       records.messages.has(id),
@@ -4069,6 +4112,27 @@ function voidedTranscriptWindow(
     visibleOrdinals: window.visibleOrdinals,
     clock: window.clock + 1,
   };
+}
+
+/**
+ * What a fold that empties the skeleton carries into
+ * {@link TranscriptWindow.carriedSkeleton}: the outgoing skeleton when it
+ * names any row. One with no entry is itself a void still recovering, so it
+ * keeps the carry already held rather than replacing it with nothing. A
+ * zero-row authority means the rows are gone, so nothing is carried.
+ *
+ * Both such folds call it - {@link voidedTranscriptWindow} and the rebase in
+ * {@link applyWindowedSnapshot} - because the host's frames for one epoch bump
+ * can land in either order, and the second must not lose what the first kept.
+ */
+function carriedSkeletonAcrossVoid(
+  window: TranscriptWindow,
+  rowCount: number,
+): readonly (RowSkeletonEntry | undefined)[] {
+  if (rowCount === 0) return [];
+  return window.skeleton.some((entry) => entry !== undefined)
+    ? window.skeleton
+    : window.carriedSkeleton;
 }
 
 /**
@@ -4295,7 +4359,7 @@ export function applyIndexChange(
     window.skeletonStreamCoveredThrough === appendBase
       ? Math.max(appendCursor, input.rowCount)
       : window.skeletonStreamCoveredThrough;
-  const next: TranscriptWindow = {
+  const next = retireCarriedSkeleton({
     ...window,
     skeleton,
     skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
@@ -4334,7 +4398,7 @@ export function applyIndexChange(
       coversEveryOrdinal(skeleton, input.rowCount),
     skeletonStreamCoveredThrough: coveredThrough,
     clock: window.clock + 1,
-  };
+  });
   // This delta is the first authority to name the ordinals it just appended, so
   // it owes them the identity resolution a skeleton chunk owes its own - and it
   // is the LAST authority that will ever reach them, because the skeleton

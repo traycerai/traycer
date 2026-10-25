@@ -12,11 +12,17 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
 import {
   useCanEditConfiguration,
   useConfigurationSource,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
-import { ConfigurationConflict } from "./configuration-conflict";
-import { usePickedTeamLabel } from "./team-pick-label";
+import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import {
+  typedWriteIssue,
+  type ConfigurationWriteIssue,
+} from "./configuration-write-issue";
+import { usePickedTeamLabel, useConfigurationName } from "./team-pick-label";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import { ConfigurationReadFailed } from "./team-read-failed";
 
 export function TeamGuide(): ReactNode {
   const source = useConfigurationSource();
@@ -27,7 +33,7 @@ export function TeamGuide(): ReactNode {
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const [picking, setPicking] = useState(false);
-  const [conflict, setConflict] = useState(false);
+  const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const notServed = query.data?.outcome === "not_served";
   let body: ReactNode = <MutedAgentSpinner />;
   if (scope.client === null || notServed)
@@ -40,9 +46,10 @@ export function TeamGuide(): ReactNode {
     );
   else if (query.isError)
     body = (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        Couldn't read the guide.
-      </p>
+      <ConfigurationReadFailed
+        page="selection guide"
+        onRetry={() => void query.refetch()}
+      />
     );
   else if (query.data !== undefined && query.data.outcome !== "not_served") {
     body = canEdit ? (
@@ -50,7 +57,7 @@ export function TeamGuide(): ReactNode {
         key={`${scope.viewingHost?.hostId}:${query.data.revision}`}
         text={query.data.text}
         revision={query.data.revision}
-        onConflict={() => setConflict(true)}
+        onIssue={setIssue}
       />
     ) : (
       <MarkdownEditPreview
@@ -67,7 +74,7 @@ export function TeamGuide(): ReactNode {
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 p-5">
       <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
-      {conflict ? <ConfigurationConflict changedBy={null} /> : null}
+      <ConfigurationWriteFeedback issue={issue} />
       {body}
     </section>
   );
@@ -76,8 +83,11 @@ export function TeamGuide(): ReactNode {
 function TeamGuideEditor(props: {
   readonly text: string;
   readonly revision: string;
-  readonly onConflict: () => void;
+  /** A save's or a reset's answer: a lost compare-and-set, or not saved. */
+  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
 }): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const teamName = useConfigurationName();
   const source = useConfigurationSource();
   const { set, reset } = useConfigurationGuideMutations();
   const [value, setValue] = useState(props.text);
@@ -91,9 +101,8 @@ function TeamGuideEditor(props: {
         revision: props.revision,
       },
       {
-        onSuccess: (result) => {
-          if (result.outcome === "conflict") props.onConflict();
-        },
+        onSuccess: (result) =>
+          props.onIssue(typedWriteIssue(result, "Couldn't save the guide.")),
       },
     );
   };
@@ -127,17 +136,28 @@ function TeamGuideEditor(props: {
       <ConfirmDestructiveDialog
         open={confirm}
         onOpenChange={setConfirm}
-        title="Revert to default instructions?"
-        description="This replaces the team's guide. Your custom instructions will be lost."
+        title="Reset to default instructions?"
+        description={
+          personal
+            ? "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost."
+            : `This replaces ${teamName}'s selection guide with the default for every member. Changes anyone made to it are lost.`
+        }
         cascadeSummary={null}
-        actionLabel="Revert to default"
+        actionLabel="Reset to default"
         isPending={reset.isPending}
         blockedReason={null}
         onConfirm={() => {
           if (source.kind === "pool")
             reset.mutate(
               { environmentId: source.environmentId },
-              { onSuccess: () => setConfirm(false) },
+              {
+                onSuccess: (result) => {
+                  setConfirm(false);
+                  props.onIssue(
+                    typedWriteIssue(result, "Couldn't reset the guide."),
+                  );
+                },
+              },
             );
         }}
       />

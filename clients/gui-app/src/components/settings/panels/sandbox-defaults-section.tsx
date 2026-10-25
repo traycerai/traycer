@@ -204,8 +204,8 @@ export function SandboxDefaultsSection(props: {
   );
 }
 
-const KEPT_UNTIL_SET =
-  "Sandboxes you already have are kept until you set a period.";
+const KEPT_UNTIL_IDLE_CHANGED =
+  "Sandboxes you already have aren't destroyed after resting until you change their Idle settings.";
 
 function DefaultsHeading(props: {
   readonly configuration: SandboxPageConfiguration;
@@ -217,7 +217,7 @@ function DefaultsHeading(props: {
       <div className="min-w-0 space-y-1">
         <h2 className="text-ui font-medium">Your defaults for new sandboxes</h2>
         <p className="text-ui-xs text-muted-foreground">
-          {`What a New Personal sandbox row offers. The gear on the row changes one sandbox only. ${KEPT_UNTIL_SET}`}
+          {`Each new Personal sandbox starts with these. ${KEPT_UNTIL_IDLE_CHANGED}`}
         </p>
       </div>
     );
@@ -230,7 +230,7 @@ function DefaultsHeading(props: {
       <p className="text-ui-xs text-muted-foreground">
         {`Shared by ${configuration.teamName} · `}
         <EditorsClause environment={props.environment} />
-        {` · not a spending limit. The gear on a New row changes one sandbox only. ${KEPT_UNTIL_SET}`}
+        {` · not a spending limit. Each new ${configuration.teamName} sandbox starts with these. ${KEPT_UNTIL_IDLE_CHANGED}`}
       </p>
     </div>
   );

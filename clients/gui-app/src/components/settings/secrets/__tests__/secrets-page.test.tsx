@@ -1,3 +1,32 @@
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
+}));
+
+// The page names its environment through the surface's client and the viewer.
+const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => hostBoundary.client,
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
+// The computers holding a copy are covered by `secret-remove-preview-computers`;
+// here Remove's preview is read with none.
+vi.mock("@/components/settings/personal/use-personal-computers", () => ({
+  usePersonalComputers: () => ({
+    computers: [],
+    statuses: new Map(),
+    versions: new Map(),
+    participants: [],
+  }),
+}));
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -7,7 +36,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentSecret,
@@ -15,25 +44,40 @@ import type {
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsVerifyRequest,
   SecretVerifyResult,
+  SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
-import {
-  SECRET_READABLE_WHERE,
-  SECRET_REVOKED_LABEL,
-} from "@/lib/sandboxes/secrets-page-copy";
+import { SECRET_REVOKED_LABEL } from "@/lib/sandboxes/secrets-page-copy";
+import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "host-secrets";
 const TYPED_VALUE = "sk_live_TYPED_VALUE_9f3a7c";
+const PERSONAL_ENV = "env-personal";
+const ADDED_AT = Date.UTC(2026, 9, 24, 9, 30);
+
+/** The day and month a row names, as the page formats them. */
+function dayMonth(at: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+  }).format(at);
+}
 
 interface SecretsHostState {
   secrets: EnvironmentSecret[];
+  /** What `environment.secrets.versions` answers for any secret. */
+  versions: SecretVersion[];
   /** The list read rejects with this. */
   listError: Error | null;
+  /** `environment.list` rejects with this. */
+  environmentsError: Error | null;
   verifyAnswer: SecretVerifyResult;
   createAnswer: EnvironmentSecretsCreateResponse;
   /** The create rejects with this. */
@@ -71,7 +115,19 @@ function secretFixture(
 function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   const state: SecretsHostState = {
     secrets: [],
+    versions: [
+      {
+        versionId: "ver-1",
+        ordinal: 1,
+        createdAt: ADDED_AT,
+        supersededAt: null,
+        destroyedAt: null,
+        current: true,
+        rotationState: null,
+      },
+    ],
     listError: null,
+    environmentsError: null,
     verifyAnswer: { evidence: "probe_accepted" },
     createAnswer: {
       outcome: "created",
@@ -87,6 +143,37 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
+      "environment.list": () => {
+        if (state.environmentsError !== null) throw state.environmentsError;
+        return {
+          environments: [
+            {
+              environmentId: PERSONAL_ENV,
+              ownerKind: "user" as const,
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner" as const,
+              kind: "personal" as const,
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        };
+      },
+      "environment.secrets.versions": () => ({
+        versions: [...state.versions],
+        removal: null,
+      }),
+      "environment.secrets.rotation": () => ({
+        rotation: null,
+        lastVerify: null,
+      }),
+      "environment.history": () => ({
+        readerScope: "full" as const,
+        entries: [],
+        hostStates: [],
+      }),
       "environment.secrets.list": () => {
         reads.list += 1;
         if (state.listError !== null) throw state.listError;
@@ -108,6 +195,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
 }
 
 function renderPage(host: SecretsHost): QueryClient {
+  hostBoundary.client = host.client;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -125,8 +213,16 @@ function renderPage(host: SecretsHost): QueryClient {
   return queryClient;
 }
 
+beforeEach(() => {
+  useAuthStore.setState({ status: "signed-in" });
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+});
+
 afterEach(() => {
   cleanup();
+  hostBoundary.client = null;
+  navigateToSettingsSectionMock.mockReset();
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 async function openAddDialog(): Promise<void> {
@@ -152,6 +248,12 @@ function fillApiKeyForm(): void {
   });
 }
 
+/** Opens a row's Details and waits for the secret's own controls. */
+async function openRowDetails(row: HTMLElement): Promise<HTMLElement> {
+  fireEvent.click(within(row).getByRole("button", { name: "Details" }));
+  return screen.findByTestId("secret-details-controls");
+}
+
 function buttonOf(testId: string): HTMLButtonElement {
   const element = screen.getByTestId(testId);
   if (!(element instanceof HTMLButtonElement)) {
@@ -168,7 +270,7 @@ async function saveApiKey(): Promise<void> {
 }
 
 describe("the secrets list", () => {
-  it("shows one row per secret, each live row saying where its value is readable", async () => {
+  it("shows one row per secret as one line, with Replace, Remove and Details", async () => {
     const host = buildSecretsHost({
       secrets: [
         secretFixture({ secretId: "sec-1", name: "STRIPE_KEY" }),
@@ -177,7 +279,7 @@ describe("the secrets list", () => {
           name: "PROD_DB",
           kind: "database",
           protocol: "postgres",
-          destinations: ["db.example.com"],
+          destinations: ["db.example.com", "db2.example.com"],
         }),
         secretFixture({ secretId: "sec-3", name: "OLD_KEY", revoked: true }),
       ],
@@ -190,17 +292,65 @@ describe("the secrets list", () => {
       "PROD_DB",
       "OLD_KEY",
     ]);
-    expect(rows[0].textContent).toContain(SECRET_READABLE_WHERE);
-    expect(rows[0].textContent).toContain("API key or token");
-    expect(rows[0].textContent).toContain("HTTPS");
-    expect(rows[0].textContent).toContain("api.stripe.com");
-    expect(rows[1].textContent).toContain(SECRET_READABLE_WHERE);
-    expect(rows[1].textContent).toContain("Database login");
-    expect(rows[1].textContent).toContain("PostgreSQL");
+    const added = dayMonth(ADDED_AT);
+    await waitFor(() => {
+      expect(within(rows[0]).getByTestId("secret-row-line").textContent).toBe(
+        `STRIPE_KEY · Set · sent to api.stripe.com · added by you ${added}`,
+      );
+    });
+    expect(within(rows[1]).getByTestId("secret-row-line").textContent).toBe(
+      `PROD_DB · Set · sent to db.example.com, db2.example.com · added by you ${added}`,
+    );
+    for (const row of rows) {
+      expect(row.textContent).not.toContain("Written as a plain value");
+      expect(within(row).queryByTestId("secret-row-verify")).toBeNull();
+      expect(within(row).queryByTestId("secret-row-versions")).toBeNull();
+      expect(within(row).getByRole("button", { name: "Details" })).toBeTruthy();
+    }
+    expect(
+      within(rows[0])
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Replace", "Remove", "Details"]);
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
-  it("marks a revoked secret and offers no Verify on it", async () => {
+  it("says replaced, not added, once the current version is a replacement", async () => {
+    renderPage(
+      buildSecretsHost({
+        secrets: [secretFixture({})],
+        versions: [
+          {
+            versionId: "ver-2",
+            ordinal: 2,
+            createdAt: ADDED_AT,
+            supersededAt: null,
+            destroyedAt: null,
+            current: true,
+            rotationState: null,
+          },
+        ],
+      }),
+    );
+
+    const line = await screen.findByTestId("secret-row-line");
+    await waitFor(() => {
+      expect(line.textContent).toBe(
+        `STRIPE_KEY · Set · sent to api.stripe.com · replaced by you ${dayMonth(ADDED_AT)}`,
+      );
+    });
+  });
+
+  it("leaves out the added clause while the versions are unread", async () => {
+    const host = buildSecretsHost({ secrets: [secretFixture({})] });
+    host.state.versions = [];
+    renderPage(host);
+
+    const line = await screen.findByTestId("secret-row-line");
+    expect(line.textContent).toBe("STRIPE_KEY · Set · sent to api.stripe.com");
+  });
+
+  it("marks a revoked secret, and its Details offers no Verify", async () => {
     const host = buildSecretsHost({
       secrets: [
         secretFixture({ secretId: "sec-1", name: "STRIPE_KEY" }),
@@ -212,10 +362,19 @@ describe("the secrets list", () => {
     const rows = await screen.findAllByTestId("secret-row");
     const live = rows[0];
     const revoked = rows[1];
-    expect(within(live).getByTestId("secret-row-verify")).toBeTruthy();
     expect(revoked.textContent).toContain(SECRET_REVOKED_LABEL);
-    expect(within(revoked).queryByTestId("secret-row-verify")).toBeNull();
     expect(live.textContent).not.toContain(SECRET_REVOKED_LABEL);
+
+    const liveControls = await openRowDetails(live);
+    expect(within(liveControls).getByTestId("secret-row-verify")).toBeTruthy();
+    cleanup();
+
+    renderPage(host);
+    const again = await screen.findAllByTestId("secret-row");
+    const revokedControls = await openRowDetails(again[1]);
+    expect(
+      within(revokedControls).queryByTestId("secret-row-verify"),
+    ).toBeNull();
   });
 
   it("says what secrets are when there are none", async () => {
@@ -229,15 +388,38 @@ describe("the secrets list", () => {
     expect(screen.getByTestId("secrets-add")).toBeTruthy();
   });
 
-  it("shows the host's own words when the list cannot be read", async () => {
-    renderPage(
-      buildSecretsHost({ listError: new Error("Connect to manage secrets.") }),
-    );
+  it("drops the rows it already showed when a later read fails, rather than keeping them beside the failure", async () => {
+    const host = buildSecretsHost({ secrets: [secretFixture({})] });
+    const queryClient = renderPage(host);
+    await screen.findByTestId("secret-row");
+
+    host.state.listError = new Error("Connect to manage secrets.");
+    await queryClient.invalidateQueries();
+
+    expect(await screen.findByTestId("secrets-page-error")).toBeTruthy();
+    expect(screen.queryByTestId("secret-row")).toBeNull();
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+  });
+
+  it("reads a failed list as Personal's one failure line with Retry, never the empty state", async () => {
+    const host = buildSecretsHost({
+      secrets: [secretFixture({})],
+      listError: new Error("Connect to manage secrets."),
+    });
+    renderPage(host);
 
     const error = await screen.findByTestId("secrets-page-error");
-    expect(error.textContent).toContain("Connect to manage secrets.");
+    expect(error.textContent).toContain("Couldn't read Personal's secrets.");
+    expect(error.textContent).not.toContain("Connect to manage secrets.");
+    expect(within(error).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.queryByTestId("secret-row")).toBeNull();
     expect(screen.queryByTestId("secrets-add")).toBeNull();
+
+    host.state.listError = null;
+    fireEvent.click(within(error).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("secret-row")).toBeTruthy();
+    expect(screen.queryByTestId("secrets-page-error")).toBeNull();
   });
 });
 
@@ -249,14 +431,17 @@ describe("a row's Verify", () => {
     });
     renderPage(host);
 
-    fireEvent.click(await screen.findByTestId("secret-row-verify"));
+    const controls = await openRowDetails(
+      await screen.findByTestId("secret-row"),
+    );
+    fireEvent.click(within(controls).getByTestId("secret-row-verify"));
 
     const line = await screen.findByTestId("secret-verify-line");
     expect(line.textContent).toBe(
       "Nothing answered on that port. Check the port this secret is set to.",
     );
     expect(host.verifyRequests).toEqual([
-      { target: "secret", secretId: "sec-1", environmentId: null },
+      { target: "secret", secretId: "sec-1", environmentId: PERSONAL_ENV },
     ]);
   });
 
@@ -266,7 +451,10 @@ describe("a row's Verify", () => {
     });
     renderPage(host);
 
-    fireEvent.click(await screen.findByTestId("secret-row-verify"));
+    const controls = await openRowDetails(
+      await screen.findByTestId("secret-row"),
+    );
+    fireEvent.click(within(controls).getByTestId("secret-row-verify"));
 
     expect((await screen.findByTestId("secret-verify-line")).textContent).toBe(
       "Reached the destination. The key is checked the first time an agent uses it.",
@@ -274,8 +462,36 @@ describe("a row's Verify", () => {
   });
 });
 
+describe("a row's Details on a Local pick", () => {
+  it("keeps Verify and the versions when the environment list cannot be read", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
+    });
+    const host = buildSecretsHost({
+      secrets: [secretFixture({ secretId: "sec-1" })],
+      environmentsError: new Error("environment list unavailable"),
+    });
+    renderPage(host);
+
+    const row = await screen.findByTestId("secret-row");
+    fireEvent.click(
+      await within(row).findByRole("button", { name: "Details" }),
+    );
+    const controls = await screen.findByTestId("secret-details-controls");
+    expect(await within(controls).findByTestId("secret-versions")).toBeTruthy();
+    fireEvent.click(within(controls).getByTestId("secret-row-verify"));
+
+    expect((await screen.findByTestId("secret-verify-line")).textContent).toBe(
+      "Reached the destination. The key is checked the first time an agent uses it.",
+    );
+    expect(host.verifyRequests).toEqual([
+      { target: "secret", secretId: "sec-1", environmentId: null },
+    ]);
+  });
+});
+
 describe("the add dialog's kind picker", () => {
-  it("offers only the API key, provider and database kinds", async () => {
+  it("offers only the API key and database kinds, and points provider keys to Providers", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
     await openAddDialog();
 
@@ -286,17 +502,30 @@ describe("the add dialog's kind picker", () => {
     expect(offered.sort()).toEqual([
       "secret-kind-option-api_key",
       "secret-kind-option-database",
-      "secret-kind-option-provider",
     ]);
-    for (const option of within(picker).getAllByRole("button")) {
-      expect((option as HTMLButtonElement).disabled).toBe(false);
-    }
-    for (const kind of ["ssh", "aws", "broker", "mail", "rdp"]) {
+    expect(screen.queryByText("Model provider API key")).toBeNull();
+    for (const kind of ["provider", "ssh", "aws", "broker", "mail", "rdp"]) {
       expect(
         screen.queryByTestId(`secret-kind-option-${kind}`),
         kind,
       ).toBeNull();
     }
+    expect(screen.getByTestId("secret-provider-keys-line").textContent).toBe(
+      "Provider keys are set on each provider's Account tab, under Providers.",
+    );
+  });
+
+  it("closes the dialog and opens the Providers page from the provider-keys line", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openAddDialog();
+
+    fireEvent.click(screen.getByTestId("secret-provider-keys-link"));
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("providers");
+    await waitFor(() => {
+      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
+    });
   });
 
   it("says who holds the value on the form, and the add dialog names no web handoff", async () => {
@@ -304,7 +533,7 @@ describe("the add dialog's kind picker", () => {
     await openApiKeyForm();
 
     expect(screen.getByTestId("secret-custody-sentence").textContent).toBe(
-      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it through the broker.",
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
     );
     expect(screen.getByTestId("add-secret-dialog").textContent).not.toMatch(
       /on the web|dashboard/i,
@@ -380,10 +609,11 @@ describe("saving a secret", () => {
     fireEvent.click(buttonOf("secret-form-continue"));
 
     const confirmation = await screen.findByTestId("secret-save-confirmation");
-    expect(confirmation.textContent).toContain("STRIPE_KEY");
-    expect(confirmation.textContent).toContain(
-      "plain value on every host you own",
+    // The custody sentence and its disclosure, and nothing else before Save.
+    expect(confirmation.textContent).toBe(
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.How Traycer handles this",
     );
+    expect(confirmation.textContent).not.toContain("plain value");
     expect(host.createRequests).toEqual([]);
     expect(host.reads.list).toBe(1);
 
@@ -414,7 +644,7 @@ describe("saving a secret", () => {
         exportPolicy: null,
         sandboxesByDefault: true,
         plaintextConsent: null,
-        environmentId: null,
+        environmentId: PERSONAL_ENV,
       },
     ]);
     await waitFor(() => {
@@ -563,5 +793,93 @@ describe("saving a secret", () => {
       expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
     });
     expect(host.createRequests).toHaveLength(1);
+  });
+});
+
+describe("the add form's words", () => {
+  it("labels the host field Server address with where the key is sent", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openApiKeyForm();
+
+    expect(screen.getByLabelText("Server address")).toBeTruthy();
+    expect(screen.queryByLabelText("Host")).toBeNull();
+    expect(
+      screen.getByText(
+        "Where this key is sent, e.g. api.stripe.com. Separate several with commas.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses the short hint on a database login's server address", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openAddDialog();
+    fireEvent.click(screen.getByTestId("secret-kind-option-database"));
+
+    await screen.findByLabelText("Server address");
+    expect(screen.getByText("Separate several with commas.")).toBeTruthy();
+    expect(screen.queryByText(/Where this key is sent/)).toBeNull();
+  });
+
+  it("says in plain words what each mode does, and warns only on the one that exposes the value", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openApiKeyForm();
+
+    const dialog = screen.getByTestId("add-secret-dialog");
+    expect(
+      within(dialog).getByLabelText(
+        "Agents use it without seeing it (recommended)",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByLabelText("Agents can read it")).toBeTruthy();
+    expect(dialog.textContent).toContain(
+      "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
+    );
+    expect(dialog.textContent).not.toContain(
+      "agents can use it and never read it",
+    );
+    expect(dialog.textContent).not.toMatch(/Broker/i);
+  });
+
+  it("offers How Traycer handles this on the form and on the confirmation", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openApiKeyForm();
+    fillApiKeyForm();
+
+    fireEvent.click(screen.getByTestId("members-data-handling-trigger"));
+    expect(screen.getByTestId("members-data-handling-notice").textContent).toBe(
+      dataHandlingNoticeText(),
+    );
+
+    fireEvent.click(buttonOf("secret-form-continue"));
+    const confirmation = await screen.findByTestId("secret-save-confirmation");
+    expect(
+      within(confirmation).getByTestId("members-data-handling-trigger"),
+    ).toBeTruthy();
+  });
+
+  it("names the server address typed when the host cannot find it", async () => {
+    const host = buildSecretsHost({
+      secrets: [],
+      createAnswer: { outcome: "refused", code: "destination_unresolvable" },
+    });
+    renderPage(host);
+    await openApiKeyForm();
+    fireEvent.change(screen.getByTestId("secret-form-name"), {
+      target: { value: "STRIPE_KEY" },
+    });
+    fireEvent.change(screen.getByTestId("secret-form-hosts"), {
+      target: { value: "api.example.com, api2.example.com" },
+    });
+    fireEvent.change(screen.getByTestId("secret-form-value"), {
+      target: { value: TYPED_VALUE },
+    });
+    fireEvent.click(buttonOf("secret-form-continue"));
+    fireEvent.click(await screen.findByTestId("secret-save"));
+
+    const note = await screen.findByTestId("secret-save-note");
+    expect(note.textContent).toBe(
+      "Couldn't reach api.example.com, api2.example.com. Check the server address, then save again.",
+    );
+    expect(screen.getByTestId("add-secret-dialog")).toBeTruthy();
   });
 });

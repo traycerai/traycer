@@ -8,6 +8,10 @@ import type {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
+import { RetrospectiveSheetReview } from "@/components/settings/move/retrospective-sheet-link";
+import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
+import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -81,7 +85,11 @@ export function ChatBotMessage(props: {
         />
       )}
       {postId === null || openThread === null ? null : (
-        <ThreadLine line={threadLine} onOpen={() => openThread(postId)} />
+        <ThreadLine
+          line={threadLine}
+          botTitle={presentation.botTitle}
+          onOpen={() => openThread(postId)}
+        />
       )}
     </BotMessageFrame>
   );
@@ -109,7 +117,7 @@ function BotRow(props: {
     openAnnouncementThread !== null;
   return (
     <BotMessageFrame
-      avatar={<BotAvatar />}
+      avatar={<BotAvatar size="lg" />}
       name={presentation.botTitle}
       app
       sentAt={sentAt}
@@ -135,6 +143,7 @@ function BotRow(props: {
       {answerable ? (
         <ThreadLine
           line={presentation.threadLine?.(announcementId) ?? null}
+          botTitle={presentation.botTitle}
           onOpen={() => openAnnouncementThread(announcementId)}
         />
       ) : null}
@@ -186,11 +195,14 @@ export function BotMessageFrame(props: {
   );
 }
 
-export function BotAvatar(): ReactElement {
+export function BotAvatar(props: { readonly size: "lg" | "sm" }): ReactElement {
   return (
-    <Avatar shape="square" size="lg" data-testid="bot-avatar">
+    <Avatar shape="square" size={props.size} data-testid="bot-avatar">
       <AvatarFallback>
-        <Bot className="size-5" aria-hidden="true" />
+        <Bot
+          className={props.size === "lg" ? "size-5" : "size-3.5"}
+          aria-hidden="true"
+        />
       </AvatarFallback>
     </Avatar>
   );
@@ -246,6 +258,18 @@ const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
   question: "border-l-chart-2",
 };
 
+/**
+ * Tracy's message on a computer an earlier version shared is a record, not a
+ * proposal: it carries the retrospective sheet's link, and is labelled with
+ * the Overview's own line.
+ */
+function announcementLabel(announcement: BotAnnouncement): string {
+  return announcement.link !== null &&
+    retrospectiveSheetLinkHostId(announcement.link) !== null
+    ? SHARED_BY_EARLIER_VERSION_LINE
+    : ANNOUNCEMENT_LABELS[announcement.kind];
+}
+
 function BotAnnouncementBody(props: {
   readonly announcement: BotAnnouncement;
   readonly children: ReactNode;
@@ -260,7 +284,7 @@ function BotAnnouncementBody(props: {
       )}
     >
       <span className="text-ui-sm font-semibold text-foreground">
-        {ANNOUNCEMENT_LABELS[announcement.kind]}
+        {announcementLabel(announcement)}
       </span>
       {props.children}
       {announcement.link === null ? null : (
@@ -304,10 +328,19 @@ function ReplyOptions(props: {
   );
 }
 
-/** An http(s) link opens; an epic-relative path is shown as the path it is. */
+/**
+ * An http(s) link opens; a retrospective sheet link is the message's Review
+ * action; any other epic-relative path is shown as the path it is.
+ */
 function AnnouncementLink(props: { readonly link: string }): ReactElement {
   const openLink = useOpenLink();
   const isWebLink = /^https?:\/\//i.test(props.link);
+  const reviewHostId = isWebLink
+    ? null
+    : retrospectiveSheetLinkHostId(props.link);
+  if (reviewHostId !== null) {
+    return <RetrospectiveSheetReview hostId={reviewHostId} />;
+  }
   if (!isWebLink) {
     return (
       <code className="truncate text-ui-xs text-muted-foreground">
@@ -414,15 +447,18 @@ function ConversationRequestLine(props: {
  * Slack's line under a post: "N replies" and when the last one landed, the
  * way into the thread. A thread with no reply yet offers "Reply in thread",
  * the action Slack puts on a post. An unread reply in a thread the viewer
- * took part in shows as a dot and bold count.
+ * took part in shows as a dot and bold count. While the bot is answering in
+ * the thread, the line says so in place of when the last reply landed.
  */
 function ThreadLine(props: {
   readonly line: ChatBotThreadLine | null;
+  readonly botTitle: string;
   readonly onOpen: () => void;
 }): ReactElement {
-  const { line, onOpen } = props;
+  const { line, botTitle, onOpen } = props;
   const replies = line?.replyCount ?? 0;
   const unread = line?.unread ?? false;
+  const replying = line?.replying ?? false;
   return (
     <button
       type="button"
@@ -431,7 +467,7 @@ function ThreadLine(props: {
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
-      {replies === 0 ? (
+      {replies === 0 && !replying ? (
         <span className="flex items-center gap-1 font-medium text-primary">
           <MessageSquareText className="size-3.5" aria-hidden="true" />
           Reply in thread
@@ -446,20 +482,47 @@ function ThreadLine(props: {
               role="img"
             />
           ) : null}
-          <span
-            className={cn(
-              "text-primary",
-              unread ? "font-bold" : "font-semibold",
-            )}
-          >
-            {replies === 1 ? "1 reply" : `${replies} replies`}
-          </span>
-          {line?.lastReplyAt === null || line === null ? null : (
-            <LastReply at={line.lastReplyAt} />
+          {replies === 0 ? null : (
+            <span
+              className={cn(
+                "text-primary",
+                unread ? "font-bold" : "font-semibold",
+              )}
+            >
+              {replies === 1 ? "1 reply" : `${replies} replies`}
+            </span>
           )}
+          <ThreadLineStatus
+            lastReplyAt={line?.lastReplyAt ?? null}
+            replying={replying}
+            botTitle={botTitle}
+          />
         </>
       )}
     </button>
+  );
+}
+
+/** The line's tail: the bot answering now, else when the last reply landed. */
+function ThreadLineStatus(props: {
+  readonly lastReplyAt: number | null;
+  readonly replying: boolean;
+  readonly botTitle: string;
+}): ReactNode {
+  if (props.replying) {
+    return (
+      <span
+        data-testid="bot-thread-replying"
+        className="min-w-0 truncate text-muted-foreground"
+      >
+        <WorkingShimmerText className={undefined}>
+          {`${props.botTitle} is replying…`}
+        </WorkingShimmerText>
+      </span>
+    );
+  }
+  return props.lastReplyAt === null ? null : (
+    <LastReply at={props.lastReplyAt} />
   );
 }
 

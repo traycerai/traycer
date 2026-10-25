@@ -11,12 +11,12 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-ids";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
-import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { environmentMutationKeys } from "@/lib/query-keys";
 
 type LinkMethod = "providers.link" | "providers.linkComplete";
 type LinkCompleteResponse = ResponseOfMethod<
@@ -34,20 +34,18 @@ function teamLinkFloor(method: LinkMethod): RequiredHostMethodVersion {
   return { method, version: { major: 1, minor: 1 } };
 }
 
-/** A linked plan changes the team's Plans card and its provider items. */
+/**
+ * A linked plan changes the team's Plans card and its provider items, on
+ * every host that read them.
+ */
 function rereadLinkedPlan(
   queryClient: QueryClient,
-  hostId: string | null,
   environmentId: string,
 ): void {
-  for (const method of [
+  invalidateConfigurationReads(queryClient, environmentId, [
     "environment.plans.list",
     "environment.configuration.items",
-  ] as const) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.method(hostId, method, { environmentId }),
-    });
-  }
+  ]);
 }
 
 export interface TeamPlanLinkStart {
@@ -62,7 +60,7 @@ export function useTeamPlanLinkStartMutation(
   HostRpcError,
   TeamPlanLinkStart
 > {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   return useHostMutation<
     HostRpcRegistry,
     "providers.link",
@@ -88,18 +86,13 @@ export function useTeamPlanLinkStartMutation(
 export function useTeamPlanLinkCompleteMutation(
   environmentId: string,
   readCode: () => string,
-): UseMutationResult<
-  LinkCompleteResponse,
-  HostRpcError,
-  string,
-  { readonly hostId: string | null }
-> {
-  const client = usePoolTierHostClient(useHostClient());
+): UseMutationResult<LinkCompleteResponse, HostRpcError, string, undefined> {
+  const client = useHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "providers.linkComplete",
-    { readonly hostId: string | null },
+    undefined,
     string
   >({
     client,
@@ -111,10 +104,9 @@ export function useTeamPlanLinkCompleteMutation(
     requiredHostMethodVersion: () => teamLinkFloor("providers.linkComplete"),
     options: {
       mutationKey: environmentMutationKeys.providersLinkComplete(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (response, _linkId, context) => {
+      onSuccess: (response) => {
         if (response.state === "linked") {
-          rereadLinkedPlan(queryClient, context.hostId, environmentId);
+          rereadLinkedPlan(queryClient, environmentId);
         }
       },
     },
@@ -133,7 +125,7 @@ export function useTeamPlanLinkPollQuery(
   linkId: string | null,
   intervalMs: number,
 ): UseQueryResult<LinkCompleteResponse, HostRpcError> {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   const queryClient = useQueryClient();
   const poll = useHostQuery({
     client,
@@ -165,8 +157,8 @@ export function useTeamPlanLinkPollQuery(
   const linked = poll.data?.state === "linked";
   useEffect(() => {
     if (linked) {
-      rereadLinkedPlan(queryClient, client.getActiveHostId(), environmentId);
+      rereadLinkedPlan(queryClient, environmentId);
     }
-  }, [linked, queryClient, client, environmentId]);
+  }, [linked, queryClient, environmentId]);
   return poll;
 }

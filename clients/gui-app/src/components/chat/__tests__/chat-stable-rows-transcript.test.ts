@@ -7,7 +7,18 @@ import {
   EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
   transcriptListKeySequence,
 } from "@/components/chat/chat-stable-rows";
-import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import {
+  transcriptListRows,
+  unplacedRowKey,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
+import {
+  applyIndexChange,
+  applySkeletonChunk,
+  applyWindowedSnapshot,
+  emptyTranscriptWindow,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 
 function model(id: string, content: string): ChatMessageModel {
   return {
@@ -38,7 +49,7 @@ function placeholder(
   ordinal: number,
   entry: RowSkeletonEntry | null,
 ): TranscriptListRow {
-  return { kind: "placeholder", key, ordinal, entry };
+  return { kind: "placeholder", key, ordinal, entry, provenance: "index" };
 }
 
 function hydrated(
@@ -168,5 +179,96 @@ describe("transcript list key sequence", () => {
 
   it("treats an undefined committed baseline as unchanged", () => {
     expect(didTranscriptListKeySequenceChange(undefined, rows)).toBe(false);
+  });
+});
+
+describe("stable rows across a send's void", () => {
+  function entries(rowIds: readonly string[]): RowSkeletonEntry[] {
+    return rowIds.map((rowId, index) => ({
+      rowId,
+      createdAt: 1000 + index,
+      role: index % 2 === 0 ? "user" : "assistant",
+      byteLength: 64 << index,
+      bodyDigest: `d-${rowId}`,
+    }));
+  }
+
+  function skeletonChunk(
+    window: TranscriptWindow,
+    rowIds: readonly string[],
+  ): TranscriptWindow {
+    return applySkeletonChunk(window, {
+      epoch: window.epoch,
+      fromOrdinal: 0,
+      entries: entries(rowIds),
+      isFinal: true,
+    });
+  }
+
+  function opened(rowIds: readonly string[]): TranscriptWindow {
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: rowIds.length,
+        indexRevision: null,
+        tail: { fromOrdinal: rowIds.length, messages: [], events: [] },
+      },
+      null,
+      null,
+    );
+    return skeletonChunk(seeded, rowIds);
+  }
+
+  it("changes the committed key sequence only by the row the send appended", () => {
+    const before = opened(["a", "b", "c"]);
+    const held = computeStableTranscriptListRows(
+      transcriptListRows({ window: before, rendered: [] }),
+      EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
+    );
+    const committed = transcriptListKeySequence(held.result);
+
+    const voided = applyIndexChange(before, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 4,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    const throughVoid = computeStableTranscriptListRows(
+      transcriptListRows({ window: voided, rendered: [] }),
+      held,
+    );
+    expect(transcriptListKeySequence(throughVoid.result)).toEqual([
+      ...committed,
+      unplacedRowKey(3),
+    ]);
+    // The same descriptor under the same key, now marked as the carry's.
+    throughVoid.result.slice(0, 3).forEach((row, ordinal) => {
+      const prior = held.result[ordinal];
+      expect(row.kind === "placeholder" ? row.entry : null).toBe(
+        prior.kind === "placeholder" ? prior.entry : undefined,
+      );
+      expect(row).toMatchObject({ provenance: "carried" });
+    });
+
+    const replaced = computeStableTranscriptListRows(
+      transcriptListRows({
+        window: skeletonChunk(voided, ["a", "b", "c", "d"]),
+        rendered: [],
+      }),
+      throughVoid,
+    );
+    expect(transcriptListKeySequence(replaced.result)).toEqual([
+      ...committed,
+      "d",
+    ]);
+    // Authority replaced the carried entry under the same key and position,
+    // so the row re-renders in place rather than remounting elsewhere.
+    const carried = throughVoid.result[1];
+    const authoritative = replaced.result[1];
+    expect(carried).toMatchObject({ key: "b", provenance: "carried" });
+    expect(authoritative).toMatchObject({ key: "b", provenance: "index" });
+    expect(authoritative).not.toBe(carried);
   });
 });

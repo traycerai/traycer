@@ -343,7 +343,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(
       screen.getByText(
-        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Amp CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", { name: "Amp installation guide" });
@@ -369,7 +369,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(
       screen.getByText(
-        "No Command Code CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Command Code CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", {
@@ -405,7 +405,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(screen.getByText("Looking for the Amp CLI…")).toBeDefined();
     expect(
-      screen.queryByText(/No Amp CLI was found on this machine/),
+      screen.queryByText(/No Amp CLI was found on this computer/),
     ).toBeNull();
     // The install guide is the actionable half of the wrong advice; it must
     // not be reachable while the answer is still unknown.
@@ -426,7 +426,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(
       screen.getByText(
-        "No Cursor CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Cursor CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     expect(screen.queryByRole("link")).toBeNull();
@@ -457,7 +457,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
       screen.getByRole("radio", { name: "Select /usr/local/bin/opencode" }),
     ).toBeDefined();
     expect(
-      screen.queryByText(/No Traycer CLI was found on this machine/),
+      screen.queryByText(/No Traycer CLI was found on this computer/),
     ).toBeNull();
   });
 
@@ -479,7 +479,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
       screen.getByRole("radio", { name: "Select /usr/local/bin/amp" }),
     ).toBeDefined();
     expect(
-      screen.queryByText(/No Amp CLI was found on this machine/),
+      screen.queryByText(/No Amp CLI was found on this computer/),
     ).toBeNull();
   });
 });
@@ -1568,7 +1568,7 @@ describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-pa
 
     expect(
       screen.getByText(
-        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+        "No Antigravity CLI was found on this computer, and Traycer ships no bundled copy of it. Install it.",
       ),
     ).toBeDefined();
     expect(screen.queryByText(/add its path below/u)).toBeNull();
@@ -1584,7 +1584,7 @@ describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-pa
 
     expect(
       screen.getByText(
-        "No Codex CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Codex CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
   });
@@ -1666,7 +1666,7 @@ describe("ProviderCliCandidatesSection: macOS requirement", () => {
     expect(screen.queryByText(MANAGED_NOTE)).toBeNull();
     expect(
       screen.getByText(
-        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+        "No Antigravity CLI was found on this computer, and Traycer ships no bundled copy of it. Install it.",
       ),
     ).toBeDefined();
   });

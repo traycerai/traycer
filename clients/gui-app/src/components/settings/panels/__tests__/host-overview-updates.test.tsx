@@ -2228,7 +2228,7 @@ describe("Overview updates — CLI floor remedy", () => {
     await selectHostOverviewTab("updates");
 
     await screen.findByText(
-      "First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
+      "First update Traycer's command-line tools on host-a. Open a terminal on that computer and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
     );
     // This lone unavailable asset keeps Update now hidden even if only the
     // cliFloor suppression is removed: the asset gate independently rejects
@@ -2267,7 +2267,7 @@ describe("Overview updates — CLI floor remedy", () => {
     await selectHostOverviewTab("updates");
 
     await screen.findByText(
-      "Traycer's command-line tools on host-a were updated, but the host is still using an older copy. Run the command again: First update Traycer's command-line tools on host-a. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
+      "Traycer's command-line tools on host-a were updated, but the host is still using an older copy. Run the command again: First update Traycer's command-line tools on host-a. Open a terminal on that computer and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.",
     );
     // Treating cliManifest.version as clearance while restoring updatableVersion
     // would expose Update now; the meaningful positive pin above is the

@@ -82,6 +82,7 @@ function renderChipWith(
   render(
     <ConfigurationStatusChip
       hosts={hosts}
+      emptyText="Nothing runs this yet"
       savingOffline={options.savingOffline}
       local={options.local}
       onDetails={onDetails}
@@ -162,9 +163,9 @@ describe("the six chip texts", () => {
     expect(chipText()).toBe("2 not applied on dev-box");
   });
 
-  it("says No hosts yet for a configuration with no host", () => {
+  it("reads the caller's empty text for a configuration with no host", () => {
     renderChip([]);
-    expect(chipText()).toBe("No hosts yet");
+    expect(chipText()).toBe("Nothing runs this yet");
   });
 
   it("asks to update a host that negotiates below 1.1 and opens that host's Overview", async () => {

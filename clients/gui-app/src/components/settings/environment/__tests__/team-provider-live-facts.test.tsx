@@ -72,6 +72,7 @@ vi.mock("@/components/settings/panels/provider-rate-limit-section", () => ({
 
 const POOL: ConfigurationSource = {
   kind: "pool",
+  configuration: "team",
   environmentId: "env-a",
   roomId: "room-a",
   providerHandle: "handle-a",

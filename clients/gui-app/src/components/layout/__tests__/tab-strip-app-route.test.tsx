@@ -128,6 +128,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
+// The retrospective and move sheets RootComponent mounts app-wide read this
+// computer's host through a <HostRuntimeProvider> this tree does not build.
+vi.mock("@/components/settings/move/environment-sheets-host", () => ({
+  EnvironmentSheetsHost: () => null,
+}));
+// The app shell's Tracy entry resolves the main bot through the host runtime
+// too. Unmounted, it fixes no bot, so the strip draws no entry.
+vi.mock("@/components/layout/tabs/tracy-entry-controller", () => ({
+  TracyEntryController: () => null,
+}));
 
 vi.mock("@/components/layout/host-status-footer", () => ({
   HostStatusFooter: () => null,

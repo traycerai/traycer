@@ -1,3 +1,4 @@
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Info, RotateCcw } from "lucide-react";
 import {
@@ -13,12 +14,9 @@ import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
-import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
-import { CredentialChoiceDialog } from "@/components/settings/personal/credential-choice-dialog";
-import {
-  usePersonalHostState,
-  usePersonalRowNotes,
-} from "@/components/settings/personal/personal-page-context";
+import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
+import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
+import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -45,6 +43,8 @@ import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effe
 import {
   EnvOverrideEditor,
   type EnvStaleRefusal,
+  type KeyRefusal,
+  type KeyRefusalFor,
 } from "@/components/settings/panels/env-override-editor";
 import { staleWriteOf } from "@/lib/environment/stale-write";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
@@ -69,6 +69,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
@@ -76,6 +77,8 @@ import { TeamVariablesAndShells } from "@/components/settings/environment/team-v
 
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.";
+const PERSONAL_PANEL_DESCRIPTION =
+  "Plain values every computer and sandbox running Personal gets, and the shell agents run in.";
 const SAVED_FLASH_MS = 1600;
 type ShellSaveTarget = "program" | "flags";
 
@@ -160,10 +163,13 @@ const SHELL_CONFIG_GATE_METHOD = "config.shell.get";
  */
 export function ShellSettingsPanel() {
   const source = useConfigurationSource();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
   return source.kind === "pool" ? (
-    <TeamVariablesAndShells />
+    <TeamVariablesAndShells key={configurationKey} />
   ) : (
-    <HostShellSettingsPanel />
+    <HostShellSettingsPanel key={configurationKey} />
   );
 }
 
@@ -182,6 +188,10 @@ function HostShellSettingsPanel() {
   // that is not an explicit, resolved pick.
   const scopedBinding = useScopedHostBinding(scope);
   const fallbackReason = localConfigFallbackReason(scope.host, supported);
+  const description =
+    useEnvironmentPick().kind === "personal"
+      ? PERSONAL_PANEL_DESCRIPTION
+      : PANEL_DESCRIPTION;
   // Both `false` outcomes below — the bridge fallback and the remote capability
   // notice — park every host read this page owns, which would also park the
   // handshake that overturns the verdict. The probe is what keeps the answer
@@ -201,6 +211,7 @@ function HostShellSettingsPanel() {
       <ShellSettingsPanelOverLocalStore
         hostName={scope.hostLabel}
         reason={fallbackReason}
+        description={description}
       />
     );
   }
@@ -208,7 +219,7 @@ function HostShellSettingsPanel() {
   const inner = (
     <SettingsPanelShell
       title={SHELL.page.label}
-      description={PANEL_DESCRIPTION}
+      description={description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <HostScopeGate
@@ -273,6 +284,7 @@ function ShellSettingsPanelOverRpc(props: {
 function ShellSettingsPanelOverLocalStore(props: {
   readonly hostName: string;
   readonly reason: LocalConfigFallbackReason;
+  readonly description: string;
 }) {
   const runnerHost = useRunnerHost();
   const traycerCli = runnerHost.traycerCli;
@@ -280,7 +292,7 @@ function ShellSettingsPanelOverLocalStore(props: {
     return (
       <SettingsPanelShell
         title={SHELL.page.label}
-        description={PANEL_DESCRIPTION}
+        description={props.description}
       >
         <NoConfigSourceNotice hostName={props.hostName} />
       </SettingsPanelShell>
@@ -289,7 +301,7 @@ function ShellSettingsPanelOverLocalStore(props: {
   return (
     <SettingsPanelShell
       title={SHELL.page.label}
-      description={PANEL_DESCRIPTION}
+      description={props.description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <ShellSettingsPanelOverBridge
@@ -470,12 +482,9 @@ function ShellSettingsPanelBody(props: {
     beginShellSave("flags");
     controller.revertShellArgs(config.path, shellSaveCallbacks("flags"));
   };
-  const personalHostState = usePersonalHostState();
-  const [heldCredential, setHeldCredential] = useState<{
-    readonly oldKey: string;
-    readonly newKey: string;
-    readonly value: string;
-  } | null>(null);
+  // A value that looks like a key is refused in its row, which offers
+  // Add a secret with it filled in.
+  const keyShaped = useKeyShapedSecret();
   const onEnvCommit = (
     oldKey: string,
     newKey: string,
@@ -487,19 +496,6 @@ function ShellSettingsPanelBody(props: {
       (isCredentialShapedEnvName(newKey) ||
         (value !== null && urlCarriesCredentials(value)))
     ) {
-      return;
-    }
-    // Before anything is stored: a value that looks like a credential, on a
-    // host that hands variables to every host the person uses, asks first.
-    // While the host's status is not known yet it may be such a host, so it
-    // asks then too rather than storing first.
-    if (
-      (personalHostState?.kind === "ready" ||
-        personalHostState?.kind === "unknown") &&
-      value !== null &&
-      classifyCredential({ name: newKey, value }).credentialLike
-    ) {
-      setHeldCredential({ oldKey, newKey, value });
       return;
     }
     storeEnv(oldKey, newKey, value);
@@ -561,23 +557,11 @@ function ShellSettingsPanelBody(props: {
         justSaved={envJustSaved}
         credentialRefusal={credentialRefusal}
         staleRefusal={envStaleRefusal}
+        keyRefusal={keyShaped.refusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
       />
-      <CredentialChoiceDialog
-        name={heldCredential?.newKey ?? null}
-        onKeepAsVariable={() => {
-          if (heldCredential !== null) {
-            storeEnv(
-              heldCredential.oldKey,
-              heldCredential.newKey,
-              heldCredential.value,
-            );
-          }
-          setHeldCredential(null);
-        }}
-        onDismiss={() => setHeldCredential(null)}
-      />
+      {keyShaped.dialog}
     </div>
   );
 }
@@ -695,7 +679,7 @@ function TerminalShellGroup(props: {
                   Shell program
                 </div>
                 <p className="text-ui-xs text-muted-foreground">
-                  Pick a shell, or add any program on this machine.
+                  Pick a shell, or add any program on this computer.
                 </p>
               </div>
               <div className="flex max-w-full flex-col items-end gap-1.5 max-md:items-start">
@@ -922,7 +906,7 @@ function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
         <>
           <p className="text-muted-foreground">
             {notInstalled
-              ? "wsl.exe on this machine is only the Windows installer stub, so a terminal tab opens, prints its usage text, and exits. Run the command below from an elevated terminal, restart Windows, then re-detect shells."
+              ? "wsl.exe on this computer is only the Windows installer stub, so a terminal tab opens, prints its usage text, and exits. Run the command below from an elevated terminal, restart Windows, then re-detect shells."
               : "WSL runs, but no Linux distribution is registered, so a terminal tab exits immediately. Run the command below, then re-detect shells."}
           </p>
           <code className="block rounded bg-foreground/5 px-2 py-1 font-mono">
@@ -963,6 +947,7 @@ function HostEnvironmentGroup(props: {
   readonly justSaved: boolean;
   readonly credentialRefusal: string | null;
   readonly staleRefusal: EnvStaleRefusal | null;
+  readonly keyRefusal: KeyRefusal | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -971,7 +956,8 @@ function HostEnvironmentGroup(props: {
   readonly onDelete: (key: string) => void;
 }) {
   const rowNotes = usePersonalRowNotes("variable");
-  const personalHostState = usePersonalHostState();
+  const personal = useEnvironmentPick().kind === "personal";
+  const onHold = useHeldValueReviews("variable", "");
   return (
     <SettingsGroup
       group={SHELL.definitions.hostEnvironment}
@@ -997,17 +983,6 @@ function HostEnvironmentGroup(props: {
             <p className="text-ui-xs text-muted-foreground">
               Per-provider variables live in Settings → Providers.
             </p>
-            {/* This page edits this host's own operating system; a value for
-                another one is set where every host is listed. */}
-            {personalHostState?.kind === "ready" ? (
-              <p
-                data-testid="other-os-values-note"
-                className="text-ui-xs text-muted-foreground"
-              >
-                Values and shells for other operating systems are set in the
-                dashboard.
-              </p>
-            ) : null}
           </div>
           <TransientSaveIndicator
             pending={props.pending ? props.saveActive : false}
@@ -1018,6 +993,7 @@ function HostEnvironmentGroup(props: {
         <div className={props.compact ? "p-4" : "p-5"}>
           <EnvOverrideEditor
             rowNotes={rowNotes}
+            onHold={onHold}
             overrides={props.overrides}
             disabled={props.pending}
             credentialRefusal={props.credentialRefusal}
@@ -1025,7 +1001,12 @@ function HostEnvironmentGroup(props: {
             namePlaceholder={
               props.credentialRefusal === null ? "OPENAI_API_KEY" : "NODE_ENV"
             }
-            emptyLabel="Variables are plain values every host gets. Add a variable."
+            emptyLabel={
+              personal
+                ? "Variables are plain values every computer and sandbox running Personal gets."
+                : "Variables are plain values every host gets."
+            }
+            keyRefusal={keyRefusalOf(props.keyRefusal)}
             staleRefusal={props.staleRefusal}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
@@ -1034,6 +1015,11 @@ function HostEnvironmentGroup(props: {
       </>
     </SettingsGroup>
   );
+}
+
+/** One refusal for every name: Variables sends every key to Secrets. */
+function keyRefusalOf(refusal: KeyRefusal | null): KeyRefusalFor {
+  return refusal === null ? null : () => refusal;
 }
 
 function TransientSaveLiveStatus(props: {

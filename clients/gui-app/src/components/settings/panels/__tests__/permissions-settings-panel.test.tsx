@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -124,7 +124,23 @@ vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
 
 // The team's surface has its own suite; here it is a marker.
 vi.mock("@/components/settings/environment/team-permissions", () => ({
-  TeamPermissions: (): ReactNode => <div data-testid="team-permissions" />,
+  TeamPermissions: (props: { readonly children: ReactNode }): ReactNode => (
+    <div data-testid="team-permissions">{props.children}</div>
+  ),
+}));
+
+// A team's switch reads and writes through the pool; both are markers here, as
+// the team's own suite owns them.
+vi.mock("@/hooks/environment/team/use-browser-access-query", () => ({
+  useEnvironmentBrowserAccessQuery: () => ({
+    isPending: false,
+    data: { agentAccess: true },
+  }),
+}));
+vi.mock("@/hooks/environment/team/use-configuration-item-mutations", () => ({
+  useConfigurationItemMutations: () => ({
+    put: { mutate: vi.fn(), isPending: false, data: undefined },
+  }),
 }));
 
 const initialInnerWidth = window.innerWidth;
@@ -213,6 +229,22 @@ describe("PermissionsSettingsPanel", () => {
     expect(screen.getAllByRole("tab")).toHaveLength(4);
   });
 
+  it("shows the Browser agent access switch below the tabs on a host pick", () => {
+    render(<PermissionsSettingsPanel />);
+
+    const group = screen.getByTestId("settings-browser-agent-access");
+    expect(group.textContent).toContain("Browser agent access");
+    expect(
+      within(group).getByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeTruthy();
+    const tabs = screen.getAllByRole("tab")[0];
+    expect(
+      tabs.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
   it("starts on Modes", () => {
     render(<PermissionsSettingsPanel />);
 
@@ -225,7 +257,7 @@ describe("PermissionsSettingsPanel", () => {
       render(<PermissionsSettingsPanel />);
 
       expect(screen.getByText(/New conversations start in/)).not.toBeNull();
-      expect(screen.getByText("All machines")).not.toBeNull();
+      expect(screen.getByText("This app only")).not.toBeNull();
     });
 
     it("renders with no host at all", () => {
@@ -336,6 +368,7 @@ describe("PermissionsSettingsPanel", () => {
     const TEAM_PICK = { kind: "team", environmentId: "env-a" } as const;
     const POOL: ConfigurationSource = {
       kind: "pool",
+      configuration: "team",
       environmentId: "env-a",
       roomId: "room-a",
       providerHandle: "handle-a",
@@ -398,6 +431,20 @@ describe("PermissionsSettingsPanel", () => {
       expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
         TEAM_PICK,
       );
+    });
+
+    it("shows the Browser agent access switch inside the team's Permissions", () => {
+      renderPicked();
+
+      const group = within(screen.getByTestId("team-permissions")).getByTestId(
+        "settings-browser-agent-access",
+      );
+      expect(group.textContent).toContain("Browser agent access");
+      expect(
+        within(group)
+          .getByRole("switch", { name: "Let agents use the in-app browser" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
     });
 
     it("opens a composer's machine on its Judge tab, moving the pick to that machine's row, and spends the intent", () => {

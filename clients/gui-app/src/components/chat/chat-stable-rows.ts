@@ -240,8 +240,11 @@ function isTranscriptListRowUnchanged(
   if (b.kind !== "placeholder") return false;
   // Skeleton entries arrive whole and are never mutated in place, so reference
   // equality is the right test - and a redelivered chunk that genuinely
-  // replaces an entry SHOULD re-render the row it describes.
-  return a.entry === b.entry;
+  // replaces an entry SHOULD re-render the row it describes. A void carries
+  // the very entry objects the index held, so the same entry can come back as
+  // a carried row: reusing the indexed row would publish a carried one as
+  // authoritative.
+  return a.entry === b.entry && a.provenance === b.provenance;
 }
 
 /** {@link computeStableChatTimelineRows} for the windowed row union. */

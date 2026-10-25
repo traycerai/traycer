@@ -5,54 +5,59 @@ export type TabCloseLockPredicate = (ref: TabRef) => boolean;
 
 type TabStructuralLockListener = () => void;
 
-const UNLOCKED: TabStructuralLockPredicate = () => false;
-
-let structuralPredicate = UNLOCKED;
-let closePredicate: TabCloseLockPredicate = UNLOCKED;
+// Each feature runtime that locks refs installs its own predicate, and a ref
+// is locked while any of them says so: the phase migration's surfaces and
+// the fixed Tracy entry hold their locks side by side.
+const structuralPredicates = new Set<TabStructuralLockPredicate>();
+const closePredicates = new Set<TabCloseLockPredicate>();
 let revision = 0;
 const listeners = new Set<TabStructuralLockListener>();
 
 /**
- * Installs the runtime-owned structural-lock policy. Tab infrastructure only
- * knows that a ref may be locked; feature runtimes retain ownership of why.
+ * Installs one runtime-owned structural-lock policy beside the others. Tab
+ * infrastructure only knows that a ref may be locked; feature runtimes retain
+ * ownership of why. The returned function removes this policy alone.
  */
 export function registerTabStructuralLockPredicate(
   next: TabStructuralLockPredicate,
 ): () => void {
-  const previous = structuralPredicate;
-  structuralPredicate = next;
+  structuralPredicates.add(next);
   notifyTabStructuralLocksChanged();
   return () => {
-    if (structuralPredicate !== next) return;
-    structuralPredicate = previous;
+    if (!structuralPredicates.delete(next)) return;
     notifyTabStructuralLocksChanged();
   };
 }
 
 export function isTabStructurallyLocked(ref: TabRef): boolean {
-  return structuralPredicate(ref);
+  for (const predicate of structuralPredicates) {
+    if (predicate(ref)) return true;
+  }
+  return false;
 }
 
 /**
- * Installs the runtime-owned close policy. A feature may allow grouped repair
- * to close an errored surface while still keeping every other structural
- * operation locked until that surface converts to its durable kind.
+ * Installs one runtime-owned close policy beside the others. A feature may
+ * allow grouped repair to close an errored surface while still keeping every
+ * other structural operation locked until that surface converts to its
+ * durable kind. The returned function removes this policy alone.
  */
 export function registerTabCloseLockPredicate(
   next: TabCloseLockPredicate,
 ): () => void {
-  const previous = closePredicate;
-  closePredicate = next;
+  closePredicates.add(next);
   notifyTabStructuralLocksChanged();
   return () => {
-    if (closePredicate !== next) return;
-    closePredicate = previous;
+    if (!closePredicates.delete(next)) return;
     notifyTabStructuralLocksChanged();
   };
 }
 
 export function isTabCloseLocked(ref: TabRef): boolean {
-  return closePredicate(ref);
+  for (const predicate of closePredicates) {
+    if (predicate(ref)) return true;
+  }
+  return false;
 }
 
 export function subscribeTabStructuralLocks(
@@ -73,7 +78,7 @@ export function notifyTabStructuralLocksChanged(): void {
 }
 
 export function resetTabStructuralLockForTesting(): void {
-  structuralPredicate = UNLOCKED;
-  closePredicate = UNLOCKED;
+  structuralPredicates.clear();
+  closePredicates.clear();
   notifyTabStructuralLocksChanged();
 }

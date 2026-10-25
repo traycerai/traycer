@@ -20,7 +20,7 @@ export function TeamSecretNames(props: {
           <li key={secret.name} className="flex flex-col gap-1 p-3">
             <span className="font-mono text-ui-sm">{secret.name}</span>
             <span className="text-ui-xs text-muted-foreground">
-              {secret.revoked ? "Access revoked" : "Set"}
+              {secret.revoked ? "Removing · no longer usable" : "Set"}
             </span>
           </li>
         ))}

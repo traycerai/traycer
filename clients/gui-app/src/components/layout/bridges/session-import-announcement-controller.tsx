@@ -138,7 +138,7 @@ export function SessionImportAnnouncementController(): ReactNode {
       <ActionToastContent
         toastId={SESSION_IMPORT_ANNOUNCEMENT_TOAST_ID}
         eyebrow="New in this release"
-        title="Bring your work with you"
+        title="Import chats from other coding agents"
         description="Import work you started in other coding agents and keep going within Traycer."
         actionLabel="Import work…"
         onAction={() => {

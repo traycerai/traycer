@@ -7,7 +7,7 @@
  * call this (E4 greys that row; we draw no cohort line).
  *
  * Subtitle is the text before the verb. E4 renders `Move to Personal` and
- * `finish moving` from `verb`.
+ * `Finish moving` from `verb`.
  */
 
 export const ENVIRONMENT_PLANE_IDS = ["records", "broker", "room"] as const;
@@ -35,13 +35,11 @@ export const PLANE_DISPLAY_NAME: Readonly<Record<EnvironmentPlaneId, string>> =
     room: "skills and the guide",
   };
 
-export const LOCAL_ROW_NOT_MOVED =
-  "not moved · Personal's settings are not on it";
-export const LOCAL_ROW_NOT_SHARING =
-  "not sharing · Personal's settings are not on it";
+export const LOCAL_ROW_NOT_MOVED = "its own settings, not in Personal yet";
+export const LOCAL_ROW_NOT_SHARING = "stopped using Personal";
 export const LOCAL_ROW_SHARED_UNRECORDED =
-  "Some files were shared by an earlier version; these settings have not moved.";
-export const LOCAL_ROW_PARTLY_MOVED = "partly moved";
+  "Some files were shared by an earlier version; these settings are not in Personal yet.";
+export const LOCAL_ROW_PARTLY_MOVED = "partly in Personal";
 
 export type PlanesCohortVerb = "move_to_personal" | "finish_moving";
 
@@ -91,7 +89,7 @@ export function planeMoveSheetLabel(state: EnvironmentPlaneState): string {
     case "shared_unrecorded":
       return "already shared by an earlier version";
     case "stopped":
-      return "not sharing";
+      return "stopped using Personal";
   }
 }
 
@@ -165,18 +163,29 @@ function localRowSubtitle(input: {
   return LOCAL_ROW_NOT_MOVED;
 }
 
+/**
+ * Nothing of this computer's has moved: its Local row reads
+ * `its own settings, not in Personal yet` and offers `Move to Personal`.
+ */
+export function planesNotMoved(
+  planes: EnvironmentPlanes,
+  partlyMoved: boolean,
+): boolean {
+  return cohortFromPlanes(planes, partlyMoved).subtitle === LOCAL_ROW_NOT_MOVED;
+}
+
 export function planesHaveLocal(planes: EnvironmentPlanes): boolean {
   return planeValues(planes).some(isThisComputers);
 }
 
-/** Planes that have not moved, named the way the retrospective sheet lists them. */
+/** Planes not in Personal yet, named the way the retrospective sheet lists them. */
 export function stillLocalFromPlanes(
   planes: EnvironmentPlanes,
 ): readonly { readonly id: EnvironmentPlaneId; readonly summary: string }[] {
   return ENVIRONMENT_PLANE_IDS.filter((plane) => planes[plane] === "local").map(
     (plane) => ({
       id: plane,
-      summary: `${PLANE_DISPLAY_NAME[plane]} have not moved`,
+      summary: `${PLANE_DISPLAY_NAME[plane]} are not in Personal yet`,
     }),
   );
 }

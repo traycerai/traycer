@@ -2012,9 +2012,7 @@ describe("JudgeTab", () => {
     support.set = false;
     renderTab();
 
-    expect(
-      screen.getByText(/This machine's host can't change the judge/),
-    ).not.toBeNull();
+    expect(screen.getByText(/This host can't change the judge/)).not.toBeNull();
     expect(automaticRadio().hasAttribute("disabled")).toBe(true);
     expect(pickRadio().hasAttribute("disabled")).toBe(true);
   });
@@ -2029,7 +2027,7 @@ describe("JudgeTab", () => {
       renderTab();
 
       expect(screen.getByTestId("auto-judge-providers-error").textContent).toBe(
-        "Couldn't load this machine's providers. Reopen Settings to try again.",
+        "Couldn't load this host's providers. Reopen Settings to try again.",
       );
     });
 

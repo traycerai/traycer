@@ -69,6 +69,8 @@ interface LocalRowsReading {
   readonly isFetching: boolean;
   /** Some owner host's local read failed (no data is NOT the same as a miss). */
   readonly hasError: boolean;
+  /** Re-reads the owner reads that failed. */
+  readonly refetchFailed: () => void;
 }
 
 const NO_LOCAL_ROWS: LocalRowsReading = {
@@ -77,6 +79,7 @@ const NO_LOCAL_ROWS: LocalRowsReading = {
   hostIds: new Map(),
   isFetching: false,
   hasError: false,
+  refetchFailed: () => undefined,
 };
 
 const testState = vi.hoisted(() => {
@@ -108,6 +111,7 @@ const testState = vi.hoisted(() => {
       hostIds: new Map(),
       isFetching: false,
       hasError: false,
+      refetchFailed: () => undefined,
     },
   };
   return state;
@@ -1234,6 +1238,7 @@ describe("useCurrentTasks open task owned by another host", () => {
       hostIds: new Map([["open-b", HOST_B]]),
       isFetching: false,
       hasError: false,
+      refetchFailed: () => undefined,
     };
 
     const { result } = renderHook(() => useCurrentTasks(), {
@@ -1268,6 +1273,7 @@ describe("useCurrentTasks open task owned by another host", () => {
       hostIds: new Map([["open-b", HOST_B]]),
       isFetching: false,
       hasError: false,
+      refetchFailed: () => undefined,
     };
 
     const { result } = renderHook(() => useCurrentTasks(), {
@@ -1331,6 +1337,29 @@ describe("useCurrentTasks when an owner host's local read fails", () => {
       }
     },
   );
+
+  it("retryActivity re-reads the owner reads that failed", async () => {
+    const refetchFailed = vi.fn<() => void>();
+    testState.firstPage = page([], null, SETTLED);
+    testState.openEpicIds = ["open-b"];
+    testState.localRows = {
+      ...NO_LOCAL_ROWS,
+      hostIds: new Map([["open-b", HOST_B]]),
+      hasError: true,
+      refetchFailed,
+    };
+
+    const { result } = renderHook(() => useCurrentTasks(), {
+      wrapper: wrapperFor(newQueryClient()),
+    });
+    await waitFor(() => {
+      expect(result.current.activityCoverage).toBe("partial");
+    });
+
+    act(() => result.current.retryActivity());
+
+    expect(refetchFailed).toHaveBeenCalledOnce();
+  });
 });
 
 describe("useCurrentTasks pin tail under an unverified session", () => {

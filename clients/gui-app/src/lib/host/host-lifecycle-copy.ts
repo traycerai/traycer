@@ -31,14 +31,14 @@ export const HOST_LIFECYCLE_MODE_ORDER = [
 ] as const satisfies readonly HostLifecycleMode[];
 
 /**
- * What this machine is called in host copy: "Mac", "PC", or "machine" on
- * Linux. Never "device" - that noun is reserved for UI chrome, and the host
+ * What this computer is called in host copy: "Mac", "PC", or "computer"
+ * on Linux. Never "device" - that noun is reserved for UI chrome, and the host
  * identity is its `hostId`.
  */
 export function hostMachineNoun(): string {
   if (isMac()) return "Mac";
   if (isWindows()) return "PC";
-  return "machine";
+  return "computer";
 }
 
 export interface HostLifecycleOptionCopy {
@@ -78,7 +78,7 @@ export function hostLifecycleOptionCopy(
       mode: "none",
       label: `Don't run a host on this ${machine}`,
       description:
-        "Traycer connects only to remote hosts, where your agents and terminals run. No host starts when you open Traycer on this machine.",
+        "Traycer connects only to remote hosts, where your agents and terminals run. No host starts when you open Traycer on this computer.",
     },
   ];
 }
@@ -89,7 +89,7 @@ export function hostLifecycleCardSubtitle(machine: string): string {
 
 /** Why the `none` option is disabled while signed out. */
 export const HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON =
-  "Sign in to use remote hosts. Until then, Traycer needs a host on this machine.";
+  "Sign in to use remote hosts. Until then, Traycer needs a host on this computer.";
 
 /**
  * Why the modes that run a host here are held while the host's Scheduled Task
@@ -226,19 +226,19 @@ export const HOST_FOREGROUND_REMOVE_TRAYCER_REASON =
   "A host you started in a terminal is running; stop it, then remove Traycer.";
 
 /**
- * The no-local-host card, on a desktop launched in `none`: "This machine runs
+ * The no-local-host card, on a desktop launched in `none`: "This computer runs
  * without a local host. Add a remote host, or run `traycer host install` on
- * the machine that should host your work (for WSL, inside the distro)." Split
+ * the computer that should host your work (for WSL, inside the distro)." Split
  * around the command so it renders as code.
  */
 export const NO_LOCAL_HOST_DESKTOP_LEAD =
-  "This machine runs without a local host. Add a remote host, or run";
+  "This computer runs without a local host. Add a remote host, or run";
 export const NO_LOCAL_HOST_INSTALL_COMMAND = "traycer host install";
 export const NO_LOCAL_HOST_DESKTOP_TAIL =
-  "on the machine that should host your work (for WSL, inside the distro).";
+  "on the computer that should host your work (for WSL, inside the distro).";
 export const NO_LOCAL_HOST_RUN_HERE_LABEL = "Run a host here instead";
 export const NO_LOCAL_HOST_RUN_HERE_APPLIED =
-  "A host will run on this machine from the next launch. Quit and reopen Traycer to start it.";
+  "A host will run on this computer from the next launch. Quit and reopen Traycer to start it.";
 
 // ---------------------------------------------------------------------------
 // Quit modal
@@ -285,7 +285,7 @@ export function hostQuitTerminalsInUseDescription(count: number): string {
 export const HOST_QUIT_DESCRIPTION_STOPPING =
   "Traycer quits once the stop has run.";
 export const HOST_QUIT_DESCRIPTION_CHECKING =
-  "Traycer is asking this machine's host what it is running.";
+  "Traycer is asking this computer's host what it is running.";
 
 /** Why the modal could not read the host, one sentence per cause. */
 export type HostQuitUnknownReason = "unreachable" | "no-connection";
@@ -297,14 +297,14 @@ export function hostQuitUnknownDescription(
     case "unreachable":
       return "The host didn't answer, so Traycer can't list what it is running. Stopping it may end work in progress.";
     case "no-connection":
-      return "Traycer couldn't open a connection to this machine's host - you may be signed out, or its credentials may be refreshing. Stopping it may end work in progress.";
+      return "Traycer couldn't open a connection to this computer's host - you may be signed out, or its credentials may be refreshing. Stopping it may end work in progress.";
   }
 }
 
-/** A click found this machine's host replaced under the open list. */
+/** A click found this computer's host replaced under the open list. */
 export const HOST_QUIT_HOST_CHANGED_TITLE = "Host changed";
 export const HOST_QUIT_HOST_CHANGED_DESCRIPTION =
-  "This machine's host was replaced while this dialog was open, so nothing was stopped. Check the new host's list and choose again.";
+  "This computer's host was replaced while this dialog was open, so nothing was stopped. Check the new host's list and choose again.";
 
 export const HOST_QUIT_KEEP_LABEL = "Keep running and quit";
 export const HOST_QUIT_STOP_LABEL = "Stop host and quit";
@@ -315,9 +315,9 @@ export const HOST_QUIT_REMEMBER_LABEL =
 
 /** The `→ none` confirm: the same modal with Stop as its only action. */
 export const HOST_NONE_CONFIRM_TITLE_BUSY = "The host is still working";
-export const HOST_NONE_CONFIRM_TITLE_IDLE = "Stop the host on this machine?";
+export const HOST_NONE_CONFIRM_TITLE_IDLE = "Stop the host on this computer?";
 export const HOST_NONE_CONFIRM_DESCRIPTION =
-  "Traycer will stop this machine's host and connect only to remote hosts from the next launch.";
+  "Traycer will stop this computer's host and connect only to remote hosts from the next launch.";
 export const HOST_NONE_CONFIRM_STOP_LABEL = "Stop host";
 /**
  * The `→ none` confirm during a foreground run. Main commits `none` then and

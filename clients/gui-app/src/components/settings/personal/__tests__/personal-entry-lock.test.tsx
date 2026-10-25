@@ -143,6 +143,7 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { PERSONAL_ENTRY_LOCKED_TEXT } from "@/components/settings/personal/personal-page-context";
 import {
@@ -164,6 +165,7 @@ type NativeMutateRequest = RequestOfMethod<
 >;
 
 afterEach(() => {
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
@@ -328,12 +330,16 @@ function renderPage(
   };
   const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
   recordNegotiatedHostManifest(HOST_ID, {
-    "environment.status": { major: 1, minor: 0 },
+    "environment.status": { major: 1, minor: 1 },
     "environment.localOverrides": { major: 1, minor: 0 },
     "providers.nativeMutate": { major: 1, minor: 1 },
   });
   hostMock.client = client;
   hostMock.binding = null;
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,
@@ -367,10 +373,10 @@ function skillsPage(): ReactNode {
 }
 
 /** The MCP row for `name`: the list item around its expand button. */
-function mcpRow(name: string): HTMLElement {
-  const row = screen
-    .getByRole("button", { name: `Expand ${name}` })
-    .closest("li");
+async function mcpRow(name: string): Promise<HTMLElement> {
+  const row = (
+    await screen.findByRole("button", { name: `Expand ${name}` })
+  ).closest("li");
   if (row === null) throw new Error(`no row for ${name}`);
   return row;
 }
@@ -395,9 +401,9 @@ async function statusRead(): Promise<void> {
 describe("A Personal MCP server row", () => {
   it("holds the server switch off with the sentence, and sends nothing when it is clicked", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    const rig = renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     const locked = await within(row).findByTestId(LOCKED_TESTID);
     expect(PERSONAL_ENTRY_LOCKED_TEXT).toBe("Change this in the dashboard.");
     const toggle = within(locked).getByRole("switch", {
@@ -418,9 +424,11 @@ describe("A Personal MCP server row", () => {
 
   it("says the sentence in a tooltip on the held switch", async () => {
     listMock.servers = [mcpServer("github")];
-    renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const locked = await within(mcpRow("github")).findByTestId(LOCKED_TESTID);
+    const locked = await within(await mcpRow("github")).findByTestId(
+      LOCKED_TESTID,
+    );
     const user = userEvent.setup();
     await user.hover(locked);
 
@@ -432,9 +440,9 @@ describe("A Personal MCP server row", () => {
 
   it("still toggles a tool, with a request for exactly that tool", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    const rig = renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     await within(row).findByTestId(LOCKED_TESTID);
     fireEvent.click(screen.getByRole("button", { name: "Expand github" }));
     fireEvent.click(
@@ -462,9 +470,9 @@ describe("A Personal MCP server row", () => {
 
   it("still reaches the remove confirmation, and Remove sends the remove request", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    const rig = renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     await within(row).findByTestId(LOCKED_TESTID);
     fireEvent.click(within(row).getByRole("button", { name: "Delete github" }));
 
@@ -486,9 +494,9 @@ describe("A Personal MCP server row", () => {
 
   it("the remove confirmation names every provider on every host", async () => {
     listMock.servers = [mcpServer("github")];
-    renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     await within(row).findByTestId(LOCKED_TESTID);
     fireEvent.click(within(row).getByRole("button", { name: "Delete github" }));
 
@@ -504,9 +512,9 @@ describe("A local MCP server row", () => {
   it("keeps a live server switch that sends toggleServer", async () => {
     listMock.servers = [mcpServer("linear")];
     // The host applied the person's `github`; `linear` is only on this host.
-    const rig = renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    const rig = renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("linear");
+    const row = await mcpRow("linear");
     const toggle = await within(row).findByRole("switch", {
       name: "Disable linear",
     });
@@ -529,9 +537,9 @@ describe("A local MCP server row", () => {
 
   it("the remove confirmation keeps this provider's config", async () => {
     listMock.servers = [mcpServer("linear")];
-    renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("linear");
+    const row = await mcpRow("linear");
     await within(row).findByRole("switch", { name: "Disable linear" });
     fireEvent.click(within(row).getByRole("button", { name: "Delete linear" }));
 
@@ -543,9 +551,9 @@ describe("A local MCP server row", () => {
 
   it("is not held off by a skill of the same name", async () => {
     listMock.servers = [mcpServer("deploy")];
-    renderPage("mcp-servers", mcpPage(), [appliedSkill("deploy")]);
+    renderPage("providers", mcpPage(), [appliedSkill("deploy")]);
 
-    const row = mcpRow("deploy");
+    const row = await mcpRow("deploy");
     await statusRead();
     expect(
       within(row).getByRole("switch", { name: "Disable deploy" }),
@@ -555,9 +563,9 @@ describe("A local MCP server row", () => {
 
   it("is not held off when the host applied none of the person's items", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), []);
+    const rig = renderPage("providers", mcpPage(), []);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     await statusRead();
     expect(within(row).queryByTestId(LOCKED_TESTID)).toBeNull();
     fireEvent.click(
@@ -573,9 +581,9 @@ describe("A project-scope MCP server with a Personal server's name", () => {
   it("is not locked, because Personal settings are global", async () => {
     scopeMock.scope = "project";
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+    const rig = renderPage("providers", mcpPage(), [appliedMcp("github")]);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     await statusRead();
     expect(within(row).queryByTestId(LOCKED_TESTID)).toBeNull();
     const toggle = within(row).getByRole("switch", { name: "Disable github" });
@@ -603,7 +611,7 @@ describe("A Personal skill", () => {
     // SKILL.md is readable and the origin is known, so a local skill WOULD be
     // editable and updatable here: their absence is the lock's doing.
     listMock.skillFile = skillMarkdown("deploy");
-    const rig = renderPage("skills", skillsPage(), [appliedSkill("deploy")]);
+    const rig = renderPage("providers", skillsPage(), [appliedSkill("deploy")]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: /^Open deploy / }),
@@ -624,7 +632,7 @@ describe("A Personal skill", () => {
   it("Remove still reaches the confirmation and sends the remove request", async () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
-    const rig = renderPage("skills", skillsPage(), [appliedSkill("deploy")]);
+    const rig = renderPage("providers", skillsPage(), [appliedSkill("deploy")]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: /^Open deploy / }),
@@ -653,7 +661,7 @@ describe("A Personal skill", () => {
   it("the remove confirmation names every provider on every host", async () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
-    renderPage("skills", skillsPage(), [appliedSkill("deploy")]);
+    renderPage("providers", skillsPage(), [appliedSkill("deploy")]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: /^Open deploy / }),
@@ -676,7 +684,7 @@ describe("A local skill", () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
     // The host applied a DIFFERENT skill of the person's.
-    renderPage("skills", skillsPage(), [appliedSkill("other")]);
+    renderPage("providers", skillsPage(), [appliedSkill("other")]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: /^Open deploy / }),
@@ -696,7 +704,7 @@ describe("A local skill", () => {
   it("is not locked by an MCP server of the same name", async () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
-    renderPage("skills", skillsPage(), [appliedMcp("deploy")]);
+    renderPage("providers", skillsPage(), [appliedMcp("deploy")]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: /^Open deploy / }),
@@ -712,7 +720,7 @@ describe("A local skill", () => {
   it("the remove confirmation keeps the disk text", async () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
-    renderPage("skills", skillsPage(), [appliedSkill("other")]);
+    renderPage("providers", skillsPage(), [appliedSkill("other")]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: /^Open deploy / }),

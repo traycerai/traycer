@@ -16,6 +16,8 @@ import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { cn } from "@/lib/utils";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { SideHomeRow } from "./side-home-row";
+import { SideTracyRow } from "./side-tracy-row";
+import type { TracyStripEntry } from "../tab-strip-controller";
 import {
   SideStripNavRows,
   SideStripNewTask,
@@ -39,6 +41,8 @@ export interface SideStripTopBlockProps {
   readonly homeTabDrawn: boolean;
   readonly homeIsActive: boolean;
   readonly onHomeTab: () => void;
+  /** The fixed Tracy entry, drawn right after Home; `null` with none. */
+  readonly tracy: TracyStripEntry | null;
   readonly onNewTab: () => void;
   /** Collapses the strip to the rail or expands it, easing the width. */
   readonly onToggleCollapsed: () => void;
@@ -76,13 +80,7 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   const newTask = (
     <SideStripNewTask variant={props.variant} onNewTab={props.onNewTab} />
   );
-  const home = props.homeTabDrawn ? (
-    <SideHomeRow
-      variant={props.variant}
-      isActive={props.homeIsActive}
-      onActivate={props.onHomeTab}
-    />
-  ) : null;
+  const home = sideFixedRows(props);
   return (
     <div
       data-testid="side-strip-top-block"
@@ -150,6 +148,25 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
         </div>
       )}
     </div>
+  );
+}
+
+/** Home and the fixed Tracy entry after it, or `null` with neither drawn. */
+function sideFixedRows(props: SideStripTopBlockProps): ReactNode {
+  if (!props.homeTabDrawn && props.tracy === null) return null;
+  return (
+    <>
+      {props.homeTabDrawn ? (
+        <SideHomeRow
+          variant={props.variant}
+          isActive={props.homeIsActive}
+          onActivate={props.onHomeTab}
+        />
+      ) : null}
+      {props.tracy === null ? null : (
+        <SideTracyRow variant={props.variant} entry={props.tracy} />
+      )}
+    </>
   );
 }
 

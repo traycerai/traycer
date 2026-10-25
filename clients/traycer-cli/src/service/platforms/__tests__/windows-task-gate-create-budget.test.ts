@@ -86,6 +86,7 @@ function timedQueueDeps(entries: readonly TimedQuery[]): {
       },
       callerSid: () => CALLER_SID,
       resolveAccountSid: async () => null,
+      taskHiddenFromCaller: async () => false,
     },
     queryCount: () => i,
   };

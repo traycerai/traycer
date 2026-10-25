@@ -8,9 +8,14 @@ import type {
   MutationKind,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { HOST_NOT_SERVICE_RUN_CODE } from "@traycer-clients/shared/platform/host-service-notices";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
+  hostOptionStatusWord,
+} from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 
 /**
@@ -95,12 +100,11 @@ function controllerStatusWithLane(
   };
 }
 
-function makeHostManagement(kind: MutationKind | null): IHostManagement {
+function makeHostManagement(status: HostControllerStatus): IHostManagement {
   const notImplemented = (name: string) => () =>
     Promise.reject(new Error(`${name} not implemented in this test`));
   return {
-    getHostControllerStatus: () =>
-      Promise.resolve(controllerStatusWithLane(kind)),
+    getHostControllerStatus: () => Promise.resolve(status),
     convergeReady: notImplemented("convergeReady"),
     applyStaged: notImplemented("applyStaged"),
     activateInstalled: notImplemented("activateInstalled"),
@@ -141,7 +145,11 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
 }
 
 function renderWithLane(kind: MutationKind | null) {
-  const hostManagement = makeHostManagement(kind);
+  return renderWithStatus(controllerStatusWithLane(kind));
+}
+
+function renderWithStatus(status: HostControllerStatus) {
+  const hostManagement = makeHostManagement(status);
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -233,5 +241,82 @@ describe("useHostOptions provisioning lane", () => {
     const { result, queryClient, hostManagement } = renderWithLane(null);
     await waitForControllerStatusSettled(queryClient, hostManagement);
     expect(findLocalRow(result.current.hosts)?.settingUp).toBe(false);
+  });
+
+  // A terminal-started host the app defers over frees the lane: the row must
+  // go back to a plain word, not stay on "setting up" and not fall to
+  // "offline" while the host-health snapshot still holds.
+  it("reads the local row's word as setting up only while an ensure holds the lane", async () => {
+    const busy = renderWithLane("ensure");
+    await waitForControllerStatusSettled(busy.queryClient, busy.hostManagement);
+    await waitFor(() => {
+      expect(findLocalRow(busy.result.current.hosts)?.settingUp).toBe(true);
+    });
+    const busyRow = findLocalRow(busy.result.current.hosts);
+    expect(busyRow).toBeDefined();
+    if (busyRow === undefined) return;
+    expect(
+      hostOptionStatusWord(busyRow, AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBe("setting up");
+    busy.unmount();
+
+    const idle = renderWithLane(null);
+    await waitForControllerStatusSettled(idle.queryClient, idle.hostManagement);
+    const idleRow = findLocalRow(idle.result.current.hosts);
+    expect(idleRow).toBeDefined();
+    if (idleRow === undefined) return;
+    expect(idleRow.settingUp).toBe(false);
+    const word = hostOptionStatusWord(
+      idleRow,
+      AVAILABLE_HOST_ROW_SURFACE_STATE,
+    );
+    expect(word).not.toBe("setting up");
+    expect(word).not.toBe("offline");
+  });
+
+  describe("terminal-run note", () => {
+    const NOTE = "This host was started from a terminal, so the app leaves it.";
+    const refusedStatus: HostControllerStatus = {
+      ...IDLE_CONTROLLER_STATUS,
+      lastEnsureFailure: { message: NOTE, code: HOST_NOT_SERVICE_RUN_CODE },
+    };
+
+    it("carries the refusal's sentence on the local row once the lane is free, and the word is not setting up", async () => {
+      const { result, queryClient, hostManagement } =
+        renderWithStatus(refusedStatus);
+      await waitForControllerStatusSettled(queryClient, hostManagement);
+      const row = findLocalRow(result.current.hosts);
+      expect(row?.terminalRunNote).toBe(NOTE);
+      expect(row?.settingUp).toBe(false);
+      if (row === undefined) return;
+      expect(
+        hostOptionStatusWord(row, AVAILABLE_HOST_ROW_SURFACE_STATE),
+      ).not.toBe("setting up");
+    });
+
+    it("drops the note while a lane job runs", async () => {
+      const { result, queryClient, hostManagement } = renderWithStatus({
+        ...refusedStatus,
+        mutation: {
+          kind: "ensure",
+          progress: null,
+          startedAt: "2026-05-15T00:00:00Z",
+        },
+      });
+      await waitForControllerStatusSettled(queryClient, hostManagement);
+      await waitFor(() => {
+        expect(findLocalRow(result.current.hosts)?.settingUp).toBe(true);
+      });
+      expect(findLocalRow(result.current.hosts)?.terminalRunNote).toBeNull();
+    });
+
+    it("shows no note for any other ensure failure", async () => {
+      const { result, queryClient, hostManagement } = renderWithStatus({
+        ...refusedStatus,
+        lastEnsureFailure: { message: "Something else.", code: null },
+      });
+      await waitForControllerStatusSettled(queryClient, hostManagement);
+      expect(findLocalRow(result.current.hosts)?.terminalRunNote).toBeNull();
+    });
   });
 });

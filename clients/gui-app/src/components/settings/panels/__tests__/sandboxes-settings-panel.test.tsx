@@ -343,6 +343,7 @@ function hostPage(): TeamPageHarness {
         avatarUrl: null,
         linkedPlan: false,
         invitedAddress: null,
+        email: null,
       })),
       nextCursor: null,
       legacyRoleNoticeSeenAt: null,
@@ -511,6 +512,31 @@ describe("<SandboxesSettingsPanel />", () => {
       );
       expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
         sandboxPeriodLabel(7 * 24 * 60),
+      );
+    });
+
+    it("introduces Personal's defaults as what each new Personal sandbox starts with", async () => {
+      mocks.catalogue = CATALOGUE;
+      host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "viewer")];
+      renderPanel([]);
+
+      const heading = await screen.findByRole("heading", {
+        name: "Your defaults for new sandboxes",
+      });
+      expect(heading.nextElementSibling?.textContent).toBe(
+        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+      );
+    });
+
+    it("introduces a team's defaults as what each new team sandbox starts with", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      renderPanel([]);
+
+      const heading = await screen.findByRole("heading", {
+        name: "Acme's defaults for new sandboxes",
+      });
+      expect(heading.nextElementSibling?.textContent).toBe(
+        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
       );
     });
 

@@ -132,7 +132,7 @@ export function ProviderJudgeSwitch(props: {
         className={LINE_CLASSNAME}
         data-testid="provider-auto-judge-unreadable"
       >
-        This machine&apos;s host can&apos;t report who reviews {providerName}
+        This host can&apos;t report who reviews {providerName}
         &apos;s commands. Update it to see and change this.
       </p>
     );
@@ -145,8 +145,7 @@ export function ProviderJudgeSwitch(props: {
         className={LINE_CLASSNAME}
         data-testid="provider-auto-judge-unsupported"
       >
-        {current}. This machine&apos;s host can&apos;t change it; update it to
-        choose.
+        {current}. This host can&apos;t change it; update it to choose.
       </p>
     );
   }

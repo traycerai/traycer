@@ -4,6 +4,7 @@ import {
   type TraycerNextStepsPart,
 } from "@/markdown/traycer-next-steps";
 import { withMemberAdded } from "@/lib/immutable-set";
+import { SPOKEN_TEXT_ATTR } from "@/lib/speech/spoken-reply-dom";
 import type { AssistantMarkdownImageContext } from "@/stores/composer/chat-store";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import {
@@ -55,6 +56,7 @@ export function TextSegment(props: TextSegmentProps) {
     <AssistantMarkdownImageProvider context={imageContext}>
       <div
         data-chat-find-unit={props.findUnitId ?? undefined}
+        {...{ [SPOKEN_TEXT_ATTR]: "" }}
         className="text-ui leading-7 text-foreground"
       >
         {parts.map((part) => (
