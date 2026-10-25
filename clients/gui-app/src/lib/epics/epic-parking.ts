@@ -194,7 +194,7 @@ function notify(epicId: string): void {
  *
  * "Hidden" here is what `lib/dom/document-visibility.ts` answers: the Page
  * Visibility API (which the desktop also hides on, covered windows included
- * on macOS and Windows), AND-ed with the shell's own minimised/hidden answer
+ * on macOS only), AND-ed with the shell's own minimised/hidden answer
  * pushed in through `desktop-window-visibility.ts` for the window a WebRTC
  * video plane keeps rendering unseen (#1613).
  */

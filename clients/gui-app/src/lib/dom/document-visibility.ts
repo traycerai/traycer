@@ -9,11 +9,13 @@
  *
  * Desktop windows are background-throttled, so the first input reports a
  * minimised or hidden window as `"hidden"` there too, and a covered one on
- * macOS and Windows (Linux has no occlusion tracking). The second input
- * covers the one exception: while a browser tile's WebRTC video plane keeps
- * throttling off (#1613, `lib/browser-view/tiles/desktop-background-rendering.ts`),
- * DOM visibility stays visible and only main can still report minimise/hide.
- * A window covered during that time is detected by neither input.
+ * macOS. Electron updates it on occlusion only there: on Windows and Linux a
+ * covered window stays `"visible"` until it is minimised or hidden. The second
+ * input covers the one exception: while a browser tile's WebRTC video plane
+ * keeps throttling off (#1613,
+ * `lib/browser-view/tiles/desktop-background-rendering.ts`), DOM visibility
+ * stays visible and only main can still report minimise/hide. A window covered
+ * during that time is detected by neither input.
  *
  * `visibilityState`, deliberately, and NOT `document.hasFocus()`. Focus answers
  * a different question: a window the user can plainly see loses focus the

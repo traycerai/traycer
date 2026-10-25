@@ -434,8 +434,8 @@ describe("loadMainWindow", () => {
       placement: createFirstLaunchWindowPlacement(),
     });
 
-    // Throttled by default: a covered, minimised or hidden window must be
-    // allowed to stop rendering (traycer#2355).
+    // Throttled by default: a covered (macOS), minimised or hidden window must
+    // be allowed to stop rendering (traycer#2355).
     expect(electronState.browserWindowOptions).toEqual([
       expect.objectContaining({
         webPreferences: expect.objectContaining({

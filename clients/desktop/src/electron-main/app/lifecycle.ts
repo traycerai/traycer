@@ -17,8 +17,8 @@ export function configureV8CodeCache(): void {
 
 /**
  * The two Chromium throttles that slow a HIDDEN page's timers beyond the
- * plain one-second alignment, switched off so a covered or minimised window
- * stops rendering but keeps its timer cadence.
+ * plain one-second alignment, switched off so a covered (macOS) or minimised
+ * window stops rendering but keeps its timer cadence.
  *
  * GUI windows are background-throttled (`windows/background-rendering.ts`).
  * Left on, these two would make that unsafe for the transport: a stream pings

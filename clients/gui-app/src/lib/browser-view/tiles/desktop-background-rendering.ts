@@ -9,8 +9,9 @@ import {
  * Keep this desktop window rendering while it is unseen exactly as long as it
  * holds a browser tile's WebRTC media entry.
  *
- * Desktop windows are background-throttled, so a covered, minimised or hidden
- * window goes `"hidden"` and stops rendering, like a background tab. The video
+ * Desktop windows are background-throttled, so a covered (macOS only),
+ * minimised or hidden window goes `"hidden"` and stops rendering, like a
+ * background tab. The video
  * plane's receiver is the one consumer that must not stop: throttled, its
  * stats timers and `requestVideoFrameCallback` go silent and the sender
  * ratchets its capture rate down for the rest of the session (#1613). Main

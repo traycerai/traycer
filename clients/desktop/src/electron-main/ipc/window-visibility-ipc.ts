@@ -8,7 +8,7 @@ import type { IpcManagedWindow, RunnerIpcBridge } from "./runner-ipc-bridge";
  * Main's shown/not-minimised signal, which the renderer ANDs with Page
  * Visibility. Windows are background-throttled
  * (`windows/background-rendering.ts`), so Page Visibility itself reports a
- * minimised, hidden or (macOS, Windows) covered window - except while a WebRTC
+ * minimised, hidden or (macOS only) covered window - except while a WebRTC
  * video plane keeps throttling off (#1613). Then DOM visibility stays visible,
  * this signal is the only source for minimise/hide, and a covered window is
  * detected by neither. An absent isMinimized on a test double fails toward

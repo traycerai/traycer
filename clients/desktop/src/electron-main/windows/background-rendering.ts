@@ -4,7 +4,7 @@ import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
  * Background throttling for GUI windows, and the one demand that turns it off.
  *
  * GUI windows keep Electron's default `backgroundThrottling: true`, so Chromium
- * treats a covered (macOS, Windows), minimised or hidden window the way a
+ * treats a covered (macOS only), minimised or hidden window the way a
  * browser treats a background tab: `document.visibilityState` reports
  * `"hidden"`, rAF and CSS animations stop, and the window's compositor stops
  * drawing. Timers only align to one second: the two deeper timer throttles

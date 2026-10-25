@@ -130,14 +130,15 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       // window may create `<webview>` tags; attach is fail-closed in
       // `installWebviewAttachGuards` before the renderer loads.
       webviewTag: true,
-      // Throttled while covered, minimised or hidden, like a background tab:
-      // rendering stops. The renderer turns it off only while a browser
-      // tile's WebRTC video plane needs it (`background-rendering.ts`), and
-      // never for the whole window's life again: off, Electron keeps a window
-      // that was shown once "visible" and compositing forever (traycer#2355).
-      // Timers keep their cadence in a hidden window, so transport keepalives
-      // still meet their pong cutoff: `BACKGROUND_TIMER_THROTTLES`
-      // (`app/lifecycle.ts`) turns off Chromium's two timer throttles.
+      // Throttled while covered (macOS only), minimised or hidden, like a
+      // background tab: rendering stops. The renderer turns it off only while a
+      // browser tile's WebRTC video plane needs it (`background-rendering.ts`),
+      // and never for the whole window's life again: off, Electron keeps a
+      // window that was shown once "visible" and compositing forever
+      // (traycer#2355). Timers keep their cadence in a hidden window, so
+      // transport keepalives still meet their pong cutoff:
+      // `BACKGROUND_TIMER_THROTTLES` (`app/lifecycle.ts`) turns off Chromium's
+      // two timer throttles.
       backgroundThrottling: true,
       zoomFactor: options.zoomFactor,
     },

@@ -1667,15 +1667,18 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 });
 
-// ── A covered window parks its epics (traycer#2355) ─────────────────────────
+// ── A covered macOS window parks its epics (traycer#2355) ───────────────────
 //
 // Main creates every window background-throttled and keeps a window rendering
 // unseen only while this renderer reports a browser tile's video plane
-// (`backgroundRendering.setRequired`). Throttled, Chromium reports a covered
-// window as `document.visibilityState === "hidden"` (macOS, Windows) while main
-// still sees it shown and not minimised, and that is what starts the park
-// clock. The pin renders the REAL provider, so the demand asserted is the one
-// main applies, and it hides the document only once that demand is released.
+// (`backgroundRendering.setRequired`). Throttled, a covered window on macOS
+// reports `document.visibilityState === "hidden"` while main still sees it
+// shown and not minimised, and that is what starts the park clock. Electron
+// updates visibility on occlusion only on macOS: on Windows and Linux a covered
+// window stays "visible" and parks only once minimised or hidden (the window
+// visibility pins above). The pin renders the REAL provider, so the demand
+// asserted is the one main applies, and it hides the document only once that
+// demand is released.
 
 function setDocumentVisibilityState(state: "visible" | "hidden"): void {
   Object.defineProperty(document, "visibilityState", {
@@ -1695,7 +1698,7 @@ const idleMediaPeer: MediaPeerFactory = () => {
   return peer;
 };
 
-describe("<WindowsBridgeProvider /> - a covered window's epics", () => {
+describe("<WindowsBridgeProvider /> - a covered macOS window's epics", () => {
   beforeEach(() => {
     resetStores();
     __resetEpicParkingForTests();
@@ -1714,12 +1717,13 @@ describe("<WindowsBridgeProvider /> - a covered window's epics", () => {
     vi.useRealTimers();
   });
 
-  it("park five minutes after the window is covered, once no video plane keeps it rendering", async () => {
+  it("park five minutes after the window is covered on macOS, once no video plane keeps it rendering", async () => {
     const EPIC = "epic-provider-window-covered";
     const VIEW = "view-provider-window-covered";
     const fake = createDesktopWindowsBridge();
     const visibility = createEpicVisibilityChannel([]);
-    // Covered, not minimised: main sees the window shown the whole time.
+    // Covered on macOS, not minimised: main sees the window shown the whole
+    // time.
     const windowVisibility = createWindowVisibilityChannel(true);
     const renderingDemand: boolean[] = [];
     vi.useFakeTimers();
@@ -1765,7 +1769,7 @@ describe("<WindowsBridgeProvider /> - a covered window's epics", () => {
       });
       expect(renderingDemand).toEqual([false, true, false]);
 
-      // Throttled again, so covering the window hides the document.
+      // Throttled again, so covering the window on macOS hides the document.
       act(() => {
         setDocumentVisibilityState("hidden");
       });
