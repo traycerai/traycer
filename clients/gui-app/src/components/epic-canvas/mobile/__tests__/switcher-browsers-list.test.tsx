@@ -582,6 +582,25 @@ describe("SwitcherBrowsersList", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the empty state inside the Simulators scroller so a long list cannot squeeze it", () => {
+    // The empty state used to sit above the scroller as a sibling, so a long
+    // Simulators list squeezed it until its Add browser button was clipped.
+    // Sharing the scroller and holding its natural height is what prevents it.
+    replaceSessions([], "live");
+    renderList(() => undefined);
+    const empty = screen.getByTestId("epic-browsers-panel-empty");
+    const simulators = screen.getByTestId("switcher-simulators-section-stub");
+    const emptyScroller = empty.closest(".overflow-y-auto");
+    const simulatorsScroller = simulators.closest(".overflow-y-auto");
+
+    expect(emptyScroller).not.toBeNull();
+    expect(simulatorsScroller).not.toBeNull();
+    expect(emptyScroller).toBe(simulatorsScroller);
+    const wrapper = empty.parentElement;
+    expect(wrapper?.classList.contains("shrink-0")).toBe(true);
+    expect(wrapper?.classList.contains("grow")).toBe(true);
+  });
+
   it("keeps the rows reachable when the session stream drops", () => {
     // A stream that fails does not un-open the tabs, and these rows are the
     // only route to them. Desktop renders the banner ABOVE its list for the
