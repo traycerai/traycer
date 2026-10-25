@@ -212,9 +212,15 @@ export interface SettingsState {
   startPageWallpaper: StartPageWallpaper | null;
   showGreeting: boolean;
   showRecentHistory: boolean;
+  /**
+   * Whether the personal Tracy bot keeps its fixed place in the tab strip,
+   * beside Home. Off, Tracy opens in an ordinary tab from the bots list.
+   */
+  showTracy: boolean;
   setStartPageWallpaper: (wallpaper: StartPageWallpaper | null) => void;
   setShowGreeting: (visible: boolean) => void;
   setShowRecentHistory: (visible: boolean) => void;
+  setShowTracy: (visible: boolean) => void;
   theme: ThemeMode;
   themePreset: ThemePreset;
   defaultSelection: HarnessModelSelection;
@@ -406,6 +412,7 @@ type PersistedSettingsState = Pick<
   | "startPageWallpaper"
   | "showGreeting"
   | "showRecentHistory"
+  | "showTracy"
   | "theme"
   | "themePreset"
   | "defaultSelection"
@@ -483,6 +490,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     startPageWallpaper: state.startPageWallpaper,
     showGreeting: state.showGreeting,
     showRecentHistory: state.showRecentHistory,
+    showTracy: state.showTracy,
     theme: state.theme,
     themePreset: state.themePreset,
     defaultSelection: state.defaultSelection,
@@ -528,9 +536,11 @@ export const useSettingsStore = create<SettingsState>()(
       startPageWallpaper: null,
       showGreeting: true,
       showRecentHistory: true,
+      showTracy: true,
       setStartPageWallpaper: makeSetter(set, "startPageWallpaper"),
       setShowGreeting: makeSetter(set, "showGreeting"),
       setShowRecentHistory: makeSetter(set, "showRecentHistory"),
+      setShowTracy: makeSetter(set, "showTracy"),
       theme: "system",
       themePreset: DEFAULT_THEME_PRESET,
       defaultSelection: DEFAULT_SELECTION,

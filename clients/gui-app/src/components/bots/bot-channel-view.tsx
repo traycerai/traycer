@@ -22,7 +22,10 @@ import {
   type BotTranscriptSurface,
 } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
+import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import {
   BotThreadPanel,
   type BotThreadPanelThread,
@@ -34,7 +37,11 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  useBotActivity,
+  type BotActivity,
+  type BotSessionActivity,
+} from "@/hooks/bots/use-bot-activity";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import {
@@ -46,6 +53,7 @@ import {
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -95,22 +103,6 @@ function channelConversation(
 }
 
 /**
- * The thread open beside the channel, by the message it hangs off: a
- * member's post, or one of the bot's questions or proposals. Held by the
- * tab above the views, so an announcement's thread nobody has started yet
- * still opens as the box that starts it after a switch between the tabs.
- */
-export type BotOpenThread = {
-  readonly anchorMessageId: string;
-  /**
-   * The thread opens with the first reply under its anchor, sent with the
-   * anchor's id: the bot's question or proposal, or a post the bot answered
-   * in the channel (reply mode `direct`). `false` for a post's own thread.
-   */
-  readonly announcement: boolean;
-};
-
-/**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
  * the top level, a line under each post that opens its thread, and the
@@ -128,6 +120,8 @@ export function BotChannelView(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly botTitle: string;
+  /** What the bot does, for the top of a channel nobody has written in. */
+  readonly directive: string | null;
   /**
    * The bot's channel: the app conversation `bot.create` made, as the bot
    * record names it. `null` from a host that predates the field.
@@ -150,6 +144,7 @@ export function BotChannelView(props: {
     botId,
     hostId,
     botTitle,
+    directive,
     appConversationChatId,
     paused,
     resolveMember,
@@ -175,15 +170,20 @@ export function BotChannelView(props: {
     threadsByPost,
     isUnread,
   } = useChannelThreads({ client, botId, hostId, paused });
+  const activity = useBotActivity(botId);
 
   // A direct reply's option, clicked, is the person's next post: offered
-  // only while no earlier pick is still being sent.
+  // only while no earlier pick is still being sent. A pick that fails says so
+  // where a failed message does.
   const { mutate: send, isPending: sending } =
     useBotConversationSendMutation(client);
+  const sendFailure = useBotSendFailure();
+  const { fail: failSend, clear: clearSendFailure } = sendFailure;
   const channelId = channel?.conversationId ?? null;
   const chooseOption = useCallback(
     (choice: string) => {
       if (channelId === null) return;
+      clearSendFailure();
       send(
         {
           botId,
@@ -192,13 +192,10 @@ export function BotChannelView(props: {
           threadId: null,
           announcementId: null,
         },
-        {
-          onError: (error) =>
-            toastFromHostError(error, "Couldn't send your choice."),
-        },
+        { onError: failSend },
       );
     },
-    [botId, channelId, send],
+    [botId, channelId, clearSendFailure, failSend, send],
   );
 
   // A question, a proposal or a direct post with no thread yet shows a box
@@ -220,6 +217,10 @@ export function BotChannelView(props: {
           replyCount: thread.replyCount,
           lastReplyAt: thread.lastReplyAt,
           unread: isUnread(thread.threadId),
+          // An open thread says it in its own panel, not under its post.
+          replying:
+            postMessageId !== openThreadPostId &&
+            activity?.threads[thread.threadId]?.state === "replying",
         };
       },
       // A host without the thread list has no thread to open.
@@ -234,17 +235,24 @@ export function BotChannelView(props: {
         ? openAnnouncementThread
         : null,
       chooseOption: sending ? null : chooseOption,
+      intro: { botTitle, directive },
     }),
     [
+      botTitle,
+      activity?.threads,
       chooseOption,
+      directive,
       isUnread,
       onOpenThread,
       openAnnouncementThread,
+      openThreadPostId,
       sending,
       threadListSupported,
       threadsByPost,
     ],
   );
+
+  const trunk = channelTrunk(activity);
 
   const threadOpen =
     openThreadPostId !== null && !paused && threadListSupported;
@@ -362,6 +370,16 @@ export function BotChannelView(props: {
               resolveMember={resolveMember}
             />
           )}
+          <BotReplyingStrip
+            botTitle={botTitle}
+            activity={trunk.reply}
+            testId="bot-channel-replying"
+          />
+          <BotUnansweredNotice
+            botTitle={botTitle}
+            activity={trunk.session}
+            testId="bot-channel-unanswered"
+          />
           <BotMessageComposer
             botId={botId}
             conversationId={channel.conversationId}
@@ -370,6 +388,7 @@ export function BotChannelView(props: {
             placeholder={`Message #${botTitle}`}
             label={`Message #${botTitle}`}
             testId="bot-channel-composer"
+            failure={sendFailure}
           />
         </section>
         {threadOpen ? (
@@ -390,6 +409,24 @@ export function BotChannelView(props: {
       </div>
     </div>
   );
+}
+
+type ChannelTrunk = {
+  readonly session: BotSessionActivity | null;
+  readonly reply: BotSessionActivity | null;
+};
+
+/**
+ * The trunk answers a direct post at the channel's top level: its running
+ * turn is the channel's typing line (`reply`) only while it answers one, so
+ * its other work (a routine, a check-in) and a turn whose post is answered
+ * draw none. The notice under the last row reads the trunk's state alone
+ * (`session`).
+ */
+function channelTrunk(activity: BotActivity | null): ChannelTrunk {
+  const session = activity?.trunk ?? null;
+  const reply = session !== null && session.requestId !== null ? session : null;
+  return { session, reply };
 }
 
 /**

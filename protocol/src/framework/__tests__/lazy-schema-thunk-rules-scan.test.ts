@@ -136,6 +136,14 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
     },
   ],
   [
+    "method-on-non-schema queueSteerNowClientFrameSchemaPreSteerRestartConfirm.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm (an array of zod schemas); `.extend` clones",
+    },
+  ],
+  [
     "method-on-non-schema EpicArtifactKindSchemaPreHtml.nullable (protocol/src/common/registry.ts)",
     {
       count: 1,

@@ -67,6 +67,9 @@ export interface ChatTimelineFollowLatch {
   readonly completeOwnedEndNavigation: (didLandAtEnd: boolean) => void;
   /** Fresh DOM validation for explicit-navigation settle loops. */
   readonly isAtStrictEnd: () => boolean;
+  /** Whether an end correction's LegendList `scrollToEnd` is still queued or
+   *  in flight - geometry the library has yet to apply. */
+  readonly hasPendingEndCorrection: () => boolean;
   /** Routes every native or library scroll report through this authority. */
   readonly observeLiveGeometry: () => void;
 }
@@ -128,6 +131,16 @@ interface ChatTimelineFollowLatchOptions {
     | undefined;
   readonly isCorrectionSuppressed: (() => boolean) | undefined;
   readonly resolveSuppressedEndLanding: (() => boolean) | undefined;
+  /**
+   * True while the transcript is structurally recovering (a void, a carried
+   * skeleton, a key-sequence commit whose layout has not settled). Its
+   * strict-bottom landings are the list's, not the reader's, so they must not
+   * grant follow to a detached reader. Reader evidence - a touch reaching the
+   * tail, a reader end candidate, explicit go-live - still grants, and a
+   * reader already following is unaffected, which is what separates this from
+   * `isCorrectionSuppressed`.
+   */
+  readonly isReattachSuppressed: (() => boolean) | undefined;
 }
 
 function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
@@ -261,6 +274,7 @@ export function useChatTimelineFollowLatch(
     onReaderGesture,
     isCorrectionSuppressed,
     resolveSuppressedEndLanding,
+    isReattachSuppressed,
   } = options;
   const permissionRef = useRef(initialScrollAtEnd);
   const [scrollNode, setScrollNode] = useState<HTMLElement | null>(null);
@@ -462,6 +476,11 @@ export function useChatTimelineFollowLatch(
     );
   }, [listRef]);
 
+  const hasPendingEndCorrection = useCallback(
+    (): boolean => pendingEndCorrectionScrollRef.current !== null,
+    [],
+  );
+
   const beginOwnedEndNavigation = useCallback((): void => {
     const node = listRef.current?.getScrollableNode();
     if (!node) return;
@@ -496,7 +515,9 @@ export function useChatTimelineFollowLatch(
       cancelActiveCorrection();
       readerEndCandidateRef.current = null;
       const armedDeparture = armedReaderDepartureRef.current;
-      if (armedDeparture?.source === "touch" && isNativeScrollReport) {
+      const isTouchArrival =
+        armedDeparture?.source === "touch" && isNativeScrollReport;
+      if (isTouchArrival) {
         // The finger reached the tail mid-contact (streaming grew it past
         // the contact offset): later movement is measured from here, or a
         // drag back to the original offset would read as a tap and the lift
@@ -505,6 +526,17 @@ export function useChatTimelineFollowLatch(
           source: "touch",
           scrollTopAtContact: scrollTop,
         };
+      }
+      if (
+        !isTouchArrival &&
+        !permissionRef.current &&
+        isReattachSuppressed?.() === true
+      ) {
+        // A recovering transcript's clamp can land a detached reader at the
+        // strict bottom for a frame. That landing is the list's, so it leaves
+        // the reader detached and every arm in place; the settle that lifts
+        // the suppression reconciles whatever geometry remains.
+        return;
       }
       if (
         armedDeparture?.source === "gesture" &&
@@ -529,6 +561,7 @@ export function useChatTimelineFollowLatch(
     [
       cancelActiveCorrection,
       isCorrectionSuppressed,
+      isReattachSuppressed,
       resolveSuppressedEndLanding,
       setFollowIntent,
     ],
@@ -654,6 +687,12 @@ export function useChatTimelineFollowLatch(
         cancelActiveCorrection();
         return;
       }
+      if (!permissionRef.current && isReattachSuppressed?.() === true) {
+        // Maintenance is never reader evidence, and a recovering transcript's
+        // clamp is not the reader arriving: leave a detached reader detached.
+        cancelActiveCorrection();
+        return;
+      }
       // Maintenance can be the only observable boundary after a collapsing
       // row or end-inset change passively clamps the DOM to the strict edge.
       // Reconcile before consulting permission so a stale false latch cannot
@@ -676,6 +715,7 @@ export function useChatTimelineFollowLatch(
   }, [
     cancelActiveCorrection,
     isCorrectionSuppressed,
+    isReattachSuppressed,
     listRef,
     reconcileStrictBottom,
     startEndCorrection,
@@ -866,6 +906,7 @@ export function useChatTimelineFollowLatch(
       completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       isAtStrictEnd,
+      hasPendingEndCorrection,
       observeLiveGeometry,
     }),
     [
@@ -874,6 +915,7 @@ export function useChatTimelineFollowLatch(
       completeOwnedFreeNavigation,
       completeOwnedEndNavigation,
       followEndIfPermitted,
+      hasPendingEndCorrection,
       isAtStrictEnd,
       noteReaderGesture,
       observeLiveGeometry,

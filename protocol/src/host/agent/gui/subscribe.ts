@@ -185,6 +185,7 @@ import {
 import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
+import { opencodeLineHeldSchema } from "@traycer/protocol/common/opencode-line";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -3467,7 +3468,7 @@ export const QUEUE_STEER_RESTART_UNCONFIRMED_CODE =
 // Every reason a queued steer would restart the turn, on a `rejected` ack
 // carrying `QUEUE_STEER_RESTART_UNCONFIRMED`: the host refuses a restart the
 // client did not confirm, and names each cause so the confirm dialog can.
-// Absent on every other ack. `1.38`; `projectChatActionAckForVersion` strips
+// Absent on every other ack. `1.39`; `projectChatActionAckForVersion` strips
 // it below. Optional for the same reason `cause` is.
 const steerRestartAckFields = {
   steerRestartReasons: lazySchema(() =>
@@ -3741,9 +3742,9 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
     },
   });
 
-// The common frames as `chat.subscribe@1.35` through `@1.37` ship them:
+// The common frames as `chat.subscribe@1.35` through `@1.38` ship them:
 // `1.34`'s over the live open queue, which may carry a memory-curation item.
-// Frozen without the steer restart reasons `1.38` adds to `actionAck`.
+// Frozen without the steer restart reasons `1.39` adds to `actionAck`.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
@@ -3761,9 +3762,9 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.38`): `1.35`'s with the steer
+// The live common frames (`chat.subscribe@1.39`): `1.35`'s with the steer
 // restart reasons on a rejected `actionAck`.
-const chatSubscribeCommonServerFrameSchemasOpenHarnessV138 =
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
     queue: openChatQueueStateSchema,
@@ -4065,19 +4066,19 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessV135 = [
   blockDeltaServerFrameSchema(openRuntimeEventSchemaPreNotApplied),
 ];
 
-// The shared frames shipped at `chat.subscribe@1.37`: the current compaction
-// outcome schema, without the steer restart reasons `1.38` adds.
+// The shared frames shipped at `chat.subscribe@1.37` and `@1.38`: the current
+// compaction outcome schema, without the steer restart reasons `1.39` adds.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV137 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV135,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
-// Live shared frames (`chat.subscribe@1.38`): the live open-harness common set
+// Live shared frames (`chat.subscribe@1.39`): the live open-harness common set
 // over the same `blockDelta`.
-const chatSubscribeSharedServerFrameSchemasOpenHarnessV138 = [
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV139 = [
   messageDeliveryChangedServerFrameSchema,
-  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV138,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV139,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
@@ -4844,8 +4845,8 @@ const chatSubscribeClientFrameSchemaOptionsPreCanvas = [
 
 const [sendClientFrameSchemaPreCanvas, ...clientFrameOptionsAfterSend] =
   chatSubscribeClientFrameSchemaOptionsPreCanvas;
-// Client frames of `chat.subscribe@1.32` through `@1.37`: `send` carries
-// browser annotations; `queueSteerNow` has no restart confirmation (`1.38`).
+// Client frames of `chat.subscribe@1.32` through `@1.38`: `send` carries
+// browser annotations; `queueSteerNow` has no restart confirmation (`1.39`).
 const chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm = [
   lazySchema(() =>
     sendClientFrameSchemaPreCanvas.extend({
@@ -4858,7 +4859,7 @@ const chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm = [
 // Positional, like the destructure of the middle options above: `send`, then
 // the two message frames and the seven frames ahead of `queueSteerNow` in
 // `chatSubscribeClientFrameSchemaMiddleOptionsLive`. A miscount re-binds the
-// wrong frame; `chat-subscribe-steer-restart-v138.test.ts` asserts the new key
+// wrong frame; `chat-subscribe-steer-restart-v139.test.ts` asserts the new key
 // on `queueSteerNow` by kind.
 const [
   sendClientFrameSchemaPreSteerRestartConfirm,
@@ -4875,7 +4876,7 @@ const [
   ...clientFrameOptionsAfterQueueSteerNow
 ] = chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm;
 
-// Live client frames (`chat.subscribe@1.38`): `queueSteerNow` says whether the
+// Live client frames (`chat.subscribe@1.39`): `queueSteerNow` says whether the
 // person confirmed ending the running turn. A host on this line refuses a
 // steer that would restart the turn unless it is confirmed, and names why
 // (`steerRestartReasons` on the rejected ack); the client confirms and sends
@@ -6369,13 +6370,22 @@ const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
   }),
 );
 
-// The live windowed snapshot reopens harness ids in the queue and tail.
-// The record head, active turn and fallback tuples keep the closed enum:
-// they are what a peer drives (`open-harness-wire.ts`).
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot shipped at `chat.subscribe@1.37`: harness ids reopened
+// in the queue and tail. The record head, active turn and fallback tuples keep
+// the closed enum: they are what a peer drives (`open-harness-wire.ts`).
+const openChatWindowedSnapshotSchemaPreLineHeld = lazySchema(() =>
   chatWindowedSnapshotSchema.extend({
     queue: openChatQueueStateSchema,
     tail: openChatTranscriptWindowSchema,
+  }),
+);
+
+// The live windowed snapshot (`chat.subscribe@1.38`): `1.37`'s with
+// `opencodeLineHeld`, present while the chat stays on its recorded OpenCode
+// line although the saved selection names the other one, and absent otherwise.
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreLineHeld.extend({
+    opencodeLineHeld: opencodeLineHeldSchema.optional(),
   }),
 );
 export type OpenChatWindowedSnapshot = z.infer<
@@ -6432,8 +6442,20 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135 =
     }),
   );
 
-// The live snapshot carries the not-applied outcome flag.
+// The snapshot shipped at `chat.subscribe@1.37`: the not-applied outcome flag,
+// no `opencodeLineHeld`.
 const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137 =
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchemaPreLineHeld,
+    }),
+  );
+
+// The live snapshot carries `opencodeLineHeld`.
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138 =
   lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
@@ -7227,7 +7249,7 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.37: not-applied outcome flag, no steer restart reasons (`1.38`). */
+/** Frozen 1.37: the not-applied outcome flag, no `opencodeLineHeld`. */
 const chatSubscribeServerFrameSchemaV137 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
@@ -7244,18 +7266,10 @@ const chatSubscribeServerFrameSchemaV137 = lazySchema(() =>
   ]),
 );
 
-/**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.38`): the
- * union above with the snapshot, the `range` response, the three
- * sender-bearing common frames and the `blockDelta` bound to their
- * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
- * (the active turn, the fallback tuples) and the snapshot's record head - keep
- * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
- */
-export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+/** Frozen 1.38: `opencodeLineHeld`, no steer restart reasons (`1.39`). */
+const chatSubscribeServerFrameSchemaV138 = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
@@ -7265,7 +7279,32 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
-    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV138,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV137,
+  ]),
+);
+
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.39`): the
+ * union above with the snapshot, the `range` response, the three
+ * sender-bearing common frames and the `blockDelta` bound to their
+ * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
+ * (the active turn, the fallback tuples) and the snapshot's record head - keep
+ * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
+ * is assignable to this type; the client parses with this schema.
+ */
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV139,
   ]),
 );
 export type OpenChatSubscribeWindowedServerFrame = z.infer<
@@ -8385,17 +8424,31 @@ export const chatSubscribeV137 = defineStreamRpcContract({
 });
 
 /**
- * 1.38: a queued steer that would end the running turn needs the person's
- * confirmation. `queueSteerNow` carries `restartConfirmed`; the host refuses
- * an unconfirmed restart with `QUEUE_STEER_RESTART_UNCONFIRMED` and every
- * cause in `steerRestartReasons` on the rejected ack, and stages nothing. A
- * peer below 1.38 keeps the old behaviour: its steer restarts the turn
- * unasked, and the host strips the reasons from its acks.
+ * 1.38 adds `opencodeLineHeld` to the snapshot: why a chat stays on its
+ * recorded OpenCode line although the saved selection names the other one.
+ * Optional, and stripped by name below `1.38`, where absent reads as "not
+ * held", which is also all an older host can say.
  */
 export const chatSubscribeV138 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 38 } as const,
   openRequestSchema: chatSubscribeV137.openRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV138,
+  clientFrameSchema: chatSubscribeV137.clientFrameSchema,
+});
+
+/**
+ * 1.39: a queued steer that would end the running turn needs the person's
+ * confirmation. `queueSteerNow` carries `restartConfirmed`; the host refuses
+ * an unconfirmed restart with `QUEUE_STEER_RESTART_UNCONFIRMED` and every
+ * cause in `steerRestartReasons` on the rejected ack, and stages nothing. A
+ * peer below 1.39 keeps the old behaviour: its steer restarts the turn
+ * unasked, and the host strips the reasons from its acks.
+ */
+export const chatSubscribeV139 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 39 } as const,
+  openRequestSchema: chatSubscribeV138.openRequestSchema,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

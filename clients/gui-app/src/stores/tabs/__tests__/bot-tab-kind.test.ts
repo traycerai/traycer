@@ -13,6 +13,7 @@ import {
   useBotTabsStore,
   type BotTabRecord,
 } from "@/stores/bots/bot-tabs-store";
+import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { botTabModule, isOpenBotTab } from "@/stores/tabs/kinds/bot";
 import {
   TAB_KINDS,
@@ -39,6 +40,7 @@ function record(botId: string, hostId: string, title: string): BotTabRecord {
 
 function resetStores(): void {
   useBotTabsStore.setState({ tabs: {} });
+  useBotOpenThreadStore.setState({ byBotId: {} });
   useTabsStore.setState(useTabsStore.getInitialState(), true);
 }
 
@@ -110,6 +112,22 @@ describe("bot-tabs store", () => {
     expect(lookupBotTab(tabs, BOT_A)).toBeNull();
     expect(lookupBotTab(tabs, BOT_B)).not.toBeNull();
     expect(isOpenBotTab(BOT_A)).toBe(false);
+  });
+
+  it("reopens a closed bot's tab with no thread open, and leaves another bot's thread open", () => {
+    const { openBotTab, closeBotTab } = useBotTabsStore.getState();
+    const { setOpenThread } = useBotOpenThreadStore.getState();
+    openBotTab({ botId: BOT_A, hostId: "host-1", title: "A" });
+    openBotTab({ botId: BOT_B, hostId: "host-1", title: "B" });
+    setOpenThread(BOT_A, { anchorMessageId: "post-a", announcement: false });
+    setOpenThread(BOT_B, { anchorMessageId: "post-b", announcement: false });
+
+    closeBotTab(BOT_A);
+    openBotTab({ botId: BOT_A, hostId: "host-1", title: "A" });
+
+    expect(useBotOpenThreadStore.getState().byBotId).toEqual({
+      [BOT_B]: { anchorMessageId: "post-b", announcement: false },
+    });
   });
 
   it("setBotTabTitle and rebindBotTab change only their own field", () => {

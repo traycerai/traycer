@@ -6,6 +6,7 @@ import {
   chatSubscribeV136,
   chatSubscribeV137,
   chatSubscribeV138,
+  chatSubscribeV139,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -319,18 +320,21 @@ function parseFrame(
 }
 
 describe("chat.subscribe@1.37 registration", () => {
-  it("binds chatSubscribeV137 above 1.36, under the 1.38 head", () => {
-    expect(line.latestMinor).toBe(38);
+  it("binds chatSubscribeV137 above 1.36, frozen under the 1.39 head", () => {
+    expect(line.latestMinor).toBe(39);
+    expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(line.versions[38].contract).toBe(chatSubscribeV138);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
     expect(chatSubscribeV137.schemaVersion).toEqual({ major: 1, minor: 37 });
-    // Frozen since 1.38 added the steer restart reasons to `actionAck`.
     expect(chatSubscribeV137.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV138.serverFrameSchema).toBe(
+    expect(chatSubscribeV138.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV139.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV136.serverFrameSchema).not.toBe(
@@ -338,9 +342,9 @@ describe("chat.subscribe@1.37 registration", () => {
     );
   });
 
-  it("registers every minor from 1.0 through 1.38", () => {
+  it("registers every minor from 1.0 through 1.39", () => {
     expect([...MINORS].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 39 }, (_, minor) => minor),
+      Array.from({ length: 40 }, (_, minor) => minor),
     );
   });
 });

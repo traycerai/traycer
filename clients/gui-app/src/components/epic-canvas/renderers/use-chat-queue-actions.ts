@@ -153,7 +153,7 @@ export function useChatQueueActions(
     readonly changed: ReadonlyArray<string>;
   } | null>(null);
   // A steer this tile sent unconfirmed - the row's Steer button, or a queue
-  // edit's Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.38` refused
+  // edit's Cmd/Ctrl+Enter - that a host on `chat.subscribe@1.39` refused
   // because it would end the running turn. Read, not taken: it stays in the
   // store until this tile's dialog is answered, so a pane that was unfocused
   // when the refusal arrived asks once it is focused again, and another pane

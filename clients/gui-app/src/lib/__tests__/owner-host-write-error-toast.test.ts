@@ -937,7 +937,7 @@ describe("batch notice spec (traycerai/traycer#2546, round 10): one test per row
     );
 
     expect(noticesRaised()).toEqual([
-      "Couldn't delete any of the 5 selected agents. You don't have permission to do that. The host machine is out of disk space. Free some space on it, then try again.",
+      "Couldn't delete any of the 5 selected agents. You don't have permission to do that. The host computer is out of disk space. Free some space on it, then try again.",
     ]);
   });
 

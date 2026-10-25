@@ -46,6 +46,8 @@ export function GeneralSettingsPanel() {
   const setSteerOnModEnterEnabled = useSettingsStore(
     (s) => s.setSteerOnModEnterEnabled,
   );
+  const showTracy = useSettingsStore((s) => s.showTracy);
+  const setShowTracy = useSettingsStore((s) => s.setShowTracy);
   const compact = useSettingsDensity() === "compact";
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
@@ -139,6 +141,28 @@ export function GeneralSettingsPanel() {
             />
           ) : null}
           <ChatAutoArchiveSettingsRow />
+        </SettingsGroup>
+
+        <SettingsGroup
+          group={GENERAL.definitions.bots}
+          showTitle
+          tone="default"
+          dataTestId="settings-general-bots"
+          fill={false}
+        >
+          <SettingsRow
+            row={GENERAL.definitions.showTracy}
+            control={
+              <Switch
+                checked={showTracy}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("showTracy");
+                  setShowTracy(value);
+                }}
+                aria-label="Show Tracy"
+              />
+            }
+          />
         </SettingsGroup>
 
         <DangerZoneSection />

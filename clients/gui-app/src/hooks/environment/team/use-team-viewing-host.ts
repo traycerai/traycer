@@ -100,7 +100,7 @@ export function useTeamViewingHost(): TeamViewingHost {
   const visit = useViewingHosts((state) => state.visit);
   const activeHostId = useEffectiveHostId();
   const rows = hosts.isError ? NO_HOSTS : (hosts.data?.hosts ?? NO_HOSTS);
-  const eligible = rows.filter(isReachable);
+  const eligible = rows.filter((host) => isEligible(host, activeHostId));
   const selected =
     eligible.find((host) => host.hostId === pickedId) ??
     recent
@@ -114,7 +114,7 @@ export function useTeamViewingHost(): TeamViewingHost {
   useEffect(() => {
     if (
       activeHostId !== null &&
-      rows.some((host) => host.hostId === activeHostId && isReachable(host))
+      rows.some((host) => host.hostId === activeHostId)
     ) {
       visit(viewerId, activeHostId);
     }
@@ -133,7 +133,15 @@ export function useTeamViewingHost(): TeamViewingHost {
   };
 }
 
-/** An older inventory cannot prove a host is eligible for a team read. */
-function isReachable(host: EnvironmentHostRecordV11): boolean {
-  return host.reachable;
+/**
+ * An older inventory cannot prove another host is eligible for a team read.
+ * The window's own host needs no proof: the window is talking to it, and the
+ * list holds only hosts bound to that environment. The cloud's flag lapses
+ * for a desktop host that is not relay-attached, minutes after its last report.
+ */
+function isEligible(
+  host: EnvironmentHostRecordV11,
+  activeHostId: string | null,
+): boolean {
+  return host.reachable || host.hostId === activeHostId;
 }

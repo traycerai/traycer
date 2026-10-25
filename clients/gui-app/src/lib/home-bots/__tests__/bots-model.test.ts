@@ -103,6 +103,7 @@ function snapshot(input: {
     openRequestCount: input.openRequestCount,
     conversationsRevision: null,
     boundHost: { hostId: input.hostId, epoch: 2, isThisHost: input.isThisHost },
+    activity: null,
   };
 }
 

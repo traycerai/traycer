@@ -6666,6 +6666,34 @@ describe("<ChatTile />", () => {
     });
   });
 
+  it("shows the store's OpenCode line hold beside the composer, and drops it when the store clears it", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) throw new Error("expected chat session handle");
+    expect(screen.queryByTestId("chat-composer-opencode-line-held")).toBeNull();
+
+    act(() => {
+      handle.store.setState({
+        opencodeLineHeld: { line: 1, reason: "model_unavailable" },
+      });
+    });
+    expect(
+      screen.getByTestId("chat-composer-opencode-line-held").textContent,
+    ).toBe(
+      "Stays on OpenCode 1.x because OpenCode 2.x can't run this message.",
+    );
+
+    act(() => {
+      handle.store.setState({ opencodeLineHeld: undefined });
+    });
+    expect(screen.queryByTestId("chat-composer-opencode-line-held")).toBeNull();
+  });
+
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`
   // (it instruments composer renders directly). Behaviour coverage for the
   // stop/running transitions is exercised by the other tests above.

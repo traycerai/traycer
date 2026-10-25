@@ -466,7 +466,7 @@ describe("<EpicUsageDialog />", () => {
     await screen.findByTestId("usage-dialog-empty");
     expect(
       screen.getByTestId("usage-served-by-local-note").textContent,
-    ).toContain("This machine's usage only");
+    ).toContain("This computer's usage only");
   });
 
   it("keeps the absent-usage disclaimer with the stat tiles", async () => {

@@ -399,6 +399,8 @@ export function publishedChatSessionState(
     // Both are live-only state the host never publishes: a frozen copy has no
     // next prompt to suggest and no turn to be thinking in.
     suggestedPrompt: undefined,
+    // A copy runs no turn, so nothing holds it on a line.
+    opencodeLineHeld: undefined,
     thinkingTokens: null,
     fallbackChoiceLease: null,
     pendingBackgroundStops: {},

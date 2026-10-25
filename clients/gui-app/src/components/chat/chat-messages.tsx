@@ -460,6 +460,20 @@ interface FreeRestoreGeometry {
   readonly rowPosition: number | null;
 }
 
+/**
+ * The store half of follow-reattach suppression: the window was voided and its
+ * replacement index has not finished streaming back. Each commit of that
+ * recovery reshapes the list under the reader, so a strict-bottom landing
+ * during it is the list's, not the reader's.
+ */
+function isTranscriptWindowRecovering(
+  window: TranscriptWindow | null,
+): boolean {
+  return (
+    window !== null && (window.invalidated || window.carriedSkeleton.length > 0)
+  );
+}
+
 /** LegendList's web implementation can return null before its scroll element
  * attaches even though the cross-platform public type is non-null. Keep that
  * runtime boundary explicit for mount-time restoration reads. */
@@ -2367,6 +2381,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       pendingHydrationRestoreAnchorIdRef.current !== null,
     [],
   );
+  // Read through the mirrored ref, never render state: the latch consults it
+  // from scroll and layout callbacks that no render accompanies.
+  const isReattachSuppressed = useCallback(
+    (): boolean => isTranscriptWindowRecovering(transcriptWindowRef.current),
+    [],
+  );
   // Fixup (fix-top-level-task-tab-scroll-restoration): continuously mirrors
   // the last KNOWN-COHERENT scroll snapshot while the DOM is genuinely
   // measurable (kept fresh by the rAF-throttled viewport update below, same
@@ -2727,7 +2747,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   useLayoutEffect(() => {
     messagesRef.current = messages;
+    const wasRecovering = isTranscriptWindowRecovering(
+      transcriptWindowRef.current,
+    );
     transcriptWindowRef.current = transcriptWindow;
+    // The timeline's maintenance for this commit ran in its own layout
+    // effect, before this one, against the window still recovering. Reconcile
+    // once now so a reader the finished recovery left at the strict bottom is
+    // granted follow under the ordinary clamp contract.
+    if (wasRecovering && !isTranscriptWindowRecovering(transcriptWindow)) {
+      followLatchRef.current?.followEndIfPermitted();
+    }
   }, [messages, transcriptWindow]);
 
   useInsertionEffect(() => {
@@ -4312,6 +4342,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   followLatchRef={followLatchRef}
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
+                  isReattachSuppressed={isReattachSuppressed}
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }

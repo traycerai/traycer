@@ -879,7 +879,10 @@ signed-in viewer's identity. Generic item mutations also retain environmentId
 in their variables so paused-save status belongs to the picked team.
 
 Live facts, native skills and the guide share `useTeamViewingHost()`: an
-explicit reachable host registered to that team, or no host. Picking it does
+explicit reachable host registered to that team, or no host. The window's own
+host (`useEffectiveHostId()`) counts as reachable whenever the team's list
+holds it, since the cloud's flag lapses for a desktop host that is not
+relay-attached. Picking it does
 not activate or wake it. Skills and the guide use the team's room through
 that host; no-host states offer the common picker. Skill edits and removal
 capture the team id and require `providers.nativeMutate@1.4` at dispatch. A
@@ -3055,6 +3058,29 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     only when the surface's host advertises both (the method is optional), so
     an older host shows nothing here. Holds a local echo of a flip until the
     host's read-back lands, like the per-provider judge select.
+  - **Session name** (`claude-session-name-group.tsx`), Claude Code only: one
+    "Name template" field (saved on blur/Enter) for the name the scoped host
+    gives a Claude Code session it starts on the Terminal interface, passed as
+    `claude --name` at the launch that creates the session (first launch or
+    fork; a resume keeps its name). Stored as `sessionNames.claudeTemplate`
+    in `~/.traycer/cli/config.json` on that machine over
+    `config.sessionNames.get` / `set` (optional methods; a host without them
+    draws nothing). Default `Traycer · {project} · {date}`. The placeholders
+    listed and accepted are the ones the host's `get` reports; an unknown one,
+    or a template over 200 characters, shows an inline error and is not
+    saved. A live preview renders the draft with `renderSessionName`
+    (`@traycer/protocol/config/session-name-template`, the same renderer the
+    host uses) against sample values. Reset writes the default and discards
+    the draft (its mousedown keeps focus, and the field's blur does not save
+    when focus moves to Reset, so neither a click nor a Tab saves it; Reset's
+    own blur saves the draft when focus leaves elsewhere). The field and
+    Reset are disabled while a save is in flight. Saves share one mutation
+    scope per host (`sessionNamesWriteScope`) and compare against the last
+    value sent; a read-back that lands while a save is queued is of an
+    earlier save and does not replace the draft. A refused save clears that
+    value unless a later save was queued since, so committing the same draft
+    again retries it, and its draft stays (no read-back replaces it) until the
+    next commit, Reset or edit.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared

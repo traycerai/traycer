@@ -205,6 +205,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   worktreeBinding: true,
   missingWorktreePaths: true,
   suggestedPrompt: true,
+  opencodeLineHeld: true,
   thinkingTokens: true,
 } as const satisfies Readonly<Record<ChatSessionDataKey, true | string>>;
 

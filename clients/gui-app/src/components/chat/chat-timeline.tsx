@@ -6,6 +6,7 @@ import {
   useCallback,
   useLayoutEffect,
   useMemo,
+  useRef,
   type RefObject,
 } from "react";
 import {
@@ -187,6 +188,12 @@ export interface ChatTimelineProps {
   readonly isFollowCorrectionSuppressed?: () => boolean;
   /** Releases that gate only for a controller-validated reader end landing. */
   readonly resolveSuppressedEndLanding?: () => boolean;
+  /**
+   * True while the transcript's store is structurally recovering. A detached
+   * reader is not reattached by a strict-bottom landing until it returns
+   * false; this timeline adds its own geometry settle on top.
+   */
+  readonly isReattachSuppressed?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /**
@@ -248,6 +255,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   followLatchRef,
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
+  isReattachSuppressed,
   navigationHighlightedMessageId,
   navigationHighlightedBlockId,
   rowHeightMemory = null,
@@ -259,6 +267,15 @@ export const ChatTimeline = memo(function ChatTimeline({
   const rows = useStableChatTimelineRows(listRef, inputRows);
 
   const keySequenceChanged = useCommittedKeySequenceChanged(listRef, rows);
+
+  // Set from a key-sequence-changing commit until its layout has settled; see
+  // the effect that owns it below.
+  const structuralCommitUnsettledRef = useRef(false);
+  const isLatchReattachSuppressed = useCallback(
+    (): boolean =>
+      structuralCommitUnsettledRef.current || isReattachSuppressed?.() === true,
+    [isReattachSuppressed],
+  );
 
   // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
   // hook's own doc comment. Bottom-follow is owned entirely here now -
@@ -272,6 +289,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       onReaderGesture,
       isCorrectionSuppressed: isFollowCorrectionSuppressed,
       resolveSuppressedEndLanding,
+      isReattachSuppressed: isLatchReattachSuppressed,
     },
   );
 
@@ -379,6 +397,57 @@ export const ChatTimeline = memo(function ChatTimeline({
     },
     [followLatch, onListMetricsChange],
   );
+
+  // The geometry half of reattach suppression. A commit that changes the key
+  // sequence arms the MVCP data walk, and the library applies its adjusts over
+  // the frames after it - any of which can clamp a detached reader to the
+  // strict bottom for a moment. Hold suppression until `scrollHeight` has held
+  // still for two consecutive frames with no end correction outstanding, then
+  // reconcile once under the ordinary clamp contract: a reader the settled
+  // layout leaves at the strict bottom has no "away" left to keep. Declared
+  // before the maintain effect below so this commit's own maintenance already
+  // sees the flag. A later structural commit restarts the wait; one that
+  // changes no key leaves it running.
+  const structuralSettleFrameRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (!keySequenceChanged) return;
+    if (structuralSettleFrameRef.current !== null) {
+      cancelAnimationFrame(structuralSettleFrameRef.current);
+    }
+    structuralCommitUnsettledRef.current = true;
+    const readScrollHeight = (): number | null => {
+      const node = listRef.current?.getScrollableNode();
+      return node ? node.scrollHeight : null;
+    };
+    let previousScrollHeight = readScrollHeight();
+    let stillFrames = 0;
+    const checkSettled = (): void => {
+      const scrollHeight = readScrollHeight();
+      stillFrames =
+        scrollHeight === previousScrollHeight &&
+        !followLatch.hasPendingEndCorrection()
+          ? stillFrames + 1
+          : 0;
+      previousScrollHeight = scrollHeight;
+      if (stillFrames < 2) {
+        structuralSettleFrameRef.current = requestAnimationFrame(checkSettled);
+        return;
+      }
+      structuralSettleFrameRef.current = null;
+      structuralCommitUnsettledRef.current = false;
+      followLatch.followEndIfPermitted();
+    };
+    structuralSettleFrameRef.current = requestAnimationFrame(checkSettled);
+  }, [followLatch, keySequenceChanged, listRef, rows]);
+
+  useLayoutEffect(() => {
+    const settleFrame = structuralSettleFrameRef;
+    return () => {
+      if (settleFrame.current !== null) {
+        cancelAnimationFrame(settleFrame.current);
+      }
+    };
+  }, []);
 
   // Fixup (callback-synchronous-follow): the data-change and content-inset
   // maintain triggers DO go through a React commit (both are props), so a

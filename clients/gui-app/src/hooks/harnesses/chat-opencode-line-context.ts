@@ -1,5 +1,8 @@
 import { createContext, use } from "react";
-import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
+import type {
+  OpencodeLine,
+  OpencodeLineHeld,
+} from "@traycer/protocol/common/opencode-line";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
 
@@ -13,6 +16,18 @@ export const ChatOpencodeLineContext = createContext<OpencodeLine | null>(null);
 
 export function useChatOpencodeLine(): OpencodeLine | null {
   return use(ChatOpencodeLineContext);
+}
+
+/**
+ * Why the host keeps this chat on its line although Settings names the other
+ * one (the snapshot's `opencodeLineHeld`). `null` outside a chat and whenever
+ * nothing holds it.
+ */
+export const ChatOpencodeLineHeldContext =
+  createContext<OpencodeLineHeld | null>(null);
+
+export function useChatOpencodeLineHeld(): OpencodeLineHeld | null {
+  return use(ChatOpencodeLineHeldContext);
 }
 
 /**

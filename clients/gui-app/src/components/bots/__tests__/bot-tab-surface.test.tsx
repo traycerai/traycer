@@ -282,6 +282,7 @@ function snapshot(): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
+    activity: null,
   };
 }
 
@@ -529,10 +530,9 @@ describe("<BotTabSurface /> bot.open", () => {
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
   });
 
-  it("labels the tab with the environment and nothing about a machine", () => {
+  it("names no machine anywhere on the tab", () => {
     const { container } = render(surface());
 
-    expect(screen.getByRole("banner").textContent).toContain("Acme");
     expectNoMachineWording(container);
   });
 });
@@ -874,30 +874,21 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("marks the header of the bot bot.list names as its environment's main bot", () => {
+  it("draws the header as the channel's name and its tabs only, even for the environment's main bot", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
 
-    expect(screen.getByTestId("bot-tab-main").textContent).toBe("Main");
-  });
-
-  it.each([
-    ["another bot is main", { "env-team": OTHER_BOT_ID }],
-    ["this bot is main only in another environment", { "env-other": BOT_ID }],
-    ["the host predates the field", null],
-  ])("leaves the header unmarked when %s", (_name, mainBotIds) => {
-    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-    mocks.state.mainBotIds = mainBotIds;
-    render(surface());
-
-    expect(screen.queryByTestId("bot-tab-main")).toBeNull();
-  });
-
-  it("leaves the header unmarked until bot.list has answered", () => {
-    render(surface());
-
-    expect(screen.queryByTestId("bot-tab-main")).toBeNull();
+    const header = screen.getByTestId("bot-tab-title").closest("header");
+    if (header === null) throw new Error("expected the channel header");
+    expect(
+      within(header)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Messages", "Under the hood", "Settings"]);
+    expect(header.textContent).toBe(
+      `${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hoodSettings`,
+    );
   });
 
   it.each([

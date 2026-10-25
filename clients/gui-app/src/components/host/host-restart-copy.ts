@@ -20,7 +20,7 @@ import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
  * Both surfaces refuse rather than dispatch, and say why.
  */
 export const HOST_CHANGED_DESCRIPTION =
-  "This machine's host was replaced while this dialog was open, so nothing " +
+  "This computer's host was replaced while this dialog was open, so nothing " +
   "was stopped. Restart again to check the new host.";
 
 /**

@@ -267,6 +267,7 @@ describe("<HomeBotRow /> state", () => {
       openRequestCount: 0,
       conversationsRevision: null,
       boundHost: { hostId: null, epoch: 2, isThisHost: false },
+      activity: null,
     };
     mountRow(OWN_AND_DIALABLE);
 

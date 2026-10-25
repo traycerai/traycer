@@ -44,7 +44,7 @@ function noticeCopyFor(status: GitWatcherStatus): NoticeCopy | null {
     return {
       label: "Periodic refresh",
       explanation:
-        "This machine is out of filesystem watches, so Git changes refresh on a timer instead of instantly. Raising the system watch limit restores live updates - they resume on their own once watches free up.",
+        "This computer is out of filesystem watches, so Git changes refresh on a timer instead of instantly. Raising the system watch limit restores live updates - they resume on their own once watches free up.",
     };
   }
   if (status.state === "degraded-error") {

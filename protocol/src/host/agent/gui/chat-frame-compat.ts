@@ -50,7 +50,7 @@ const CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR = 12;
  * unconfirmed restart only for a peer on this line, so a lower peer never
  * receives that code; the reasons are stripped for it all the same.
  */
-export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 38;
+export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 39;
 
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,

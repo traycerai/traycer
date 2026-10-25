@@ -31,6 +31,7 @@ import {
   chatSubscribeV136,
   chatSubscribeV137,
   chatSubscribeV138,
+  chatSubscribeV139,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -63,9 +64,10 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.38", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.39", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(38);
+    expect(line.latestMinor).toBe(39);
+    expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(line.versions[38].contract).toBe(chatSubscribeV138);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
@@ -82,7 +84,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(line.versions[15].contract).toBe(chatSubscribeV115);
   });
 
-  it("1.38's server frame is the open windowed schema; older lines are frozen", () => {
+  it("1.39's server frame is the open windowed schema; older lines are frozen", () => {
     expect(chatSubscribeV124.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -121,7 +123,9 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 froze when
     // 1.35 added the memory-curation queue item above it; 1.35 froze when
     // 1.37 added the compaction `notApplied` flag above it; 1.36 aliases
-    // 1.35's frozen frames; 1.37 binds the live windowed schema.
+    // 1.35's frozen frames; 1.37 froze when 1.38 added `opencodeLineHeld`
+    // above it; 1.38 froze when 1.39 added the steer restart reasons to
+    // `actionAck`; 1.39 binds the live windowed schema.
     expect(chatSubscribeV133.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -134,11 +138,13 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(chatSubscribeV136.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    // 1.37 froze when 1.38 added the steer restart reasons to `actionAck`.
     expect(chatSubscribeV137.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV138.serverFrameSchema).toBe(
+    expect(chatSubscribeV138.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV139.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     // 1.36 carries 1.35's frames unchanged.
