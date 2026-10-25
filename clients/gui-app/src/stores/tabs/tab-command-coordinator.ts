@@ -785,6 +785,29 @@ export class TabCommandCoordinator {
   }
 
   /**
+   * Keeps a fixed entry's ungrouped tab first in the strip, where its owner
+   * draws it beside Home. The one move a structurally locked ref takes: the
+   * lock keeps every gesture from moving it, and this puts it back after a
+   * restore or a reconciliation appended it. Selection is untouched.
+   */
+  keepSourceRefFirst(ref: TabRef): boolean {
+    const layout = currentLayout();
+    const item = findStripItemForRef(layout, ref);
+    if (item?.kind !== "tab" || layout.items[0]?.id === item.id) return false;
+    const next = reorderStripItem(layout, { itemId: item.id, targetIndex: 0 });
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  /**
    * Creates a source-owned ref and places it in one suppressed transaction.
    * The source callback runs only after reconciliation is suppressed; its
    * freshly minted ref is then inserted into the authoritative layout before

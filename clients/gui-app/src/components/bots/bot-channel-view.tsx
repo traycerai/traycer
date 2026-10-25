@@ -218,7 +218,7 @@ export function BotChannelView(props: {
           // An open thread says it in its own panel, not under its post.
           replying:
             postMessageId !== openThreadPostId &&
-            activity.threads[thread.threadId]?.state === "replying",
+            activity?.threads[thread.threadId]?.state === "replying",
         };
       },
       // A host without the thread list has no thread to open.
@@ -237,7 +237,7 @@ export function BotChannelView(props: {
     }),
     [
       botTitle,
-      activity.threads,
+      activity?.threads,
       chooseOption,
       directive,
       isUnread,
@@ -408,8 +408,8 @@ export function BotChannelView(props: {
  * turn is the channel's typing line while it answers one, and its other work
  * (a routine, a check-in) is not a reply.
  */
-function channelReply(activity: BotActivity): BotSessionActivity | null {
-  const trunk = activity.trunk;
+function channelReply(activity: BotActivity | null): BotSessionActivity | null {
+  const trunk = activity?.trunk ?? null;
   return trunk !== null && trunk.requestId !== null ? trunk : null;
 }
 

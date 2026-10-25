@@ -133,7 +133,7 @@ vi.mock(
 // the thread lines and the boxes with the bot idle
 // (`bot-channel-typing.test.tsx` drives it).
 vi.mock("@/hooks/bots/use-bot-activity", () => ({
-  useBotActivity: () => ({ trunk: null, threads: {} }),
+  useBotActivity: () => null,
 }));
 vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: {

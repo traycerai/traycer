@@ -95,7 +95,7 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 // The thread's typing line is `bot-channel-typing.test.tsx`'s; here the bot
 // is idle.
 vi.mock("@/hooks/bots/use-bot-activity", () => ({
-  useBotActivity: () => ({ trunk: null, threads: {} }),
+  useBotActivity: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,

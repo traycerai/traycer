@@ -30,14 +30,16 @@ export type BotSessionActivityState = "idle" | "replying" | "parked" | "failed";
 
 export interface BotSessionActivity {
   readonly state: BotSessionActivityState;
-  readonly startedAt: string | null;
+  /** Epoch ms, like every other `bot.*` timestamp. */
+  readonly startedAt: number | null;
   readonly step: string | null;
   readonly requestId: string | null;
 }
 
 /**
  * The bot's live activity: its trunk (`null` where this client cannot read
- * it) and its threads by thread id. A thread absent from `threads` is idle.
+ * it) and its threads by thread id. A session absent from it reads idle, as
+ * an `idle` entry does.
  */
 export interface BotActivity {
   readonly trunk: BotSessionActivity | null;
@@ -47,7 +49,8 @@ export interface BotActivity {
 /**
  * Every read of what a bot is doing goes through here: the channel's and a
  * thread's typing lines, the closed threads' lines, the Tracy entry and the
- * notice after a turn fails.
+ * notice after a turn fails. `null` while this client's host is not the
+ * one the bot is bound to.
  *
  * INTERIM until `bot.subscribe` carries `activity` (T64). This body derives
  * the same shape on the client, through the host the bot's tab is bound to:
@@ -58,7 +61,7 @@ export interface BotActivity {
  * the body becomes a read of the `bot.subscribe` handle and nothing that
  * calls it changes.
  */
-export function useBotActivity(botId: string): BotActivity {
+export function useBotActivity(botId: string): BotActivity | null {
   const { hostId, bot, serving } = useServingBot(botId);
   const tabHostId = hostId ?? "";
 
@@ -121,7 +124,7 @@ export function useBotActivity(botId: string): BotActivity {
               openTurn,
             ),
           }
-        : NO_ACTIVITY,
+        : null,
     [
       openDirectRequestId,
       openThread,
@@ -184,8 +187,6 @@ function threadActivity(
   return byThread;
 }
 
-const NO_ACTIVITY: BotActivity = { trunk: null, threads: {} };
-
 const PLANE_REPLYING: BotSessionActivity = {
   state: "replying",
   startedAt: null,
@@ -221,8 +222,7 @@ function sessionActivity(
   if (turn.replying) {
     return {
       state: "replying",
-      startedAt:
-        turn.startedAt === null ? null : new Date(turn.startedAt).toISOString(),
+      startedAt: turn.startedAt,
       step: turn.step,
       requestId,
     };
@@ -345,7 +345,13 @@ function readStep(state: ChatSessionState): string | null {
   return null;
 }
 
+/** The longest step a session reports, as T64's labeler caps it. */
+const ACTIVITY_LABEL_MAX_LENGTH = 96;
+
 function firstLine(text: string | null): string | null {
   const line = text?.split("\n", 1)[0].trim() ?? "";
-  return line.length === 0 ? null : line;
+  if (line.length === 0) return null;
+  return line.length > ACTIVITY_LABEL_MAX_LENGTH
+    ? `${line.slice(0, ACTIVITY_LABEL_MAX_LENGTH - 1)}…`
+    : line;
 }

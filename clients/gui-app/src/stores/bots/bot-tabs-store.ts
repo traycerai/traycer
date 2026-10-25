@@ -32,6 +32,14 @@ export interface BotTabRecord {
 interface BotTabsState {
   readonly tabs: Readonly<Record<string, BotTabRecord>>;
   /**
+   * The bot whose tab is the fixed Tracy entry: the personal main bot, drawn
+   * beside Home, kept first in the strip and never closed or moved. `null`
+   * with "Show Tracy" off or before the bot is known. Persisted with the
+   * records so a restart draws the entry in place from the first frame.
+   */
+  readonly fixedBotId: string | null;
+  readonly setFixedBotId: (botId: string | null) => void;
+  /**
    * Opens a tab for `botId` bound to `hostId`, or keeps the existing one. The
    * existing record's host WINS: a tab's binding is for life, and a second
    * open naming another host is a request to view the bot through a tab that
@@ -61,6 +69,11 @@ export const useBotTabsStore = create<BotTabsState>()(
   persist(
     (set, get) => ({
       tabs: {},
+      fixedBotId: null,
+      setFixedBotId: (botId) => {
+        if (get().fixedBotId === botId) return;
+        set({ fixedBotId: botId });
+      },
       openBotTab: (record) => {
         const existing = lookupBotTab(get().tabs, record.botId);
         if (existing !== null) {
@@ -100,7 +113,10 @@ export const useBotTabsStore = create<BotTabsState>()(
     {
       ...basePersistOptions(BOT_TABS_PERSIST_KEY),
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ tabs: state.tabs }),
+      partialize: (state) => ({
+        tabs: state.tabs,
+        fixedBotId: state.fixedBotId,
+      }),
     },
   ),
 );

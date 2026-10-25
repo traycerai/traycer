@@ -2,6 +2,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  Bot,
   House,
   LayersPlus,
   LogOut,
@@ -42,6 +43,10 @@ import {
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
 import { useRegionShown } from "@/lib/layout-overrides";
+import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
+import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -222,6 +227,12 @@ export function MobileNavDrawer(): ReactNode {
             <span className="flex-1 text-left">Home</span>
           </Button>
         ) : null}
+        <MobileNavTracyRow
+          onOpen={(botId) => {
+            close();
+            activateTabIntent(navigate, botTabIntent(botId), undefined);
+          }}
+        />
         <Button
           type="button"
           variant="default"
@@ -315,6 +326,56 @@ export function MobileNavDrawer(): ReactNode {
 // Single source of a row's display label; raw epic titles can be empty, so
 // apply the source-aware "Untitled task" fallback (phases carry their own
 // baked fallback and render verbatim). Mirrors the landing list.
+/** The fixed Tracy entry, beneath Home, as the strip draws it beside Home. */
+function MobileNavTracyRow(props: {
+  readonly onOpen: (botId: string) => void;
+}): ReactNode {
+  const itemId = useTracyEntryItemId();
+  const record = useBotTabsStore((state) =>
+    state.fixedBotId === null
+      ? null
+      : lookupBotTab(state.tabs, state.fixedBotId),
+  );
+  if (itemId === null || record === null) return null;
+  return (
+    <MobileNavTracyButton
+      botId={record.botId}
+      title={record.title}
+      onOpen={props.onOpen}
+    />
+  );
+}
+
+function MobileNavTracyButton(props: {
+  readonly botId: string;
+  readonly title: string;
+  readonly onOpen: (botId: string) => void;
+}): ReactNode {
+  const signals = useTracyEntrySignals(props.botId);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn(ROW_CLASS, "mb-1 shrink-0")}
+      data-testid="mobile-nav-tracy"
+      data-unread={signals.unread ? "" : undefined}
+      onClick={() => {
+        props.onOpen(props.botId);
+      }}
+    >
+      <Bot className="size-4" />
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-left",
+          signals.unread && "font-semibold",
+        )}
+      >
+        {props.title}
+      </span>
+    </Button>
+  );
+}
+
 function drawerItemDisplayTitle(item: HistoryItem): string {
   return item.taskType === "phase"
     ? item.title

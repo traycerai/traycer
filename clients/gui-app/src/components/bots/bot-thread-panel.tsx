@@ -202,7 +202,7 @@ function ListedThread(
   );
   // The thread's own session answers in it; its running turn is the
   // thread's typing line.
-  const activity = useBotActivity(botId).threads[threadId] ?? null;
+  const activity = useBotActivity(botId)?.threads[threadId] ?? null;
   return (
     <>
       <div className="flex shrink-0 flex-col gap-2 px-2 pt-2">

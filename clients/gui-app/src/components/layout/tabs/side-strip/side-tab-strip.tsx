@@ -130,6 +130,7 @@ export function SideTabStrip(props: {
               homeTabDrawn={controller.homeTabDrawn}
               homeIsActive={controller.homeIsActive}
               onHomeTab={controller.onHomeTab}
+              tracy={controller.tracy}
               onNewTab={controller.onNewTab}
               onToggleCollapsed={widthEasing.toggle}
               taskCount={controller.tabs.length}
