@@ -6,7 +6,6 @@ import {
   Hand,
   MousePointer2,
   MessageSquarePlus,
-  PanelRight,
   Pen,
   Play,
   Square,
@@ -91,19 +90,18 @@ export function CanvasToolbar(props: {
   );
 }
 
-/** Play, the inspector toggle, comments and the zoom menu at the top right. */
+/** Prototypes, comments and the zoom menu at the top right. Entering Play must
+ * not change this toolbar's contents, so the exit control lives at the top
+ * left ({@link CanvasPlayExitButton}) instead of a button appearing here. */
 export function CanvasViewControls(props: {
   readonly viewOnly: boolean;
   readonly play: boolean;
   readonly commenting?: boolean;
-  readonly setPlay: (play: boolean) => void;
   readonly prototypes: readonly {
     readonly path: string;
     readonly title: string;
   }[];
   readonly onStart: (path: string) => void;
-  readonly inspectorOpen: boolean;
-  readonly toggleInspector: () => void;
   readonly trailing: ReactNode;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -117,16 +115,6 @@ export function CanvasViewControls(props: {
       aria-label="Canvas view"
       className="flex items-center gap-0.5 rounded-lg border bg-popover p-1 shadow-sm"
     >
-      {props.play && !props.commenting ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => props.setPlay(false)}
-        >
-          <MousePointer2 />
-          Playing · Back to {props.viewOnly ? "canvas" : "editing"}
-        </Button>
-      ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm">
@@ -143,29 +131,38 @@ export function CanvasViewControls(props: {
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      {props.viewOnly || props.play || props.commenting ? null : (
-        <TooltipWrapper
-          label={props.inspectorOpen ? "Hide inspector" : "Show inspector"}
-          side="bottom"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            variant={props.inspectorOpen ? "secondary" : "ghost"}
-            size="icon-sm"
-            aria-label="Inspector"
-            aria-pressed={props.inspectorOpen}
-            onClick={props.toggleInspector}
-          >
-            <PanelRight />
-          </Button>
-        </TooltipWrapper>
-      )}
       {props.trailing}
       <ZoomMenu
         {...props}
         viewOnly={props.viewOnly || props.play || props.commenting === true}
       />
+    </div>
+  );
+}
+
+/** Replaces the editing toolbar at the top left while Play is on. */
+export function CanvasPlayExitButton(props: {
+  readonly viewOnly: boolean;
+  readonly onExit: () => void;
+}) {
+  const label = props.viewOnly ? "Back to canvas" : "Edit";
+  return (
+    <div className="flex items-center rounded-lg border bg-popover p-1 shadow-sm">
+      <TooltipWrapper
+        label={`${label} · Esc`}
+        side="bottom"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${label} (Escape)`}
+          onClick={props.onExit}
+        >
+          <MousePointer2 />
+        </Button>
+      </TooltipWrapper>
     </div>
   );
 }

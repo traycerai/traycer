@@ -159,8 +159,10 @@ function CanvasBoardButtons({
 }
 
 /**
- * The caption occupies authored canvas space, so it cannot grow into nearby
- * headings as the viewport zooms out. It remains the board's drag handle.
+ * The plain caption above a board. Counter-scaled against the viewport zoom so
+ * it reads at the same size near normal zoom, with the scale bounded so it
+ * cannot grow into nearby captions as the viewport zooms far out. It remains
+ * the board's drag handle.
  */
 function CanvasBoardHeader({
   path,
@@ -174,14 +176,12 @@ function CanvasBoardHeader({
   readonly actions: CanvasNodeActions;
 }) {
   const zoom = useStore((state) => state.transform[2]);
-  // Preserve legibility near normal zoom, with a bounded 54px canvas
-  // footprint instead of ever-growing screen-sized captions.
   const captionScale = Math.min(1.5, 1 / zoom);
   const [renaming, setRenaming] = useState(false);
   return (
     <div
       data-canvas-board-handle=""
-      className="absolute bottom-full left-0 flex origin-bottom-left cursor-grab items-center gap-1 rounded-t-md border border-b-0 border-border bg-background px-2 text-foreground"
+      className="absolute bottom-full left-0 flex origin-bottom-left cursor-grab items-center gap-1 pb-0.5 text-muted-foreground"
       style={{
         height: BOARD_HEADER_HEIGHT,
         width: `${100 / captionScale}%`,
@@ -199,7 +199,7 @@ function CanvasBoardHeader({
           />
         ) : (
           <span
-            className="block truncate text-ui-sm font-semibold"
+            className="block truncate text-ui-sm"
             onDoubleClick={() => {
               if (!actions.viewOnly && !actions.play) setRenaming(true);
             }}

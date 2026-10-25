@@ -1,14 +1,19 @@
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useQueryClient } from "@tanstack/react-query";
-import { AnchoredDraftPopover } from "@/components/comments/anchored-draft-popover";
+import {
+  AnchoredDraftPopover,
+  type AnchoredDraftTidInsertion,
+} from "@/components/comments/anchored-draft-popover";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
+import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import {
   CanvasCommentIndex,
   CanvasCommentPins,
+  CanvasCommentPointPins,
   CanvasCommentsControl,
   CanvasCommentsSidebar,
 } from "./canvas-comments";
@@ -110,6 +115,64 @@ export function CanvasSelectionProvider(
     [commentsEnabled, registry, epicId, draftOwner, queryClient],
   );
   const [selectionOwner] = useState(() => Symbol("canvas-selection"));
+  // The revision each board's LIVE document adopted in place (a stamped
+  // comment tid): its frame keeps the mounted document when the head moves to
+  // `after`. Keyed to the bridge so a replaced document never inherits an old
+  // certificate - a reverted-then-redone head must reload normally.
+  const adoptedRevisions = useRef(
+    new Map<
+      string,
+      {
+        readonly bridge: SandboxBridgeHost;
+        readonly from: string;
+        readonly to: string;
+      }
+    >(),
+  );
+  const adoptInsertedTid = useCallback(
+    async (insertion: AnchoredDraftTidInsertion): Promise<void> => {
+      const entry = registry.get(insertion.boardPath);
+      if (entry.bridge === null || entry.sha256 !== insertion.sha256Before)
+        return;
+      const stamped = await entry.bridge
+        .stampTid({
+          marker: insertion.marker,
+          tagName: insertion.tagName,
+          tid: insertion.tid,
+        })
+        .catch(() => false);
+      if (!stamped) return;
+      // Later markers in the live document move with the inserted attribute,
+      // so a second comment on this board still locates its element. Every
+      // shift must land; a document that lost one cannot claim the revision.
+      for (const splice of insertion.splices) {
+        const shifted = await entry.bridge
+          .shiftMarkers({
+            at: splice.start,
+            delta: splice.replacement.length - (splice.end - splice.start),
+          })
+          .catch(() => false);
+        if (!shifted) return;
+      }
+      // Revalidate against the live frame: a replacement document that
+      // mounted during the awaits above owns the registry now.
+      const current = registry.get(insertion.boardPath);
+      if (
+        current.bridge !== entry.bridge ||
+        current.sha256 !== insertion.sha256Before
+      )
+        return;
+      adoptedRevisions.current.set(insertion.boardPath, {
+        bridge: entry.bridge,
+        from: insertion.sha256Before,
+        to: insertion.sha256After,
+      });
+      registry.update(insertion.boardPath, {
+        sha256: insertion.sha256After,
+      });
+    },
+    [registry],
+  );
   const [errorAttachment, setErrorAttachment] = useState<{
     path: string;
     error: CanvasPageError;
@@ -222,13 +285,27 @@ export function CanvasSelectionProvider(
           tileId: draftOwner,
           artifactId,
           artifactType: "canvas",
-          anchor: { kind: "artifact" },
+          anchor: {
+            kind: "canvas-point",
+            page: point.page,
+            x: point.canvas.x,
+            y: point.canvas.y,
+            label: "Pinned on canvas",
+          },
           quotedText: "",
           selection: null,
           retargeted: false,
-          rect: { ...point, width: 0, height: 0 },
+          rect: { ...point.screen, width: 0, height: 0 },
         });
       },
+      renderCanvasPins: (page, viewport) => (
+        <CanvasCommentPointPins
+          scope={scope}
+          page={page}
+          viewport={viewport}
+          registry={registry}
+        />
+      ),
       renderToolbarControls: () =>
         commentsEnabled ? <CanvasCommentsControl registry={registry} /> : null,
       renderCommentsSidebar: () => <CanvasCommentsSidebar scope={scope} />,
@@ -241,8 +318,18 @@ export function CanvasSelectionProvider(
             hostClient={hostClient}
             onCreated={() => undefined}
             onClosed={() => undefined}
+            onTidInserted={adoptInsertedTid}
           />
         ),
+      sourceAdopted: (path, previousSha256, nextSha256) => {
+        const record = adoptedRevisions.current.get(path);
+        return (
+          record !== undefined &&
+          record.from === previousSha256 &&
+          record.to === nextSha256 &&
+          record.bridge === registry.get(path).bridge
+        );
+      },
       onSource: (path, source) => {
         registry.update(path, { source });
         parent?.onSource?.(path, source);
@@ -444,6 +531,7 @@ export function CanvasSelectionProvider(
       epicId,
       draftOwner,
       openComment,
+      adoptInsertedTid,
       props.viewOnly,
       hostClient,
     ],

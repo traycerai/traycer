@@ -36,6 +36,21 @@ import {
   type CommentComposerHandle,
 } from "./comment-composer";
 
+export interface AnchoredDraftTidInsertion {
+  readonly boardPath: string;
+  readonly marker: number;
+  readonly tagName: string;
+  readonly tid: string;
+  readonly sha256Before: string;
+  readonly sha256After: string;
+  /** The insertion's splices, for shifting the live document's markers. */
+  readonly splices: readonly {
+    readonly start: number;
+    readonly end: number;
+    readonly replacement: string;
+  }[];
+}
+
 export function AnchoredDraftPopover(props: {
   readonly epicId: string;
   readonly artifactId: string;
@@ -43,6 +58,10 @@ export function AnchoredDraftPopover(props: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly onCreated: (threadId: string) => void;
   readonly onClosed: () => void;
+  /** Lets the surface adopt a first comment's tid without reloading the board. */
+  readonly onTidInserted?: (
+    insertion: AnchoredDraftTidInsertion,
+  ) => Promise<void>;
 }) {
   const { epicId, artifactId, tileId, hostClient, onCreated, onClosed } = props;
   const stored = useAnchoredDraftStore((state) => state.byEpicId[epicId]);
@@ -141,7 +160,8 @@ export function AnchoredDraftPopover(props: {
     target: AnchoredCommentDraft,
   ): Promise<CommentAnchor | null> => {
     const anchor = target.anchor;
-    if (anchor.kind === "artifact") return anchor;
+    if (anchor.kind === "artifact" || anchor.kind === "canvas-point")
+      return anchor;
     if (anchor.elementId !== null)
       return { ...anchor, elementId: anchor.elementId };
     if (target.selection === null || target.selection.element.generated) {
@@ -166,6 +186,19 @@ export function AnchoredDraftPopover(props: {
       });
       return null;
     }
+    if (
+      props.onTidInserted !== undefined &&
+      target.selection.element.marker !== null
+    )
+      await props.onTidInserted({
+        boardPath: target.selection.boardPath,
+        marker: target.selection.element.marker,
+        tagName: target.selection.element.tagName,
+        tid: result.tid,
+        sha256Before: target.selection.servedSha256,
+        sha256After: result.sha256After,
+        splices: result.splices,
+      });
     const resolved: CommentAnchor = { ...anchor, elementId: result.tid };
     useAnchoredDraftStore
       .getState()

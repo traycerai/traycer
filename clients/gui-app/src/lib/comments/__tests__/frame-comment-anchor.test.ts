@@ -99,7 +99,7 @@ describe("resolveHtmlCommentArtboard", () => {
       kind: "element",
       artboard: "report.html",
     });
-    if (anchor.kind === "artifact")
+    if (anchor.kind !== "element" && anchor.kind !== "text")
       throw new Error("Expected an element anchor");
     expect(resolveHtmlCommentArtboard(fileArtifact, anchor.artboard)).toBe(
       "notes/report.html",

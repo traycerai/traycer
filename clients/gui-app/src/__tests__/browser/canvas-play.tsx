@@ -43,7 +43,10 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { createAppQueryClient } from "@/lib/query-client";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  EpicSessionContext,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
@@ -77,11 +80,27 @@ const BOARD_B_PATH = "boards/b.html";
 const BOARD_B_TITLE = "B";
 const BOARD_B_SHA = "b".repeat(64);
 
-function boardHtml(name: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0}body{font:20px sans-serif;display:flex;align-items:center;justify-content:center;height:100vh}</style></head><body><div><div data-tid="name">${name}</div><div data-tid="token"></div></div><script>document.querySelector('[data-tid="token"]').textContent = String(Math.random());</script></body></html>`;
+function boardHtml(
+  name: string,
+  link: { readonly href: string; readonly label: string } | null,
+): string {
+  const anchor =
+    link === null
+      ? ""
+      : `<a href="${link.href}" data-tid="link">${link.label}</a>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0}body{font:20px sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;height:100vh}</style></head><body><div><div data-tid="name">${name}</div><div data-tid="token"></div>${anchor}</div><script>document.querySelector('[data-tid="token"]').textContent = String(Math.random());</script></body></html>`;
 }
-const BOARD_A_HTML = boardHtml(BOARD_A_TITLE);
-const BOARD_B_HTML = boardHtml(BOARD_B_TITLE);
+// A's link carries a query so a click exercises the query-reload path
+// (`canvas-bootstrap.ts`'s "navigate" handler); B's carries none, so the
+// trip back never needs one.
+const BOARD_A_HTML = boardHtml(BOARD_A_TITLE, {
+  href: "b.html?step=2",
+  label: "Go to B",
+});
+const BOARD_B_HTML = boardHtml(BOARD_B_TITLE, {
+  href: "a.html",
+  label: "Go to A",
+});
 
 interface ServedFile {
   readonly status: number;
@@ -421,7 +440,11 @@ function RequestContext(props: { readonly children: ReactNode }): ReactNode {
     );
     return unsubscribe;
   }, [binding, ready]);
-  return ready ? props.children : null;
+  return ready && binding !== null ? (
+    <EpicSessionHostClientContext value={binding.hostClient}>
+      {props.children}
+    </EpicSessionHostClientContext>
+  ) : null;
 }
 
 export function CanvasPlayFixture(): ReactNode {

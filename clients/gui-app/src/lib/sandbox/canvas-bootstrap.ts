@@ -515,6 +515,46 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     element?.scrollIntoView({ block: "center", inline: "nearest" });
     return { revealed: element !== null };
   };
+  // Adopts a source-side tid insertion into the live document, so a first
+  // comment resolves its pin here without reloading the board.
+  const validStampParams = (
+    params: Record<string, unknown>,
+  ): params is Record<string, unknown> & { tid: string; tagName: string } =>
+    typeof params.tid === "string" &&
+    params.tid.length > 0 &&
+    params.tid.length <= 300 &&
+    typeof params.tagName === "string";
+  // Keeps the live markers aligned with the adopted source: every element
+  // whose start tag sits after the splice moves by the splice's length delta.
+  const shiftMarkers = (params: Record<string, unknown>) => {
+    if (
+      typeof params.at !== "number" ||
+      typeof params.delta !== "number" ||
+      !Number.isSafeInteger(params.at) ||
+      !Number.isSafeInteger(params.delta)
+    )
+      return { shifted: false };
+    for (const element of document.querySelectorAll("[data-traycer-pos]")) {
+      const raw = element.getAttribute("data-traycer-pos");
+      const marker = raw !== null && /^\d+$/.test(raw) ? Number(raw) : NaN;
+      if (!Number.isSafeInteger(marker) || marker <= params.at) continue;
+      element.setAttribute("data-traycer-pos", String(marker + params.delta));
+    }
+    return { shifted: true };
+  };
+  const stampTid = (params: Record<string, unknown>) => {
+    if (!validStampParams(params)) return { stamped: false };
+    const element = locate(params);
+    const current = element?.getAttribute("data-tid") ?? null;
+    if (
+      element === null ||
+      element.tagName.toLowerCase() !== params.tagName.toLowerCase() ||
+      (current !== null && current !== params.tid)
+    )
+      return { stamped: false };
+    element.setAttribute("data-tid", params.tid);
+    return { stamped: true };
+  };
   const navigate = (
     params: Record<string, unknown>,
   ): Record<string, unknown> | null => {
@@ -541,46 +581,46 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     return {};
   };
 
+  const handlers: Record<
+    string,
+    (params: Record<string, unknown>) => Record<string, unknown> | null
+  > = {
+    "traycer/canvas/sibling-layout": (params) => ({
+      layout: siblingLayout(params),
+    }),
+    "traycer/canvas/hit-test": hitTest,
+    "traycer/canvas/select-text-range": (params) => {
+      selectTextRange(params);
+      return {};
+    },
+    "traycer/canvas/retype-at": retypeAt,
+    "traycer/canvas/set-text-selection-target": setTextSelectionTarget,
+    "traycer/canvas/describe-element": describeElement,
+    "traycer/canvas/literal-ancestor": literalAncestor,
+    "traycer/canvas/text-range-rect": textRangeRect,
+    "traycer/canvas/element-box": (params) => {
+      const element = locate(params);
+      return {
+        box: element === null ? null : boxOf(element.getBoundingClientRect()),
+      };
+    },
+    "traycer/canvas/reveal-element": revealElement,
+    "traycer/canvas/stamp-tid": stampTid,
+    "traycer/canvas/shift-markers": shiftMarkers,
+    "traycer/canvas/navigate": navigate,
+    "traycer/canvas/set-mode": (params) => {
+      if (params.mode !== "edit" && params.mode !== "play") return null;
+      mode = params.mode;
+      return {};
+    },
+  };
   const answer = (
     method: unknown,
     params: Record<string, unknown>,
-  ): Record<string, unknown> | null => {
-    switch (method) {
-      case "traycer/canvas/sibling-layout":
-        return { layout: siblingLayout(params) };
-      case "traycer/canvas/hit-test":
-        return hitTest(params);
-      case "traycer/canvas/select-text-range":
-        selectTextRange(params);
-        return {};
-      case "traycer/canvas/retype-at":
-        return retypeAt(params);
-      case "traycer/canvas/set-text-selection-target":
-        return setTextSelectionTarget(params);
-      case "traycer/canvas/describe-element":
-        return describeElement(params);
-      case "traycer/canvas/literal-ancestor":
-        return literalAncestor(params);
-      case "traycer/canvas/text-range-rect":
-        return textRangeRect(params);
-      case "traycer/canvas/element-box": {
-        const element = locate(params);
-        return {
-          box: element === null ? null : boxOf(element.getBoundingClientRect()),
-        };
-      }
-      case "traycer/canvas/reveal-element":
-        return revealElement(params);
-      case "traycer/canvas/navigate":
-        return navigate(params);
-      case "traycer/canvas/set-mode":
-        if (params.mode !== "edit" && params.mode !== "play") return null;
-        mode = params.mode;
-        return {};
-      default:
-        return null;
-    }
-  };
+  ): Record<string, unknown> | null =>
+    typeof method === "string" && Object.hasOwn(handlers, method)
+      ? handlers[method](params)
+      : null;
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.source !== host || !ready) return;
     const data = event.data;
@@ -629,11 +669,12 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   window.addEventListener("click", blockEdit, true);
   window.addEventListener("auxclick", blockEdit, true);
   window.addEventListener("submit", blockEdit, true);
+  // A bare Escape is the app's in both modes: it steps selection out while
+  // editing and leaves Play, so the page never keeps it.
   window.addEventListener(
     "keydown",
     (event) => {
       if (
-        mode !== "edit" ||
         event.code !== "Escape" ||
         event.ctrlKey ||
         event.metaKey ||
@@ -691,7 +732,14 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     }
     if (url.protocol !== location.protocol || url.host !== location.host)
       return;
-    if (url.pathname === location.pathname && url.hash !== "") return;
+    // Native navigation is only the same document's own fragment: a changed
+    // query needs the bridge's authorized reload, never a raw load.
+    if (
+      url.pathname === location.pathname &&
+      url.search === location.search &&
+      url.hash !== ""
+    )
+      return;
     event.preventDefault();
     notify("traycer/canvas/relative-link", { href: href.slice(0, 8192) });
   });

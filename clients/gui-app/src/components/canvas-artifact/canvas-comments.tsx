@@ -27,6 +27,7 @@ import { deriveFrameCommentPositions } from "@/lib/comments/frame-comment-positi
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import { canvasQueryKeys } from "@/lib/query-keys/canvas-query-keys";
 import { FrameCommentPins } from "@/components/comments/frame-comment-pins";
+import { cn } from "@/lib/utils";
 import { useOrderedFrameThreads } from "@/components/comments/use-ordered-frame-threads";
 import { ToolbarActionButton } from "@/editor-core/toolbar/toolbar-action-button";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
@@ -193,6 +194,91 @@ export function CanvasCommentPins(props: {
   );
 }
 
+/** The canvas-space pins outside every board, on the page being shown. */
+export function CanvasCommentPointPins(props: {
+  readonly scope: CanvasAnnotationScope;
+  readonly page: string;
+  readonly viewport: {
+    readonly x: number;
+    readonly y: number;
+    readonly zoom: number;
+  };
+  readonly registry: CanvasFrameRegistry;
+}) {
+  const { scope, page, viewport, registry } = props;
+  const threads = useFrameCommentThreads(
+    scope.epicId,
+    scope.artifactId,
+    "canvas",
+  );
+  const ordered = useOrderedFrameThreads(
+    scope.epicId,
+    scope.artifactId,
+    "canvas",
+  );
+  const activate = useActivateCommentThread({
+    ...scope,
+    artifactType: "canvas",
+  });
+  const commenting = useSyncExternalStore(
+    registry.subscribe,
+    () => registry.view?.commenting === true,
+  );
+  const activeThreadId = useActiveThreadId(scope.epicId);
+  if (!commenting) return null;
+  const pins =
+    threads?.filter(
+      (thread) =>
+        thread.data.anchorKind === "canvas-point" &&
+        thread.data.page === page &&
+        thread.data.x !== undefined &&
+        thread.data.y !== undefined &&
+        (!thread.resolved || thread.threadId === activeThreadId),
+    ) ?? [];
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-30 overflow-hidden"
+      data-slot="canvas-point-pins"
+    >
+      {pins.map((thread) => {
+        const entry = ordered?.find(
+          (candidate) => candidate.thread.threadId === thread.threadId,
+        );
+        if (
+          entry === undefined ||
+          thread.data.x === undefined ||
+          thread.data.y === undefined
+        )
+          return null;
+        return (
+          <button
+            key={thread.threadId}
+            type="button"
+            data-comment-pin={thread.threadId}
+            aria-label={`Open comment ${entry.number}`}
+            className={cn(
+              "canvas-nopan touch-auto pointer-events-auto absolute flex size-6 -translate-x-full items-center justify-center rounded-full border border-primary bg-primary text-xs font-medium text-primary-foreground shadow-sm",
+              activeThreadId === thread.threadId &&
+                "ring-2 ring-ring ring-offset-2",
+            )}
+            style={{
+              left: thread.data.x * viewport.zoom + viewport.x,
+              top: thread.data.y * viewport.zoom + viewport.y,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              activate(thread.threadId);
+            }}
+          >
+            {entry.number}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Includes unloaded boards: virtualization must not make their anchors missing. */
 export function CanvasCommentIndex(props: {
   readonly scope: CanvasAnnotationScope;
@@ -257,6 +343,17 @@ export function CanvasCommentIndex(props: {
           );
           if (thread === undefined) return false;
           view?.setCommenting(true);
+          if (thread.data.anchorKind === "canvas-point") {
+            return thread.data.page !== undefined &&
+              thread.data.x !== undefined &&
+              thread.data.y !== undefined
+              ? (view?.revealCanvasPoint(
+                  thread.data.page,
+                  thread.data.x,
+                  thread.data.y,
+                ) ?? false)
+              : false;
+          }
           if (thread.data.artboard === undefined) {
             if (
               useCanvasSelectionStore.getState().selection?.artifactId ===

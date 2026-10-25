@@ -26,6 +26,8 @@ import {
   type CanvasArtifactEditorProps,
 } from "../canvas-artifact-editor";
 import type { CanvasFrameEvents } from "../canvas-frame";
+import { useCanvasSelectionStore } from "../canvas-selection-store";
+import { canvasElement } from "./canvas-edit-test-support";
 import type { CanvasFlowNode } from "../canvas-node-context";
 import type { CanvasLayoutStore } from "../canvas-layout-store";
 import {
@@ -316,6 +318,7 @@ function frameEvents(overrides: Partial<CanvasFrameEvents>): CanvasFrameEvents {
 
 afterEach(() => {
   cleanup();
+  useCanvasSelectionStore.getState().clear();
   for (const bridge of bridges.splice(0)) bridge.dispose();
   frames.clear();
   flow.nodes = [];
@@ -341,7 +344,6 @@ describe("a view-only canvas (the phone)", () => {
     mount({ viewOnly: true });
     for (const label of TOOL_LABELS)
       expect(screen.queryByRole("button", { name: label })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Inspector" })).toBeNull();
     // The reading aids stay.
     expect(screen.getByRole("button", { name: "Pages" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Prototypes" })).toBeDefined();
@@ -358,7 +360,6 @@ describe("a view-only canvas (the phone)", () => {
     mount({ viewOnly: false });
     for (const label of TOOL_LABELS)
       expect(screen.getByRole("button", { name: label })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Inspector" })).toBeDefined();
     await user.click(screen.getByRole("button", { name: /, zoom$/ }));
     // The items carry their shortcut in the accessible name.
     for (const label of [/^Undo/, /^Redo/])
@@ -371,7 +372,7 @@ describe("a view-only canvas (the phone)", () => {
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
     expect(
-      screen.getByRole("button", { name: "Playing · Back to canvas" }),
+      screen.getByRole("button", { name: "Back to canvas (Escape)" }),
     ).toBeDefined();
   });
 
@@ -380,9 +381,7 @@ describe("a view-only canvas (the phone)", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
-    expect(
-      screen.getByRole("button", { name: "Playing · Back to editing" }),
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Edit (Escape)" })).toBeDefined();
   });
 
   it("still lets the reader move between pages but not change them", () => {
@@ -527,9 +526,18 @@ describe("a view-only canvas (the phone)", () => {
     const shield = document.querySelector("[data-canvas-frame-overlay]");
     if (shield !== null) fireEvent.pointerDown(shield);
     expect(onEditPointer).toHaveBeenCalledOnce();
-    // The panel stays out of the way until the inspector is asked for.
+    // The panel stays out of the way until an element is picked.
     expect(screen.queryByLabelText("Annotations")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
+    act(() => {
+      useCanvasSelectionStore.getState().select({
+        artifactId: ARTIFACT_ID,
+        boardPath: HOME,
+        page: null,
+        servedSha256: "sha",
+        element: canvasElement({}),
+        textRange: null,
+      });
+    });
     expect(screen.getByLabelText("Annotations")).toBeDefined();
   });
 });
@@ -657,9 +665,7 @@ describe("the frame's mode", () => {
     );
     setMode.mockClear();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Playing · Back to editing" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit (Escape)" }));
 
     expect(setMode).toHaveBeenLastCalledWith("edit");
   });
@@ -675,7 +681,7 @@ describe("the frame's mode", () => {
     expect(setMode).toHaveBeenLastCalledWith("play");
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Playing · Back to canvas" }),
+      screen.getByRole("button", { name: "Back to canvas (Escape)" }),
     );
     expect(setMode).toHaveBeenLastCalledWith("edit");
   });

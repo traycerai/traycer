@@ -9,6 +9,7 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import {
   Background,
@@ -52,7 +53,15 @@ import {
 } from "./canvas-node-context";
 import { CanvasBoardNode, CanvasNoteNode } from "./canvas-nodes";
 import { CanvasPageMenu } from "./canvas-pages";
-import { CanvasToolbar, CanvasViewControls } from "./canvas-toolbar";
+import {
+  CanvasPlayExitButton,
+  CanvasToolbar,
+  CanvasViewControls,
+} from "./canvas-toolbar";
+import {
+  useCanvasSelectionStore,
+  type CanvasSelection,
+} from "./canvas-selection-store";
 import { CanvasFullscreen } from "./canvas-fullscreen";
 import { useCanvasPresentation } from "./use-canvas-presentation";
 import {
@@ -244,6 +253,46 @@ function CanvasInspectorOverlay({
     </div>
   );
 }
+/** What the toggle-less inspector follows: the selected element, one note,
+ * else the selected board (whose panel holds its size and fit controls). */
+function canvasInspectorKey(
+  elementSelection: CanvasSelection | null,
+  selectedNotes: readonly CanvasFlowNode[],
+  selectedBoards: readonly CanvasFlowNode[],
+): string | null {
+  if (elementSelection !== null) {
+    const element = elementSelection.element;
+    const identity = element.tid ?? element.marker ?? element.selector;
+    return `element:${elementSelection.boardPath}:${identity}`;
+  }
+  if (selectedNotes.length === 1) return `note:${selectedNotes[0].data.path}`;
+  if (selectedBoards.length === 1)
+    return `board:${selectedBoards[0].data.path}`;
+  return null;
+}
+
+function canvasInspectorOpen(
+  elementSelection: CanvasSelection | null,
+  selectedNotes: readonly CanvasFlowNode[],
+  selectedBoards: readonly CanvasFlowNode[],
+  dismissedKey: string | null,
+): boolean {
+  const key = canvasInspectorKey(
+    elementSelection,
+    selectedNotes,
+    selectedBoards,
+  );
+  return key !== null && key !== dismissedKey;
+}
+
+function renderCanvasPointPins(
+  frameEvents: CanvasFrameEvents | null,
+  page: string,
+  viewport: Viewport,
+): ReactNode {
+  return frameEvents?.renderCanvasPins?.(page, viewport) ?? null;
+}
+
 function canvasInteractionMode({
   readOnly,
   play,
@@ -309,7 +358,15 @@ export function CanvasArtifactEditor({
   const [pageErrors, setPageErrors] = useState<
     Readonly<Record<string, CanvasPageError | null | undefined>>
   >({});
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  // The inspector has no toolbar toggle: it opens beside the canvas while an
+  // in-board element or a single free note is selected, and closing it keeps
+  // it closed until the selection moves to a different target.
+  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<
+    string | null
+  >(null);
+  const elementSelection = useCanvasSelectionStore((state) =>
+    state.selection?.artifactId === artifactId ? state.selection : null,
+  );
   // Holding Space pans from any tool, as in design tools, without changing it.
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [editingNote, setEditingNote] = useState<string | null>(null);
@@ -508,6 +565,43 @@ export function CanvasArtifactEditor({
     },
     [snapshot, flow, viewport.zoom],
   );
+  const revealCanvasPoint = useCallback(
+    (pageId: string, x: number, y: number): boolean => {
+      // A vanished page keeps the sidebar thread where it is: no silent
+      // relocation to another page.
+      if (flow === null || !snapshot.pages.some((item) => item.id === pageId))
+        return false;
+      // Point pins live outside every board, so a fullscreen board cannot
+      // show one: leave fullscreen before revealing the spot.
+      setChosenPage(pageId);
+      const zoom = Math.min(1, viewport.zoom);
+      if (activeFullscreen !== null) {
+        closeFullscreen();
+        // While fullscreen, onMove ignores the flow's viewport events, so
+        // setCenter would be snapped back by the controlled viewport on the
+        // next render. Write the centered viewport through the controlled
+        // state instead, batched with the close.
+        const centered = {
+          x: size.width / 2 - x * zoom,
+          y: size.height / 2 - y * zoom,
+          zoom,
+        };
+        setViewport(centered);
+        setSettledViewport(centered);
+        return true;
+      }
+      void flow.setCenter(x, y, { zoom, duration: 200 });
+      return true;
+    },
+    [
+      flow,
+      snapshot.pages,
+      viewport.zoom,
+      size,
+      activeFullscreen,
+      closeFullscreen,
+    ],
+  );
   const revealCommentBoard = useCallback(
     (path: string): boolean => {
       if (flow === null || !Object.hasOwn(snapshot.boards, path)) return false;
@@ -543,6 +637,8 @@ export function CanvasArtifactEditor({
       return next;
     });
   }, []);
+  // Deliberately no camera move: Play applies to the boards where they lie,
+  // and the person keeps the viewport they had.
   const startPlay = useCallback(
     (path: string): void => {
       clearNodeSelection();
@@ -551,9 +647,8 @@ export function CanvasArtifactEditor({
       setCommenting(false);
       setSpaceHeld(false);
       rememberBoard(path);
-      centerBoard(path);
     },
-    [clearNodeSelection, frameEvents, rememberBoard, centerBoard],
+    [clearNodeSelection, frameEvents, rememberBoard],
   );
   const openFullscreen = useCallback(
     (path: string): void => {
@@ -576,6 +671,7 @@ export function CanvasArtifactEditor({
       order: snapshot.order,
       sourceForBoard,
       revealBoard: revealCommentBoard,
+      revealCanvasPoint,
       setTool,
       clearNodeSelection,
     });
@@ -589,6 +685,7 @@ export function CanvasArtifactEditor({
     snapshot.order,
     sourceForBoard,
     revealCommentBoard,
+    revealCanvasPoint,
     clearNodeSelection,
   ]);
   const zoomAt = useCallback(
@@ -836,6 +933,15 @@ export function CanvasArtifactEditor({
   const selectedNotes = nodes.filter(
     (node) => node.selected && node.data.note !== null,
   );
+  const selectedBoards = nodes.filter(
+    (node) => node.selected && node.data.board !== null,
+  );
+  const inspectorOpen = canvasInspectorOpen(
+    elementSelection,
+    selectedNotes,
+    selectedBoards,
+    dismissedInspectorKey,
+  );
   const deleteSelectedNotes = (event: KeyboardEvent): void => {
     if (selectedNotes.length === 0) return;
     event.preventDefault();
@@ -885,6 +991,12 @@ export function CanvasArtifactEditor({
                 setSpaceHeld(false);
             }}
             onKeyDownCapture={(event) => {
+              if (play && !commenting && event.code === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setPlay(false);
+                return;
+              }
               if (readOnly || activeFullscreen !== null || play || commenting)
                 return;
               if (isCanvasTextInput(event.target, event.currentTarget)) return;
@@ -953,8 +1065,12 @@ export function CanvasArtifactEditor({
                         frameEvents?.commentsEnabled === true
                       )
                         frameEvents.onPaneComment?.({
-                          x: event.clientX,
-                          y: event.clientY,
+                          screen: { x: event.clientX, y: event.clientY },
+                          canvas: toCanvas({
+                            x: event.clientX,
+                            y: event.clientY,
+                          }),
+                          page,
                         });
                       else if (activeTool === "select") {
                         frameEvents?.onBoardSelect?.(null);
@@ -1053,17 +1169,26 @@ export function CanvasArtifactEditor({
                   />
                 ) : null}
                 {presentation.fullscreen ? null : (
-                  <CanvasCursors
-                    awareness={awareness}
-                    artifactId={artifactId}
-                    page={page}
-                    viewport={viewport}
-                  />
+                  <>
+                    <CanvasCursors
+                      awareness={awareness}
+                      artifactId={artifactId}
+                      page={page}
+                      viewport={viewport}
+                    />
+                    {renderCanvasPointPins(frameEvents, page, viewport)}
+                  </>
                 )}
                 {activeFullscreen === null ? (
                   <div className="pointer-events-none absolute inset-0 flex">
                     <div className="flex min-w-0 flex-1 items-start justify-between gap-2 p-2">
                       <div className="min-w-0 [&]:pointer-events-auto">
+                        {playing ? (
+                          <CanvasPlayExitButton
+                            viewOnly={readOnly}
+                            onExit={() => setPlay(false)}
+                          />
+                        ) : null}
                         {toolsHidden ? null : (
                           <CanvasToolbar
                             viewOnly={readOnly}
@@ -1114,7 +1239,6 @@ export function CanvasArtifactEditor({
                           viewOnly={readOnly}
                           play={play}
                           commenting={commenting}
-                          setPlay={setPlay}
                           prototypes={snapshot.order
                             .filter(
                               (path) =>
@@ -1125,11 +1249,12 @@ export function CanvasArtifactEditor({
                               path,
                               title: snapshot.boards[path].title || path,
                             }))}
-                          onStart={startPlay}
-                          inspectorOpen={inspectorOpen}
-                          toggleInspector={() =>
-                            setInspectorOpen((open) => !open)
-                          }
+                          onStart={(path) => {
+                            // A prototype picked from the menu is an explicit
+                            // destination, unlike a board's own play button.
+                            startPlay(path);
+                            centerBoard(path);
+                          }}
                           trailing={frameEvents?.renderToolbarControls?.()}
                           undo={store.undo}
                           redo={store.redo}
@@ -1148,6 +1273,14 @@ export function CanvasArtifactEditor({
                             },
                             onFit: () => {
                               void flow?.fitView({
+                                nodes: [
+                                  ...items.boards.map(([path]) => ({
+                                    id: `board:${path}`,
+                                  })),
+                                  ...items.notes.map(([path]) => ({
+                                    id: `note:${path}`,
+                                  })),
+                                ],
                                 padding: 0.15,
                                 duration: 200,
                               });
@@ -1164,7 +1297,15 @@ export function CanvasArtifactEditor({
                         store={store}
                         frameEvents={frameEvents}
                         selectedNotes={selectedNotes}
-                        onClose={() => setInspectorOpen(false)}
+                        onClose={() =>
+                          setDismissedInspectorKey(
+                            canvasInspectorKey(
+                              elementSelection,
+                              selectedNotes,
+                              selectedBoards,
+                            ),
+                          )
+                        }
                       />
                     )}
                   </div>

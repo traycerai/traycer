@@ -485,3 +485,88 @@ test.describe("the comment draft composer", () => {
     await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
   });
 });
+
+test.describe("relative links and the query-navigation reload", () => {
+  // Each board's own page links to the other (A's link carries a query, B's
+  // does not), and the bootstrap only intercepts a link's click in Play -
+  // see canvas-bootstrap.ts's click listener.
+  test("a query-carrying link reloads the target board in place, and the bridge still answers after it, and after the trip back", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByRole("button", { name: "Play A on canvas" }).click();
+
+    await waitForBoardCentred(page, "A");
+    // Keyboard activation avoids cross-frame pointer rounding at canvas zoom.
+    await board(page, "A").locator('[data-tid="link"]').press("Enter");
+    // The reload lands with the query applied, not dropped.
+    await expect
+      .poll(() =>
+        board(page, "B")
+          .locator("body")
+          .evaluate(() => location.search),
+      )
+      .toBe("?step=2");
+
+    // The trip back never needs a reload (B's query, A's none), but clicking
+    // it still exercises the bridge the reload just re-handshook: if that
+    // handshake left it rejecting requests, this click - and the relative
+    // link notification it depends on - would simply never land.
+    await board(page, "B").locator('[data-tid="link"]').press("Enter");
+    await waitForBoardCentred(page, "A");
+
+    // And the editor itself is still live, not stuck behind the reload.
+    await commentsToggle(page).click();
+    await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+test.describe("the fullscreen sidebar's draft across an exit and reenter", () => {
+  test("a reply typed in fullscreen survives Back to canvas and reentering, and Edit's menu is reachable there too", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByRole("button", { name: "Play A fullscreen" }).click();
+    await commentsToggle(page).click();
+    await commentPin(page, 1).click();
+    await expect(commentsSidebar(page)).toBeVisible();
+
+    const reply = commentsSidebar(page).locator('[contenteditable="true"]');
+    await reply.fill("in progress reply");
+
+    await page.getByRole("button", { name: "Back to canvas" }).click();
+    await expect(canvasSurface(page)).not.toHaveAttribute(
+      "data-canvas-fullscreen",
+      "true",
+    );
+
+    // The left-panel selection the pin click made is untouched by leaving
+    // fullscreen, so the sidebar (and the thread it had open) reappear
+    // without picking the pin again.
+    await page.getByRole("button", { name: "Play A fullscreen" }).click();
+    await expect(canvasSurface(page)).toHaveAttribute(
+      "data-canvas-fullscreen",
+      "true",
+    );
+    await expect(commentsSidebar(page)).toBeVisible();
+    await expect(reply).toHaveText("in progress reply");
+
+    // The actions menu (and the composer it opens) portal to
+    // `document.body` by default, below the fullscreen surface's own
+    // manual top-layer popover; a real click through to a state change -
+    // the edit composer appearing, pre-filled and typable - is what tells
+    // "exists in the DOM" apart from "actually reachable" in that stack.
+    await commentsSidebar(page)
+      .getByRole("button", { name: "Comment actions" })
+      .click();
+    await canvasSurface(page).getByRole("menuitem", { name: "Edit" }).click();
+    const editDraft = commentsSidebar(page)
+      .locator('[contenteditable="true"]')
+      .first();
+    await expect(editDraft).toContainText("about boards/a.html");
+    await editDraft.fill("about boards/a.html, edited in fullscreen");
+    await expect(editDraft).toHaveText(
+      "about boards/a.html, edited in fullscreen",
+    );
+  });
+});

@@ -117,7 +117,7 @@ describe("the canvas bootstrap is a separate script", () => {
     expect(canvasScript).toContain('"styleProperties":["display"');
   });
 
-  it("is the only difference from the ordinary document, apart from the stamps", () => {
+  it("differs from the ordinary document only in its channel, stamps and readiness flags", () => {
     const ordinary = buildArtifactDocument(html, optionsFor(false));
     const canvas = buildArtifactDocument(html, optionsFor(true));
     const [, canvasScript] = scriptsOf(canvas);
@@ -128,6 +128,7 @@ describe("the canvas bootstrap is a separate script", () => {
       canvas
         .replace(canvasScript, "")
         .replace(STAMP_PATTERN, "")
+        .replace('"canvas":true', '"canvas":false')
         .replace('"artifactPage":null', '"artifactPage":"found"'),
     ).toBe(ordinary.replace(buildHtmlViewerPrelude(), ""));
   });
@@ -637,12 +638,12 @@ describe("the canvas bootstrap in a running page", () => {
       expect(shortcutPosts(page)).toEqual([]);
     });
 
-    it("leaves Escape to the page in play mode", () => {
+    it("tells the app about a bare Escape in play mode too, so it can leave Play", () => {
       const page = runCanvasPage(MARKUP);
       loaded(page);
       page.deliver(request(1, "set-mode", { mode: "play" }));
-      expect(pressEscape(page, {})).toBe(true);
-      expect(shortcutPosts(page)).toEqual([]);
+      expect(pressEscape(page, {})).toBe(false);
+      expect(shortcutPosts(page)).toHaveLength(1);
     });
 
     it("says nothing before the page has loaded", () => {
@@ -1482,8 +1483,18 @@ describe("the canvas bootstrap in a running page", () => {
       expect(linkPosts(page)).toEqual([]);
     });
 
+    it("forwards a link that keeps this path but changes the query, even with a hash", () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      // The page is served at /page.html with no query, so this reloads it.
+      expect(clickAnchor(page, "page.html?step=2#details")).toBe(false);
+      expect(linkPosts(page)).toHaveLength(1);
+    });
+
     it.each([
       ["a hash within this page", "#section"],
+      ["a hash on this page's own path and query", "page.html#details"],
       ["an external page", "https://example.com/x.html"],
     ])("forwards nothing for %s in play", (_label, href) => {
       const page = runCanvasPage(MARKUP);

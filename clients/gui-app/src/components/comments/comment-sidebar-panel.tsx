@@ -1,3 +1,8 @@
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
+import {
+  CanvasCommentDraftContext,
+  canvasCommentDraftStore,
+} from "./canvas-comment-drafts";
 import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -32,6 +37,7 @@ export interface CommentSidebarPanelProps {
  */
 export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   const { epicId, activeArtifactId } = props;
+  const viewTabId = useEpicViewTabId();
   const artifactRecord = useEpicArtifact(activeArtifactId);
   // The sidebar is a sibling of the canvas, deliberately outside every
   // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
@@ -61,24 +67,37 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
     return null;
   }
 
+  const drafts =
+    artifactKind === "canvas" && hostClient !== null
+      ? canvasCommentDraftStore(
+          hostClient,
+          JSON.stringify([viewTabId, epicId, activeArtifactId]),
+        )
+      : null;
   return (
-    <CommentSidebar
-      epicId={epicId}
-      hostClient={hostClient}
-      artifactType={artifactKind}
-      artifactId={activeArtifactId}
-      laneThreads={laneThreads}
-      laneDroppedAt={laneDroppedAt}
-      commentRoomAvailability={commentRoomAvailability}
-      anchorPositions={anchorPositions}
-      currentUserId={currentUserId}
-      canModerate={false}
-      onActivateThread={(threadId) => {
-        setFlashThread(epicId, threadId);
-        if (artifactKind === "canvas")
-          requestCommentThreadAnchorReveal(epicId, activeArtifactId, threadId);
-        else revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
-      }}
-    />
+    <CanvasCommentDraftContext value={drafts}>
+      <CommentSidebar
+        epicId={epicId}
+        hostClient={hostClient}
+        artifactType={artifactKind}
+        artifactId={activeArtifactId}
+        laneThreads={laneThreads}
+        laneDroppedAt={laneDroppedAt}
+        commentRoomAvailability={commentRoomAvailability}
+        anchorPositions={anchorPositions}
+        currentUserId={currentUserId}
+        canModerate={false}
+        onActivateThread={(threadId) => {
+          setFlashThread(epicId, threadId);
+          if (artifactKind === "canvas")
+            requestCommentThreadAnchorReveal(
+              epicId,
+              activeArtifactId,
+              threadId,
+            );
+          else revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
+        }}
+      />
+    </CanvasCommentDraftContext>
   );
 }

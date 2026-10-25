@@ -37,6 +37,8 @@ export interface CanvasCommentView {
   readonly order: readonly string[];
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly revealBoard: (path: string) => boolean;
+  /** Shows a canvas-point pin's page and centers its spot, once. */
+  readonly revealCanvasPoint: (page: string, x: number, y: number) => boolean;
   readonly setTool: (tool: CanvasTool) => void;
   /** Deselects boards and notes; the editor owns those node flags. */
   readonly clearNodeSelection: () => void;

@@ -27,6 +27,7 @@ export function useOrderedFrameThreads(
               number: index + 1,
               hasAnchor:
                 thread.data.anchorKind === "artifact" ||
+                thread.data.anchorKind === "canvas-point" ||
                 anchorPosition !== null,
             }),
           ),

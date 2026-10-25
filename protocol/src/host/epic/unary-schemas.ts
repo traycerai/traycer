@@ -3007,10 +3007,21 @@ export const createCommentThreadRequestSchemaPreAnchor = lazySchema(() =>
     artifactType: latestEpicArtifactKindSchema,
   }),
 );
-/** Durable HTML/canvas anchors; offsets refer to normalized element text. */
+/**
+ * Durable HTML/canvas anchors; offsets refer to normalized element text.
+ * `canvas-point` pins a spot on a canvas page outside every board, in
+ * canvas-space coordinates.
+ */
 export const commentAnchorSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("artifact") }),
+    z.object({
+      kind: z.literal("canvas-point"),
+      page: z.string(),
+      x: z.number().finite(),
+      y: z.number().finite(),
+      label: z.string(),
+    }),
     z.object({
       kind: z.literal("element"),
       artboard: z.string(),
@@ -3213,12 +3224,18 @@ export const commentThreadDataSchemaPreAnchor = lazySchema(() =>
 
 export const commentThreadDataSchema = lazySchema(() =>
   commentThreadDataSchemaPreAnchor.extend({
-    anchorKind: z.enum(["artifact", "element", "text"]).optional(),
+    anchorKind: z
+      .enum(["artifact", "canvas-point", "element", "text"])
+      .optional(),
     artboard: z.string().optional(),
     elementId: z.string().optional(),
     startOffset: z.number().int().nonnegative().optional(),
     endOffset: z.number().int().nonnegative().optional(),
     label: z.string().optional(),
+    /** A canvas-point anchor's page and canvas-space position. */
+    page: z.string().optional(),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
   }),
 );
 

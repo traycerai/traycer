@@ -108,6 +108,22 @@ function serializeThread(
   const lines = [`<thread ${attrs}>`];
   const quotedText = thread.data.quotedText?.trim() ?? "";
 
+  // A canvas-point thread is pinned to a spot on the canvas itself; carry the
+  // page and canvas-space coordinates so the reader knows where it points.
+  if (
+    thread.data.anchorKind === "canvas-point" &&
+    thread.data.page !== undefined &&
+    thread.data.x !== undefined &&
+    thread.data.y !== undefined
+  ) {
+    const pointAttrs = [
+      attribute("page", thread.data.page),
+      attribute("x", String(Math.round(thread.data.x))),
+      attribute("y", String(Math.round(thread.data.y))),
+    ].join(" ");
+    lines.push(`<canvas_point ${pointAttrs}/>`);
+  }
+
   if (quotedText.length > 0) {
     const quotedSectionAttrs = [
       attribute("anchor", input.anchorStatus),
