@@ -110,3 +110,38 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^patches/@xterm%2Faddon-canvas@[0-9.]+\.patch$''']
 regexes = ['''^t\.TwoKeyMap=void$''']
+
+# The two entries below are RULE-scoped (`[[rules]]` with a default rule's id
+# plus `[[rules.allowlists]]`) rather than global `[[allowlists]]`. Gitleaks
+# 8.30.1 treats a global allowlist whose `paths` match as "skip this file"
+# before any rule runs, whatever its `condition` and `regexes` say (its debug
+# log reads `skipping file: global allowlist`), so a global path entry
+# allowlists EVERY secret in that file. A rule-scoped allowlist is evaluated
+# per finding, so the regex really does narrow it to the one value: checked
+# with 8.30.1, another `sk_live_…` value in the same file still reports.
+
+[[rules]]
+id = "stripe-access-token"
+[[rules.allowlists]]
+description = "Stripe-shaped masking fixture in the env-override editor suite: `sk_live_9f3a7c1d2e4b5a60` is a made-up value whose only job is to be hidden by the masked row and asserted absent from the DOM. The rule matches it on prefix shape alone; it is not an issued key. Fifth instance of the `fetch-depth: 0` pattern: the fixture lives on the in-flight branch `fix/environments-round-2`, so main's own scan and every open PR's fail on it until that branch lands. Scoped to the exact value and the one source path so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/settings/panels/__tests__/env-override-editor\.test\.tsx$''',
+]
+regexes = ['''^sk_live_9f3a7c1d2e4b5a60$''']
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "The `EnvironmentSecretV12` TYPE NAME in the environment-secret test suites: a fixture declared as `const secret: EnvironmentSecretV12 = {` (or `secretSettingIt:` / `readonly secret:`) reads to the generic-api-key rule as a key named `secret` with the value `EnvironmentSecretV12`. A type annotation is never a credential. Same in-flight branch as the entry above (`fix/environments-round-2`), same reason it cannot wait for that branch to land. Scoped to the exact type name and the suites that declare such a fixture so unrelated findings stay reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/settings/panels/__tests__/provider-env-overrides-section\.test\.tsx$''',
+  '''^clients/gui-app/src/components/settings/secrets/__tests__/secret-remove-preview-computers\.test\.tsx$''',
+  '''^clients/gui-app/src/components/settings/secrets/__tests__/replace-dialog-and-versions-edges\.test\.tsx$''',
+  '''^clients/gui-app/src/providers/__tests__/support-environment-bridge\.test\.tsx$''',
+  '''^clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question\.test\.tsx$''',
+]
+regexes = ['''^EnvironmentSecretV\d+$''']
