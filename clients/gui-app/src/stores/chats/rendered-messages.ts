@@ -155,6 +155,13 @@ export interface RenderedMessagesDisplayContext {
   readonly resolveUserSenderAvatarUrl: (
     sender: OpenUserMessageSender,
   ) => string | null;
+  /**
+   * The member a user row names as its sender, for a chat that draws its
+   * members (a bot's); absent where a row carries no sender id.
+   */
+  readonly resolveUserSenderId?: (
+    sender: OpenUserMessageSender,
+  ) => string | null;
   readonly resolveAgentSenderDisplay: (
     sender: OpenAgentSender,
   ) => AgentSenderDisplay;
@@ -3955,6 +3962,10 @@ function renderSteerBlockUserMessage(
       block.sender === null
         ? null
         : ctx.resolveUserSenderAvatarUrl(block.sender),
+    senderUserId:
+      block.sender === null
+        ? null
+        : (ctx.resolveUserSenderId?.(block.sender) ?? null),
     settings: null,
     steerBadge: {
       status: "steered",
@@ -3971,6 +3982,7 @@ function renderSteeredUserMessage(input: {
   readonly sender: OpenUserMessageSender | null;
   readonly senderLabel: string | null;
   readonly senderAvatarUrl: string | null;
+  readonly senderUserId: string | null;
   readonly settings: ChatMessageModel["settings"];
   readonly steerBadge: ChatMessageSteerBadge;
 }): ChatMessageModel {
@@ -3999,6 +4011,7 @@ function renderSteeredUserMessage(input: {
     persistentMessageId: input.persistentMessageId,
     senderLabel: input.senderLabel,
     ...senderAvatarField(input.senderAvatarUrl),
+    ...senderUserIdField(input.senderUserId),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo:
@@ -4061,6 +4074,7 @@ function renderUserMessage(
     persistentMessageId: message.messageId,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
+    ...senderUserIdField(ctx.resolveUserSenderId?.(message.sender) ?? null),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -4084,6 +4098,13 @@ function senderAvatarField(
   avatarUrl: string | null,
 ): Pick<ChatMessageModel, "senderAvatarUrl"> {
   return avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl };
+}
+
+/** A user row's `senderUserId`: the key only in a chat that draws its members. */
+function senderUserIdField(
+  userId: string | null,
+): Pick<ChatMessageModel, "senderUserId"> {
+  return userId === null ? {} : { senderUserId: userId };
 }
 
 function renderPendingUserMessage(
@@ -4121,6 +4142,7 @@ function renderPendingUserMessage(
     persistentMessageId: null,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
+    ...senderUserIdField(ctx.resolveUserSenderId?.(message.sender) ?? null),
     assistantMeta: null,
     statusLabel: "Pending",
     agentSenderInfo: agentSenderInfoFromSender(message.sender),

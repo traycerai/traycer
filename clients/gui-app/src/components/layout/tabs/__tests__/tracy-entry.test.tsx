@@ -8,6 +8,7 @@
  * connectable hosts, the notification indicators and the bot's activity (the
  * real protocol schemas do not load in this suite's jsdom).
  */
+import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -459,6 +460,10 @@ describe("the fixed Tracy entry - top strip", () => {
     const scroller = screen.getByTestId("header-tab-strip-scroll");
 
     expect(entry.textContent).toContain("Tracy");
+    // The bot's picture is a squircle, as a bot's is everywhere (T62).
+    expect(avatarShape(within(entry).getByTestId("bot-avatar"))).toBe(
+      "squircle",
+    );
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -920,6 +925,9 @@ describe("the fixed Tracy entry - vertical strip", () => {
     const topBlock = screen.getByTestId("side-strip-top-block");
 
     expect(topBlock.contains(entry)).toBe(true);
+    for (const avatar of within(entry).getAllByTestId("bot-avatar")) {
+      expect(avatarShape(avatar)).toBe("squircle");
+    }
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

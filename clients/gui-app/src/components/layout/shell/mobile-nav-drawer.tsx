@@ -2,7 +2,6 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Bot,
   House,
   LayersPlus,
   LogOut,
@@ -53,6 +52,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
+import { TracyEntryAvatar } from "@/components/layout/tabs/tracy-strip-entry";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -384,7 +384,11 @@ function MobileNavTracyButton(props: {
         props.onOpen(props.botId);
       }}
     >
-      <Bot className="size-4" />
+      <TracyEntryAvatar
+        botId={props.botId}
+        title={props.title}
+        className={undefined}
+      />
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left",

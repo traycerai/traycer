@@ -273,6 +273,55 @@ export const botUpdateResponseSchema = lazySchema(() =>
 );
 export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
 
+// ---- bot.notificationLevel.read / bot.notificationLevel.set ------------ //
+
+/**
+ * What the caller's bell raises for one of a bot's conversations (Tracy Bots
+ * T63): `all` of the bot's activity there, `mentions` (the answers to their
+ * own posts and threads they took part in, which is what a conversation
+ * with no level set reads as), or `off`. A thread follows its channel's
+ * level. Stored per person in the cloud, so it is the same on every device.
+ */
+export const botNotificationLevelSchema = lazySchema(() =>
+  z.enum(["all", "mentions", "off"]),
+);
+export type BotNotificationLevel = z.infer<typeof botNotificationLevelSchema>;
+
+export const botNotificationLevelReadRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotNotificationLevelReadRequest = z.infer<
+  typeof botNotificationLevelReadRequestSchema
+>;
+
+/** The caller's levels by conversation id; a conversation absent reads `mentions`. */
+export const botNotificationLevelReadResponseSchema = lazySchema(() =>
+  z.object({
+    levels: z.record(z.string().min(1), botNotificationLevelSchema),
+  }),
+);
+export type BotNotificationLevelReadResponse = z.infer<
+  typeof botNotificationLevelReadResponseSchema
+>;
+
+export const botNotificationLevelSetRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1),
+    level: botNotificationLevelSchema,
+  }),
+);
+export type BotNotificationLevelSetRequest = z.infer<
+  typeof botNotificationLevelSetRequestSchema
+>;
+
+export const botNotificationLevelSetResponseSchema = lazySchema(() =>
+  z.object({ level: botNotificationLevelSchema }),
+);
+export type BotNotificationLevelSetResponse = z.infer<
+  typeof botNotificationLevelSetResponseSchema
+>;
+
 // ---- bot.delete -------------------------------------------------------- //
 
 export const botDeleteRequestSchema = lazySchema(() =>

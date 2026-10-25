@@ -4,11 +4,8 @@ import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-s
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  BotAvatar,
-  BotMessageFrame,
-  MemberAvatar,
-} from "@/components/chat/chat-bot-message";
+import { BotMessageFrame } from "@/components/chat/chat-bot-message";
+import { BotAvatar, MemberAvatar } from "@/components/bots/bot-avatars";
 import { TextSegment } from "@/components/chat/segments/text-segment";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
@@ -355,7 +352,14 @@ function ThreadAnchor(props: {
   }
   return (
     <BotMessageFrame
-      avatar={<MemberAvatar name={senderLabel} avatarUrl={avatarUrl} />}
+      avatar={
+        <MemberAvatar
+          userId={anchor.senderUserId}
+          name={senderLabel}
+          avatarUrl={avatarUrl}
+          size="lg"
+        />
+      }
       name={senderLabel}
       app={false}
       sentAt={anchor.sentAt}

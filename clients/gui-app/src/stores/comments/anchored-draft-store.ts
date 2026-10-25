@@ -5,6 +5,13 @@ import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 export type AnchoredDraftAnchor =
   | { readonly kind: "artifact" }
   | {
+      readonly kind: "canvas-point";
+      readonly page: string;
+      readonly x: number;
+      readonly y: number;
+      readonly label: string;
+    }
+  | {
       readonly kind: "element";
       readonly artboard: string;
       readonly elementId: string | null;

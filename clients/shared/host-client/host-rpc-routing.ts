@@ -329,6 +329,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.onboarding.complete": "target-host",
   "bot.onboarding.read": "target-host",
   "bot.open": "target-host",
+  "bot.notificationLevel.read": "target-host",
+  "bot.notificationLevel.set": "target-host",
   "bot.read": "target-host",
   "bot.thread.list": "target-host",
   "bot.updateDirective": "target-host",
