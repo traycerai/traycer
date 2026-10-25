@@ -29,6 +29,8 @@ import type {
 } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { parseArtifactAddress } from "@/lib/sandbox/artifact-serving/artifact-address";
+import { CommentSidebarPanel } from "@/components/comments";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
 import { CanvasArtifactFixtureProvider } from "@/components/canvas-artifact/canvas-surface-context";
@@ -255,10 +257,11 @@ epicHandle.store.setState({
   commentThreads: { byArtifactId: { [ARTIFACT_ID]: [THREAD_A, THREAD_B] } },
 });
 // `useFrameCommentsEnabled` also gates on this host having negotiated
-// `epic.createCommentThread` at `@1.2`; a real handshake records it, and
+// `epic.createCommentThread` at `@1.2` - and a canvas-point draft (a click
+// on empty canvas) posts only at `@1.3`. A real handshake records it, and
 // this fixture's mock messenger never does, so it is recorded directly.
 recordNegotiatedHostManifest(HOST_ID, {
-  "epic.createCommentThread": { major: 1, minor: 2 },
+  "epic.createCommentThread": { major: 1, minor: 3 },
 });
 
 const queryClient = createAppQueryClient();
@@ -447,22 +450,48 @@ function RequestContext(props: { readonly children: ReactNode }): ReactNode {
   ) : null;
 }
 
+/**
+ * The rail comments panel, as the app's left panel mounts it: a sibling of
+ * the canvas tile, shown while the left-panel store has Comments selected
+ * for this tab - which is exactly what a pin click writes
+ * (`useActivateCommentThread`). Being outside the tile is the shipped
+ * contract the specs lean on: the sidebar stays visible and usable while a
+ * board is fullscreen.
+ */
+function RailCommentsSidebar(): ReactNode {
+  const selected = useLeftPanelStore(
+    (s) => s.getActivePanelId(VIEW_TAB_ID) === "comments",
+  );
+  if (!selected) return null;
+  return (
+    <aside
+      aria-label="Comments sidebar"
+      style={{ width: "min(340px, 30vw)", flexShrink: 0, overflow: "auto" }}
+    >
+      <CommentSidebarPanel epicId={EPIC_ID} activeArtifactId={ARTIFACT_ID} />
+    </aside>
+  );
+}
+
 export function CanvasPlayFixture(): ReactNode {
   return (
-    <div style={{ width: "100vw", height: "100vh" }}>
-      <CanvasSelectionProvider
-        epicId={EPIC_ID}
-        artifactId={ARTIFACT_ID}
-        artifactTitle={artifact.title}
-        hostId={HOST_ID}
-        viewTabId={VIEW_TAB_ID}
-      >
-        <CanvasArtifactSurface
+    <div style={{ width: "100vw", height: "100vh", display: "flex" }}>
+      <RailCommentsSidebar />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <CanvasSelectionProvider
           epicId={EPIC_ID}
           artifactId={ARTIFACT_ID}
-          artifact={artifact}
-        />
-      </CanvasSelectionProvider>
+          artifactTitle={artifact.title}
+          hostId={HOST_ID}
+          viewTabId={VIEW_TAB_ID}
+        >
+          <CanvasArtifactSurface
+            epicId={EPIC_ID}
+            artifactId={ARTIFACT_ID}
+            artifact={artifact}
+          />
+        </CanvasSelectionProvider>
+      </div>
     </div>
   );
 }
