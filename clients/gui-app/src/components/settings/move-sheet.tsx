@@ -1,17 +1,30 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import type { EnvironmentMovePlanResponse } from "@traycer/protocol/host/environment/move-contracts";
+import type { EnvironmentMovePlanResponseV11 } from "@traycer/protocol/host/environment/move-contracts";
 import {
   DEFAULT_KEY_CHOICE,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
   MOVE_SECTIONS,
   moveAcceptRequest,
+  moveReachSentence,
+  moveRecipientSentence,
+  movesSectionRows,
+  guideDiffersNote,
+  nothingToMoveLine,
+  notAwaitingLine,
   PLAN_CHANGED_TEXT,
+  planMovesASecret,
+  planMovesNothing,
   type MoveKeyChoice,
   type MoveRow,
 } from "@/components/settings/move-sheet-model";
 import { needsUpdateSubtitle } from "@/components/settings/environment/environment-picker-model";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-environment-status-model";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
+import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
+import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,9 +59,12 @@ const EMPTY_PARAMS = {};
  * Personal, computed by that computer (`environment.move.plan`), shown
  * before anything leaves it. `Move to Personal` accepts this list as shown
  * (`environment.move.accept` with the plan's hash and the key choices);
- * `Not now` closes and records nothing.
+ * `Not now` closes and records nothing. A plan that moves nothing reads so,
+ * with `Done` alone.
  *
- * Mounted once, in the Settings sidebar; opened through `useMoveSheetStore`.
+ * Mounted once, app-wide (`EnvironmentSheetsHost`); opened through
+ * `useMoveSheetStore`. While open it names the computers running Personal,
+ * where the moved settings reach.
  */
 export function MoveSheet(): ReactNode {
   const target = useMoveSheetStore((state) => state.target);
@@ -78,6 +94,9 @@ function MoveSheetBody(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const { target } = props;
+  // Read only while the sheet is open: the same reads the Environment
+  // dropdown makes, which the app-wide mount must not hold open otherwise.
+  const runningPersonal = useHostsRunningPersonal(useHostScope());
   const client = useHostClientForHostId(target.hostId);
   const supported = useHostMethodSupport(
     target.hostId,
@@ -94,6 +113,7 @@ function MoveSheetBody(props: {
     () => new Map(),
   );
   const [planChanged, setPlanChanged] = useState(false);
+  const [notAwaiting, setNotAwaiting] = useState(false);
   const accept = useHostScopedMutationForClient(client, {
     method: "environment.move.accept",
     mutationKey: environmentMutationKeys.moveAccept(),
@@ -103,7 +123,7 @@ function MoveSheetBody(props: {
   const choose = (key: string, choice: MoveKeyChoice): void => {
     setChoices((current) => new Map(current).set(key, choice));
   };
-  const send = (data: EnvironmentMovePlanResponse): void => {
+  const send = (data: EnvironmentMovePlanResponseV11): void => {
     accept.mutate(moveAcceptRequest(data, choices), {
       onSuccess: (response) => {
         if (response.outcome === "plan_changed") {
@@ -113,17 +133,27 @@ function MoveSheetBody(props: {
           setChoices(new Map());
           return;
         }
+        if (response.outcome === "not_awaiting") {
+          setNotAwaiting(true);
+          return;
+        }
         props.onClose();
       },
     });
   };
+  const movesNothing = plan.data !== undefined && planMovesNothing(plan.data);
+  const reachedHostNames = runningPersonal
+    .filter((host) => host.hostId !== target.hostId)
+    .map((host) => host.name);
+  const reach = moveReachSentence(reachedHostNames, target.hostName);
   return (
     <>
       <SheetHeader>
         <SheetTitle>Move {target.hostName}'s settings to Personal</SheetTitle>
-        <SheetDescription>
-          {target.hostName} keeps working either way. Every row opens to its
-          items.
+        <SheetDescription data-testid="move-sheet-description">
+          {movesNothing
+            ? nothingToMoveLine(target.hostName)
+            : `${reach} ${target.hostName} keeps working either way. Every row opens to its items.`}
         </SheetDescription>
       </SheetHeader>
       <div
@@ -168,61 +198,108 @@ function MoveSheetBody(props: {
             {PLAN_CHANGED_TEXT}
           </p>
         ) : null}
+        {notAwaiting ? (
+          <p
+            role="status"
+            className="rounded-md border border-info/30 bg-info/10 px-3 py-2 text-ui-sm text-info-foreground"
+            data-testid="move-sheet-not-awaiting"
+          >
+            {notAwaitingLine(target.hostName)}
+          </p>
+        ) : null}
         {plan.data === undefined ? null : (
-          <MovePlanRows plan={plan.data} choices={choices} onChoose={choose} />
+          <MovePlanRows
+            plan={plan.data}
+            hostName={target.hostName}
+            choices={choices}
+            reachedHostNames={reachedHostNames}
+            onChoose={choose}
+          />
         )}
       </div>
       <SheetFooter className="flex-row justify-end gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          data-testid="move-sheet-not-now"
-          onClick={props.onClose}
-        >
-          Not now
-        </Button>
-        <Button
-          type="button"
-          data-testid="move-sheet-accept"
-          disabled={plan.data === undefined || accept.isPending}
-          onClick={() => {
-            if (plan.data !== undefined) send(plan.data);
-          }}
-        >
-          Move to Personal
-          {accept.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-              tone="muted"
-            />
-          ) : null}
-        </Button>
+        {movesNothing ? (
+          <Button
+            type="button"
+            data-testid="move-sheet-done"
+            onClick={props.onClose}
+          >
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              data-testid="move-sheet-not-now"
+              onClick={props.onClose}
+            >
+              Not now
+            </Button>
+            <Button
+              type="button"
+              data-testid="move-sheet-accept"
+              disabled={plan.data === undefined || accept.isPending}
+              onClick={() => {
+                if (plan.data !== undefined) send(plan.data);
+              }}
+            >
+              Move to Personal
+              {accept.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                  tone="muted"
+                />
+              ) : null}
+            </Button>
+          </>
+        )}
       </SheetFooter>
     </>
   );
 }
 
 function MovePlanRows(props: {
-  readonly plan: EnvironmentMovePlanResponse;
+  readonly plan: EnvironmentMovePlanResponseV11;
+  readonly hostName: string;
   readonly choices: ReadonlyMap<string, MoveKeyChoice>;
+  readonly reachedHostNames: readonly string[];
   readonly onChoose: (key: string, choice: MoveKeyChoice) => void;
 }): ReactNode {
   const { rows } = props.plan;
+  const movesNothing = planMovesNothing(props.plan);
+  const moving = movesSectionRows(props.plan, props.choices);
   return (
     <>
-      {MOVE_SECTIONS.map((section) =>
-        section.empty === null && rows[section.rows].length === 0 ? null : (
+      {props.plan.guideDiffers ? (
+        // Above Moves, in no section and with no choice: the move never puts
+        // this guide over Personal's.
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="move-sheet-guide-differs"
+        >
+          {guideDiffersNote(props.hostName)}
+        </p>
+      ) : null}
+      {MOVE_SECTIONS.map((section) => {
+        const sectionRows =
+          section.rows === "moves" ? moving : rows[section.rows];
+        // A sheet that moves nothing says so in its description instead.
+        const hidden =
+          sectionRows.length === 0 && (section.empty === null || movesNothing);
+        return hidden ? null : (
           <MoveSection
             key={section.rows}
             testId={`move-sheet-${section.rows}`}
             title={section.title}
-            rows={rows[section.rows]}
+            rows={sectionRows}
             empty={section.empty ?? ""}
+            detailSeparator={section.detailSeparator}
           />
-        ),
-      )}
+        );
+      })}
       {rows.looksLikeAKey.length === 0 ? null : (
         <section
           className="flex flex-col gap-2"
@@ -241,12 +318,19 @@ function MovePlanRows(props: {
           </ul>
         </section>
       )}
-      <p
-        className="text-ui-sm text-muted-foreground"
-        data-testid="move-sheet-disclosure"
-      >
-        {MOVE_DISCLOSURE} {MOVE_ACCEPTS_AS_SHOWN}
-      </p>
+      {movesNothing ? null : (
+        <div className="flex flex-col gap-1">
+          <p
+            className="text-ui-sm text-muted-foreground"
+            data-testid="move-sheet-disclosure"
+          >
+            {planMovesASecret(props.plan, props.choices)
+              ? `${MOVE_DISCLOSURE} ${moveRecipientSentence(props.reachedHostNames)} ${MOVE_ACCEPTS_AS_SHOWN}`
+              : MOVE_ACCEPTS_AS_SHOWN}
+          </p>
+          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+        </div>
+      )}
     </>
   );
 }
@@ -256,6 +340,7 @@ function MoveSection(props: {
   readonly title: string;
   readonly rows: readonly MoveRow[];
   readonly empty: string;
+  readonly detailSeparator: string | null;
 }): ReactNode {
   return (
     <section className="flex flex-col gap-1" data-testid={props.testId}>
@@ -279,13 +364,7 @@ function MoveSection(props: {
                   key={`${row.kind}:${row.key}:${row.os ?? ""}`}
                   className="text-ui-sm"
                 >
-                  {row.label}
-                  {row.detail === null ? null : (
-                    <span className="text-muted-foreground">
-                      {" "}
-                      · {row.detail}
-                    </span>
-                  )}
+                  <MoveRowText row={row} separator={props.detailSeparator} />
                 </li>
               ))}
             </ul>
@@ -293,6 +372,25 @@ function MoveSection(props: {
         </Collapsible>
       )}
     </section>
+  );
+}
+
+/** A row's label and detail; a detail that names the item stands alone. */
+function MoveRowText(props: {
+  readonly row: MoveRow;
+  readonly separator: string | null;
+}): ReactNode {
+  const { row, separator } = props;
+  if (row.detail === null) return moveRowLabel(row);
+  if (separator === null) return row.detail;
+  return (
+    <>
+      {moveRowLabel(row)}
+      <span className="text-muted-foreground">
+        {separator}
+        {row.detail}
+      </span>
+    </>
   );
 }
 

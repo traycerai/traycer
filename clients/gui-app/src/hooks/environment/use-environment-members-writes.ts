@@ -48,8 +48,10 @@ export interface EnvironmentMembersWrites {
 
 /**
  * Members writes against `environment.members.invite` / `.setRole` /
- * `.remove` / `.noticeSeen`. A missing client answers `forbidden` rather
- * than throwing at the call site.
+ * `.remove` / `.noticeSeen`. A request that got no answer (no client, a
+ * refused version, a failed connection) resolves `failed` rather than
+ * throwing at the call site, and the Members view says so where the person
+ * acted, so these three raise no toast of their own.
  */
 export function useEnvironmentMembersWrites(
   client: HostClient<HostRpcRegistry> | null,
@@ -58,19 +60,19 @@ export function useEnvironmentMembersWrites(
   const inviteMutation = useHostScopedMutationForClient(client, {
     method: "environment.members.invite",
     mutationKey: environmentMutationKeys.membersInvite(),
-    errorMessage: "Couldn't send that invitation.",
+    errorMessage: null,
     invalidateMethods: ["environment.members"],
   });
   const setRoleMutation = useHostScopedMutationForClient(client, {
     method: "environment.members.setRole",
     mutationKey: environmentMutationKeys.membersSetRole(),
-    errorMessage: "Couldn't change that role.",
+    errorMessage: null,
     invalidateMethods: ["environment.members"],
   });
   const removeMutation = useHostScopedMutationForClient(client, {
     method: "environment.members.remove",
     mutationKey: environmentMutationKeys.membersRemove(),
-    errorMessage: "Couldn't remove that member.",
+    errorMessage: null,
     invalidateMethods: ["environment.members"],
   });
   const noticeSeenMutation = useHostScopedMutationForClient(client, {
@@ -93,7 +95,7 @@ export function useEnvironmentMembersWrites(
         })
         .then(
           (response): MembersInviteOutcome => response,
-          (): MembersInviteOutcome => ({ outcome: "forbidden" }),
+          (): MembersInviteOutcome => ({ outcome: "failed" }),
         );
     },
     [environmentId, inviteMutation],
@@ -112,7 +114,7 @@ export function useEnvironmentMembersWrites(
         })
         .then(
           (response): MembersSetRoleOutcome => ({ outcome: response.outcome }),
-          (): MembersSetRoleOutcome => ({ outcome: "forbidden" }),
+          (): MembersSetRoleOutcome => ({ outcome: "failed" }),
         );
     },
     [environmentId, setRoleMutation],
@@ -127,7 +129,7 @@ export function useEnvironmentMembersWrites(
         })
         .then(
           (response): MembersRemoveOutcome => response,
-          (): MembersRemoveOutcome => ({ outcome: "forbidden" }),
+          (): MembersRemoveOutcome => ({ outcome: "failed" }),
         );
     },
     [environmentId, removeMutation],

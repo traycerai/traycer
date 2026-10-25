@@ -81,7 +81,10 @@ afterAll(async () => {
   }
 });
 
-import { createWindowsController } from "../windows";
+import {
+  createWindowsController,
+  setWindowsTaskHiddenProbeForTests,
+} from "../windows";
 import {
   ProcessRunError,
   ProcessTimeoutError,
@@ -90,6 +93,15 @@ import {
 import { serviceLabelFor, windowsTaskName } from "../../label";
 
 const label = serviceLabelFor("production");
+
+// Pinned so no row opens a real path under `%SystemRoot%\System32\Tasks`.
+beforeEach(() => {
+  setWindowsTaskHiddenProbeForTests(async () => false);
+});
+
+afterEach(() => {
+  setWindowsTaskHiddenProbeForTests(null);
+});
 
 describe("statusService disambiguates schtasks /Query failures", () => {
   it("(i) access denied: status(label) rejects rather than reading as not-installed", async () => {
@@ -170,6 +182,59 @@ describe("statusService disambiguates schtasks /Query failures", () => {
       version: null,
       listenUrl: null,
       pid: null,
+    });
+  });
+
+  describe("when Task Scheduler hides another user's task from this account", () => {
+    const PATH_STDERR = "ERROR: The system cannot find the path specified.\r\n";
+
+    // Answers the schtasks query with the hidden-path failure and records
+    // every PowerShell spawn (the absence probe).
+    function answerPathFailure(): { readonly powershellCalls: string[] } {
+      const powershellCalls: string[] = [];
+      runCommandMock.impl = async (command) => {
+        if (command === "powershell") {
+          powershellCalls.push(command);
+          return { exitCode: 4, stdout: "", stderr: "" };
+        }
+        throw new ProcessRunError(
+          "schtasks /Query /TN ai.traycer.host exited with code 1: ERROR: The system cannot find the path specified.",
+          "schtasks",
+          ["/Query", "/TN", "ai.traycer.host"],
+          1,
+          "",
+          PATH_STDERR,
+        );
+      };
+      return { powershellCalls };
+    }
+
+    it("(x) a failed query for a task the hidden probe names resolves 'not-installed' without the absence probe", async () => {
+      const { powershellCalls } = answerPathFailure();
+      const asked: string[] = [];
+      setWindowsTaskHiddenProbeForTests(async (taskName) => {
+        asked.push(taskName);
+        return true;
+      });
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).resolves.toEqual({
+        state: "not-installed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      });
+      expect(asked).toEqual([windowsTaskName(label)]);
+      expect(powershellCalls).toEqual([]);
+    });
+
+    it("(xi) the same failure with the task not hidden still rejects", async () => {
+      answerPathFailure();
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).rejects.toBeInstanceOf(
+        ProcessRunError,
+      );
     });
   });
 

@@ -120,6 +120,9 @@ interface ProfileDropdownProps {
     string | null,
     ProfileRowAdmission
   > | null;
+  /** Whether the terminal login carries its `Terminal` badge. Settings names
+   *  that row in its label instead, and passes `false`. */
+  readonly showTerminalBadge: boolean;
 }
 
 /**
@@ -146,6 +149,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     usagePresentation,
     eligibilityControls,
     admissionByProfileId,
+    showTerminalBadge,
   } = props;
   const rowIdPrefix = useId();
   const triggerId = `${rowIdPrefix}-trigger`;
@@ -184,6 +188,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     eligibilityControls,
     profileEnablementPending,
     onSelectProfile,
+    showTerminalBadge,
   };
 
   return (
@@ -204,7 +209,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           <button
             id={triggerId}
             type="button"
-            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
+            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile, showTerminalBadge)}${activeProfile.enabled ? "" : ", Disabled"}`}
             className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
           >
             <AccentDot
@@ -224,9 +229,10 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               <span className="min-w-0 flex-1 truncate text-left font-medium">
                 {profileDisplayLabel(activeProfile)}
               </span>
-              {activeProfile.kind === "ambient" ? (
-                <TerminalProfileBadge />
-              ) : null}
+              <TerminalProfileBadge
+                profile={activeProfile}
+                show={showTerminalBadge}
+              />
               {!activeProfile.enabled ? (
                 <span className="shrink-0 text-muted-foreground">Disabled</span>
               ) : null}
@@ -358,6 +364,7 @@ interface ProfileDropdownRowContext {
   readonly eligibilityControls: ProfileDropdownEligibilityControls | null;
   readonly profileEnablementPending: ProfileDropdownProps["profileEnablementPending"];
   readonly onSelectProfile: ProfileDropdownProps["onSelectProfile"];
+  readonly showTerminalBadge: boolean;
 }
 
 interface ProfileDropdownRowState {
@@ -385,6 +392,7 @@ function ProfileDropdownRow(props: {
     shortcutHintForIndex: props.context.shortcutHintForIndex,
     usagePresentation: props.context.usagePresentation,
     admissionByProfileId: props.context.admissionByProfileId,
+    showTerminalBadge: props.context.showTerminalBadge,
   });
   const enablementPending =
     props.context.profileEnablementPending?.(state.commitId) ??
@@ -491,6 +499,7 @@ function ProfileSelectionControl(props: {
         state={state}
         enablementPending={props.enablementPending}
         activeProfileId={context.activeProfileId}
+        showTerminalBadge={context.showTerminalBadge}
       />
       {visibleDisabledReason !== null ? (
         <span className="pl-5.5 text-left text-overline leading-tight text-muted-foreground">
@@ -506,6 +515,7 @@ function ProfileSelectionContents(props: {
   readonly state: ProfileDropdownRowState;
   readonly enablementPending: boolean;
   readonly activeProfileId: string | null;
+  readonly showTerminalBadge: boolean;
 }): ReactNode {
   const { profile, state } = props;
   return (
@@ -520,7 +530,10 @@ function ProfileSelectionContents(props: {
       />
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span className="min-w-0 flex-1 truncate">{state.label}</span>
-        {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+        <TerminalProfileBadge
+          profile={profile}
+          show={props.showTerminalBadge}
+        />
         <ProfileEnablementLabel
           enabled={profile.enabled}
           pending={props.enablementPending}
@@ -687,6 +700,7 @@ function computeProfileRowState(input: {
     string | null,
     ProfileRowAdmission
   > | null;
+  readonly showTerminalBadge: boolean;
 }): ProfileDropdownRowState {
   const statusSuffix = profileRowStatusSuffix(input.profile);
   const commitId = profileCommitId(input.profile);
@@ -704,6 +718,7 @@ function computeProfileRowState(input: {
     usageEntry,
     admissionReason: admission?.reason ?? null,
     enabled: input.profile.enabled,
+    showTerminalBadge: input.showTerminalBadge,
   });
   return {
     statusSuffix,
@@ -739,8 +754,12 @@ function admissionTooltipRow(
 }
 
 /** Marks the terminal/default-CLI-login profile next to its name, on both the
- *  closed trigger and the open rows. */
-function TerminalProfileBadge() {
+ *  closed trigger and the open rows, where the caller shows it. */
+function TerminalProfileBadge(props: {
+  readonly profile: ProviderProfile;
+  readonly show: boolean;
+}): ReactNode {
+  if (props.profile.kind !== "ambient" || !props.show) return null;
   return (
     <Badge variant="muted" className="h-5 shrink-0" size="xs">
       Terminal
@@ -751,8 +770,11 @@ function TerminalProfileBadge() {
 /** Restates the visual `TerminalProfileBadge` for aria-labels - both the
  *  trigger and the rows carry aria-labels that replace their text content, so
  *  the badge is invisible to AT without this suffix. */
-function terminalBadgeSuffix(profile: ProviderProfile): string {
-  return profile.kind === "ambient" ? ", Terminal" : "";
+function terminalBadgeSuffix(
+  profile: ProviderProfile,
+  showTerminalBadge: boolean,
+): string {
+  return profile.kind === "ambient" && showTerminalBadge ? ", Terminal" : "";
 }
 
 function profileRowAccessibleLabel(input: {
@@ -768,8 +790,9 @@ function profileRowAccessibleLabel(input: {
    *  perceivable to them at all. */
   readonly admissionReason: string | null;
   readonly enabled: boolean;
+  readonly showTerminalBadge: boolean;
 }): string {
-  const label = `${input.label}${terminalBadgeSuffix(input.profile)}`;
+  const label = `${input.label}${terminalBadgeSuffix(input.profile, input.showTerminalBadge)}`;
   const base = profileRowAccessibleLabelBase(input, label);
   const eligibility = input.enabled ? base : `${base}, Disabled`;
   if (input.admissionReason === null) return eligibility;

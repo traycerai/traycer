@@ -1,12 +1,17 @@
 /**
  * Retrospective inventory rows that are not held items: Shared in use from
- * this host's applied `environment.status` items, Shared from the room from
+ * this host's applied `environment.status` items, Shared files from
  * `planes.room` plus the room-backed kinds, Applied on from
  * `environment.host.list@1.1` `applied[]`.
  */
 import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentPlanes } from "@/components/settings/move/cohort-rows";
+import {
+  envOverrideProviderName,
+  itemLabel,
+  itemPageName,
+} from "@/components/settings/personal/personal-page-status";
 import type {
   RetrospectivePageId,
   SharedInUseItem,
@@ -28,23 +33,20 @@ const KIND_PAGE: Readonly<Record<string, RetrospectivePageId>> = {
   auto_policy: "permissions",
 };
 
+/**
+ * How a group of a counted kind reads. A kind a configuration holds one of
+ * is named by its page instead (`itemPageName`), and an env override by its
+ * provider (`envOverrideGroupLabel`).
+ */
 const KIND_WORDS: Readonly<
   Record<string, { readonly one: string; readonly many: string }>
 > = {
   managed_profile: { one: "1 profile", many: "profiles" },
-  env_override: { one: "1 provider override", many: "provider overrides" },
   variable: { one: "1 variable", many: "variables" },
-  shell: { one: "1 shell variable", many: "shell variables" },
   mcp_server: { one: "1 MCP server", many: "MCP servers" },
   agent_definition: { one: "1 agent definition", many: "agent definitions" },
   setup_script: { one: "1 setup script", many: "setup scripts" },
   pack_policy: { one: "1 permission pack", many: "permission packs" },
-  fallback_policy: { one: "1 fallback policy", many: "fallback policies" },
-  browser_agent_access: {
-    one: "1 browser-agent access row",
-    many: "browser-agent access rows",
-  },
-  auto_policy: { one: "1 auto policy", many: "auto policies" },
   secret: { one: "1 secret", many: "secrets" },
 };
 
@@ -68,7 +70,18 @@ function groupKey(
   page: RetrospectivePageId,
 ): string {
   if (item.kind === "secret" && looksLikeApiKey(item.key)) return "api-keys";
+  if (item.kind === "env_override") {
+    return `${page}:env_override:${envOverrideProviderName(item.key) ?? ""}`;
+  }
   return `${page}:${item.kind}`;
+}
+
+function envOverrideGroupLabel(
+  items: readonly EnvironmentItemStatus[],
+): string {
+  const provider = envOverrideProviderName(items[0]?.key ?? "");
+  const noun = provider === null ? "env setting" : `${provider} env setting`;
+  return items.length === 1 ? `1 ${noun}` : `${items.length} ${noun}s`;
 }
 
 function groupLabel(
@@ -81,7 +94,11 @@ function groupLabel(
   ) {
     return items.length === 1 ? "1 API key" : `${items.length} API keys`;
   }
-  const words = KIND_WORDS[items[0]?.kind ?? ""] ?? {
+  const kind = items[0]?.kind ?? "";
+  const pageName = itemPageName(kind);
+  if (pageName !== null) return pageName;
+  if (kind === "env_override") return envOverrideGroupLabel(items);
+  const words = KIND_WORDS[kind] ?? {
     one: "1 item",
     many: "items",
   };
@@ -126,7 +143,10 @@ export function sharedInUseFromItems(
     return {
       id: key,
       label: groupLabel(group.items, group.page),
-      names: group.items.map((item) => item.key),
+      names: group.items.flatMap((item) => {
+        if (itemPageName(item.kind) !== null) return [];
+        return item.kind === "env_override" ? [itemLabel(item)] : [item.key];
+      }),
       page: group.page,
     };
   });

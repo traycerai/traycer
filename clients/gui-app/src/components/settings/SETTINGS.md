@@ -744,7 +744,7 @@ Supporting pieces, all viewport-agnostic where possible:
   second `Select` (`provider-section-select.tsx`) in the rail's slot - so
   picking a section is the same gesture as picking the provider one row above
   it, rather than a bespoke one. Both arms read the same `tabs` list and the
-  same `providerTabLabel`; only the container differs, and `Tabs` stays
+  same `PROVIDER_TAB_LABELS`; only the container differs, and `Tabs` stays
   controlled by the panel, so exactly one section body is mounted either way.
   Rows are icon + label only: the state a section is in belongs in its BODY,
   one tap away, and a two-line row inside a menu is a card in other clothes.
@@ -841,18 +841,32 @@ Supporting pieces, all viewport-agnostic where possible:
 
 ## Team configuration sources
 
-The Environment dropdown uses `useEnvironmentPick()`. Personal and Local
-keep the existing host reads. A team mounts `ConfigurationSourceBoundary`
-before its page, resolves its descriptor through `environment.list@1.1`, and
-provides `ConfigurationSourceContext` with the team id, room id, provider
-handle and effective role. An unresolved or unavailable team never mounts a
-page with the host source. The boundary is keyed by team id so unsent edits
-and secret input do not cross team selections.
+The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
+decides each Environment page's source, one rule per pick. A team reads the
+cloud. A Local row reads that computer's own host pages. Personal reads the
+cloud unless the window's host runs Personal by the dropdown's own rule
+(`hostRunsPersonal`: it reports Personal and has no Local row), when that
+host's pages stay; while that host's status is unknown the page shows
+loading. A cloud-read page mounts `ConfigurationSourceBoundary` before it,
+resolves its descriptor through `environment.list@1.1` (the team's row, or
+the `ownerKind: "user"` row for Personal), and provides
+`ConfigurationSourceContext` with the environment id, room id, provider
+handle and effective role. An unresolved or unavailable configuration never
+mounts a page with the host source. The boundary is keyed by team id so
+unsent edits and secret input do not cross team selections, and every
+configuration editor with a draft (Selection guide, Definitions,
+Permissions, Model routing, Variables and shells, a provider's Env, MCP
+servers and their dialog, Skills, Add a secret) is keyed by
+`useConfigurationKey()` (the environment id read from the cloud, else the
+host's id), so a draft or a write's conflict never shows in another
+configuration whose names and revisions match.
 
 Team hooks live under `hooks/environment/team/`. Variables, provider env
 overrides, shell, managed profiles, pack policies, MCP tool toggles, agent
 definitions, browser access and model routing read revisioned configuration
-items through the pool requester. Saves quote the displayed revision; conflicts
+items through the surface's own host, which forwards them on the viewer's
+session; every team read and write is `target-host` in the routing table, so
+the server pool serves none of them. Saves quote the displayed revision; conflicts
 reread the row and show who changed it. Approval policy reads its item and
 writes through the dedicated policy method. Editors can change configuration;
 plan linking and approval/browser policy changes require an admin. Viewers get
@@ -860,7 +874,7 @@ read-only values, with secret names and read-access Details entries only.
 
 Secrets and plan sign-in requests carry the source environment id and require
 the addressing minor before dispatch. Raw secret values and sign-in codes stay
-in local component state and direct requests. Pool query caches include the
+in local component state and direct requests. Team query caches include the
 signed-in viewer's identity. Generic item mutations also retain environmentId
 in their variables so paused-save status belongs to the picked team.
 
@@ -890,13 +904,21 @@ Personal; if it is about your account rather than your settings it sits under
 Account; the rest is the app itself.
 
 - **Application** - General, Appearance, Browser, Opening behavior, Sounds,
-  Keybindings, Diagnostics, Layout.
-- **Personal** - Providers, MCP servers, Skills, Model routing, Variables and
-  shells (id `shell`), Agent selection, Browser agent access, Secrets, Agent
-  definitions, Machine setup. These pages read through the window's own host
-  (`usePersonalHostScope()`), never through the picker.
-- **Account** - Sessions, Link mobile app, Usage, Permissions, Notifications,
-  and Delete account on mobile. Read through the window's own host too.
+  Keybindings, Layout, Diagnostics.
+- **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
+  and Delete account on mobile. Read through the window's own host, never
+  through the picker.
+- **Environment** (group id `personal`) - Providers, MCP servers, Skills,
+  Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
+  Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
+  Members on a team; a Local row shows only Providers, Permissions, Agents,
+  Model routing, Variables & shells and Secrets. Browser agent access is a
+  region of Permissions, below its tabs. `agent-definitions`,
+  `browser-agent-access` and `machine-setup` are retired
+  (`RETIRED_SETTINGS_SECTION_IDS`): the first two redirect to Agents and
+  Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
+  read through the window's own host (`usePersonalHostScope()`), never
+  through the picker.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.
@@ -904,22 +926,43 @@ Account; the rest is the app itself.
 Section ids are a compatibility surface and did not change when Providers,
 Model routing, Variables and shells, Agent selection, Permissions and
 Notifications left the Host group; only their group did. Browser agent access
-moved out of Browser into its own section, `browser-agent-access`.
+moved out of Browser into its own section, `browser-agent-access`, and then
+into Permissions; agent definitions became the Agents page's Definitions tab.
 
-MCP servers (`mcp-servers`) and Skills (`skills`) were tabs inside each
-provider. They are now pages of their own drawn by the same panel
-(`ProvidersSettingsPanel` under a `ProvidersPanelView`): the same provider
-rail and the same tab body, narrowed to that one tab (`tabsForView`), and
-Providers stops showing those two tabs. The host's `supportedTabs` wire is
-unchanged. On both pages a global-scope entry carries whether it is one of the
-person's settings (`PersonalEntryMark`): "Personal" when the host applied one
-of their items as that entry (`environment.status` `appliedAs`), otherwise "On
-<host> only". An MCP server offers "Add to Personal"; a skill does not
-(`providers.nativeMutate@1.3` `promoteToPersonal`, shown only on a host that
-negotiated 1.2). A project's entries stay with the project and carry no mark. A
-new entry added, created or imported here stays on this host ("On <host>
-only"); an MCP server until "Add to Personal".
-On a Personal entry the host passes on only Remove and an MCP server's tool
+MCP servers (`mcp-servers`) and Skills (`skills`) are pages of the
+configuration, read from the cloud on Personal and on a team alike, whatever
+the window's host runs (`CLOUD_ONLY_SECTIONS` in `PersonalPageFrame`): no host
+serves an environment-wide form of them. The MCP servers page
+(`environment-mcp-servers.tsx`) lists every server once from
+`environment.configuration.mcpServers.list`, with its transport, the tool
+count the viewing host reports, the providers that use it, Tools, Edit,
+Remove and an Enabled switch (`mcpServers.setEnabled`: off keeps the tool
+toggles on the server and takes its `mcp_server` item away; on puts it back,
+on for every provider). Add and Edit (`mcp-server-dialog.tsx`) write
+`mcpServers.put@1.1`; a remote server's Secret is picked from the
+configuration's secrets or typed, and a command server is refused one. The
+Skills page (`environment-skills.tsx`) lists the skills of a viewing host that
+serves the configuration (`environment.configuration.skills.list`), with their
+source, providers, Preview or Edit, and Remove for a skill written in Settings;
+a built-in is only switched off per provider. Remove asks first, naming where
+the entry goes from; a server's confirm also says whether its secret stays on
+Secrets (picked) or is deleted with it (added with the server,
+`credential.owned`).
+
+Each provider keeps its MCP and Skills tabs (`tabsForView` no longer drops
+them). On Personal or a team they switch the configuration's servers and
+skills for that provider (an MCP server's `offFor`, a skill's
+`skills.setProviders`, drawn disabled with a line until the serving host
+negotiates it) and list, under "On <host> only · not shared", what the
+provider holds on the viewing host by itself, at global scope and in each
+project and worktree this client opened there (`on-host-only-entries.tsx`),
+each with where it lives and "Add to <name>". A refused Add shows the host's
+own words beside the button, here and on a Local row; only a failed send
+toasts. On a
+Local row they are the computer's own tabs, whole. The page's words live in
+`mcp-skills-copy.ts`.
+
+On a Local row's host tabs, a Personal entry the host passes on only Remove and an MCP server's tool
 switches; everything else is changed in the dashboard, so the MCP server switch
 and a skill's edit and update are held off with "Change this in the dashboard."
 (`usePersonalEntryApplied`, `PERSONAL_ENTRY_LOCKED_TEXT`). Remove there is the
@@ -940,69 +983,93 @@ variable". The one exception is the auto-mode policy file's own
 "Environment" heading, which people type and the host parses.
 
 **Personal ▸ Secrets** (`panels/secrets-settings-panel.tsx`,
-`secrets/`). Read through the window's own host.
-On a host that serves `environment.secrets.list` the page is the list: each
-secret's name, kind, protocol and destinations, "Written as a plain value on
-every host you own; agents there can read it. Brokered on your sandboxes.",
-and **Verify** (`environment.secrets.verify` by id, so every kind, those
-already stored included), whose refusal names the setting that is the likely
-cause ("Nothing answered on that port. Check the port this secret is set
-to."). Empty, it reads "Values and logins your agents use. On your computers
+`secrets/`). Read through the window's own host, and every
+`environment.secrets.*` call names its environment
+(`hooks/environment/use-addressed-environment.ts`): a team's id on its
+pages, Personal's own id on the Personal pick (from `environment.list`,
+`ownerKind: "user"`, the resolver Details shares), and the host's own only on
+a Local pick, so a host that has not moved its settings still reads
+Personal's. A read waits for Personal's id. A provider's sign-in
+(`providers.link`, `providers.linkComplete`) names the same environment, and
+its Continue waits for Personal's id. Each row reads
+"STRIPE_KEY · Set · sent to api.stripe.com · added by you 24 Oct"
+("replaced by you" after a replacement, from the current version) with
+**Replace**, **Remove** and **Details**; Details holds **Verify**
+(`environment.secrets.verify` by id), the rotation, **Versions** (Undo,
+Restore on a revoked secret sent with `regrant`, Destroy behind a
+confirmation, refusals read by `secretChangeRefusalLine`) and the recovery
+order for a leaked secret. Empty, it reads "Values and logins your agents use. On your computers
 they are set as values; on sandboxes agents use them without seeing them."
-with Add a secret. **Add a secret** is kind first: only the kinds whose form
-lives in the app — API key, model provider key and database login
-(`lib/sandboxes/secret-intake-form.ts`: hosts, port, login, database,
-variables, mode, "Every sandbox gets it", the database's plaintext lines and
-their disclosure version). SSH, the cloud kinds and client certificate are
-not offered; the protocol catalogue
-(`@traycer/protocol/host/secret-intake-catalogue`) is unchanged. A kind none
-of whose protocols is brokered is greyed with the catalogue's own line. Add
-and Replace carry "Stored encrypted in Traycer's cloud. Computers running
-Personal receive the value, readable by their tools and agents; sandboxes
-use it through the broker."; Replace adds "Tools already running keep the
-old value until they restart." Verify works on the dialog's candidate too,
-and Save first shows where the value becomes readable. The typed value is
+with Add a secret, and the page has no subtitle, which would say it twice.
+A failed read shows only "Couldn't read Personal's secrets." with Retry,
+never the empty state. The page's own `Details` sits beside its chip, and a
+Details that cannot load reads "Couldn't load details." with Retry.
+**Add a secret** offers API key and database login, with "Provider keys are
+set on each provider's Account tab, under Providers." where Providers opens
+that page (`lib/sandboxes/secret-intake-form.ts`: server address, port,
+login, database, variables, mode, "Every sandbox gets it", the database's
+plaintext lines and their disclosure version). The server address's hint is
+"Where this key is sent, e.g. api.stripe.com. Separate several with
+commas."; the mode is "Agents use it without seeing it (recommended)" or
+"Agents can read it", the second with its warning. A kind none of whose
+protocols is brokered is greyed with the catalogue's own line. The form and
+Save's confirmation carry "Stored encrypted in Traycer's cloud. Computers
+running Personal receive the value, readable by their tools and agents;
+sandboxes use it without seeing it." and How Traycer handles this, and
+nothing else before Save. A value a Variables or provider-variable row refused
+opens it with the name and value filled in (`prefill`). The typed value is
 sent by a direct `client.request`, never through a query or mutation, so it
 reaches no cache, and closing the dialog drops it. A refusal shows the host's
 words (`Connect to manage secrets.` with no session on this computer) or the
-`secretChangeRefusalLine` for a create refusal's code. On a team's host the
-page is the team line and "Team secrets are brokered only; a tool that needs
-a plain value needs a personal sandbox.", no list; on a host whose version
-predates the page, "Update this host to use your secrets here."
-Each row also has **Replace value** (`environment.secrets.replaceValue`,
+`secretChangeRefusalLine` for a create refusal's code;
+`destination_unresolvable` reads "Couldn't reach <address>. Check the server
+address, then save again." On a team's host the page is the team line, no
+list; on a host whose version predates the page, "Update this host to use
+your secrets here." **Replace** (`environment.secrets.replaceValue`,
 compare-and-set on the version the list showed; a stale answer asks to look
-again), after which the row reads the rotation (`environment.secrets.rotation`,
-polled every 3 s only while it moves): "New value accepted, closing old
-sessions." until every worker class and host has proved the old value out of
-use with an entry of a kind the rotation wire defines, then "New value
-enforced." with each one's proof ("postgres: 3 sessions closed", "3 sessions
-closed on dev-sandbox", "contained by expiry"); a bare zero session count is
-no proof (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox
-card's per-grant line). It adds that a tool running on this computer keeps
-the old value until it restarts. **Remove** confirms with where the value
-came from, its current version, which hosts hold it, and that running tools
-keep it until they restart (`secretRemovePreview`); a fact the wire does not
-yet name reads `unknown`. Confirm does not yet call a remove RPC. **Versions**
-lists each version with Undo (Restore on a revoked secret, sent with
-`regrant`) and Destroy behind a confirmation, refusals read by
-`secretChangeRefusalLine`, beside the recovery order for a leaked secret and
-the line that a change reaches only the copy stored here. A held secret's
+again) adds "Tools already running keep the old value until they restart.",
+and the row then reads the rotation (`environment.secrets.rotation`, polled
+every 3 s only while it moves): "New value accepted, closing old sessions."
+until every worker class and host has proved the old value out of use, then
+"New value enforced." with each one's proof
+(`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
+per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1.
+On dev-box and laptop. Tools already running keep it until they restart."
+(`secretRemovePreview`), each of the first three clauses only when it is
+known. On Personal the hosts are the computers running Personal, as the page
+chip counts and names them (`usePersonalComputers`, `namedHosts`: "<A> and
+<B>", "<A>, <B> and 1 more", "<n> computers"), and the clause is left out
+when none does; a team's computers and every sandbox hold no copy. A secret
+MCP servers use (`environment.configuration.mcpServers.list`, each server's
+`credential.secretId`, read once Remove opens, never on a Local row) leads
+the preview with "Used by github. Removing it leaves github without a
+credential; if the server needs one, it stops working until you pick another
+secret on MCP servers." ("Used by <A> and <B>." or "<A>, <B> and <n> more",
+then "Removing it leaves them without a credential; any that need one stop
+working until you pick another secret on MCP servers."), whose "MCP servers"
+opens that page (`secretUsedByLine`). A held secret's
 row keeps its "Waiting for you" badge.
 
-**Environment ▸ Retrospective sheet and Stop sharing.** On a 1.1 host,
-Overview shows `Shared by an earlier version` / `This computer stopped
-sharing on …` / `This computer went back to your own settings.`
+**Environment ▸ Retrospective sheet and Stop using Personal.** On a 1.1
+host, Overview shows `Shared by an earlier version` / `This computer stopped
+using Personal on …` / `This computer went back to your own settings.`
 (`environment.status` planes and `returnedFromTeam`), the `Details` verb on
-the earlier-version line, and `Stop sharing from this computer` while any
-plane is not `stopped` and not fully `local`. `Details` opens the
+the earlier-version line, and `Stop using Personal on this computer` with its
+help line ("Returns {host} to its own settings: it stops receiving Personal
+and reporting to it. Shows what Personal manages here first. Nothing in
+Personal is deleted.") while any plane is not `stopped` and not fully
+`local`. `Details` opens the
 retrospective sheet (`environment.review@1.1` evidence and held rows); Got it
 records acknowledgement (`environment.review.record`) and Escape does not. A
-Local picker row's subtitle and `Move to Personal` / `finish moving` verb
-come from those planes (E4's slot). The Secrets page's `N items from {host}
-is/are not in use · Review them` line opens the same sheet for that host's
-held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
+Local picker row's subtitle (`its own settings, not in Personal yet`,
+`partly in Personal`, `stopped using Personal`) and `Move to Personal` /
+`Finish moving` verb come from those planes (E4's slot); the row's `Local`
+badge reads "Settings on this computer only" on hover. The Secrets page's
+`N values from {host} are on hold until you choose · Review them` line
+(`1 value … is on hold until you choose · Review it`) opens the same sheet
+for that host's held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
 hosts, port, swap sites, gateway consent) with no value field, then
-`environment.review.heldApply`. Stop sharing opens the preview
+`environment.review.heldApply`. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
 Resolve.
@@ -1013,8 +1080,24 @@ kinds the page edits: each convergence notice from `environment.notices`
 ("LOG_LEVEL from dev-box now applies everywhere.", or "from the dashboard")
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
-looks like a secret / runs a command / was changed without your
-confirmation.") with Review, which opens Secrets. On the host a variable or
+runs a command / was changed without your confirmation.") with Review, which
+opens Secrets. A value held because it looks like a key reads
+"LOG_LEVEL looks like a key and is on hold until you choose · Review", and
+its Variables or provider-variable row reads "LOG_LEVEL · on hold until you
+choose · Review" with no value; both Reviews open the retrospective sheet for
+that value. A value typed there that looks like a key (`classifyCredential`) is
+refused in its row with "This looks like a key. Add it as a secret.", whose
+link opens Add a secret with the name and value filled in; nothing is stored
+as a variable. A provider's own key variable typed on its Env tab
+(`envNamePlaceholder`, for every provider with an Account tab key) is refused
+instead with "This is Kiro's key. Set it on Kiro's Account tab.", whose link
+opens that provider's Account tab; the typed value is cleared and nothing is
+saved. That tab is the one the provider page shows (`apiKey.supported`), so a
+provider without one, such as Claude Code, keeps the first line. A value
+already saved that looks like a key shows as dots with Remove, never in a
+field, on every Variables and Env list (Personal, a team, a Local row), with
+the same line beneath where the page has one; its link carries the saved
+value on, and nothing is cleared until the person acts. On the host a variable or
 provider-variable notice came from, "Keep dev-box's value on dev-box" writes
 the value that host has now as its own (`config.env.localOverride.set`, the
 value read as the page reads it: `config.env.list` or `providers.list`) and
@@ -1046,8 +1129,8 @@ host scopes on one screen, with the outer one unable to describe the number
 the inner one produced. It still reads through a host CLIENT, as every RPC
 does; that is a transport fact, not a scope one.
 
-Application, Personal and Account lead because none of them depends on a
-selection; the host group goes last because it is the only one whose contents
+Application, Account and Environment lead because none of them depends on
+a selection; the host group goes last because it is the only one whose contents
 do.
 
 **Scope is not a level.** Settings already spends its nesting budget inside
@@ -1210,9 +1293,8 @@ account's rules are read through it, and the decision log is the host's own -
 so the page sits in the Host group and `HostScopeGate` wraps those three tab
 BODIES. The Modes tab is not per machine: "New conversations start in" is one
 preference for this app (`settingsStore.defaultPermission`), so it renders
-outside the gate, works with no host in scope at all, and says so twice - an
-"All machines" badge on the row and the line "The machine picker above doesn't
-change anything on this tab." The tab bar sits above the gate too, which is
+outside the gate, works with no host in scope at all, and says so with the
+caption "This app only" under the row's control. The tab bar sits above the gate too, which is
 what lets each tab trigger carry a search anchor (see Search, "Gated on the
 SELECTED HOST"). This amends, rather than contradicts, the rule above: the row
 used to live on General precisely because it is application scope, and the
@@ -1336,7 +1418,7 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       and sentence, and the row's description is the chosen mode's own
       sentence, so what quitting will do is readable without opening anything.
       The copy is the host lifecycle UX artifact's, with the machine noun
-      platform-substituted (Mac / PC / machine; never "device"). It is here,
+      platform-substituted (Mac / PC / computer; never "device"). It is here,
       on the app-wide page, and not under a host scope, because it is a
       machine-local desktop preference read and written through desktop main
       (`hostLifecycle.get/set/onChange`), never a host RPC: it has to work
@@ -2871,23 +2953,11 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       as **"CLI & Args"** and `usage` as **"Profiles & Limits"** while both ids
       stay put. The old "General" named nothing about its contents, which is
       what the rename fixes.
-      **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
-      managed profiles and usage limits, but managed profiles exist for
-      `claude-code`, `codex`, `grok` and `antigravity` only — so on the other providers the fixed
-      label promised a section that is not there. Elsewhere it reads
-      **"Usage limits"**, which is the panel's own words for what remains (the
-      section inside is headed exactly that). The ID never varies; this is
-      presentation.
-      The predicate is a deliberate MIRROR of the host's
-      `providerSupportsManagedProfiles`, which is itself an id check — there is
-      no capability on the wire to read instead, because the host answers this
-      before it builds one. `profiles` cannot stand in for it: for an
-      unsupported provider it is empty BY RULE
-      (`resolveProfileWireEntries` returns `[]` without consulting the
-      registry), and an unseeded `claude-code` is empty too, so a label keyed on
-      the count would name the wrong tab and then change under the user. Adding
-      a profile-capable provider means updating both sides; the cost of missing
-      it is a tab that under-promises for a round.
+      **`usage` reads "Profiles & Limits" on every provider**
+      (`PROVIDER_TAB_LABELS`), as the design names it, though managed profiles
+      exist for `claude-code`, `codex`, `grok` and `antigravity` only: on the
+      other providers the tab holds usage limits alone. The ID never varies;
+      this is presentation.
     - **`account` is CLIENT-ONLY and deliberately not in the wire enum.** It is
       derived from `state.apiKey.supported` alone. The API key and the
       profile/limits surfaces answer different questions ("how does this
@@ -4036,8 +4106,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       Settings) and `closeFocus="trigger"`. That last prop exists because the
       picker's composer-focus return is app-global and can name an editor on a
       canvas BEHIND Settings.
-    - The row carries an "All machines" badge, and the tab opens with the line
-      "The machine picker above doesn't change anything on this tab."
+    - The row's control is captioned "This app only".
     - A new chat does not read only this row: a composer prefers the last mode
       that HOST ran with (`composer-run-settings-store`, bucketed per host),
       and session import reads the same ladder (`newChatPermissionModeFor`).
@@ -4093,7 +4162,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       since withdrawn.
     - **The card** opens with one lead line, the group's description
       ("Checks each command before it runs in Auto mode."), and a muted xs
-      "This machine" `Badge`, the one the Modes tab uses for "All machines".
+      "This machine" `Badge`.
       The scope badge stays on the lead line; the **Experimental** badge sits
       beside the group's heading through `SettingsGroup.titleStatus`.
     - **Two tiles, one radio group**: "✦ Automatic" (with an outline
@@ -4603,8 +4672,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     the card's own line for a recorded `auto: ` reason, otherwise the family its
     `failureKind` names; "Fix in Judge" there keys on the kind.
 
-- `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
-  compatibility identifiers) Editor for the **global** agent selection guide
+- `Agents` (section id `agents`, route `/settings/agents` - both kept as
+  compatibility identifiers), tabs Selection guide and Definitions. Selection
+  guide is the editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
   to choose harnesses, models, and reasoning effort when creating or
   reconfiguring Traycer agents. The guide does not automatically configure
@@ -4619,7 +4689,7 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   highlighting and line numbers, including for Mermaid and wireframe fences.
   It debounce-auto-saves (and flushes on blur) via
   `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
-  footer, no Save button. A **Revert to default** button (disabled while the
+  footer, no Save button. A **Reset to default** button (disabled while the
   content already equals the provider-based default) calls
   `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
   The editor has NO host selector of its own - the sidebar switcher scopes it.
@@ -6105,34 +6175,25 @@ set-state-in-effect` forbids the effect form, and an effect would also
        (`useHostAccessPromptsStore`, persisted); the host keeps no "asked"
        mark, so another desktop, or this one after its storage is cleared,
        asks again.
-    5. **Runs bots for** (`panels/host-environment-section.tsx`, its own row
-       under the question, Tracy Bots): whose bots THIS host runs. It reads
-       the scope's host, the one the picker names, never the window's. A
-       sandbox shows nothing: a team's sandbox is placed in the team's
-       environment when it is created, and a person's sandbox runs that
-       person's bots. Any other host reads `environment.list` and its binding
-       through the scope's client (the pool's `environment.binding.read
-{ hostId }` in a build with a pool, the host's own
-       `environment.host.read` without one) and is offered the
-       personal environment, plus the one it reports now so the marked row
-       is never hidden (`aria-pressed`), with one line saying a team's bots
-       run on the team's machines. A click binds through
-       `environment.host.bind`; the mutation has no toast - a refusal is shown
-       in place under the list (`role="alert"`). Nothing is pre-selected: the
-       marked row is the host's own answer, never a default the panel chose.
-       A host another member added to a team (`explicit && !canUnbind`) is
-       shown with every option disabled and one sentence saying only that
-       member can change it. Below the picker,
-       `panels/environment-machines-list.tsx` lists each team's machines from
-       `environment.host.list` (gated on that method): a sandbox reads "Team
-       machine" and names no operator, the reader's own machine reads
-       "Yours"; another member's machine is never listed (the host answers
-       only what the reader may see). A team whose list could not be read
-       says so with a Retry, rather than showing the empty state. A bind
-       refreshes the lists of the team the host leaves and the team it joins.
-       The list is admin surface only; the bot flow never asks for a machine.
-       On a host whose handshake lacks `environment.host.read` the row says to
-       update the host; while the capability is unknown it renders nothing.
+    5. **Runs Personal** (`panels/host-environment-section.tsx`, its own row
+       under the question): which configuration THIS host runs, as a fact,
+       not a control - `Runs Personal`, or `Runs <team>` for a host an
+       earlier build bound to a team (a team cannot hold a computer in this
+       version, so there is nothing to pick). It reads the scope's host, the
+       one the picker names, never the window's, through its binding (the
+       pool's `environment.binding.read { hostId }` in a build with a pool,
+       the host's own `environment.host.read` without one). A sandbox shows
+       nothing, and neither does a host whose handshake lacks
+       `environment.host.read`, or a binding still loading or refused.
+    6. **The settings card** (`panels/host-overview-settings-card.tsx`, its
+       own row under Runs Personal, on every tab): `Settings on this computer
+only.` with `Move to Personal` (or `Finish moving` when an upload
+       stopped) while the computer has a Local row, the picker's own rule
+       (`environment/local-row-cohort.tsx`); the progress row while it moves;
+       `Moved to Personal on <date>` after a consented move; and the dated
+       lines (`Shared by an earlier version · Details`, `This computer
+stopped using Personal on <date>`) with `Stop using Personal on this
+computer`. A team's host draws no card.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
@@ -7183,12 +7244,9 @@ level`, `Host log level` and the host's log tails described the selected host.
     likewise explicit ("No log files on &lt;host&gt;.") rather than an empty card.
 - `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
   Sessions - see "Scope: the organising idea" above for why it is not under
-  the host picker. Groups must stay contiguous in `settings-sections.ts`, so
-  landing it there pushed Shell past `SINGLE_DIGIT_LEADER_INDEX_LIMIT` into the
-  digit-less tail. Adding Application -> Diagnostics later pushed **Agent
-  selection** out too, which runs against the rule that support surfaces are the
-  ones to lose digits - it is forced by position, since an Application entry
-  lands in the first four whatever it is. See that file's own note). All reading
+  the host picker. Groups stay contiguous in `settings-sections.ts`, and only
+  Getting started, the Application entries and Sessions carry a leader digit;
+  Usage is in the digit-less tail. See that file's own note). All reading
   `host.usage.summary` through `UsageSummaryPanel`
   (`components/usage-analytics/`), placement-agnostic. `host.usage.summary`
   is an OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol

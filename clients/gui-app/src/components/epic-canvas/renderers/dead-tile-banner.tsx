@@ -64,7 +64,7 @@ function terminalDeadTileMessage(
   hostLabel: string,
 ): string {
   if (reason === "not-running-remotely") {
-    return `This agent is not running on "${hostLabel}" right now, and it can only be started on that machine. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
+    return `This agent is not running on "${hostLabel}" right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
   return ownerKind === "agent"
     ? `Host "${hostLabel}" is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
@@ -648,7 +648,7 @@ function foreignOwnerMessage(input: {
 }): string {
   const fact = hostAnsweredForReason(input.reason)
     ? "This agent belongs to another collaborator, and its history isn't available here."
-    : "This agent belongs to another collaborator and lives on their machine, which isn't connected here.";
+    : "This agent belongs to another collaborator and lives on their computer, which isn't connected here.";
   return `${fact}${copyClauses(input)}`;
 }
 

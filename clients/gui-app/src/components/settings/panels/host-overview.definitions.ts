@@ -29,7 +29,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "status",
       "restart",
       "rename",
-      "machine",
+      "computer",
       "server",
       "connection",
     ],
@@ -60,7 +60,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     search: { anchor: "host-overview-tab-ports" },
     label: "Ports",
     description:
-      "The ports forwarded through this host, and the ones other machines hold here.",
+      "The ports forwarded through this host, and the ones other hosts hold here.",
     breadcrumb: "Overview",
     availableWhen: alwaysAvailable,
     keywords: [
@@ -334,7 +334,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
   portForwardsHeld: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Ports other machines hold here",
+    label: "Ports other hosts hold here",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,

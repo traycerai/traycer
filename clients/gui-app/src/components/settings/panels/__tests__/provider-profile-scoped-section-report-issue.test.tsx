@@ -142,7 +142,6 @@ function renderSection(
           selectedProfileId={null}
           onSelectedProfileIdChange={() => undefined}
           profileEnablementAvailable={false}
-          profileStatusRefreshAvailable={false}
           profileEnablementPending={() => false}
           onSetProfileEnabled={() => undefined}
           {...overrides}

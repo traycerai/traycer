@@ -18,19 +18,31 @@ export interface ConfigurationChipState {
   readonly tone: "success" | "warning" | "info";
 }
 
-function hostNames(hosts: readonly ConfigurationChipHost[]): string {
-  if (hosts.length >= 4) return `${hosts.length} hosts`;
-  const first = hosts.at(0)?.name ?? "";
-  const second = hosts.at(1)?.name;
+/**
+ * How the chip names a set of hosts: "<A>", "<A> and <B>", "<A>, <B> and 1
+ * more", and from four on "<n> <plural>".
+ */
+export function namedHosts(
+  names: readonly string[],
+  plural: "hosts" | "computers",
+): string {
+  if (names.length >= 4) return `${names.length} ${plural}`;
+  const first = names.at(0) ?? "";
+  const second = names.at(1);
   if (second === undefined) return first;
-  return hosts.length === 2
+  return names.length === 2
     ? `${first} and ${second}`
     : `${first}, ${second} and 1 more`;
 }
 
+/**
+ * The chip's line. `emptyText` is what it reads while no host runs the
+ * configuration: Personal names computers and sandboxes, a team its hosts.
+ */
 export function configurationChipState(
   hosts: readonly ConfigurationChipHost[],
   savingOffline: boolean,
+  emptyText: string,
 ): ConfigurationChipState {
   if (savingOffline) return { text: "Saving when back online", tone: "info" };
   const unsupported = hosts.find((host) => host.state === "unsupported");
@@ -51,6 +63,12 @@ export function configurationChipState(
   );
   if (applying !== undefined)
     return { text: `Applying on ${applying.name}…`, tone: "info" };
-  if (hosts.length === 0) return { text: "No hosts yet", tone: "info" };
-  return { text: `✓ On ${hostNames(hosts)}`, tone: "success" };
+  if (hosts.length === 0) return { text: emptyText, tone: "info" };
+  return {
+    text: `✓ On ${namedHosts(
+      hosts.map((host) => host.name),
+      "hosts",
+    )}`,
+    tone: "success",
+  };
 }

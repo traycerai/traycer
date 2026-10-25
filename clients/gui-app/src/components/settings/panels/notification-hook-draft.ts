@@ -49,27 +49,49 @@ export type HookDraft = {
   readonly url: string;
   readonly headersText: string;
   readonly command: string;
+  /** One argument per line, each as typed. */
   readonly argsText: string;
+  /**
+   * The saved hook this draft edits, or null for a new one. A field that
+   * still shows its saved value goes back exactly as the hook holds it.
+   */
+  readonly held: NotificationHookConfig | null;
 };
+
+type HttpAction = Extract<NotificationHookConfig["action"], { type: "http" }>;
+type CommandAction = Extract<
+  NotificationHookConfig["action"],
+  { type: "command" }
+>;
+
+/** The severities the switches show for `held`. */
+function shownSeverities(
+  held: NotificationHookConfig["severities"],
+): HostNotificationSeverity[] {
+  // `null` on the wire means "any severity"; every reachable severity
+  // selected is the same thing, and it is what the switches can show.
+  return held === null ? HOOK_SEVERITIES.map((entry) => entry.id) : [...held];
+}
+
+function headersText(headers: HttpAction["headers"]): string {
+  return Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\n");
+}
 
 export function draftFromHook(hook: NotificationHookConfig): HookDraft {
   return {
     id: hook.id,
     name: hook.name ?? "",
     enabled: hook.enabled,
-    // `null` on the wire means "any severity"; every reachable severity
-    // selected is the same thing, and it is what the switches can show.
-    severities: hook.severities ?? HOOK_SEVERITIES.map((entry) => entry.id),
+    severities: shownSeverities(hook.severities),
     actionType: hook.action.type,
     url: hook.action.type === "http" ? hook.action.url : "",
     headersText:
-      hook.action.type === "http"
-        ? Object.entries(hook.action.headers)
-            .map(([name, value]) => `${name}: ${value}`)
-            .join("\n")
-        : "",
+      hook.action.type === "http" ? headersText(hook.action.headers) : "",
     command: hook.action.type === "command" ? hook.action.command : "",
     argsText: hook.action.type === "command" ? hook.action.args.join("\n") : "",
+    held: hook,
   };
 }
 
@@ -84,6 +106,7 @@ export function emptyDraft(): HookDraft {
     headersText: "",
     command: "",
     argsText: "",
+    held: null,
   };
 }
 
@@ -109,30 +132,73 @@ function splitLines(text: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-export function draftToHook(draft: HookDraft): NotificationHookConfig {
-  const shared = {
-    id: draft.id,
-    name: draft.name.trim().length === 0 ? null : draft.name.trim(),
-    enabled: draft.enabled,
-    severities: [...draft.severities],
+function draftName(draft: HookDraft): string | null {
+  if (draft.held !== null && draft.name === (draft.held.name ?? ""))
+    return draft.held.name;
+  const typed = draft.name.trim();
+  return typed.length === 0 ? null : typed;
+}
+
+function draftSeverities(
+  draft: HookDraft,
+): NotificationHookConfig["severities"] {
+  if (draft.held === null) return [...draft.severities];
+  const shown = shownSeverities(draft.held.severities);
+  const unchanged =
+    shown.length === draft.severities.length &&
+    shown.every((severity) => draft.severities.includes(severity));
+  return unchanged ? draft.held.severities : [...draft.severities];
+}
+
+function httpAction(draft: HookDraft): HttpAction {
+  const action = draft.held === null ? null : draft.held.action;
+  const held = action !== null && action.type === "http" ? action : null;
+  return {
+    type: "http",
+    url: held !== null && draft.url === held.url ? held.url : draft.url.trim(),
+    headers:
+      held !== null && draft.headersText === headersText(held.headers)
+        ? { ...held.headers }
+        : parseHeaders(draft.headersText),
   };
-  return draft.actionType === "http"
-    ? {
-        ...shared,
-        action: {
-          type: "http",
-          url: draft.url.trim(),
-          headers: parseHeaders(draft.headersText),
-        },
-      }
-    : {
-        ...shared,
-        action: {
-          type: "command",
-          command: draft.command.trim(),
-          args: splitLines(draft.argsText),
-        },
-      };
+}
+
+function commandAction(draft: HookDraft): CommandAction {
+  const action = draft.held === null ? null : draft.held.action;
+  const held = action !== null && action.type === "command" ? action : null;
+  return {
+    type: "command",
+    command:
+      held !== null && draft.command === held.command
+        ? held.command
+        : draft.command.trim(),
+    args:
+      held !== null && draft.argsText === held.args.join("\n")
+        ? [...held.args]
+        : typedArgs(draft.argsText),
+  };
+}
+
+/** One argument per line, each as typed. */
+function typedArgs(text: string): string[] {
+  return text.length === 0 ? [] : text.split("\n");
+}
+
+/**
+ * The hook a save writes. A field the person left as it was goes back
+ * exactly as the saved hook holds it: parsing its text back would rewrite
+ * values the save never changed (a padded argument, an empty one, a header
+ * value's spacing, `null` severities).
+ */
+export function draftToHook(draft: HookDraft): NotificationHookConfig {
+  return {
+    id: draft.id,
+    name: draftName(draft),
+    enabled: draft.enabled,
+    severities: draftSeverities(draft),
+    action:
+      draft.actionType === "http" ? httpAction(draft) : commandAction(draft),
+  };
 }
 
 /**

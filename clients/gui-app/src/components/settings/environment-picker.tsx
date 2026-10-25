@@ -1,27 +1,26 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import {
-  environmentPickerModel,
-  isEnvironmentComputer,
   isStaleLocalPick,
+  LOCAL_BADGE_TOOLTIP,
   type EnvironmentPickerModel,
   type LocalPickerRow,
 } from "@/components/settings/environment/environment-picker-model";
 import { EnvironmentPickerRow } from "@/components/settings/environment/environment-picker-row";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
+import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
-import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import {
   environmentPickValue,
   environmentSectionShown,
@@ -45,33 +44,15 @@ import {
  * this is the one place that knows each computer's state.
  */
 function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
-  const hosts = useMemo(
-    () => scope.hosts.filter(isEnvironmentComputer),
-    [scope.hosts],
-  );
-  const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);
-  const statuses = useRegisteredHostEnvironmentStatuses(hosts);
-  const versions = useHostNegotiatedMethodVersions(
-    hostIds,
-    "environment.status",
-  );
-  const model = useMemo(
-    () =>
-      environmentPickerModel({
-        hosts,
-        statuses,
-        versions,
-        windowHostId: scope.activeHostId,
-      }),
-    [hosts, statuses, versions, scope.activeHostId],
-  );
+  const model = useEnvironmentStatusModel(scope);
   const pick = useSettingsEnvironmentPickStore((state) => state.pick);
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const setDefaultPick = useSettingsEnvironmentPickStore(
     (state) => state.setDefaultPick,
   );
-  const stale = isStaleLocalPick(pick, model, statuses);
-  const { defaultPick } = model;
+  const statuses = model.statuses;
+  const stale = isStaleLocalPick(pick, model.picker, statuses);
+  const { defaultPick } = model.picker;
   // Syncs host-reported state into the window's pick: the store is read by
   // pages that do not mount this hook.
   useEffect(() => {
@@ -80,7 +61,7 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   useEffect(() => {
     if (stale) setPick(null);
   }, [stale, setPick]);
-  return model;
+  return model.picker;
 }
 
 /**
@@ -129,6 +110,7 @@ export function EnvironmentPicker(props: {
             value={environmentPickValue(PERSONAL_PICK)}
             label="Personal"
             badge={null}
+            badgeTooltip={null}
             subtitle={model.personalSubtitle}
             nested={false}
             disabled={false}
@@ -146,6 +128,7 @@ export function EnvironmentPicker(props: {
               })}
               label={row.name}
               badge="Local"
+              badgeTooltip={LOCAL_BADGE_TOOLTIP}
               subtitle={row.subtitle}
               nested
               disabled={row.needsUpdate}
@@ -181,7 +164,7 @@ function localRowVerb(
   }
   if (row.verb === "finish_moving") {
     return {
-      label: "finish moving",
+      label: "Finish moving",
       testId: `environment-picker-finish-${row.hostId}`,
       onSelect: () => finishMoving(row.hostId),
     };
@@ -216,9 +199,16 @@ function EnvironmentPickerTrigger(props: {
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate">{label}</span>
           {local ? (
-            <Badge variant="secondary" size="xs">
-              Local
-            </Badge>
+            <TooltipWrapper
+              label={LOCAL_BADGE_TOOLTIP}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Badge variant="secondary" size="xs">
+                Local
+              </Badge>
+            </TooltipWrapper>
           ) : null}
         </span>
         <ChevronDown className="size-3.5 shrink-0" aria-hidden />

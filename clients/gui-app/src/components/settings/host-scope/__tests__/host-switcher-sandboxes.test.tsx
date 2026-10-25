@@ -391,6 +391,7 @@ describe("<HostSwitcher /> a sandbox no host row stands for", () => {
       localService: undefined,
       hasLiveSession: () => false,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: [
         sandboxSummaryFixture({
           id: "sbx-broken",

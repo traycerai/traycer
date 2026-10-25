@@ -30,12 +30,7 @@ import {
   TRAYCER_TICKET_TAG,
   TRAYCER_WIREFRAME_TAG,
 } from "./plugins/const";
-import { rehypeCustomMermaid } from "./plugins/rehype-custom-mermaid";
-import { rehypeCustomWireframe } from "./plugins/rehype-custom-wireframe";
-import { rehypeTraycerChat } from "./plugins/rehype-traycer-chat";
-import { rehypeTraycerEpic } from "./plugins/rehype-traycer-epic";
-import { rehypeTraycerSpec } from "./plugins/rehype-traycer-spec";
-import { rehypeTraycerTicket } from "./plugins/rehype-traycer-ticket";
+import { PRODUCT_REHYPE_PLUGINS } from "./plugins/product-rehype-plugins";
 import {
   extendAssistantImageSanitizeSchema,
   extendTraycerSanitizeSchema,
@@ -43,19 +38,6 @@ import {
 import { getTraycerStreamingHighlighter } from "./traycer-streaming-highlighter";
 
 const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
-
-// Product rehype plugins only. Tailmark already runs rehype-raw, sanitize, and
-// its marker policy; do not re-register GFM / disable-indented-code (built-in).
-// Intentionally no Tailmark `repairs` for next-steps - custom repairs force the
-// full-document repair path, and TextSegment peels next-steps before render.
-const PRODUCT_REHYPE_PLUGINS: PluggableList = [
-  rehypeCustomMermaid,
-  rehypeCustomWireframe,
-  rehypeTraycerChat,
-  rehypeTraycerEpic,
-  rehypeTraycerSpec,
-  rehypeTraycerTicket,
-];
 
 // Product custom tags (mermaid + traycer references) are not on react-markdown's
 // `Components` keyof surface; cast after building the map so StreamingMarkdown

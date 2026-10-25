@@ -561,7 +561,7 @@ export const AUTO_MID_TURN_NOTICE =
   "Switches now. Anything already waiting still asks you.";
 
 export const AUTO_JUDGE_UNAVAILABLE_DESCRIPTION =
-  "No judge available on this machine · asks you instead";
+  "No judge available on this host · asks you instead";
 
 /**
  * What a disabled option says, and WHO it blames.
@@ -614,7 +614,7 @@ export function unsupportedPermissionModeCopy(input: {
     catalogSupportedModes !== null &&
     !catalogSupportedModes.includes(mode)
   ) {
-    return "Needs a newer Traycer on this machine.";
+    return "Needs a newer Traycer on this host.";
   }
   return `Not supported by ${harnessLabel ?? "this provider"}.`;
 }

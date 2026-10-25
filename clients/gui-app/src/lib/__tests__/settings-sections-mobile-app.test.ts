@@ -34,7 +34,8 @@ describe("visibleSettingsSections", () => {
     const ids = visibleSettingsSections().map((section) => section.id);
     expect(ids).toEqual(
       SETTINGS_SECTIONS.map((section) => section.id).filter(
-        (id) => id !== "delete-account" && id !== "machine-setup",
+        (id) =>
+          id !== "delete-account" && !RETIRED_SETTINGS_SECTION_IDS.has(id),
       ),
     );
     expect(isSettingsSectionVisible("keybindings")).toBe(true);
@@ -86,7 +87,9 @@ describe("visibleSettingsSections", () => {
     const ids = visibleSettingsSections().map((section) => section.id);
     const expected = SETTINGS_SECTIONS.map((section) => section.id).filter(
       (id) =>
-        id !== "keybindings" && id !== "link-phone" && id !== "machine-setup",
+        id !== "keybindings" &&
+        id !== "link-phone" &&
+        !RETIRED_SETTINGS_SECTION_IDS.has(id),
     );
     expect(ids).toEqual(expected);
   });

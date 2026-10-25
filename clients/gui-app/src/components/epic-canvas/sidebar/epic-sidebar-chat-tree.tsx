@@ -2897,7 +2897,7 @@ function describeOfflineLockForAria(
   const outcome =
     lock.access === "published-copy"
       ? "opens read-only"
-      : "unavailable until that machine is back";
+      : "unavailable until that computer is back";
   return `on ${lock.hostLabel}, offline, ${outcome}`;
 }
 
@@ -3012,7 +3012,7 @@ function offlineRowLockTooltip(lock: OfflineRowLock): string {
   }
   return lock.access === "published-copy"
     ? `Lives on ${lock.hostLabel}, which is offline. Opens read-only from the last published copy.`
-    : `Lives on ${lock.hostLabel}, which is offline. The agent and its transcript stay on that machine, and it becomes available again when ${lock.hostLabel} is back.`;
+    : `Lives on ${lock.hostLabel}, which is offline. The agent and its transcript stay on that computer, and it becomes available again when ${lock.hostLabel} is back.`;
 }
 
 /**

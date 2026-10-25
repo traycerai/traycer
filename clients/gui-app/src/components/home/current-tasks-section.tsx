@@ -63,7 +63,7 @@ const MORE_CLASS_NAME =
   "mt-2 ml-1 self-start rounded-sm bg-foreground/6 px-2.5 py-1.25 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground active:press-scrim focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2";
 
 export function CurrentTasksSection(): ReactNode {
-  const { groups, isPending, pinsComplete, activityCoverage } =
+  const { groups, isPending, pinsComplete, activityCoverage, retryActivity } =
     useCurrentTasks();
   const { openHistory } = useSystemTabModalActions();
   const setPinned = useEpicSetPinned();
@@ -163,6 +163,7 @@ export function CurrentTasksSection(): ReactNode {
                       ? null
                       : PARTIAL_ACTIVITY_NOTICE
                   }
+                  onNoticeRetry={retryActivity}
                 />
                 <CurrentTaskGroup
                   title="Pinned"
@@ -173,12 +174,14 @@ export function CurrentTasksSection(): ReactNode {
                       ? pinnedTasksUnavailableNotice(groups.pinned.length)
                       : null
                   }
+                  onNoticeRetry={null}
                 />
                 <CurrentTaskGroup
                   title="Open"
                   items={groups.open}
                   {...groupRowProps}
                   notice={null}
+                  onNoticeRetry={null}
                 />
               </>
             )}
@@ -194,6 +197,8 @@ function CurrentTaskGroup(props: {
   readonly title: string;
   readonly items: readonly HistoryItem[];
   readonly notice: string | null;
+  /** A Retry after the notice, or `null` for a notice with nothing to retry. */
+  readonly onNoticeRetry: (() => void) | null;
   readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
   readonly pendingPinIds: ReadonlySet<string>;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
@@ -242,8 +247,17 @@ function CurrentTaskGroup(props: {
         </button>
       ) : null}
       {props.notice === null ? null : (
-        <p className="px-2.5 py-1 text-ui-xs text-muted-foreground">
+        <p className="flex items-baseline gap-2 px-2.5 py-1 text-ui-xs text-muted-foreground">
           {props.notice}
+          {props.onNoticeRetry === null ? null : (
+            <button
+              type="button"
+              onClick={props.onNoticeRetry}
+              className="rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+            >
+              Retry
+            </button>
+          )}
         </p>
       )}
     </section>

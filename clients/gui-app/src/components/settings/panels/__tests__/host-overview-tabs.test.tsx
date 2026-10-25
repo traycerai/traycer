@@ -97,8 +97,10 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostMethods,
+  recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useChatTileHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -318,6 +320,37 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
+  it("shows the settings card above the tabs, on the default tab", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      overrideHandlers: {
+        "environment.status": () =>
+          environmentStatusFixture({
+            planes: { records: "local", broker: "local", room: "local" },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostManifest("host-a", {
+      "environment.status": { major: 1, minor: 1 },
+    });
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-settings-card");
+    expect(activeTabTestId()).toBe("host-overview-tab-installation");
+    expect(
+      within(card).getByTestId("host-settings-card-local").textContent,
+    ).toBe("Settings on this computer only.");
+    const tabList = screen.getAllByRole("tab")[0].closest("[role='tablist']");
+    expect(
+      card.compareDocumentPosition(tabList ?? card) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
   it("opens on Installation, ahead of Updates, Access and setup, Data, Ports and Mobile simulators", () => {
     const fixture = buildFixture("host-a");
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -557,7 +590,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       expect(name.classList.contains("min-w-0")).toBe(true);
       expect(name.classList.contains("truncate")).toBe(true);
       expect(within(row).getByTestId("host-overview-edit-name")).not.toBeNull();
-      expect(within(row).getByText("Local")).not.toBeNull();
+      expect(within(row).getByText("This computer")).not.toBeNull();
       // The ⋯ menu shares the row's line: the header's one flex line holds the
       // name row and the actions side by side.
       const line = row.parentElement;

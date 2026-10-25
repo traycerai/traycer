@@ -334,14 +334,14 @@ describe("the five kinds' copy", () => {
       ),
     ).toEqual({
       title: "Move to Personal stalled",
-      body: "studio • 3 items not moved yet",
+      body: "studio • 3 items not in Personal yet",
     });
     expect(
       presentationOf("environment.move.stalled", {
         ...PAYLOADS["environment.move.stalled"],
         remaining: 1,
       }).body,
-    ).toBe("studio • 1 item not moved yet");
+    ).toBe("studio • 1 item not in Personal yet");
   });
 
   it("words a setting that was not applied from its host and key", () => {

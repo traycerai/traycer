@@ -8,6 +8,7 @@
  * `environment.setMainBot` - which of an environment's bots is its main bot.
  * `environment.members.invite` / `.setRole` / `.remove` / `.removePreview` /
  * `.noticeSeen` - an admin's member management, and the legacy-role notice.
+ * `environment.members.seats` - the team's seats, read before an invite.
  *
  * `@1.1` of `environment.list`, `environment.host.list` and
  * `environment.members` adds the redesign's fields, each with its upgrade
@@ -388,7 +389,8 @@ export type EnvironmentMembersRequest = z.infer<
  * One person in an environment: a member of the owning team, or the person
  * a personal environment belongs to. `displayName` is what to call them,
  * null when they have set neither a name nor a handle; `avatarUrl` is null
- * when they have no picture. Never an email.
+ * when they have no picture. No email before `@1.2`
+ * ({@link environmentMemberSchemaV12}).
  */
 export const environmentMemberSchema = lazySchema(() =>
   z.object({
@@ -495,6 +497,53 @@ export const environmentMembersUpgradeV10ToV11 = defineUpgradePath<
     nextCursor: response.nextCursor,
     legacyRoleNoticeSeenAt: null,
     legacyMembers: [],
+  }),
+});
+
+/**
+ * `environment.members@1.2`'s member: `@1.1`'s plus their `email`, so
+ * Members can show each person's name, email and role. The email is the one
+ * authn returns for this reader, passed through as authn scoped it: null
+ * where authn gave none or blanked it for this reader. The host never
+ * derives or widens it.
+ */
+export const environmentMemberSchemaV12 = lazySchema(() =>
+  environmentMemberSchemaV11.extend({
+    email: z.string().min(1).max(320).nullable(),
+  }),
+);
+export type EnvironmentMemberV12 = z.infer<typeof environmentMemberSchemaV12>;
+
+export const environmentMembersResponseSchemaV12 = lazySchema(() =>
+  z.object({
+    members: z.array(environmentMemberSchemaV12),
+    nextCursor: z.string().min(1).nullable(),
+    legacyRoleNoticeSeenAt: z.number().int().nonnegative().nullable(),
+    legacyMembers: z.array(z.string()),
+  }),
+);
+export type EnvironmentMembersResponseV12 = z.infer<
+  typeof environmentMembersResponseSchemaV12
+>;
+
+export const environmentMembersV12 = defineRpcContract({
+  method: "environment.members",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentMembersRequestSchema,
+  responseSchema: environmentMembersResponseSchemaV12,
+});
+
+/** A `@1.1` page names no email: each member upgrades with none. */
+export const environmentMembersUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentMembersV11,
+  typeof environmentMembersV12
+>({
+  from: environmentMembersV11.schemaVersion,
+  to: environmentMembersV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    members: response.members.map((member) => ({ ...member, email: null })),
   }),
 });
 
@@ -647,6 +696,39 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMembersRemovePreviewRequestSchema,
   responseSchema: environmentMembersRemovePreviewResponseSchema,
+});
+
+/**
+ * `environment.members.seats@1.0`: the seats a team holds (every membership
+ * row, pending invitations included) of the quantity its paid plan bills,
+ * read before an invite is sent; `seats` null for a team on no paid plan.
+ */
+export const environmentMembersSeatsRequestSchema = lazySchema(() =>
+  z.object({ environmentId: z.string().min(1) }),
+);
+export type EnvironmentMembersSeatsRequest = z.infer<
+  typeof environmentMembersSeatsRequestSchema
+>;
+
+export const environmentMembersSeatsResponseSchema = lazySchema(() =>
+  z.object({
+    seats: z
+      .object({
+        used: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+      })
+      .nullable(),
+  }),
+);
+export type EnvironmentMembersSeatsResponse = z.infer<
+  typeof environmentMembersSeatsResponseSchema
+>;
+
+export const environmentMembersSeatsV10 = defineRpcContract({
+  method: "environment.members.seats",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentMembersSeatsRequestSchema,
+  responseSchema: environmentMembersSeatsResponseSchema,
 });
 
 /** `environment.members.noticeSeen@1.0`: the reader dismissed the legacy-role notice. */

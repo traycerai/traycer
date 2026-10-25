@@ -654,7 +654,7 @@ function unattributedReasonLine(
         return "This window's session was ended from another window, so running tasks can't be loaded here.";
     }
   }
-  return "Connecting to your machines…";
+  return "Connecting to your computers…";
 }
 
 /**
@@ -675,14 +675,14 @@ function degradedReasonLine(
     case "cloud-disconnected":
       return (
         <>
-          {host} isn't connected to Traycer, so tasks from your other machines
+          {host} isn't connected to Traycer, so tasks from your other computers
           may be missing.
         </>
       );
     case "cloud-reconnecting":
       return (
         <>
-          {host} is reconnecting to Traycer, so tasks from your other machines
+          {host} is reconnecting to Traycer, so tasks from your other computers
           may be missing.
         </>
       );

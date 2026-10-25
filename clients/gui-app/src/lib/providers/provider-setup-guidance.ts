@@ -196,7 +196,7 @@ export const TERMINAL_SIGN_IN_COPY: {
     summary:
       "Amp signs in from a terminal: it prints a sign-in link, and finishes in that terminal.",
     firstStep:
-      "Open the link that terminal prints — on your own machine Amp may open it for you — then follow it through and answer whatever the terminal asks for next.",
+      "Open the link that terminal prints — on your own computer Amp may open it for you — then follow it through and answer whatever the terminal asks for next.",
     terminalHint:
       "Amp prints a sign-in link and waits in that terminal. Finish there, then use Refresh above.",
   },
@@ -214,9 +214,9 @@ export const TERMINAL_SIGN_IN_COPY: {
     summary:
       "Command Code signs in from a terminal: it opens its sign-in page in a browser and waits in that terminal.",
     firstStep:
-      "Finish the sign-in in the browser page that terminal opens, on the machine it runs on.",
+      "Finish the sign-in in the browser page that terminal opens, on the computer it runs on.",
     terminalHint:
-      "Command Code opens its sign-in page in a browser on that machine and waits in the terminal. Finish there, then use Refresh above.",
+      "Command Code opens its sign-in page in a browser on that computer and waits in the terminal. Finish there, then use Refresh above.",
   },
 };
 

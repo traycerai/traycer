@@ -6,7 +6,6 @@ import type {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import {
@@ -23,7 +22,7 @@ export function useConfigurationPlansQuery(): UseQueryResult<
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   return useHostQuery({
     cacheKeyIdentity: [viewerId],
     client,
@@ -51,7 +50,7 @@ export function useConfigurationPlanUnlinkPreview(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   return useHostQuery({
     cacheKeyIdentity: [viewerId, previewId],
     client,

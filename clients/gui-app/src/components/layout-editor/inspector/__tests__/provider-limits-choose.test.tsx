@@ -13,7 +13,6 @@ import {
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import { providerChanged, resetWouldChange } from "@/lib/layout/layout-diff";
-import { USAGE_PROVIDER_LEVEL } from "@/components/layout-editor/regions/usage-provider-level";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
@@ -88,7 +87,7 @@ function selection() {
 }
 
 function limitsMode(): string | null {
-  const group = screen.getByRole("radiogroup", { name: "Limits" });
+  const group = screen.getByRole("radiogroup", { name: "Usage limits" });
   const on = [...group.querySelectorAll('[role="radio"]')].find(
     (option) => option.getAttribute("aria-checked") === "true",
   );
@@ -132,6 +131,17 @@ describe('the provider row\'s "Choose..." checklist (L-96, I-14)', () => {
     // Seeded from what the strip was already drawing, so taking control of
     // the pick does not change the picture in the same gesture.
     expect(selection()).toEqual({ limitKeys: ["5h"] });
+  });
+
+  it("names the section once, as Usage limits, with the one line saying what Automatic does", () => {
+    render(<ProviderLimitsControl providerId={PROVIDER} />);
+
+    expect(screen.getAllByText("Usage limits")).toHaveLength(1);
+    expect(
+      screen.getByText("Automatic: uses the limits your provider reports."),
+    ).toBeDefined();
+    expect(screen.queryByText("Limits in usage readings")).toBeNull();
+    expect(screen.queryByText("Limits")).toBeNull();
   });
 
   it("ticks a second limit into the selection, in catalog order", () => {
@@ -223,7 +233,7 @@ describe('the provider row\'s "Choose..." checklist (L-96, I-14)', () => {
     const describedById = choose.getAttribute("aria-describedby");
     expect(describedById).not.toBeNull();
     const reason = document.getElementById(describedById as string);
-    expect(reason?.textContent).toBe(USAGE_PROVIDER_LEVEL.limitsEmpty);
+    expect(reason?.textContent).toBe("No limits reported yet.");
 
     // Functionally inert, not just visually: a disabled radio must not flip
     // the mode on a click, which is the difference `aria-disabled` alone
@@ -284,7 +294,9 @@ describe("credit-only providers (isWindowedRateLimitProvider: false) never get a
       <ProviderLimitsControl providerId={CREDIT_PROVIDER} />,
     );
 
-    expect(screen.queryByRole("radiogroup", { name: "Limits" })).toBeNull();
+    expect(
+      screen.queryByRole("radiogroup", { name: "Usage limits" }),
+    ).toBeNull();
     expect(container.firstChild).toBeNull();
   });
 });
@@ -331,7 +343,7 @@ describe("what a hidden provider's limits look like (L-08)", () => {
       // provider off can still read what its greyed limits say (L-08's "greyed
       // in place", rather than `inert`'s "gone from the tree") - and the group
       // is described by the reason, so it is heard on the control it explains.
-      const mode = screen.getByRole("radiogroup", { name: "Limits" });
+      const mode = screen.getByRole("radiogroup", { name: "Usage limits" });
       const group = mode.closest("fieldset");
       expect(group?.disabled).toBe(true);
       const line = screen.getByText(reason);
@@ -398,7 +410,7 @@ describe("what a hidden provider's limits look like (L-08)", () => {
     render(<ProviderLimitsControl providerId={PROVIDER} />);
 
     const group = screen
-      .getByRole("radiogroup", { name: "Limits" })
+      .getByRole("radiogroup", { name: "Usage limits" })
       .closest("fieldset");
     expect(group?.disabled).toBe(false);
     expect(screen.queryByText(/Hidden in Layout|hidden in Layout/)).toBeNull();

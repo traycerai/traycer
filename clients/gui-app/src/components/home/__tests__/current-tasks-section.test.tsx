@@ -9,6 +9,7 @@ const testState = vi.hoisted(() => ({
   isPending: false,
   pinsComplete: true,
   activityCoverage: "fleet" as ActivityFleetCoverage,
+  retryActivity: vi.fn<() => void>(),
   openItem: vi.fn<(item: HistoryItem) => void>(),
   openHistory: vi.fn(),
   setPinnedMutate: vi.fn<(variables: SetPinnedVariables) => void>(),
@@ -80,6 +81,7 @@ vi.mock("@/hooks/home/use-current-tasks", () => ({
     isPending: testState.isPending,
     pinsComplete: testState.pinsComplete,
     activityCoverage: testState.activityCoverage,
+    retryActivity: testState.retryActivity,
   }),
 }));
 
@@ -197,7 +199,7 @@ import { useHistorySearchStore } from "@/stores/home/history-search-store";
 
 const CAPTION =
   "Tasks in progress, pinned, or open in a tab. Everything else is in History.";
-const COVERAGE_NOTICE = "Can't check everything that's running right now";
+const COVERAGE_NOTICE = "Couldn't check running tasks.";
 const PINS_UNAVAILABLE_NOTICE = "Can't load your pinned tasks right now.";
 const PINS_PARTIAL_NOTICE = "Some pinned tasks couldn't load.";
 
@@ -365,6 +367,7 @@ describe("<CurrentTasksSection />", () => {
     testState.isPending = false;
     testState.pinsComplete = true;
     testState.activityCoverage = "fleet";
+    testState.retryActivity.mockReset();
     testState.openItem.mockReset();
     testState.openHistory.mockReset();
     testState.setPinnedMutate.mockReset();
@@ -1246,6 +1249,25 @@ describe("<CurrentTasksSection />", () => {
         expect(screen.queryByText("No current tasks")).toBeNull();
       },
     );
+
+    it("offers one Retry beside the coverage line, which asks for the activity again", () => {
+      testState.activityCoverage = "partial";
+      renderSection();
+
+      const retries = screen.getAllByRole("button", { name: "Retry" });
+      expect(retries).toHaveLength(1);
+      expect(
+        within(group("In progress")).getByRole("button", { name: "Retry" }),
+      ).toBe(retries[0]);
+      fireEvent.click(retries[0]);
+      expect(testState.retryActivity).toHaveBeenCalledOnce();
+    });
+
+    it("offers no Retry once activity is fleet-wide", () => {
+      renderSection();
+
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
 
     it("keeps the coverage line above the rows in In progress", () => {
       testState.activityCoverage = "partial";

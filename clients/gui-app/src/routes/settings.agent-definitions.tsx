@@ -1,6 +1,11 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { AgentDefinitionsSettingsPanel } from "@/components/settings/panels/agent-definitions-settings-panel";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
+/**
+ * Legacy redirect: agent definitions are the Agents page's Definitions tab.
+ * A remembered path or a deep link lands on that page.
+ */
 export const Route = createFileRoute("/settings/agent-definitions")({
-  component: AgentDefinitionsSettingsPanel,
+  beforeLoad: () => {
+    redirect({ throw: true, to: "/settings/agents", replace: true });
+  },
 });

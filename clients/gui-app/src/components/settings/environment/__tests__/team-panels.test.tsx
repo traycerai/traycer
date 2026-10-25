@@ -2,8 +2,8 @@ import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentDefinitionsSettingsPanel } from "@/components/settings/panels/agent-definitions-settings-panel";
-import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
+import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definitions-tab";
+import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import {
   configurationItem,
   mountTeamPage,
@@ -48,14 +48,14 @@ const definition = (text: string, revision: number) =>
     revision,
   });
 
-describe("AgentDefinitionsSettingsPanel on a team", () => {
+describe("AgentDefinitionsTab on a team", () => {
   it("reads the team's definitions from the pool items, not the host's list", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
         items: [definition("Review the diff", 7)],
       }),
     });
-    render(<AgentDefinitionsSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentDefinitionsTab />, { wrapper: harness.Wrapper });
 
     expect((await screen.findByLabelText("reviewer text")).textContent).toBe(
       "Review the diff",
@@ -77,7 +77,7 @@ describe("AgentDefinitionsSettingsPanel on a team", () => {
         }),
       },
     );
-    render(<AgentDefinitionsSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentDefinitionsTab />, { wrapper: harness.Wrapper });
 
     expect((await screen.findByLabelText("reviewer text")).textContent).toBe(
       "Own text",
@@ -91,7 +91,7 @@ describe("AgentDefinitionsSettingsPanel on a team", () => {
         items: [definition("Review the diff", 7)],
       }),
     });
-    render(<AgentDefinitionsSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentDefinitionsTab />, { wrapper: harness.Wrapper });
 
     const field = await screen.findByLabelText("reviewer text");
     expect(field).toHaveProperty("readOnly", true);
@@ -115,7 +115,7 @@ describe("AgentDefinitionsSettingsPanel on a team", () => {
         };
       },
     });
-    render(<AgentDefinitionsSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentDefinitionsTab />, { wrapper: harness.Wrapper });
 
     const field = await screen.findByLabelText("reviewer text");
     await userEvent.clear(field);
@@ -143,7 +143,7 @@ describe("AgentDefinitionsSettingsPanel on a team", () => {
   });
 });
 
-describe("BrowserAgentAccessSettingsPanel on a team", () => {
+describe("BrowserAgentAccessGroup on a team", () => {
   const access = (enabled: boolean, revision: number) =>
     configurationItem({
       kind: "browser_agent_access",
@@ -160,7 +160,7 @@ describe("BrowserAgentAccessSettingsPanel on a team", () => {
         revision: 5,
       }),
     });
-    render(<BrowserAgentAccessSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
     const toggle = await screen.findByRole("switch", {
       name: "Let agents use the in-app browser",
@@ -187,7 +187,7 @@ describe("BrowserAgentAccessSettingsPanel on a team", () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items: [access(true, 4)] }),
     });
-    render(<BrowserAgentAccessSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
     expect(await screen.findByText("On")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
@@ -201,7 +201,7 @@ describe("BrowserAgentAccessSettingsPanel on a team", () => {
         revision: 1,
       }),
     });
-    render(<BrowserAgentAccessSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
     const toggle = await screen.findByRole("switch", {
       name: "Let agents use the in-app browser",
@@ -227,7 +227,7 @@ describe("BrowserAgentAccessSettingsPanel on a team", () => {
         };
       },
     });
-    render(<BrowserAgentAccessSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
     const toggle = await screen.findByRole("switch", {
       name: "Let agents use the in-app browser",
@@ -255,7 +255,7 @@ describe("BrowserAgentAccessSettingsPanel on a team", () => {
       { kind: "host" },
       { "config.browser.get": () => ({ agentAccess: true }) },
     );
-    render(<BrowserAgentAccessSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
     await waitFor(() => {
       expect(harness.paramsOf("config.browser.get").length).toBeGreaterThan(0);

@@ -235,6 +235,7 @@ function renderDropdown(
       usagePresentation={usagePresentation}
       eligibilityControls={null}
       admissionByProfileId={null}
+      showTerminalBadge
     />,
   );
 }

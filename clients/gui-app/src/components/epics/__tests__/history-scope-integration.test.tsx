@@ -1091,7 +1091,7 @@ describe("History scope bar: the search box follows the scope", () => {
 
     expect(
       screen.getByRole("searchbox", {
-        name: "Search messages on this machine",
+        name: "Search messages on this computer",
       }),
     ).toBeTruthy();
   });
@@ -1515,18 +1515,18 @@ describe("History scope bar: the sr-only status", () => {
     setHits(readyHits(["chat-hit"], false));
     expect(scopeStatus()).toBe(status);
     expect(status.textContent).toBe(
-      "1 task · 1 chat with message matches on this machine",
+      "1 task · 1 chat with message matches on this computer",
     );
 
     setHits(readyHits(["chat-hit", "chat-two"], true));
     expect(status.textContent).toBe(
-      "1 task · 2+ chats with message matches on this machine",
+      "1 task · 2+ chats with message matches on this computer",
     );
 
     await user.click(scopeTab("messages"));
     expect(scopeStatus()).toBe(status);
     expect(status.textContent).toBe(
-      "2+ chats with message matches on this machine",
+      "2+ chats with message matches on this computer",
     );
 
     await user.click(scopeTab("tasks"));

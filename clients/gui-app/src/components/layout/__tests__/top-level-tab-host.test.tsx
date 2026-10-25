@@ -234,6 +234,15 @@ vi.mock("@/components/home/home-hero", () => ({
 vi.mock("@/components/home/host-update-banner", () => ({
   HostUpdateBanner: () => null,
 }));
+// The landing guide's Start toast reads this computer's environment through
+// the host runtime and a QueryClient, neither of which this suite mounts.
+vi.mock("@/components/onboarding/first-task-guide", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/onboarding/first-task-guide")
+    >();
+  return { ...actual, FirstTaskLandingGuide: () => null };
+});
 // Reads the landing draft's repository identity through the host runtime,
 // which this suite mounts no provider for.
 vi.mock("@/components/home/landing-appearance-wallpaper", () => ({

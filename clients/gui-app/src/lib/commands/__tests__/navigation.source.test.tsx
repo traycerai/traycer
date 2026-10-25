@@ -143,33 +143,32 @@ describe("navigationSource", () => {
     expect(account?.statusBadge).toBe("Account");
   });
 
-  it("lists the Browser agent access and Secrets pages in the settings sub-page", () => {
+  it("lists the Secrets page, and none of the retired pages, in the settings sub-page", () => {
     const items = captureSettingsSubpage("/");
     const ids = items.map((i) => i.id);
-    expect(ids).toContain("nav:settings/browser-agent-access");
-    expect(ids).toContain("nav:settings/secrets");
-    const access = items.find(
-      (i) => i.id === "nav:settings/browser-agent-access",
-    );
     const secrets = items.find((i) => i.id === "nav:settings/secrets");
-    expect(access?.label).toBe("Browser agent access");
-    expect(access?.statusBadge).toBe("Environment");
     expect(secrets?.label).toBe("Secrets");
     expect(secrets?.statusBadge).toBe("Environment");
+    for (const retired of [
+      "browser-agent-access",
+      "agent-definitions",
+      "machine-setup",
+    ]) {
+      expect(ids, retired).not.toContain(`nav:settings/${retired}`);
+    }
   });
 
-  it("lists the MCP servers, Skills and Agent definitions pages, and not the retired Machine setup, in the settings sub-page", () => {
+  it("lists the MCP servers, Skills and Agents pages in the settings sub-page", () => {
     const items = captureSettingsSubpage("/");
     for (const [id, label] of [
       ["mcp-servers", "MCP servers"],
       ["skills", "Skills"],
-      ["agent-definitions", "Agent definitions"],
+      ["agents", "Agents"],
     ] as const) {
       const item = items.find((i) => i.id === `nav:settings/${id}`);
       expect(item?.label, id).toBe(label);
       expect(item?.statusBadge, id).toBe("Environment");
     }
-    expect(items.map((i) => i.id)).not.toContain("nav:settings/machine-setup");
   });
 
   it("badges the regrouped pages with the scope the sidebar now files them under", () => {

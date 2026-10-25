@@ -111,7 +111,7 @@ function LocalStoreRepairDialog(props: {
       blockedReason={
         repairable
           ? null
-          : "This host can't repair its own store from here. Follow the steps above on the machine itself."
+          : "This host can't repair its own store from here. Follow the steps above on the computer itself."
       }
       actionLabel="Rebind local store"
       isPending={

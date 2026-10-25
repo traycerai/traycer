@@ -13,6 +13,7 @@ import {
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
 import { PageChip } from "@/components/settings/personal/page-chip";
+import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -28,13 +29,22 @@ import {
   useEnvironmentReviewRead,
   useEnvironmentStatusRead,
 } from "@/hooks/environment/use-environment-reads";
+import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
+import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
-import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import {
+  ConfigurationSourceBoundary,
+  type CloudConfigurationTarget,
+} from "@/components/settings/environment/configuration-source-boundary";
+import { hostRunsPersonal } from "@/components/settings/environment/environment-picker-model";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { cn } from "@/lib/utils";
@@ -115,6 +125,12 @@ function teamNameOf(state: PersonalHostState): string | null {
  * settings, the read-only rendering the flows give it: the page shows the
  * host's own values and takes no edits until the host is updated.
  *
+ * Which source an Environment page reads is decided here, one rule per pick:
+ * a team reads the cloud; a Local row reads that computer's own pages;
+ * Personal reads the cloud unless the window's host runs Personal
+ * (`hostRunsPersonal`, the dropdown's own rule), when that host's pages stay;
+ * MCP servers and Skills read the cloud on Personal always.
+ *
  * Mounted once per page by `SettingsPanelForSection`, which both settings
  * surfaces render through, so neither can show a Personal page without it.
  */
@@ -128,16 +144,118 @@ export function PersonalPageFrame(props: {
   );
   if (pick.kind === "team" && environmentPage) {
     return (
-      <ConfigurationSourceBoundary
+      <CloudPageFrame
         key={pick.environmentId}
-        environmentId={pick.environmentId}
+        section={props.section}
+        pick={pick}
+        target={{ kind: "team", environmentId: pick.environmentId }}
       >
-        <TeamPageFrame section={props.section} pick={pick}>
-          {props.children}
-        </TeamPageFrame>
-      </ConfigurationSourceBoundary>
+        {props.children}
+      </CloudPageFrame>
     );
   }
+  if (pick.kind === "personal" && CLOUD_ONLY_SECTIONS.has(props.section)) {
+    return (
+      <CloudPageFrame
+        section={props.section}
+        pick={pick}
+        target={{ kind: "personal" }}
+      >
+        {props.children}
+      </CloudPageFrame>
+    );
+  }
+  if (pick.kind === "personal" && environmentPage) {
+    return (
+      <PersonalSourceFrame section={props.section} pick={pick}>
+        {props.children}
+      </PersonalSourceFrame>
+    );
+  }
+  return (
+    <HostPageFrame section={props.section}>{props.children}</HostPageFrame>
+  );
+}
+
+/**
+ * Pages Personal reads from the cloud even when the window's host runs it:
+ * no host serves an environment-wide form of them, only each provider's own.
+ */
+const CLOUD_ONLY_SECTIONS: ReadonlySet<SettingsSectionId> = new Set([
+  "mcp-servers",
+  "skills",
+]);
+
+/**
+ * Personal from the cloud, or from the window's host when it runs Personal.
+ * Nothing renders while that host's status is unknown: a guess would show
+ * one source's values and then swap to the other's.
+ */
+function PersonalSourceFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly pick: EnvironmentPick;
+  readonly children: ReactNode;
+}): ReactNode {
+  const runs = useWindowHostRunsPersonal();
+  if (runs === null) {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="personal-source-loading"
+        variant={undefined}
+        tone="muted"
+      />
+    );
+  }
+  if (runs) {
+    return (
+      <HostPageFrame section={props.section}>{props.children}</HostPageFrame>
+    );
+  }
+  return (
+    <CloudPageFrame
+      section={props.section}
+      pick={props.pick}
+      target={{ kind: "personal" }}
+    >
+      {props.children}
+    </CloudPageFrame>
+  );
+}
+
+/**
+ * Whether the window's host runs Personal; `null` while it is unknown: no
+ * handshake yet, or a host that serves `environment.status` and has not
+ * answered. A window with no host runs nothing.
+ */
+function useWindowHostRunsPersonal(): boolean | null {
+  const scope = usePersonalHostScope();
+  const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
+  const version = useHostNegotiatedMethodVersion(
+    scope.client,
+    "environment.status",
+  );
+  if (scope.hostId === null) return false;
+  if (version === null) return null;
+  if (version !== false && status.data === null && !status.isError) {
+    return null;
+  }
+  return hostRunsPersonal(
+    { hostId: scope.hostId, name: scope.hostLabel },
+    status.data,
+    version,
+  );
+}
+
+/** A page whose source is a host's own: Personal on its host, or a Local row. */
+function HostPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const pick = useEnvironmentPick();
+  // A Local row's settings are its computer's own, and no status reports
+  // their revision: they are reread on focus.
+  useRereadHostReadsOnFocus(pick.kind === "local" ? pick.hostId : null);
   const kinds = personalPageItemKinds(props.section);
   if (
     kinds === null &&
@@ -172,13 +290,39 @@ export function PersonalPageFrame(props: {
   );
 }
 
-/** Team pages never read the window host's Personal notices or values. */
+/** A page read from the cloud, behind the configuration's boundary. */
+function CloudPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly pick: EnvironmentPick;
+  readonly target: CloudConfigurationTarget;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <ConfigurationSourceBoundary target={props.target}>
+      <TeamPageFrame section={props.section} pick={props.pick}>
+        {props.children}
+      </TeamPageFrame>
+    </ConfigurationSourceBoundary>
+  );
+}
+
+/**
+ * Cloud-read pages never read the window host's Personal notices or values.
+ * Their configuration is reread when a save on the page loses to a newer
+ * change, and when the window regains focus: no status reports a team's
+ * revision, nor Personal's when the window's host does not run it. Where it
+ * does, the host's revision rereads Personal too.
+ */
 function TeamPageFrame(props: {
   readonly section: SettingsSectionId;
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
   const scope = useTeamViewingHost();
+  const source = useConfigurationSource();
+  const environmentId = source.kind === "pool" ? source.environmentId : null;
+  useRereadOnStaleWrite(null, environmentId);
+  useRereadConfigurationOnFocus(environmentId);
   return (
     <PersonalPageContext.Provider
       value={{
@@ -208,7 +352,7 @@ function PersonalPageFrameForKinds(props: {
   const environment = useWindowHostEnvironmentState(props.kinds);
   const { state, hostName } = environment;
   // A save on this page that lost to a change made elsewhere re-reads it.
-  useRereadOnStaleWrite(environment.hostId);
+  useRereadOnStaleWrite(environment.hostId, null);
   const line = personalPageStatusLine(state, props.kinds, hostName);
   // Read-only on a host whose version predates these settings, and on a
   // team's host, whose settings are the team's.
@@ -251,7 +395,6 @@ function PersonalPageReadOnlyLine(): ReactNode {
 const TONE_CLASSES: Readonly<Record<PersonalPageStatusLine["tone"], string>> = {
   info: "border-info/30 bg-info/10 text-info-foreground",
   warning: "border-warning/30 bg-warning/10 text-warning-foreground",
-  success: "border-success/30 bg-success/10 text-success-foreground",
 };
 
 function PersonalPageStatusBanner(props: {
@@ -280,17 +423,32 @@ export function PersonalPageHeaderStatus(): ReactNode {
   const value = useContext(PersonalPageContext);
   if (value === null) return null;
   if (value.pick.kind === "team")
-    return <PageChip section={value.section} pick={value.pick} />;
+    return <PageChipRow section={value.section} pick={value.pick} />;
   if (value.state.kind === "unsupported" || teamNameOf(value.state) !== null) {
     return null;
   }
   return (
     <>
-      <PageChip section={value.section} pick={value.pick} />
+      <PageChipRow section={value.section} pick={value.pick} />
       {value.line === null ? null : (
         <PersonalPageStatusBanner line={value.line} />
       )}
       <PersonalPageNotices />
     </>
+  );
+}
+
+/** The page's chip, and on Secrets the page's own `Details` beside it. */
+function PageChipRow(props: {
+  readonly section: SettingsSectionId;
+  readonly pick: EnvironmentPick;
+}): ReactNode {
+  if (props.section !== "secrets")
+    return <PageChip section={props.section} pick={props.pick} />;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <PageChip section={props.section} pick={props.pick} />
+      <SecretsHeaderDetails />
+    </div>
   );
 }
