@@ -551,20 +551,18 @@ describe("<BotChannelView /> the channel's typing line", () => {
     expect(within(strip).getByText(`Tracy: ${step}`)).toBeTruthy();
   });
 
-  it("stays while the trunk's turn runs on after the reply lands, and clears when the turn ends", async () => {
+  it("clears when the reply lands, though the trunk is still running", async () => {
     await mountAwaitingDirectReply(replying("request-1", null));
     await screen.findByTestId("bot-channel-replying");
 
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: true, resolvedAt: 2_000 }), BOT_REPLY],
     });
+    // The host's frame as the reply resolves the post: the turn runs on,
+    // answering no post.
+    emitActivity({ trunk: replying(null, null), threads: {} });
 
     await screen.findByText("CI is green.");
-    // The host reports the turn, not the post: the line is the trunk's
-    // until its turn ends.
-    expect(screen.getByTestId("bot-channel-replying")).toBeTruthy();
-
-    emitActivity({ trunk: IDLE_ACTIVITY, threads: {} });
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });

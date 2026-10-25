@@ -749,8 +749,9 @@ export type BotSubscribeOpenRequest = z.infer<
  *  - `failed` - the last turn ended in an error while the request it answered
  *    is still open, until a later turn starts or the request resolves.
  *
- * `requestId` names the post being answered when the turn was started by one;
- * `null` for any other turn (a check-in, a notice).
+ * `requestId` names the open post the turn is answering, the latest one
+ * delivered to it; `null` for a turn that answers none (a check-in, a
+ * notice), and once its post is resolved while the turn runs on.
  */
 export const botSessionActivitySchema = lazySchema(() =>
   z.object({
