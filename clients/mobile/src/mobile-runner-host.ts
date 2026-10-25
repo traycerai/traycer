@@ -92,6 +92,7 @@ import type {
   LocalHostUnresponsive,
   NotificationShowOutcome,
   PushPermissionState,
+  PushSeverity,
   RegisteredHostsChange,
   StoredAuthTokens,
   StoredCredentials,
@@ -406,14 +407,15 @@ export class MobileRunnerHost implements IRunnerHost {
     this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
     this.notifications = buildNotifications(options.pushRegistration);
+    this.tokenStore = new MobileTokenStore(
+      this.secureStorage,
+      options.authnBaseUrl,
+    );
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
       options.openPushSettings,
       this.systemResume,
-    );
-    this.tokenStore = new MobileTokenStore(
-      this.secureStorage,
-      options.authnBaseUrl,
+      this.tokenStore,
     );
     this.deviceFlow = new MobileDeviceFlowHost(
       options.authnBaseUrl,
@@ -1492,9 +1494,15 @@ function buildPushPermission(
   push: MobilePushRegistration | null,
   openPushSettings: (() => Promise<void>) | null,
   systemResume: MobileSystemResume,
+  tokenStore: ITokenStore,
 ): IPushPermissionHost | null {
   if (push === null || openPushSettings === null) return null;
-  return new MobilePushPermissionHost(push, openPushSettings, systemResume);
+  return new MobilePushPermissionHost(
+    push,
+    openPushSettings,
+    systemResume,
+    tokenStore,
+  );
 }
 
 /**
@@ -1507,7 +1515,10 @@ function buildPushPermission(
  * person flipping the switch in the OS Settings app (observed as the
  * foreground-resume edge on the way back, the same edge registration follows)
  * and the OS prompt a `request()` just raised. Neither tells us the new value,
- * so the reader's `get()` is what settles it.
+ * so the reader's `get()` is what settles it. A stored muted set fires it too,
+ * so the rows re-read through the one signal they already follow, and so does
+ * a change of login session: the muted set is kept per account, so a sign-in
+ * on a phone whose rows are already showing has a different answer.
  */
 class MobilePushPermissionHost implements IPushPermissionHost {
   private readonly handlers = new Set<() => void>();
@@ -1516,6 +1527,7 @@ class MobilePushPermissionHost implements IPushPermissionHost {
     private readonly registration: MobilePushRegistration,
     private readonly openPushSettings: () => Promise<void>,
     private readonly systemResume: MobileSystemResume,
+    private readonly tokenStore: ITokenStore,
   ) {}
 
   get(): Promise<PushPermissionState> {
@@ -1526,10 +1538,23 @@ class MobilePushPermissionHost implements IPushPermissionHost {
     const state = await this.registration.requestPermission();
     // The prompt has settled (either way) - tell subscribers to re-read rather
     // than trusting them to correlate this with the value returned above.
+    this.notifyChange();
+    return state;
+  }
+
+  getMutedSeverities(): Promise<readonly PushSeverity[]> {
+    return this.registration.getMutedSeverities();
+  }
+
+  async setMutedSeverities(set: readonly PushSeverity[]): Promise<void> {
+    await this.registration.setMutedSeverities(set);
+    this.notifyChange();
+  }
+
+  private notifyChange(): void {
     for (const handler of Array.from(this.handlers)) {
       handler();
     }
-    return state;
   }
 
   async openSettings(): Promise<void> {
@@ -1541,10 +1566,14 @@ class MobilePushPermissionHost implements IPushPermissionHost {
 
   onChange(handler: () => void): Disposable {
     const resumeSubscription = this.systemResume.subscribe(handler);
+    const sessionSubscription = this.tokenStore.subscribe(() => {
+      handler();
+    });
     this.handlers.add(handler);
     return {
       dispose: () => {
         resumeSubscription.dispose();
+        sessionSubscription.dispose();
         this.handlers.delete(handler);
       },
     };

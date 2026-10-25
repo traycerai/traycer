@@ -30,7 +30,21 @@ export interface RegisterDevicePushTokenInput {
   readonly token: string;
   readonly platform: DevicePushPlatform;
   readonly environment: DevicePushEnvironment;
+  /**
+   * Severities this device is not to be pushed for. Always sent, `[]`
+   * included: the registering device is the authority, so each registration
+   * replaces whatever authn stored for the token before.
+   */
+  readonly mutedSeverities: readonly string[];
 }
+
+interface RemoveDevicePushTokenBody {
+  readonly token: string;
+}
+
+type PushTokensRequestBody =
+  | RegisterDevicePushTokenInput
+  | RemoveDevicePushTokenBody;
 
 export type PushTokenFetchResult =
   | { readonly kind: "ok" }
@@ -64,7 +78,7 @@ async function postPushTokens(
   authnBaseUrl: string,
   path: string,
   bearerToken: string,
-  body: Record<string, string>,
+  body: PushTokensRequestBody,
 ): Promise<PushTokenFetchResult> {
   // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
   // `request-abort.ts`. No body is read, so it is cleared once fetch settles.
@@ -103,6 +117,7 @@ export const registerDevicePushTokenViaHttp: RegisterDevicePushTokenFn = (
     token: input.token,
     platform: input.platform,
     environment: input.environment,
+    mutedSeverities: input.mutedSeverities,
   });
 
 export const removeDevicePushTokenViaHttp: RemoveDevicePushTokenFn = (

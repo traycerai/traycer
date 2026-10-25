@@ -212,6 +212,7 @@ interface FetchCalls {
     token: string;
     platform: string;
     environment: string;
+    mutedSeverities: readonly string[];
   }>;
   removed: Array<{ bearer: string; token: string }>;
 }
@@ -255,7 +256,9 @@ function controllerFor(input: {
 const OK: PushTokenFetchResult = { kind: "ok" };
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe("MobilePushRegistration", () => {
@@ -285,6 +288,7 @@ describe("MobilePushRegistration", () => {
         token: "apns-token-1",
         platform: "ios",
         environment: "sandbox",
+        mutedSeverities: [],
       },
     ]);
   });
@@ -379,6 +383,7 @@ describe("MobilePushRegistration", () => {
         token: "apns-token-1",
         platform: "ios",
         environment: "sandbox",
+        mutedSeverities: [],
       },
     ]);
   });
@@ -467,6 +472,7 @@ describe("MobilePushRegistration", () => {
       token: "apns-token-1",
       platform: "ios",
       environment: "sandbox",
+      mutedSeverities: [],
     });
   });
 
@@ -639,6 +645,7 @@ describe("MobilePushRegistration permission surface", () => {
         token: "apns-token-1",
         platform: "ios",
         environment: "sandbox",
+        mutedSeverities: [],
       },
     ]);
 
@@ -713,6 +720,278 @@ describe("MobilePushRegistration permission surface", () => {
 });
 
 /**
+ * The per-phone muted set: stored per account, sent with the registration,
+ * and sent again (once, after the person stops flipping switches) when it
+ * changes. The register result is switchable so a failed send can be retried.
+ */
+describe("MobilePushRegistration muted severities", () => {
+  const MUTED_KEY_USER_1 = "traycer.push.mutedSeverities:user-1";
+
+  function mutedPhone(input: {
+    readonly plugin: FakePlugin;
+    readonly result: { current: PushTokenFetchResult };
+  }): { push: MobilePushRegistration; calls: FetchCalls } {
+    const calls: FetchCalls = { registered: [], removed: [] };
+    const push = new MobilePushRegistration({
+      plugin: input.plugin,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: async (_authnBaseUrl, bearer, body) => {
+        calls.registered.push({ bearer, ...body });
+        return input.result.current;
+      },
+      removeToken: async () => OK,
+    });
+    return { push, calls };
+  }
+
+  /** Signed in as user-1, granted, and the first (empty-set) registration sent. */
+  async function registeredPhone(resume: SystemResumeSource): Promise<{
+    push: MobilePushRegistration;
+    calls: FetchCalls;
+    plugin: FakePlugin;
+    source: FakeTokenSource;
+    result: { current: PushTokenFetchResult };
+  }> {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const result: { current: PushTokenFetchResult } = { current: OK };
+    const { push, calls } = mutedPhone({ plugin, result });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    push.start(source, resume);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(1);
+    return { push, calls, plugin, source, result };
+  }
+
+  it("keeps the set per account across a reload, and reads [] for a new account", async () => {
+    vi.useFakeTimers();
+    const { push, source, plugin } = await registeredPhone(NO_RESUME);
+    await expect(push.getMutedSeverities()).resolves.toEqual([]);
+
+    await push.setMutedSeverities(["done"]);
+
+    // A reload: a fresh registration object over the same storage and login.
+    const reloaded = mutedPhone({ plugin, result: { current: OK } });
+    reloaded.push.start(source, NO_RESUME);
+    await drain();
+    await expect(reloaded.push.getMutedSeverities()).resolves.toEqual(["done"]);
+
+    await source.setSignedIn(credentials("user-2", "bearer-9"));
+    await expect(reloaded.push.getMutedSeverities()).resolves.toEqual([]);
+  });
+
+  it("reads [] for a malformed stored value and drops unknown entries", async () => {
+    vi.useFakeTimers();
+    const { push } = await registeredPhone(NO_RESUME);
+
+    window.localStorage.setItem(MUTED_KEY_USER_1, "not json");
+    await expect(push.getMutedSeverities()).resolves.toEqual([]);
+    window.localStorage.setItem(MUTED_KEY_USER_1, '{"done":true}');
+    await expect(push.getMutedSeverities()).resolves.toEqual([]);
+    window.localStorage.setItem(MUTED_KEY_USER_1, '["info","bogus","info"]');
+    await expect(push.getMutedSeverities()).resolves.toEqual(["info"]);
+  });
+
+  it("sends one registration with the last set after a second of quiet", async () => {
+    vi.useFakeTimers();
+    const { push, calls, plugin } = await registeredPhone(NO_RESUME);
+
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(600);
+    await push.setMutedSeverities(["done", "info"]);
+    await vi.advanceTimersByTimeAsync(600);
+    await push.setMutedSeverities(["info"]);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(calls.registered).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls.registered).toHaveLength(2);
+    expect(calls.registered[1].mutedSeverities).toEqual(["info"]);
+    expect(plugin.register).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed send on the next resume, once", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resume = new FakeSystemResume();
+    const { push, calls, result } = await registeredPhone(resume);
+
+    result.current = { kind: "network-error" };
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls.registered).toHaveLength(2);
+
+    result.current = OK;
+    await resume.resume();
+    expect(calls.registered).toHaveLength(3);
+    expect(calls.registered[2].mutedSeverities).toEqual(["done"]);
+
+    await resume.resume();
+    expect(calls.registered).toHaveLength(3);
+  });
+
+  it("sends nothing while permission is denied, then carries the set once granted", async () => {
+    vi.useFakeTimers();
+    const plugin = fakePlugin({
+      permission: "denied",
+      afterRequest: "granted",
+    });
+    const { push, calls } = mutedPhone({ plugin, result: { current: OK } });
+    const source = new FakeTokenSource();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    push.start(source, NO_RESUME);
+    await drain();
+
+    await push.setMutedSeverities(["failure"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls.registered).toEqual([]);
+
+    await push.requestPermission();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+
+    expect(calls.registered).toHaveLength(1);
+    expect(calls.registered[0].mutedSeverities).toEqual(["failure"]);
+  });
+
+  it("a bearer rotation or the same token again re-sends nothing; a set change sends once", async () => {
+    vi.useFakeTimers();
+    const { push, calls, plugin, source } = await registeredPhone(NO_RESUME);
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls.registered).toHaveLength(2);
+
+    await source.setSignedIn(credentials("user-1", "bearer-2"));
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    expect(calls.registered).toHaveLength(2);
+
+    await push.setMutedSeverities(["done", "info"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls.registered).toHaveLength(3);
+    expect(calls.registered[2].mutedSeverities).toEqual(["done", "info"]);
+    expect(calls.registered[2].bearer).toBe("bearer-2");
+  });
+
+  it("rejects a set chosen while signed out and stores nothing", async () => {
+    vi.useFakeTimers();
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const { push, calls } = mutedPhone({ plugin, result: { current: OK } });
+    push.start(new FakeTokenSource(), NO_RESUME);
+    await drain();
+
+    await expect(push.setMutedSeverities(["done"])).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(window.localStorage.length).toBe(0);
+    expect(calls.registered).toEqual([]);
+  });
+});
+
+/**
+ * One registration request on the wire at a time. The register boundary is
+ * held open - each call waits for a hand-delivered result - so a switch
+ * flipped while a send is out is exercised against the real object.
+ */
+describe("MobilePushRegistration with a registration in flight", () => {
+  async function heldPhone(): Promise<{
+    push: MobilePushRegistration;
+    resume: FakeSystemResume;
+    sent: Array<readonly string[]>;
+    settle: (index: number, result: PushTokenFetchResult) => Promise<void>;
+  }> {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const sent: Array<readonly string[]> = [];
+    const releases: Array<(result: PushTokenFetchResult) => void> = [];
+    const push = new MobilePushRegistration({
+      plugin,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: (_authnBaseUrl, _bearer, body) =>
+        new Promise((resolve) => {
+          sent.push(body.mutedSeverities);
+          releases.push(resolve);
+        }),
+      removeToken: async () => OK,
+    });
+    const settle = async (
+      index: number,
+      result: PushTokenFetchResult,
+    ): Promise<void> => {
+      releases[index](result);
+      await drain();
+    };
+    const source = new FakeTokenSource();
+    const resume = new FakeSystemResume();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    push.start(source, resume);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    await settle(0, OK);
+    expect(sent).toEqual([[]]);
+    return { push, resume, sent, settle };
+  }
+
+  it("holds a reverted set back while a send is out, then sends it once that send is accepted", async () => {
+    vi.useFakeTimers();
+    const { push, resume, sent, settle } = await heldPhone();
+
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toEqual([[], ["done"]]);
+
+    await push.setMutedSeverities([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toHaveLength(2);
+
+    await settle(1, OK);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toEqual([[], ["done"], []]);
+    await settle(2, OK);
+
+    await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
+    await resume.resume();
+    expect(sent).toHaveLength(3);
+  });
+
+  it("keeps a send with a lost response dirty, so the reverted set goes out on the next resume", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { push, resume, sent, settle } = await heldPhone();
+
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await push.setMutedSeverities([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toHaveLength(2);
+
+    await settle(1, { kind: "network-error" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toHaveLength(2);
+
+    await resume.resume();
+    expect(sent).toEqual([[], ["done"], []]);
+    await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
+  });
+});
+
+/**
  * The controller is platform-agnostic by construction, so these cover the
  * things that are genuinely Android-shaped rather than re-running the iOS
  * suite: the `(platform, environment)` pair authn receives, the two distinct
@@ -758,6 +1037,7 @@ describe("MobilePushRegistration on Android", () => {
         platform: "android",
         // Never "sandbox": authn rejects that pairing outright.
         environment: "production",
+        mutedSeverities: [],
       },
     ]);
   });
@@ -829,6 +1109,7 @@ describe("MobilePushRegistration on Android", () => {
         token: "fcm-token-1",
         platform: "android",
         environment: "production",
+        mutedSeverities: [],
       },
     ]);
   });

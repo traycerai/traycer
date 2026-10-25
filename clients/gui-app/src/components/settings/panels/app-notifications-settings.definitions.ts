@@ -116,6 +116,45 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
       "device",
     ],
   },
+  // One switch per severity under the push row, gated with it. Labels and
+  // descriptions are the chime rows', so a word means one thing on the page.
+  pushNeedsAction: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "app-notifications-push-needs-action" },
+    label: "Needs action",
+    description: "Approvals and interviews.",
+    availableWhen: isPushPermissionRowAvailable,
+    keywords: ["push", "phone", "buzz", "needs action"],
+  },
+  pushFailure: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "app-notifications-push-failure" },
+    label: "Failure",
+    description: "Errored turns, stalls, crashes, and rate limits.",
+    availableWhen: isPushPermissionRowAvailable,
+    keywords: ["push", "phone", "buzz", "failure"],
+  },
+  pushDone: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "app-notifications-push-done" },
+    label: "Done",
+    description: "Completed or intentionally stopped turns.",
+    availableWhen: isPushPermissionRowAvailable,
+    keywords: ["push", "phone", "buzz", "done"],
+  },
+  pushInfo: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "app-notifications-push-info" },
+    label: "Info",
+    description:
+      "Sharing, comments, access changes, and other informational notifications.",
+    availableWhen: isPushPermissionRowAvailable,
+    keywords: ["push", "phone", "buzz", "info"],
+  },
   notificationEvents: {
     kind: "row",
     group: "notifications",
