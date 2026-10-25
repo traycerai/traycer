@@ -7,7 +7,13 @@
  */
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type {
+  ChatActiveTurn,
+  ChatQueuedPromptItem,
+  ChatRunSettings,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 
 import {
   useChatQueueActions,
@@ -102,6 +108,8 @@ function refusalFrom(
     newSettings: SETTINGS,
     reasons: ["images"],
     initiatorId,
+    turnId: null,
+    editSettings: null,
   };
 }
 
@@ -153,12 +161,10 @@ describe("steer restart refusal routing", () => {
       tileB.result.current.steerRestart.onRestart();
     });
 
-    expect(queueSteerNow).toHaveBeenCalledWith(
-      "queue-1",
-      SETTINGS,
-      true,
-      "tile-b",
-    );
+    expect(queueSteerNow).toHaveBeenCalledWith("queue-1", SETTINGS, true, {
+      initiatorId: "tile-b",
+      editSettings: null,
+    });
     expect(handle.store.getState().steerRestartRefusals).toEqual([]);
     expect(tileB.result.current.steerRestart.open).toBe(false);
     expect(tileA.result.current.steerRestart.open).toBe(false);
@@ -232,5 +238,244 @@ describe("steer restart refusal routing", () => {
     expect(handle.store.getState().steerRestartRefusals).toEqual([
       refusalFrom("tile-a", "steer-1"),
     ]);
+  });
+});
+
+const OTHER_SETTINGS: ChatRunSettings = { ...SETTINGS, model: "gpt-5-mini" };
+
+function textDoc(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function runningTurn(turnId: string): ChatActiveTurn {
+  return {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
+    turnId,
+    status: "running",
+    harnessId: "codex",
+    model: "gpt-5-codex",
+    profileId: null,
+    userMessageId: `message-${turnId}`,
+    startedAt: 3,
+    updatedAt: 3,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
+function queuedRow(): ChatQueuedPromptItem {
+  return {
+    kind: "prompt",
+    queueItemId: "queue-1",
+    messageId: "queued-message-1",
+    message: {
+      kind: "user",
+      content: textDoc("original"),
+      browserAnnotations: [],
+    },
+    sender: { type: "user", userId: "user-1" },
+    settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    sentFromHostId: null,
+    delivery: "next_turn",
+    status: "pending",
+    targetTurnId: null,
+    steerRequest: null,
+    fallbackReason: null,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+/** A store whose stream this test drives, open on a running turn with one queued row. */
+function openRunningChat(): {
+  readonly handle: ChatSessionStoreHandle;
+  readonly callbacks: ChatStreamCallbacks;
+} {
+  const stream: { callbacks: ChatStreamCallbacks | null } = { callbacks: null };
+  const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
+    hostId: "host-a",
+    epicId: "epic-1",
+    chatId: NODE_ID,
+    userId: "user-1",
+    onAuthError: null,
+    onProviderAuthError: null,
+    wakeTransport: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+      stream.callbacks = nextCallbacks;
+      return {
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  const callbacks = stream.callbacks;
+  if (callbacks === null) throw new Error("Expected stream callbacks");
+  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onSnapshot({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: NODE_ID,
+    snapshot: {
+      chat: {
+        id: NODE_ID,
+        parentId: null,
+        userId: "user-1",
+        hostId: "host-a",
+        title: "Host Chat",
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        settings: SETTINGS,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        messages: [],
+        events: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
+      },
+      access: { role: "owner", ownerUserId: "user-1", canAct: true },
+      queue: { status: "idle", items: [queuedRow()] },
+      runStatus: "running",
+      activeTurn: runningTurn("turn-1"),
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChanges: [],
+      managedCommands: [],
+      heldUpdates: [],
+      portForwards: [],
+    },
+  });
+  return { handle, callbacks };
+}
+
+function ack(
+  callbacks: ChatStreamCallbacks,
+  input: {
+    readonly clientActionId: string;
+    readonly action: "queueEdit" | "queueSteerNow";
+    readonly refusedUnconfirmed: boolean;
+  },
+): void {
+  callbacks.onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: NODE_ID,
+    clientActionId: input.clientActionId,
+    action: input.action,
+    status: input.refusedUnconfirmed ? "rejected" : "accepted",
+    reason: input.refusedUnconfirmed
+      ? "Steering this message now would end the current turn."
+      : null,
+    code: input.refusedUnconfirmed ? "QUEUE_STEER_RESTART_UNCONFIRMED" : null,
+    backgroundStopTaskIds: [],
+    token: null,
+    ...(input.refusedUnconfirmed ? { steerRestartReasons: ["harness"] } : {}),
+  });
+}
+
+describe("answering a held steer refusal", () => {
+  it("does not confirm ending a turn that started after the refusal", () => {
+    const { handle, callbacks } = openRunningChat();
+    const steerId = handle.store
+      .getState()
+      .queueSteerNow("queue-1", SETTINGS, false, {
+        initiatorId: "tile-a",
+        editSettings: null,
+      });
+    if (steerId === null) throw new Error("Expected the steer to dispatch");
+    ack(callbacks, {
+      clientActionId: steerId,
+      action: "queueSteerNow",
+      refusedUnconfirmed: true,
+    });
+    const queueSteerNow = vi.fn<ChatActions["queueSteerNow"]>(() => "steer-2");
+    const tile = renderHook(() =>
+      useChatQueueActions(tileInput(handle, "tile-a", queueSteerNow)),
+    );
+    expect(tile.result.current.steerRestart.open).toBe(true);
+
+    // The refused turn ends while the dialog is open and the next queued
+    // prompt starts a turn of its own.
+    act(() => {
+      callbacks.onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: NODE_ID,
+        runStatus: "running",
+        activeTurn: runningTurn("turn-2"),
+      });
+    });
+    act(() => {
+      tile.result.current.steerRestart.onRestart();
+    });
+
+    // Sent again unconfirmed: the host asks about the turn now running.
+    expect(queueSteerNow.mock.calls.map((call) => call[2])).toEqual([false]);
+  });
+
+  it("saves a queue edit's settings when the person declines its steer", () => {
+    const { handle, callbacks } = openRunningChat();
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+    ack(callbacks, {
+      clientActionId: editId,
+      action: "queueEdit",
+      refusedUnconfirmed: false,
+    });
+    ack(callbacks, {
+      clientActionId: steerId,
+      action: "queueSteerNow",
+      refusedUnconfirmed: true,
+    });
+    const queueSettingsUpdate = vi.fn<ChatActions["queueSettingsUpdate"]>(
+      () => "settings-1",
+    );
+    const tile = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+        chatActions: fakeChatActions({ queueSettingsUpdate }),
+      }),
+    );
+    expect(tile.result.current.steerRestart.open).toBe(true);
+
+    act(() => {
+      tile.result.current.steerRestart.onOpenChange(false);
+    });
+
+    // The text was saved; the settings rode only on the declined steer.
+    expect(queueSettingsUpdate).toHaveBeenCalledWith("queue-1", OTHER_SETTINGS);
   });
 });

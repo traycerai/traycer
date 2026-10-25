@@ -622,6 +622,14 @@ export interface SubmitQueueEditInput {
   readonly steerInitiatorId: string;
 }
 
+/** Who sent a queued steer, and what a queue edit asked for with it. */
+export interface QueuedSteerOrigin {
+  /** The tile that sent it: a refusal opens that tile's dialog. */
+  readonly initiatorId: string;
+  /** See {@link SteerRestartRefusal.editSettings}. */
+  readonly editSettings: ChatRunSettings | null;
+}
+
 /** A queued steer the host refused until the person confirms ending the turn. */
 export interface SteerRestartRefusal {
   readonly clientActionId: string;
@@ -634,6 +642,18 @@ export interface SteerRestartRefusal {
    * same chat, focused or not, never takes the question from it.
    */
   readonly initiatorId: string;
+  /**
+   * The turn running when the host refused. Confirming ends only that turn:
+   * once another has started, the steer goes again unconfirmed and the host
+   * asks about the turn now running.
+   */
+  readonly turnId: string | null;
+  /**
+   * The settings a queue edit asked for, which rode only on this steer: the
+   * dialog saves them when the person declines the steer. `null` for a row's
+   * own Steer, which changes no settings by itself.
+   */
+  readonly editSettings: ChatRunSettings | null;
 }
 
 export interface PendingUserMessage {
@@ -2147,7 +2167,7 @@ export interface ChatSessionState {
     queueItemId: string,
     newSettings: ChatRunSettings | null,
     restartConfirmed: boolean,
-    initiatorId: string,
+    origin: QueuedSteerOrigin,
   ) => string | null;
   /**
    * Removes and returns the steer refusal named, or `null` when it is no
@@ -3734,6 +3754,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly intent: QueueEditIntent;
     readonly steerRestartConfirmed: boolean;
     readonly steerInitiatorId: string;
+    /** The settings to save if the person declines the steer; `null` when the row already has them. */
+    readonly steerEditSettings: ChatRunSettings | null;
   }): string | null =>
     input.intent === "steer"
       ? sendQueueSteerNowFrame({
@@ -3744,6 +3766,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           newSettings: input.settings,
           restartConfirmed: input.steerRestartConfirmed,
           initiatorId: input.steerInitiatorId,
+          editSettings: input.steerEditSettings,
         })
       : sendQueueSettingsUpdateFrame({
           set: input.set,
@@ -3895,6 +3918,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     {
       readonly newSettings: ChatRunSettings | null;
       readonly initiatorId: string;
+      readonly editSettings: ChatRunSettings | null;
     }
   >();
   const sendQueueSteerNowFrame = (input: {
@@ -3905,6 +3929,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly newSettings: ChatRunSettings | null;
     readonly restartConfirmed: boolean;
     readonly initiatorId: string;
+    readonly editSettings: ChatRunSettings | null;
   }): string | null => {
     const frame: ChatOwnerActionFrame = {
       kind: "queueSteerNow",
@@ -3919,6 +3944,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     steersAwaitingAck.set(input.clientActionId, {
       newSettings: input.newSettings,
       initiatorId: input.initiatorId,
+      editSettings: input.editSettings,
     });
     const clientActionId = sendAction({
       set: input.set,
@@ -7914,6 +7940,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         newSettings: steer.newSettings,
         reasons: frame.steerRestartReasons ?? [],
         initiatorId: steer.initiatorId,
+        turnId: get().activeTurn?.turnId ?? null,
+        editSettings: steer.editSettings,
       };
       set((state) => ({
         steerRestartRefusals: [...state.steerRestartRefusals, refusal],
@@ -11527,6 +11555,12 @@ export function createChatSessionStoreWithNotificationDependencies(
                 intent: input.intent,
                 steerRestartConfirmed: input.steerRestartConfirmed,
                 steerInitiatorId: input.steerInitiatorId,
+                steerEditSettings: chatRunSettingsEqual(
+                  row.settings,
+                  input.settings,
+                )
+                  ? null
+                  : input.settings,
               });
         if (editSent === null || followUpSent === null) {
           // The submission did not go out whole, so the composer is not
@@ -11591,12 +11625,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
       },
-      queueSteerNow: (
-        queueItemId,
-        newSettings,
-        restartConfirmed,
-        initiatorId,
-      ) =>
+      queueSteerNow: (queueItemId, newSettings, restartConfirmed, origin) =>
         sendQueueSteerNowFrame({
           set,
           get,
@@ -11604,7 +11633,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueItemId,
           newSettings,
           restartConfirmed,
-          initiatorId,
+          initiatorId: origin.initiatorId,
+          editSettings: origin.editSettings,
         }),
       takeSteerRestartRefusal: (clientActionId) => {
         const refusals = get().steerRestartRefusals;

@@ -656,7 +656,10 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
     const steerId = store
       .getState()
-      .queueSteerNow(QUEUE_ITEM_ID, SETTINGS, false, "tile-1");
+      .queueSteerNow(QUEUE_ITEM_ID, SETTINGS, false, {
+        initiatorId: "tile-1",
+        editSettings: null,
+      });
     if (steerId === null) throw new Error("expected a steer frame");
     expect(store.getState().pendingActions[steerId].queueItemId).toBe(
       QUEUE_ITEM_ID,

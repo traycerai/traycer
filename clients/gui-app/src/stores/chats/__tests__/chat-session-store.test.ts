@@ -8567,7 +8567,10 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", null, false, "tile-1");
+      .queueSteerNow("queue-1", null, false, {
+        initiatorId: "tile-1",
+        editSettings: null,
+      });
 
     expect(clientActionId).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
@@ -8591,7 +8594,10 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", settings, false, "tile-1");
+      .queueSteerNow("queue-1", settings, false, {
+        initiatorId: "tile-1",
+        editSettings: null,
+      });
     if (clientActionId === null) throw new Error("Expected a steer");
     const frame = harness.sent.at(-1);
     if (frame?.kind !== "queueSteerNow") {
@@ -8634,6 +8640,8 @@ describe("createChatSessionStore", () => {
         newSettings: settings,
         reasons: ["images", "skills"],
         initiatorId: "tile-1",
+        turnId: null,
+        editSettings: null,
       },
     ]);
     expect(
@@ -8656,10 +8664,16 @@ describe("createChatSessionStore", () => {
     // row's Steer while the first steer's refusal is still on its way.
     const first = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", SETTINGS, false, "tile-1");
+      .queueSteerNow("queue-1", SETTINGS, false, {
+        initiatorId: "tile-1",
+        editSettings: null,
+      });
     const second = harness.handle.store
       .getState()
-      .queueSteerNow("queue-2", SETTINGS, false, "tile-2");
+      .queueSteerNow("queue-2", SETTINGS, false, {
+        initiatorId: "tile-2",
+        editSettings: null,
+      });
     if (first === null || second === null) throw new Error("Expected steers");
     for (const clientActionId of [first, second]) {
       harness.callbacks().onActionAck({

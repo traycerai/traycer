@@ -152,7 +152,10 @@ function queueSteerAndFindMap(harness: Harness): {
   try {
     const clientActionId = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", SETTINGS, false, TILE_ID);
+      .queueSteerNow("queue-1", SETTINGS, false, {
+        initiatorId: TILE_ID,
+        editSettings: null,
+      });
     const call = setSpy.mock.calls.findIndex(([, value]) => isTileEntry(value));
     const steersAwaitingAck = setSpy.mock.contexts[call];
     if (!(steersAwaitingAck instanceof Map)) {

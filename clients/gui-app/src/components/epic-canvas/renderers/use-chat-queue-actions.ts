@@ -172,9 +172,16 @@ export function useChatQueueActions(
     readonly newSettings: ChatRunSettings | null;
     readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
     readonly changed: ReadonlyArray<string>;
+    readonly refusedTurnId: string | null;
+    readonly editSettings: ChatRunSettings | null;
   } | null = useMemo(() => {
     if (pendingSteerRestart !== null) {
-      return { ...pendingSteerRestart, reasons: SETTINGS_RESTART_REASONS };
+      return {
+        ...pendingSteerRestart,
+        reasons: SETTINGS_RESTART_REASONS,
+        refusedTurnId: null,
+        editSettings: null,
+      };
     }
     if (ownRefusal === null) return null;
     return {
@@ -182,6 +189,8 @@ export function useChatQueueActions(
       newSettings: ownRefusal.newSettings,
       reasons: ownRefusal.reasons,
       changed: [],
+      refusedTurnId: ownRefusal.turnId,
+      editSettings: ownRefusal.editSettings,
     };
   }, [ownRefusal, pendingSteerRestart]);
   const queuedEditRestoreDraftRef = useRef<QueuedEditDraftSnapshot | null>(
@@ -390,12 +399,10 @@ export function useChatQueueActions(
         // Sent unconfirmed: if the host would still have to end the turn
         // (images, a slash command, skills, a harness that cannot steer), it
         // refuses and names why, and the dialog asks.
-        chatActions.queueSteerNow(
-          item.queueItemId,
-          nextStepSettings,
-          false,
-          tileInstanceId,
-        );
+        chatActions.queueSteerNow(item.queueItemId, nextStepSettings, false, {
+          initiatorId: tileInstanceId,
+          editSettings: null,
+        });
         return;
       }
       // A change the running turn can't absorb: confirm ending the turn first.
@@ -424,23 +431,45 @@ export function useChatQueueActions(
 
   const confirmSteerRestart = useCallback((): void => {
     if (steerRestartPrompt === null) return;
-    const { queueItemId, newSettings } = steerRestartPrompt;
+    const { queueItemId, newSettings, refusedTurnId, editSettings } =
+      steerRestartPrompt;
+    // The host asked about the turn running when it refused. Once another has
+    // started, confirming would end a turn the person never saw: the steer
+    // goes again unconfirmed, and the host asks about the turn now running.
+    const liveTurnId = handle.store.getState().activeTurn?.turnId ?? null;
     const actionId = chatActions.queueSteerNow(
       queueItemId,
       newSettings,
-      true,
-      tileInstanceId,
+      refusedTurnId === null || refusedTurnId === liveTurnId,
+      { initiatorId: tileInstanceId, editSettings },
     );
     if (actionId === null) return;
     settleSteerRestart();
-  }, [chatActions, settleSteerRestart, steerRestartPrompt, tileInstanceId]);
+  }, [
+    chatActions,
+    handle.store,
+    settleSteerRestart,
+    steerRestartPrompt,
+    tileInstanceId,
+  ]);
 
   const handleSteerRestartOpenChange = useCallback(
     (open: boolean): void => {
       if (open) return;
+      // Declining a queue edit's steer keeps the rest of the edit: its text
+      // was saved, and the settings it asked for rode only on the steer.
+      if (
+        steerRestartPrompt !== null &&
+        steerRestartPrompt.editSettings !== null
+      ) {
+        chatActions.queueSettingsUpdate(
+          steerRestartPrompt.queueItemId,
+          steerRestartPrompt.editSettings,
+        );
+      }
       settleSteerRestart();
     },
-    [settleSteerRestart],
+    [chatActions, settleSteerRestart, steerRestartPrompt],
   );
 
   const handleComposerSettingsChange = useCallback(
