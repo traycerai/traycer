@@ -418,7 +418,9 @@ import {
   commentsListThreadsV10,
   commentsListThreadsV11,
   commentsListThreadsV12,
+  commentsListThreadsV13,
   commentsListThreadsUpgradeV11ToV12,
+  commentsListThreadsUpgradeV12ToV13,
   commentsListThreadsUpgradeV10ToV11,
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
@@ -7568,7 +7570,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 
   "comments.listThreads": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: commentsListThreadsV10,
@@ -7584,6 +7586,14 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: commentsListThreadsV12,
           upgradeFromPreviousVersion: commentsListThreadsUpgradeV11ToV12,
+        },
+        // 1.3's `anchorKind` gains `canvas-point` over 1.2's frozen enum,
+        // which is response VALUE growth: host dispatch projects a point
+        // thread to a whole-artifact anchor for pre-1.3 callers.
+        3: {
+          contract: commentsListThreadsV13,
+          upgradeFromPreviousVersion: commentsListThreadsUpgradeV12ToV13,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
