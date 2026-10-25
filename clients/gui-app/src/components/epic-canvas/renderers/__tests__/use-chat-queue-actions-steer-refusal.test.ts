@@ -12,6 +12,7 @@ import type {
   ChatActiveTurn,
   ChatQueuedPromptItem,
   ChatRunSettings,
+  ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 
@@ -295,7 +296,9 @@ function queuedRow(): ChatQueuedPromptItem {
 function openRunningChat(): {
   readonly handle: ChatSessionStoreHandle;
   readonly callbacks: ChatStreamCallbacks;
+  readonly sent: ChatSubscribeClientFrame[];
 } {
+  const sent: ChatSubscribeClientFrame[] = [];
   const stream: { callbacks: ChatStreamCallbacks | null } = { callbacks: null };
   const handle = createChatSessionStore({
     environment: CHAT_STORE_TEST_ENVIRONMENT,
@@ -310,7 +313,9 @@ function openRunningChat(): {
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       stream.callbacks = nextCallbacks;
       return {
-        sendAction: () => undefined,
+        sendAction: (frame) => {
+          sent.push(frame);
+        },
         sameTurnSteeringProtocolSupported: () => true,
         draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
@@ -321,6 +326,12 @@ function openRunningChat(): {
   });
   const callbacks = stream.callbacks;
   if (callbacks === null) throw new Error("Expected stream callbacks");
+  openRunningStream(callbacks);
+  return { handle, callbacks, sent };
+}
+
+/** Open the stream and seat the running turn with its one queued row. */
+function openRunningStream(callbacks: ChatStreamCallbacks): void {
   callbacks.onConnectionStatus("open", null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
@@ -361,7 +372,6 @@ function openRunningChat(): {
       portForwards: [],
     },
   });
-  return { handle, callbacks };
 }
 
 function ack(
@@ -477,5 +487,71 @@ describe("answering a held steer refusal", () => {
 
     // The text was saved; the settings rode only on the declined steer.
     expect(queueSettingsUpdate).toHaveBeenCalledWith("queue-1", OTHER_SETTINGS);
+  });
+
+  it("keeps a declined queue edit's settings until the stream can carry their save", () => {
+    const { handle, callbacks, sent } = openRunningChat();
+    const editId = handle.store.getState().submitQueueEdit({
+      queueItemId: "queue-1",
+      content: textDoc("edited"),
+      restore: { content: textDoc("edited"), browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "steer",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-a",
+    });
+    if (editId === null) throw new Error("Expected the edit to dispatch");
+    const steerId =
+      handle.store.getState().queueEditRecords[editId]?.followUpActionId;
+    if (steerId === undefined) throw new Error("Expected the edit's steer");
+    ack(callbacks, {
+      clientActionId: editId,
+      action: "queueEdit",
+      refusedUnconfirmed: false,
+    });
+    ack(callbacks, {
+      clientActionId: steerId,
+      action: "queueSteerNow",
+      refusedUnconfirmed: true,
+    });
+    const tile = renderHook(() =>
+      useChatQueueActions({
+        ...tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+        chatActions: fakeChatActions({
+          queueSettingsUpdate: (queueItemId, settings) =>
+            handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+        }),
+      }),
+    );
+    const settingsFrames = () =>
+      sent.filter((frame) => frame.kind === "queueSettingsUpdate");
+
+    act(() => {
+      callbacks.onConnectionStatus("reconnecting", null, null);
+    });
+    act(() => {
+      tile.result.current.steerRestart.onOpenChange(false);
+    });
+
+    // Nothing could be sent, so the question, and the settings it holds, stay.
+    expect(settingsFrames()).toEqual([]);
+    expect(handle.store.getState().steerRestartRefusals).toHaveLength(1);
+    expect(tile.result.current.steerRestart.open).toBe(true);
+
+    act(() => {
+      openRunningStream(callbacks);
+    });
+    act(() => {
+      tile.result.current.steerRestart.onOpenChange(false);
+    });
+
+    expect(settingsFrames()).toMatchObject([
+      { queueItemId: "queue-1", settings: OTHER_SETTINGS },
+    ]);
+    expect(handle.store.getState().steerRestartRefusals).toEqual([]);
   });
 });

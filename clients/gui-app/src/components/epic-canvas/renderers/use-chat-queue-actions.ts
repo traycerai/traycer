@@ -457,15 +457,17 @@ export function useChatQueueActions(
     (open: boolean): void => {
       if (open) return;
       // Declining a queue edit's steer keeps the rest of the edit: its text
-      // was saved, and the settings it asked for rode only on the steer.
+      // was saved, and the settings it asked for rode only on the steer. A
+      // save that cannot go out leaves the question open, as Confirm does.
       if (
         steerRestartPrompt !== null &&
         steerRestartPrompt.editSettings !== null
       ) {
-        chatActions.queueSettingsUpdate(
+        const saveId = chatActions.queueSettingsUpdate(
           steerRestartPrompt.queueItemId,
           steerRestartPrompt.editSettings,
         );
+        if (saveId === null) return;
       }
       settleSteerRestart();
     },
