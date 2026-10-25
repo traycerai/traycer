@@ -223,8 +223,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
     readonly client?: unknown;
     readonly options?: { readonly enabled?: boolean } | null;
     readonly params:
-      | { readonly boundaryMessageId: string | null | undefined }
-      | undefined;
+      { readonly boundaryMessageId: string | null | undefined } | undefined;
   }) => {
     if (args.method === "host.status") {
       const enabled = args.options?.enabled ?? false;
@@ -879,7 +878,7 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(
       screen.getByTestId("chat-fork-carry-changes-disabled").textContent,
     ).toContain(
-      "Uncommitted changes stay on the source machine, so this fork starts from the workspace you pick here.",
+      "Uncommitted changes stay on the source computer, so this fork starts from the workspace you pick here.",
     );
     expect(forkButton().disabled).toBe(false);
 
@@ -1222,7 +1221,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const notices = screen.getAllByTestId("chat-fork-publication-notice");
     expect(notices).toHaveLength(1);
     expect(notices[0].textContent).toContain(
-      "This chat hasn't been backed up yet, so another machine can't read its history.",
+      "This chat hasn't been backed up yet, so another computer can't read its history.",
     );
 
     // Ablation: the class-level inertness is NOT a per-row refusal. If the
@@ -1285,7 +1284,7 @@ describe("ChatForkDialog cross-host routing", () => {
 
     const notice = screen.getByTestId("chat-fork-publication-notice");
     expect(notice.textContent).toContain(
-      "Still syncing this turn to the cloud — forking to another machine unlocks as soon as it lands.",
+      "Still syncing this turn to the cloud — forking to another computer unlocks as soon as it lands.",
     );
     expect(selectedUnselectableExceptHostId()).toBeNull();
     expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();
@@ -1330,7 +1329,7 @@ describe("ChatForkDialog cross-host routing", () => {
 
     const notice = screen.getByTestId("chat-fork-publication-notice");
     expect(notice.textContent).toContain(
-      "Still syncing this turn to the cloud — forking to another machine unlocks as soon as it lands.",
+      "Still syncing this turn to the cloud — forking to another computer unlocks as soon as it lands.",
     );
     expect(selectedUnselectableExceptHostId()).toBeNull();
     const otherRow = screen.getByTestId(`fork-host-${OTHER_HOST_ID}`);
@@ -1390,7 +1389,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const notices = screen.getAllByTestId("chat-fork-publication-notice");
     expect(notices).toHaveLength(1);
     expect(notices[0].textContent).toContain(
-      "This chat hasn't been backed up yet, so another machine can't read its history.",
+      "This chat hasn't been backed up yet, so another computer can't read its history.",
     );
     expect(selectedUnselectableExceptHostId()).toBe(TAB_HOST_ID);
     expect(selectedRefusalWord(OTHER_HOST_ID)).toBeUndefined();

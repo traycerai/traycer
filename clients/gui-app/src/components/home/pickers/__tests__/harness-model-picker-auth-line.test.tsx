@@ -286,7 +286,7 @@ describe("<PickerProviderAuthLine />", () => {
     const code = note.querySelector("code");
     expect(code?.textContent).toBe("reasonix setup");
     expect(code?.closest("span")?.textContent).toBe(
-      "Installed the CLI yourself? Running reasonix setup in your own terminal on that machine does the same.",
+      "Installed the CLI yourself? Running reasonix setup in your own terminal on that computer does the same.",
     );
 
     expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();

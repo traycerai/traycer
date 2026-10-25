@@ -257,7 +257,7 @@ describe("presentProviderPackNotificationBody", () => {
       );
       expect(visible).toContain(REMOTE_LABEL);
       expect(visible.toLowerCase()).not.toBe(
-        "act on this from that machine".slice(0, visible.length),
+        "act on this from that computer".slice(0, visible.length),
       );
     });
 

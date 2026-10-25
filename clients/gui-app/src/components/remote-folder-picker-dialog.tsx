@@ -115,7 +115,7 @@ export function RemoteFolderPickerDialog(): ReactNode {
       >
         <DialogTitle className="sr-only">Add folder</DialogTitle>
         <DialogDescription className="sr-only">
-          Browse the host machine and pick a folder to add.
+          Browse the host computer and pick a folder to add.
         </DialogDescription>
         {/* Mounted only while open, keyed per request: a second requestPick
             while already open must not inherit the first request's path or
@@ -830,8 +830,7 @@ function RemoteFolderPickerListing(props: {
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly matches:
-    | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>
-    | undefined;
+    ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>> | undefined;
   /**
    * Where `..` leads, or null when there is no up row. One nullable prop
    * rather than a path beside a boolean: the row and its destination appear
@@ -942,8 +941,7 @@ function RemoteFolderPickerListingStatus(props: {
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly matches:
-    | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>
-    | undefined;
+    ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>> | undefined;
   readonly filtering: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -1013,7 +1011,7 @@ function RemoteFolderPickerListingStatus(props: {
           role="alert"
         >
           This host app is too old for remote browsing - update Traycer on the
-          host machine.
+          host computer.
         </p>
       );
     }
@@ -1311,8 +1309,7 @@ function parseBrowseInput(
 function readRecentShortcuts(
   rawInput: string | null,
   recentsData:
-    | Pick<WorkspacePrepareFoldersResponseV12, "recentWorkspaces">
-    | undefined,
+    Pick<WorkspacePrepareFoldersResponseV12, "recentWorkspaces"> | undefined,
 ): ReadonlyArray<WorkspaceRecentEntry> {
   if (rawInput !== null) return [];
   return recentsData?.recentWorkspaces ?? [];

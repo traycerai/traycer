@@ -762,10 +762,7 @@ export function ReportIssueDialog(
   // four, same telemetry (now tagged with which action was blocked).
   function runIfGateSatisfied(
     blockedAction:
-      | "send"
-      | "open_github_issue"
-      | "report_on_github"
-      | "save_bundle",
+      "send" | "open_github_issue" | "report_on_github" | "save_bundle",
     run: () => void,
   ): void {
     if (!gateSatisfied) {
@@ -2315,7 +2312,7 @@ function deliveryOutcomeMessage(
   // Stored, not lost, and not resendable: the app will send it by itself
   // when the connection comes back, and no action from here would help.
   if (result?.status === "queued") {
-    return "You're offline, so your report is saved on this machine - it will be sent automatically when the connection returns. There's nothing else to do.";
+    return "You're offline, so your report is saved on this computer - it will be sent automatically when the connection returns. There's nothing else to do.";
   }
   // The one failure with a remedy. The draft stays exactly as typed, so
   // "try again" means retry the send, not retype the report.

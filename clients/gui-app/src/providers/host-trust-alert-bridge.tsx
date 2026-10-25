@@ -26,12 +26,12 @@ export function HostTrustAlertBridge(): null {
     if (bridge === null) return;
     const pin = bridge.hostKeyPin.onMismatch((entry) => {
       hostKeyPinMismatchToast(entry.hostId).warning(
-        `${entry.hostId} was refused: its host key changed since this machine first connected. If you rebuilt that machine, remove its entry from ${entry.pinLocation} and reconnect.`,
+        `${entry.hostId} was refused: its host key changed since this computer first connected. If you rebuilt that computer, remove its entry from ${entry.pinLocation} and reconnect.`,
       );
     });
     const cert = bridge.certTrust.onPending((entry) => {
       untrustedCertificateToast(entry.hostname).warning(
-        `${entry.hostname} was refused: its certificate is not trusted (${entry.error}). Add that certificate to this machine's system trust store to reach it.`,
+        `${entry.hostname} was refused: its certificate is not trusted (${entry.error}). Add that certificate to this computer's system trust store to reach it.`,
       );
     });
     return () => {

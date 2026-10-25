@@ -51,7 +51,7 @@ describe("useNoEditorInstalledNotice", () => {
     expect(toastInfo).toHaveBeenCalledTimes(2);
     for (const call of toastInfo.mock.calls) {
       expect(call[0]).toBe(
-        "None of VS Code, Cursor, Windsurf, Zed, VSCodium or Code - OSS is installed on this machine; install one to open files from Traycer.",
+        "None of VS Code, Cursor, Windsurf, Zed, VSCodium or Code - OSS is installed on this computer; install one to open files from Traycer.",
       );
       expect(call[1]).toEqual({ id: "no-editor-installed" });
     }
@@ -62,7 +62,7 @@ describe("useNoEditorInstalledNotice", () => {
     const { notice } = setup();
     notice();
     expect(toastInfo).toHaveBeenCalledWith(
-      "None of VS Code, Cursor, Windsurf or Zed is installed on this machine; install one to open files from Traycer.",
+      "None of VS Code, Cursor, Windsurf or Zed is installed on this computer; install one to open files from Traycer.",
       { id: "no-editor-installed" },
     );
   });
