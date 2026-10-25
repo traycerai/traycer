@@ -15,6 +15,7 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
@@ -636,7 +637,7 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
   });
 
   it("says why on a build that cannot reach the control plane", async () => {
-    sandboxControl.reason = "Sandboxes aren't available in staging builds.";
+    sandboxControl.reason = SANDBOXES_UNAVAILABLE_IN_STAGING;
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 

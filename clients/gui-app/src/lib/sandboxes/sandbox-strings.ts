@@ -277,15 +277,8 @@ export const EMPTY_SANDBOX = "Empty sandbox";
 
 // ── Shape sheet ───────────────────────────────────────────────────────────
 
-export const SHAPE_SHEET_DESCRIPTION_PERSONAL =
-  "Opened from the gear. Changes this sandbox only and is remembered as your preference; Personal's defaults are on its Sandboxes page.";
-export function shapeSheetDescription(
-  configuration: SandboxConfigurationCopy,
-): string {
-  return configuration.kind === "personal"
-    ? SHAPE_SHEET_DESCRIPTION_PERSONAL
-    : `Opened from the gear. Changes this sandbox only and is remembered as your preference; ${configuration.teamName}'s shared defaults are on its Sandboxes page.`;
-}
+export const SHAPE_SHEET_DESCRIPTION =
+  "Used for this sandbox and remembered for your next one.";
 export const SANDBOX_REGION_LABEL = "Sandbox region";
 export const USE_THIS_SHAPE = "Use this shape";
 
