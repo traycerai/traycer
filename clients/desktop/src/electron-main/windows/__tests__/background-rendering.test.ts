@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
 import {
   installBackgroundRenderingReset,
-  setBackgroundRenderingRequired,
+  registerBackgroundRenderingIpc,
+  type BackgroundRenderingTarget,
   type BackgroundRenderingWindow,
 } from "../background-rendering";
 
@@ -58,23 +60,51 @@ class FakeWebContents implements BackgroundRenderingWindow {
   }
 }
 
-describe("setBackgroundRenderingRequired", () => {
+/**
+ * The renderer's demand as main receives it: through the handler
+ * `registerBackgroundRenderingIpc` registers, with the asking window's
+ * WebContents as `event.sender`.
+ */
+function rendererDemand(): (
+  target: BackgroundRenderingTarget,
+  required: boolean,
+) => void {
+  let registered:
+    | ((
+        event: { readonly sender: BackgroundRenderingTarget },
+        ...args: unknown[]
+      ) => unknown)
+    | null = null;
+  registerBackgroundRenderingIpc({
+    handleInvoke: (channel, handler) => {
+      expect(channel).toBe(RunnerHostInvoke.backgroundRenderingSet);
+      registered = handler;
+    },
+  });
+  return (target, required) => {
+    if (registered === null) throw new Error("no handler registered");
+    registered({ sender: target }, required);
+  };
+}
+
+describe("registerBackgroundRenderingIpc", () => {
   it("makes no Electron call when throttling already has the requested value", () => {
     const target = new FakeWebContents();
+    const demand = rendererDemand();
 
     // Throttled already: releasing a demand that was never made is a no-op.
-    setBackgroundRenderingRequired(target, false);
+    demand(target, false);
     expect(target.setCalls).toBe(0);
 
-    setBackgroundRenderingRequired(target, true);
+    demand(target, true);
     expect(target.throttling).toBe(false);
     expect(target.setCalls).toBe(1);
 
     // The same demand again changes nothing, so it must not reach Electron.
-    setBackgroundRenderingRequired(target, true);
+    demand(target, true);
     expect(target.setCalls).toBe(1);
 
-    setBackgroundRenderingRequired(target, false);
+    demand(target, false);
     expect(target.throttling).toBe(true);
     expect(target.setCalls).toBe(2);
   });
@@ -86,7 +116,7 @@ describe("installBackgroundRenderingReset", () => {
     (event) => {
       const target = new FakeWebContents();
       installBackgroundRenderingReset(target);
-      setBackgroundRenderingRequired(target, true);
+      rendererDemand()(target, true);
       expect(target.throttling).toBe(false);
 
       target.emit(event);
@@ -111,7 +141,7 @@ describe("installBackgroundRenderingReset", () => {
   it("leaves a demand alone when a SUBFRAME fails to load", () => {
     const target = new FakeWebContents();
     installBackgroundRenderingReset(target);
-    setBackgroundRenderingRequired(target, true);
+    rendererDemand()(target, true);
 
     target.emitLoadFailure("did-fail-load", false);
 

@@ -32,7 +32,7 @@ export function configureV8CodeCache(): void {
  *   WebSocket (every GUI window does) is exempt from the CPU budget. Electron
  *   carries a patch that keeps this feature switchable for that reason.
  */
-export const BACKGROUND_TIMER_THROTTLES = [
+const BACKGROUND_TIMER_THROTTLES = [
   "IntensiveWakeUpThrottling",
   "AllowAggressiveThrottlingWithWebSocket",
 ] as const;

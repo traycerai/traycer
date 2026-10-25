@@ -1,5 +1,4 @@
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
-import type { RunnerIpcBridge } from "../ipc/runner-ipc-bridge";
 
 /**
  * Background throttling for GUI windows, and the one demand that turns it off.
@@ -60,6 +59,20 @@ export interface BackgroundRenderingTarget {
   setBackgroundThrottling(allowed: boolean): void;
 }
 
+/**
+ * The slice of `RunnerIpcBridge.handleInvoke` the switch registers on: its
+ * handler reads only the asking window's WebContents.
+ */
+export interface BackgroundRenderingIpc {
+  handleInvoke(
+    channel: string,
+    handler: (
+      event: { readonly sender: BackgroundRenderingTarget },
+      ...args: unknown[]
+    ) => unknown,
+  ): void;
+}
+
 export interface BackgroundRenderingWindow extends BackgroundRenderingTarget {
   on(event: "did-navigate", listener: () => void): unknown;
   on(
@@ -75,7 +88,7 @@ export interface BackgroundRenderingWindow extends BackgroundRenderingTarget {
   on(event: "render-process-gone", listener: () => void): unknown;
 }
 
-export function setBackgroundRenderingRequired(
+function setBackgroundRenderingRequired(
   target: BackgroundRenderingTarget,
   required: boolean,
 ): void {
@@ -106,7 +119,7 @@ export function installBackgroundRenderingReset(
  * a window can only ever change itself.
  */
 export function registerBackgroundRenderingIpc(
-  bridge: Pick<RunnerIpcBridge, "handleInvoke">,
+  bridge: BackgroundRenderingIpc,
 ): void {
   bridge.handleInvoke(
     RunnerHostInvoke.backgroundRenderingSet,

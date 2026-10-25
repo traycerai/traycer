@@ -14,10 +14,7 @@ vi.mock("../logger", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import {
-  BACKGROUND_TIMER_THROTTLES,
-  trimUnusedChromiumFeatures,
-} from "../lifecycle";
+import { trimUnusedChromiumFeatures } from "../lifecycle";
 
 describe("trimUnusedChromiumFeatures", () => {
   beforeEach(() => {
@@ -37,12 +34,11 @@ describe("trimUnusedChromiumFeatures", () => {
 
     expect(features).toEqual(
       expect.arrayContaining([
-        ...BACKGROUND_TIMER_THROTTLES,
+        "IntensiveWakeUpThrottling",
+        "AllowAggressiveThrottlingWithWebSocket",
         "Translate",
         "MediaRouter",
       ]),
     );
-    expect(features).toContain("IntensiveWakeUpThrottling");
-    expect(features).toContain("AllowAggressiveThrottlingWithWebSocket");
   });
 });
