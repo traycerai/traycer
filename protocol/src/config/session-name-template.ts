@@ -49,7 +49,7 @@ const CONTROL_CHARACTERS = /\p{Cc}/gu;
 // U+200F, U+061C). Each changes how the text after it is ordered, so a title
 // could make a name display as something it does not say. Every other format
 // character stays: ZWJ joins an emoji sequence, ZWNJ is spelling in Persian.
-const BIDI_CONTROLS = /[‪-‮⁦-⁩‎‏؜]/gu;
+const BIDI_CONTROLS = /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]/gu;
 
 function isPlaceholder(name: string): name is SessionNamePlaceholder {
   return (SESSION_NAME_PLACEHOLDERS as readonly string[]).includes(name);
