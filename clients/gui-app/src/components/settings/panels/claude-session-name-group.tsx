@@ -234,8 +234,14 @@ function ClaudeSessionNameField(props: {
             onChange={(event) => setDraft(event.target.value)}
             onBlur={(event) => {
               // Focus moving to Reset is on its way to discard the draft;
-              // Reset's own blur saves it if it goes elsewhere instead.
-              if (event.relatedTarget === resetRef.current) return;
+              // Reset's own blur saves it if it goes elsewhere instead. With
+              // no Reset shown, a blur onto nothing focusable still saves.
+              if (
+                resetRef.current !== null &&
+                event.relatedTarget === resetRef.current
+              ) {
+                return;
+              }
               commit(draft);
             }}
             onKeyDown={(event) => {

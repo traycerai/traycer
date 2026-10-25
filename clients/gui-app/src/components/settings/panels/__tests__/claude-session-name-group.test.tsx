@@ -469,6 +469,21 @@ describe("ClaudeSessionNameGroup", () => {
     });
   });
 
+  it("saves the default typed by hand when focus leaves to nothing focusable", async () => {
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
+
+    // Typing the default exactly removes Reset, so no Reset button is there
+    // for focus to move to; a blur onto nothing focusable still saves.
+    fireEvent.change(templateInput(), { target: { value: DEFAULT_TEMPLATE } });
+    expect(screen.queryByTestId("claude-session-name-reset")).toBeNull();
+    fireEvent.blur(templateInput(), { relatedTarget: null });
+
+    await waitFor(() => {
+      expect(harness.stored()).toBe(DEFAULT_TEMPLATE);
+    });
+    expect(harness.sets).toEqual([{ claudeTemplate: DEFAULT_TEMPLATE }]);
+  });
+
   it("refuses a template over 200 characters inline instead of sending it", async () => {
     const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
