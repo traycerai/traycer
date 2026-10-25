@@ -10,6 +10,7 @@
 import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
@@ -259,17 +260,20 @@ function mountTranscript(
 } {
   store = createReplyJumpStore(messages);
   mocks.handle = { store } as ChatSessionStoreHandle;
+  const queryClient = new QueryClient();
   const tree = (): ReactNode => (
     <StrictMode>
-      <BotChatTranscript
-        botId={BOT_ID}
-        chatId={CHAT_ID}
-        hostId="host-1"
-        title="Release Bot"
-        instanceId="bot-thread:test"
-        surface={surface}
-        resolveMember={UNRESOLVED_BOT_MEMBERS}
-      />
+      <QueryClientProvider client={queryClient}>
+        <BotChatTranscript
+          botId={BOT_ID}
+          chatId={CHAT_ID}
+          hostId="host-1"
+          title="Release Bot"
+          instanceId="bot-thread:test"
+          surface={surface}
+          resolveMember={UNRESOLVED_BOT_MEMBERS}
+        />
+      </QueryClientProvider>
     </StrictMode>
   );
   const view = render(tree());
