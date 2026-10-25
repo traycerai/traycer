@@ -11,6 +11,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+// The secrets list names its environment through the surface's client.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => scopeOverrides.current.client,
+}));
+
 // What the host's handshake says about `environment.secrets.list`.
 const support = vi.hoisted((): { current: boolean | null } => ({
   current: null,
@@ -38,6 +44,7 @@ vi.mock("@/components/settings/secrets/secrets-page", () => ({
   SecretsPage: () => <div data-testid="secrets-page" />,
 }));
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
@@ -73,7 +80,12 @@ function renderPanel(options: {
       ? buildEnvironmentClient({ hostId: HOST_ID, handlers: {} }).client
       : null,
   };
-  render(<SecretsSettingsPanel />);
+  // The panel reads the secrets list to decide whether it has a subtitle.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <SecretsSettingsPanel />
+    </QueryClientProvider>,
+  );
 }
 
 describe("<SecretsSettingsPanel />", () => {

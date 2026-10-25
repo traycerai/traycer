@@ -929,7 +929,7 @@ export function registerBrowserViewIpc(
           title: "Trust this certificate?",
           message: `Always trust the certificate for ${pending.hostname}?`,
           detail:
-            "This machine will accept it for that site from now on, including in other apps that read the system trust store.",
+            "This computer will accept it for that site from now on, including in other apps that read the system trust store.",
           confirmLabel: "Trust",
         }))
       ) {

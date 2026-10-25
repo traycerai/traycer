@@ -38,7 +38,7 @@ export const GENERAL = defineSettingsSection("general", {
     search: { anchor: "general-voice-input" },
     label: "Voice input",
     description:
-      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves your machine.",
+      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves your computer.",
     availableWhen: isVoiceInputRowAvailable,
     keywords: ["dictation", "dictate", "speech", "microphone", "mic", "audio"],
   },
@@ -113,7 +113,7 @@ export const GENERAL = defineSettingsSection("general", {
     search: { anchor: "general-host-lifecycle" },
     label: "When you quit Traycer",
     description:
-      "Choose what happens to the host on this machine when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
+      "Choose what happens to the host on this computer when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
     availableWhen: isHostLifecycleRowAvailable,
     keywords: [
       "quit",
@@ -186,6 +186,26 @@ export const GENERAL = defineSettingsSection("general", {
       "Tidy up chats agents started once they go quiet. Applies on all your hosts.",
     availableWhen: alwaysAvailable,
     keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
+  },
+  // Everything about bots on this device. T63 adds to it.
+  bots: {
+    kind: "group",
+    search: { anchor: "general-bots" },
+    label: "Bots",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["bot", "bots", "tracy", "channel"],
+  },
+  showTracy: {
+    kind: "row",
+    group: "bots",
+    search: { anchor: "general-show-tracy" },
+    label: "Show Tracy",
+    description:
+      "Keep Tracy next to Home. When off, open Tracy from the bots list.",
+    availableWhen: alwaysAvailable,
+    keywords: ["tracy", "bot", "tab strip", "home", "pin", "sidebar"],
   },
   dangerZone: {
     kind: "group",

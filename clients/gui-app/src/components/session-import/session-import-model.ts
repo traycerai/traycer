@@ -730,7 +730,7 @@ export function sessionImportFailureLabel(
     case "source_empty":
       return "No messages";
     case "workspace_bind_failed":
-      return "No matching folder on this machine";
+      return "No matching folder on this computer";
     case "creation_failed":
       return "Task could not be created";
     case "internal_error":
@@ -784,7 +784,7 @@ function failureCause(reason: SessionImportFailureReason): string {
     case "source_empty":
       return "with no messages";
     case "workspace_bind_failed":
-      return "with no matching folder on this machine";
+      return "with no matching folder on this computer";
     case "creation_failed":
       return "that could not be created";
     case "internal_error":
@@ -1083,7 +1083,7 @@ function groupSortTier(missingFolder: boolean, gitBacked: boolean): number {
  */
 function deletedFoldersSubtitle(folders: number): string {
   const noun = folders === 1 ? "folder" : "folders";
-  return `${folders.toLocaleString()} ${noun} no longer on this machine`;
+  return `${folders.toLocaleString()} ${noun} no longer on this computer`;
 }
 
 export interface SessionImportFailureEntryView {

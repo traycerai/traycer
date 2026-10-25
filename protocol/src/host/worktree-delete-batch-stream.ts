@@ -3,6 +3,7 @@
  * approved targets. `@1.1` adds per-target `stopOwners` consent and typed busy
  * details on `target.failed` while keeping the released `@1.0` schemas frozen.
  * `@1.3` adds the decline kind on `target.complete`.
+ * `@1.4` adds an optional bounded error tail on unsuccessful targets.
  *
  * Added rather than growing `worktree.deleteByPath@1.0`, whose request and
  * frames are released and frozen. The two differ in ownership, not in
@@ -501,6 +502,92 @@ export type WorktreeDeleteBatchByPathServerFrameV13 = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchemaV13
 >;
 
+/** Display-only failure detail, bounded independently of live teardown output. */
+export const WORKTREE_DELETE_ERROR_TAIL_MAX_BYTES = 4096;
+export const WORKTREE_DELETE_ERROR_TAIL_MAX_LINES = 20;
+
+// Invalid optional detail must never swallow the target's terminal outcome.
+const worktreeDeleteErrorTailSchema = lazySchema(() =>
+  z
+    .string()
+    .min(1)
+    .max(WORKTREE_DELETE_ERROR_TAIL_MAX_BYTES)
+    .refine(
+      (tail) =>
+        new TextEncoder().encode(tail).byteLength <=
+        WORKTREE_DELETE_ERROR_TAIL_MAX_BYTES,
+    )
+    .refine(
+      (tail) => tail.split("\n").length <= WORKTREE_DELETE_ERROR_TAIL_MAX_LINES,
+    )
+    .refine(
+      (tail) => !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(tail.replaceAll("\n", "")),
+    )
+    .optional()
+    .catch(undefined),
+);
+
+/** @1.4 adds a bounded error tail on unsuccessful target terminal frames. */
+export const worktreeDeleteBatchByPathServerFrameSchemaV14 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("target.started"),
+      worktreePath: z.string().min(1),
+      hasTeardown: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.phase"),
+      worktreePath: z.string().min(1),
+      phase: worktreeDeleteBatchPhaseSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.output"),
+      worktreePath: z.string().min(1),
+      channel: worktreeDeleteBatchOutputChannelSchema,
+      chunk: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.complete"),
+      worktreePath: z.string().min(1),
+      deleted: z.boolean(),
+      declined: worktreeDeleteDeclinedKindSchema.optional().catch(undefined),
+      errorTail: worktreeDeleteErrorTailSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.failed"),
+      worktreePath: z.string().min(1),
+      reason: z.string(),
+      errorTail: worktreeDeleteErrorTailSchema,
+      holders: worktreeBusyHoldersWireFieldSchema,
+      code: z.literal("WORKTREE_BUSY").optional().catch(undefined),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("command.complete"),
+      requestedCount: z.number().int().nonnegative(),
+      deletedCount: z.number().int().nonnegative(),
+      failedCount: z.number().int().nonnegative(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("command.failed"),
+      reason: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type WorktreeDeleteBatchByPathServerFrameV14 = z.infer<
+  typeof worktreeDeleteBatchByPathServerFrameSchemaV14
+>;
+
 export const worktreeDeleteBatchByPathClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -542,5 +629,13 @@ export const worktreeDeleteBatchByPathStreamV13 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: worktreeDeleteBatchByPathOpenRequestSchemaV13,
   serverFrameSchema: worktreeDeleteBatchByPathServerFrameSchemaV13,
+  clientFrameSchema: worktreeDeleteBatchByPathClientFrameSchema,
+});
+
+export const worktreeDeleteBatchByPathStreamV14 = defineStreamRpcContract({
+  method: "worktree.deleteBatchByPath",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: worktreeDeleteBatchByPathOpenRequestSchemaV13,
+  serverFrameSchema: worktreeDeleteBatchByPathServerFrameSchemaV14,
   clientFrameSchema: worktreeDeleteBatchByPathClientFrameSchema,
 });

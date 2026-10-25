@@ -130,7 +130,7 @@ const RULES_SECTION_ORDER: ReadonlyArray<RulesSectionKey> = [
 ];
 
 const PREDATES_AUTO_MODE =
-  "This machine's host predates Auto mode. Update it to choose a judge and write a policy.";
+  "This host predates Auto mode. Update it to choose a judge and write a policy.";
 
 /**
  * Settings ▸ Permissions ▸ Rules: the account's Auto mode policy, edited in
@@ -459,7 +459,7 @@ function RulesEditor(props: {
         </h2>
         <p className="text-ui-sm text-muted-foreground">
           Your rules go on top of Traycer&apos;s built-in ones and apply to your
-          account on every machine. A repository with{" "}
+          account on every host. A repository with{" "}
           <code className="font-mono">.traycer/auto-policy.md</code> adds its
           own restrictions on top.
         </p>
@@ -514,7 +514,7 @@ function RulesEditor(props: {
       )}
       {hasShippedAutoPolicySections(shipped) ? (
         <p className="px-1 text-ui-xs text-muted-foreground">
-          Built-in rules come with each machine&apos;s Traycer version.
+          Built-in rules come with each host&apos;s Traycer version.
         </p>
       ) : null}
       <RulesFooter
@@ -620,7 +620,7 @@ function RulesBanner(props: {
       : null,
     props.canWrite
       ? null
-      : "This machine's host can't save rules, so saving is off. Update it to make changes.",
+      : "This host can't save rules, so saving is off. Update it to make changes.",
     props.openingRead === "failed"
       ? "Traycer couldn't check whether another device changed your rules, so saving is off. Reopen Settings to try again."
       : null,

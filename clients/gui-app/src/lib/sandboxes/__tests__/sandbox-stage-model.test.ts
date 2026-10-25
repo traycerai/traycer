@@ -97,7 +97,9 @@ describe("consequenceClauses", () => {
   it("adds the move clause when a computer's settings have not moved, naming it", () => {
     const clauses = consequenceClauses(input({ unmovedComputer: "MacBook" }));
     expect(kinds(clauses)).toEqual(["price", "move"]);
-    expect(clauses[1].text).toContain("MacBook");
+    expect(clauses[1].text).toBe(
+      "Starts with Personal's settings. MacBook's are not in Personal yet.",
+    );
   });
 
   it("keeps the spec's order when every clause applies", () => {

@@ -56,7 +56,7 @@ type PrLocalDiffSummarySuccess = Extract<
 
 const UNAVAILABLE_SENTENCE: Record<PrLocalDiffUnavailableReason, string> = {
   "no-local-checkout":
-    "This machine has no worktree for this pull request, so there is no local diff to read.",
+    "This computer has no worktree for this pull request, so there is no local diff to read.",
   "repo-mismatch":
     "The worktree this PR came from doesn’t hold this repository — an uninitialized submodule, most likely.",
   "ref-unavailable":

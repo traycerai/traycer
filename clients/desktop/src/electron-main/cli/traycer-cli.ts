@@ -815,6 +815,22 @@ async function streamTraycerCliJsonWithInvocation<T>(
     // lock-busy `deferred` contract to a generic failure.
     let killError: TraycerCliError | null = null;
     let settled = false;
+    // Set once THIS wrapper has killed the child, for whatever reason (idle,
+    // line flood, abort). From then on the child's `exit` settles the stream:
+    // `close` also waits for every other holder of its stdio pipes, and on
+    // Windows a grandchild that inherited them can hold them open for as long
+    // as it lives, which kept a killed command's lane job pending with no end.
+    // `exit` still means the child itself is gone, which is what the
+    // download drain's "never race a child still exiting" rule needs.
+    let killedHere = false;
+    const killChild = (): void => {
+      killedHere = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore - already exited
+      }
+    };
     const cleanupAbortListener = (): void => {
       if (opts.signal !== null) {
         opts.signal.removeEventListener("abort", onAbort);
@@ -824,9 +840,9 @@ async function streamTraycerCliJsonWithInvocation<T>(
     const onIdleTimeout = (): void => {
       if (settled) return;
       // Killing a timed-out child does not mean it has released its files.
-      // Keep this stream promise pending until `close`, just like explicit
-      // cancellation, so Remove Traycer's download-drain cannot launch an
-      // uninstall while the child is still exiting.
+      // Keep this stream promise pending until the child exits, just like
+      // explicit cancellation, so Remove Traycer's download-drain cannot
+      // launch an uninstall while the child is still exiting.
       if (!sawTerminalOk && terminalError === null) {
         killError = new TraycerCliError(
           {
@@ -842,11 +858,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
           null,
         );
       }
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore - already exited
-      }
+      killChild();
     };
     // Re-armed by `armIdleTimer` on every NDJSON event below. Deliberately
     // driven by parsed events rather than raw stdout bytes: in `--json`
@@ -868,8 +880,8 @@ async function streamTraycerCliJsonWithInvocation<T>(
     // ran to completion regardless, so Remove Traycer's cancellation was
     // cosmetic (a download could burn network/CPU for up to
     // `CLI_JSON_TIMEOUT_MS` after removal). The child is killed immediately,
-    // but this promise settles only after `close` so a follow-on uninstall
-    // cannot race a child still holding or promoting files.
+    // but this promise settles only once it has exited so a follow-on
+    // uninstall cannot race a child still holding or promoting files.
     const onAbort = (): void => {
       if (settled || abortError !== null || killError !== null) return;
       clearIdleTimer();
@@ -883,11 +895,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
         },
         null,
       );
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore - already exited
-      }
+      killChild();
     };
     if (opts.signal !== null) {
       if (opts.signal.aborted) {
@@ -969,11 +977,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
           );
         }
         stdoutBuffer = "";
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore - already exited
-        }
+        killChild();
       }
     });
 
@@ -1001,12 +1005,23 @@ async function streamTraycerCliJsonWithInvocation<T>(
       );
     });
 
-    // `close` reports `(code, signal)`, and a signal-killed child always has
+    // `close` normally, `exit` once this wrapper has killed the child (see
+    // `killedHere`).
+    child.on("exit", (exitCode, signal) => {
+      if (killedHere) settleOnEnd(exitCode, signal);
+    });
+    child.on("close", (exitCode, signal) => {
+      settleOnEnd(exitCode, signal);
+    });
+    // Both report `(code, signal)`, and a signal-killed child always has
     // a null code. Ignoring `signal` collapsed every external kill into the
     // "emitted no terminal result" branch below, which reads as "the CLI ran
     // fine but stayed silent" - the opposite of what happened, and the reason
     // flaky `host install` failures were undiagnosable from the message alone.
-    child.on("close", (exitCode, signal) => {
+    function settleOnEnd(
+      exitCode: number | null,
+      signal: NodeJS.Signals | null,
+    ): void {
       if (settled) return;
       settled = true;
       clearIdleTimer();
@@ -1123,7 +1138,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
           null,
         ),
       );
-    });
+    }
   });
 }
 

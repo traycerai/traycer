@@ -105,7 +105,7 @@ export function noEditorInstalledMessage(
   editors: ReadonlyArray<EditorEntry>,
 ): string {
   const labels = joinWithOr(editors.map((editor) => editor.label));
-  return `None of ${labels} is installed on this machine; install one to open files from Traycer.`;
+  return `None of ${labels} is installed on this computer; install one to open files from Traycer.`;
 }
 
 export interface OpenMenuState {

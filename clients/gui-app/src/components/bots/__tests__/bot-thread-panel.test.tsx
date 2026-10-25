@@ -92,6 +92,11 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   >()),
   useChatSessionHandleForContainer: () => mocks.handle,
 }));
+// The thread's typing line is `bot-channel-typing.test.tsx`'s; here the bot
+// is idle.
+vi.mock("@/hooks/bots/use-bot-activity", () => ({
+  useBotActivity: () => null,
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -407,19 +412,20 @@ describe("<BotThreadPanel /> a listed thread", () => {
     });
   });
 
-  it("tells the person when their pick could not be sent", async () => {
+  it("says in the thread's box when their pick could not be sent, and raises no toast", async () => {
     const user = userEvent.setup();
     sendAnswer = () => Promise.reject(new Error("host refused the pick"));
     mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
 
     await user.click(screen.getByRole("button", { name: "Hold" }));
 
-    await waitFor(() => {
-      expect(mocks.toastFromHostError).toHaveBeenCalledTimes(1);
-    });
-    const [error, fallback] = mocks.toastFromHostError.mock.calls[0];
-    expect(error.message).toBe("host refused the pick");
-    expect(fallback).toBe("Couldn't send your choice.");
+    expect(
+      (await screen.findByTestId("bot-thread-composer-send-failed"))
+        .textContent,
+    ).toBe("Couldn't send. Edit and try again.");
+    // The host was asked and refused: a pick that never left would show the same notice.
+    expect(sent.map((request) => request.text)).toEqual(["Hold"]);
+    expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 
   it("draws no choices under a reply that offers none", () => {

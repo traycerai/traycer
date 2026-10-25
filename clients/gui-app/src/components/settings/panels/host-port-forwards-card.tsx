@@ -82,8 +82,7 @@ export function HostPortForwardsCard(props: {
   const machine = (hostId: string): string => {
     if (hostId === props.hostId) return hostName;
     return (
-      props.hosts.find((host) => host.hostId === hostId)?.name ??
-      "another machine"
+      props.hosts.find((host) => host.hostId === hostId)?.name ?? "another host"
     );
   };
   const stoppingForwardId = stop.isPending ? stop.variables.forwardId : null;
@@ -168,7 +167,7 @@ function HostPortForwardsBody(props: {
   if (owned.length === 0 && held.length === 0) {
     return (
       <PortsNote testId="host-port-forwards-empty">
-        {`Nothing is forwarded through ${hostName}. When an agent forwards a port on this host, or another machine holds one of its ports, it shows up here so you can stop or cut it.`}
+        {`Nothing is forwarded through ${hostName}. When an agent forwards a port on this host, or another host holds one of its ports, it shows up here so you can stop or cut it.`}
       </PortsNote>
     );
   }

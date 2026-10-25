@@ -10,6 +10,7 @@ import type {
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -112,6 +113,13 @@ export function useProvidersSkillsMutate(): UseMutationResult<
       },
     }),
     onSuccess: (data, variables, ctx) => {
+      // A write into a configuration moves the list its Skills page renders,
+      // on every host that read it, and not only this host's native list.
+      const environmentId = variables.environmentId ?? null;
+      if (environmentId !== null && variables.mutation.action !== "inspect")
+        invalidateConfigurationReads(queryClient, environmentId, [
+          "environment.configuration.skills.list",
+        ]);
       if (ctx.hostId === null) return;
       if (data.kind !== "skills") return;
       queryClient.setQueryData<SkillsListData>(

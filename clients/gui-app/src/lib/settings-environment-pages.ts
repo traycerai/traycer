@@ -110,8 +110,8 @@ const PAGES_HIDDEN_BY_PICK: Readonly<
 
 /**
  * Whether the Environment group shows `section`'s row under `pick`. A section
- * of the group that is not one of the registry's pages (Agent definitions,
- * Browser agent access) is shown under every pick.
+ * of the group that is not one of the registry's pages is shown under every
+ * pick; the retired ones (`RETIRED_SETTINGS_SECTION_IDS`) are never offered.
  */
 export function environmentSectionShown(
   pick: EnvironmentPick,

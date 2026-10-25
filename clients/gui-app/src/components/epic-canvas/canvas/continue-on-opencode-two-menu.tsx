@@ -11,6 +11,7 @@ import { classifyRecoverableForkFailure } from "@/lib/chats/recoverable-fork-ref
 import {
   chatRunsOpencodeLineOne,
   epicCreateChatCarriesOpencodeLine,
+  providersSetSelectionMovesChats,
 } from "@/lib/chat/opencode-line";
 import {
   openCreatedChatWhenProjectedWithNavigation,
@@ -32,7 +33,9 @@ interface ContinueOnOpencodeTwoTabMenuProps {
  * The tab menu's "Continue on OpenCode 2" for an OpenCode chat on 1.x: a new
  * chat in the same epic, on the same host, seeded with this chat's transcript
  * and recorded on line 2. This chat is kept as it is. Offered only where the
- * host's `epic.createChat` takes a line.
+ * host's `epic.createChat` takes a line, and not where its
+ * `providers.setSelection` moves existing chats: there, picking Managed 2.x in
+ * Settings moves this chat itself.
  */
 export function ContinueOnOpencodeTwoTabMenu(
   props: ContinueOnOpencodeTwoTabMenuProps,
@@ -69,9 +72,14 @@ export function ContinueOnOpencodeTwoTabMenu(
     }) > 0;
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const version = useHostMethodSchemaVersion(hostId, "epic.createChat");
+  const setSelectionVersion = useHostMethodSchemaVersion(
+    hostId,
+    "providers.setSelection",
+  );
   if (
     chat === null ||
     !epicCreateChatCarriesOpencodeLine(version) ||
+    providersSetSelectionMovesChats(setSelectionVersion) ||
     !chatRunsOpencodeLineOne(chat)
   ) {
     return null;

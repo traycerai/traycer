@@ -301,7 +301,13 @@ export function useChatSessionHandle(
   enabled: boolean,
 ): ChatSessionStoreHandle | null {
   const epicId = useOpenEpicId();
-  return useChatSessionHandleForContainer(epicId, chatId, hostId, enabled);
+  return useChatSessionHandleInContainer({
+    epicId,
+    chatId,
+    hostId,
+    enabled,
+    fatalCloseNotification: "raise",
+  });
 }
 
 /**
@@ -313,7 +319,9 @@ export function useChatSessionHandle(
  * off the epic: `epicId` is the string the stream opens with and the registry
  * files the session under. A bot's chats live under `task_id = botId` with no
  * epic open anywhere, so the bot tab passes the bot id here and gets the same
- * durable session every chat tile gets.
+ * durable session every chat tile gets. A bot's view says its own
+ * failures in the channel or thread, so these sessions raise no "Agent stream
+ * closed unexpectedly" notification (`fatalCloseNotification: "silent"`).
  */
 export function useChatSessionHandleForContainer(
   epicId: string,
@@ -321,6 +329,23 @@ export function useChatSessionHandleForContainer(
   hostId: string,
   enabled: boolean,
 ): ChatSessionStoreHandle | null {
+  return useChatSessionHandleInContainer({
+    epicId,
+    chatId,
+    hostId,
+    enabled,
+    fatalCloseNotification: "silent",
+  });
+}
+
+function useChatSessionHandleInContainer(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly enabled: boolean;
+  readonly fatalCloseNotification: "raise" | "silent";
+}): ChatSessionStoreHandle | null {
+  const { epicId, chatId, hostId, enabled, fatalCloseNotification } = input;
   // The peer that serves this chat's stream: its own host, or - for a team
   // sandbox's chat at rest - the server pool (`useChatServingHostId`). The
   // registry still files the session under the chat's own host, so every
@@ -538,6 +563,7 @@ export function useChatSessionHandleForContainer(
             // neither is evidence of a dead session, so neither escalates.
             transportSilentFor: (ms) =>
               boundStreamClient?.isSilentFor?.(ms) ?? false,
+            fatalCloseNotification,
           }),
       );
       activeHandle = next;
@@ -577,6 +603,7 @@ export function useChatSessionHandleForContainer(
     enabled,
     openTransport,
     queryClient,
+    fatalCloseNotification,
   ]);
 
   return handle;

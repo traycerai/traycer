@@ -318,13 +318,13 @@ function parseFrame(
 }
 
 describe("chat.subscribe@1.37 registration", () => {
-  it("is the newest line, binds chatSubscribeV137 above 1.36 and the live windowed frame", () => {
-    expect(line.latestMinor).toBe(LIVE_MINOR);
+  it("binds chatSubscribeV137 above 1.36, frozen under the 1.38 head", () => {
+    expect(line.latestMinor).toBe(38);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
     expect(chatSubscribeV137.schemaVersion).toEqual({ major: 1, minor: 37 });
-    expect(chatSubscribeV137.serverFrameSchema).toBe(
+    expect(chatSubscribeV137.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV136.serverFrameSchema).not.toBe(
@@ -332,9 +332,9 @@ describe("chat.subscribe@1.37 registration", () => {
     );
   });
 
-  it("registers every minor from 1.0 through 1.37", () => {
+  it("registers every minor from 1.0 through 1.38", () => {
     expect([...MINORS].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 38 }, (_, minor) => minor),
+      Array.from({ length: 39 }, (_, minor) => minor),
     );
   });
 });

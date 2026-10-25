@@ -113,6 +113,9 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
+}));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => () => undefined,
 }));
@@ -132,9 +135,11 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -152,6 +157,7 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { ProviderMcpTab } from "@/components/settings/panels/provider-mcp-tab";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import {
   buildEnvironmentClient,
@@ -172,6 +178,7 @@ type NativeMutateRequest = RequestOfMethod<
 >;
 
 afterEach(() => {
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
@@ -180,6 +187,7 @@ afterEach(() => {
   scopeMock.scope = "global";
   listMock.servers = [];
   listMock.skills = [];
+  vi.mocked(toast.error).mockClear();
 });
 
 const GLOBAL_MCP_CAPS: ProviderMcpCapabilities = {
@@ -274,10 +282,10 @@ interface HostOptions {
     readonly major: number;
     readonly minor: number;
   } | null;
-  /** `false` answers a host with no settings of the person's yet. */
-  readonly principalReady: boolean;
   /** Items the host has already applied, before the page opens. */
   readonly applied: readonly EnvironmentItemStatus[];
+  /** How the host answers an Add to Personal: it takes it, refuses it in words, or cannot be reached. */
+  readonly promote: "ok" | "unreachable" | { readonly refusal: string };
 }
 
 interface Rig {
@@ -290,8 +298,8 @@ interface Rig {
 
 const READY_HOST: HostOptions = {
   nativeMutate: { major: 1, minor: 3 },
-  principalReady: true,
   applied: [],
+  promote: "ok",
 };
 
 /**
@@ -310,14 +318,20 @@ function renderPage(
   const rig: Rig = { sent: [], applied: [...options.applied], mintedFor: [] };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () =>
-      environmentStatusFixture(
-        options.principalReady
-          ? { items: [...rig.applied] }
-          : { principal: null },
-      ),
+      environmentStatusFixture({ items: [...rig.applied] }),
     "environment.localOverrides": () => ({ overrides: [] }),
     "providers.nativeMutate": (request) => {
       rig.sent.push(request);
+      if (options.promote === "unreachable")
+        return Promise.reject(new Error("host unavailable"));
+      if (typeof options.promote === "object")
+        return Promise.resolve({
+          result: {
+            ok: false,
+            code: "environment_mismatch",
+            detail: options.promote.refusal,
+          },
+        });
       if (request.mutation.kind === "promoteToPersonal") {
         rig.applied.push(
           itemStatusFixture({
@@ -337,7 +351,7 @@ function renderPage(
   };
   const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
   const manifest: Record<string, { major: number; minor: number }> = {
-    "environment.status": { major: 1, minor: 0 },
+    "environment.status": { major: 1, minor: 1 },
     "environment.localOverrides": { major: 1, minor: 0 },
   };
   if (options.nativeMutate !== null) {
@@ -358,6 +372,10 @@ function renderPage(
       getCredentialGeneration: () => 0,
     },
   };
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,
@@ -390,20 +408,20 @@ function skillsPage(): ReactNode {
   return <ProviderSkillsTab state={skillsState()} />;
 }
 
-/** The MCP row for `name`: the list item around its expand button. */
-function mcpRow(name: string): HTMLElement {
-  const row = screen
-    .getByRole("button", { name: `Expand ${name}` })
-    .closest("li");
+/** The MCP row for `name`: the list item around its expand button, once the page has mounted. */
+async function mcpRow(name: string): Promise<HTMLElement> {
+  const row = (
+    await screen.findByRole("button", { name: `Expand ${name}` })
+  ).closest("li");
   if (row === null) throw new Error(`no row for ${name}`);
   return row;
 }
 
 /** The skill row for `name`: the list item around its open button. */
-function skillRow(name: string): HTMLElement {
-  const row = screen
-    .getByRole("button", { name: new RegExp(`^Open ${name} `) })
-    .closest("li");
+async function skillRow(name: string): Promise<HTMLElement> {
+  const row = (
+    await screen.findByRole("button", { name: new RegExp(`^Open ${name} `) })
+  ).closest("li");
   if (row === null) throw new Error(`no row for ${name}`);
   return row;
 }
@@ -421,14 +439,14 @@ async function settle(): Promise<void> {
   });
 }
 
-describe("A `claude mcp add` entry on the MCP servers page", () => {
+describe("A `claude mcp add` entry on a provider's MCP tab", () => {
   it("shows as local and becomes Personal only on the click", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), READY_HOST);
+    const rig = renderPage("providers", mcpPage(), READY_HOST);
 
     // The host has applied none of the person's items as `github`, so the
     // entry is only on this host - and the button is the one way to change it.
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     const mark = await within(row).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
     const add = within(mark).getByRole("button", { name: "Add to Personal" });
@@ -471,20 +489,63 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
 
   it("control: an MCP server row on the same ready host keeps its Add to Personal button", async () => {
     listMock.servers = [mcpServer("github")];
-    renderPage("mcp-servers", mcpPage(), READY_HOST);
+    renderPage("providers", mcpPage(), READY_HOST);
 
-    const mark = await within(mcpRow("github")).findByTestId(MARK);
+    const mark = await within(await mcpRow("github")).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
     expect(
       within(mark).getByRole("button", { name: "Add to Personal" }),
     ).toBeTruthy();
   });
 
+  it("shows the host's words beside Add to Personal when it refuses, and raises no toast", async () => {
+    listMock.servers = [mcpServer("github")];
+    const rig = renderPage("providers", mcpPage(), {
+      ...READY_HOST,
+      promote: { refusal: "Personal already has a server called github." },
+    });
+
+    const row = await mcpRow("github");
+    fireEvent.click(
+      await within(row).findByRole("button", { name: "Add to Personal" }),
+    );
+
+    expect(
+      await within(row).findByText(
+        "Personal already has a server called github.",
+      ),
+    ).toBeTruthy();
+    expect(rig.sent).toHaveLength(1);
+    expect(within(row).queryByTestId(PERSONAL)).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("still toasts when Add to Personal cannot reach the host", async () => {
+    listMock.servers = [mcpServer("github")];
+    renderPage("providers", mcpPage(), {
+      ...READY_HOST,
+      promote: "unreachable",
+    });
+
+    fireEvent.click(
+      await within(await mcpRow("github")).findByRole("button", {
+        name: "Add to Personal",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).toContain(
+      "Couldn't add it to Personal.",
+    );
+  });
+
   it("marks only the entries the host applied, matched on kind and name", async () => {
     listMock.servers = [mcpServer("github"), mcpServer("linear")];
     // `github` applied as an MCP server; a SKILL called `linear` applied too,
     // which must not mark the MCP server of the same name.
-    renderPage("mcp-servers", mcpPage(), {
+    renderPage("providers", mcpPage(), {
       ...READY_HOST,
       applied: [
         itemStatusFixture({
@@ -500,8 +561,10 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
       ],
     });
 
-    expect(await within(mcpRow("github")).findByTestId(PERSONAL)).toBeTruthy();
-    const linear = mcpRow("linear");
+    expect(
+      await within(await mcpRow("github")).findByTestId(PERSONAL),
+    ).toBeTruthy();
+    const linear = await mcpRow("linear");
     expect((await within(linear).findByTestId(MARK)).textContent).toContain(
       `On ${HOST_NAME} only`,
     );
@@ -510,12 +573,12 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
 
   it("says where the entry is, with no button, on a host at nativeMutate 1.0", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), {
+    const rig = renderPage("providers", mcpPage(), {
       ...READY_HOST,
       nativeMutate: { major: 1, minor: 0 },
     });
 
-    const mark = await within(mcpRow("github")).findByTestId(MARK);
+    const mark = await within(await mcpRow("github")).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
     expect(
       within(mark).queryByRole("button", { name: "Add to Personal" }),
@@ -527,12 +590,12 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
   // 1.2 is the line below `promoteToPersonal`, which refuses it.
   it("says where the entry is, with no button, on a host at nativeMutate 1.2", async () => {
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), {
+    const rig = renderPage("providers", mcpPage(), {
       ...READY_HOST,
       nativeMutate: { major: 1, minor: 2 },
     });
 
-    const mark = await within(mcpRow("github")).findByTestId(MARK);
+    const mark = await within(await mcpRow("github")).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
     expect(
       within(mark).queryByRole("button", { name: "Add to Personal" }),
@@ -543,12 +606,12 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
 
   it("offers no button on a host that does not negotiate providers.nativeMutate", async () => {
     listMock.servers = [mcpServer("github")];
-    renderPage("mcp-servers", mcpPage(), {
+    renderPage("providers", mcpPage(), {
       ...READY_HOST,
       nativeMutate: null,
     });
 
-    const mark = await within(mcpRow("github")).findByTestId(MARK);
+    const mark = await within(await mcpRow("github")).findByTestId(MARK);
     expect(
       within(mark).queryByRole("button", { name: "Add to Personal" }),
     ).toBeNull();
@@ -557,9 +620,9 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
   it("shows no mark on a project-scope row, which stays with its project", async () => {
     scopeMock.scope = "project";
     listMock.servers = [mcpServer("github")];
-    const rig = renderPage("mcp-servers", mcpPage(), READY_HOST);
+    const rig = renderPage("providers", mcpPage(), READY_HOST);
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     // The status has been read and the row is drawn; neither mark appears.
     await settle();
     expect(within(row).queryByTestId(MARK)).toBeNull();
@@ -568,19 +631,6 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
       screen.queryByRole("button", { name: "Add to Personal" }),
     ).toBeNull();
     expect(rig.sent).toEqual([]);
-  });
-
-  it("shows no mark on a host that has no settings of the person's yet", async () => {
-    listMock.servers = [mcpServer("github")];
-    renderPage("mcp-servers", mcpPage(), {
-      ...READY_HOST,
-      principalReady: false,
-    });
-
-    const row = mcpRow("github");
-    await settle();
-    expect(within(row).queryByTestId(MARK)).toBeNull();
-    expect(within(row).queryByTestId(PERSONAL)).toBeNull();
   });
 
   it("shows no mark outside a Personal page", async () => {
@@ -597,35 +647,62 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
       </QueryClientProvider>,
     );
 
-    const row = mcpRow("github");
+    const row = await mcpRow("github");
     await settle();
     expect(within(row).queryByTestId(MARK)).toBeNull();
     expect(within(row).queryByTestId(PERSONAL)).toBeNull();
   });
 });
 
-describe("A skill on the Skills page", () => {
-  it("says where the skill is, with no Add to Personal button: skills cannot be added to Personal", async () => {
+describe("A skill on a provider's Skills tab", () => {
+  it("says where the skill is, and becomes Personal only on the Add to Personal click", async () => {
     listMock.skills = [skill("deploy")];
-    const rig = renderPage("skills", skillsPage(), READY_HOST);
+    const rig = renderPage("providers", skillsPage(), READY_HOST);
 
-    const row = skillRow("deploy");
+    const row = await skillRow("deploy");
     const mark = await within(row).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
-    expect(
-      within(mark).queryByRole("button", { name: "Add to Personal" }),
-    ).toBeNull();
-    expect(within(row).queryByTestId("add-to-personal")).toBeNull();
+    const add = within(mark).getByRole("button", { name: "Add to Personal" });
+    expect(within(row).queryByTestId(PERSONAL)).toBeNull();
 
     await settle();
     expect(rig.sent).toEqual([]);
+
+    fireEvent.click(add);
+    await within(row).findByTestId(PERSONAL);
+
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]).toMatchObject({
+      providerId: "claude-code",
+      mutation: {
+        kind: "promoteToPersonal",
+        entryKind: "skills",
+        scope: "global",
+        name: "deploy",
+      },
+    });
+  });
+
+  it("reads a built-in skill as Built-in alone, while a shared skill beside it still says where it is", async () => {
+    listMock.skills = [
+      { ...skill("review"), source: "managed" },
+      skill("deploy"),
+    ];
+    renderPage("providers", skillsPage(), READY_HOST);
+
+    const shared = await within(await skillRow("deploy")).findByTestId(MARK);
+    expect(shared.textContent).toContain(`On ${HOST_NAME} only`);
+    const builtIn = await skillRow("review");
+    expect(within(builtIn).getByText("Built-in")).toBeTruthy();
+    expect(within(builtIn).queryByTestId(MARK)).toBeNull();
+    expect(builtIn.textContent).not.toContain("only");
   });
 
   it("sits beside the open button, not inside it", async () => {
     listMock.skills = [skill("deploy")];
-    renderPage("skills", skillsPage(), READY_HOST);
+    renderPage("providers", skillsPage(), READY_HOST);
 
-    const row = skillRow("deploy");
+    const row = await skillRow("deploy");
     const mark = await within(row).findByTestId(MARK);
     const open = within(row).getByRole("button", { name: /^Open deploy / });
     // A button inside a button is invalid; the mark's own button must not be
@@ -635,12 +712,12 @@ describe("A skill on the Skills page", () => {
 
   it("says where the skill is, with no button, on a host at nativeMutate 1.0", async () => {
     listMock.skills = [skill("deploy")];
-    const rig = renderPage("skills", skillsPage(), {
+    const rig = renderPage("providers", skillsPage(), {
       ...READY_HOST,
       nativeMutate: { major: 1, minor: 0 },
     });
 
-    const mark = await within(skillRow("deploy")).findByTestId(MARK);
+    const mark = await within(await skillRow("deploy")).findByTestId(MARK);
     expect(mark.textContent).toContain(`On ${HOST_NAME} only`);
     expect(
       within(mark).queryByRole("button", { name: "Add to Personal" }),
@@ -652,9 +729,9 @@ describe("A skill on the Skills page", () => {
   it("shows no mark on a project-scope skill", async () => {
     scopeMock.scope = "project";
     listMock.skills = [skill("deploy")];
-    const rig = renderPage("skills", skillsPage(), READY_HOST);
+    const rig = renderPage("providers", skillsPage(), READY_HOST);
 
-    const row = skillRow("deploy");
+    const row = await skillRow("deploy");
     await settle();
     expect(within(row).queryByTestId(MARK)).toBeNull();
     expect(within(row).queryByTestId(PERSONAL)).toBeNull();
@@ -664,7 +741,7 @@ describe("A skill on the Skills page", () => {
   it("marks a skill Personal only when the host applied a skill of that name", async () => {
     listMock.skills = [skill("deploy")];
     // An MCP server called `deploy` applied; the skill of that name is not it.
-    renderPage("skills", skillsPage(), {
+    renderPage("providers", skillsPage(), {
       ...READY_HOST,
       applied: [
         itemStatusFixture({
@@ -675,7 +752,7 @@ describe("A skill on the Skills page", () => {
       ],
     });
 
-    const row = skillRow("deploy");
+    const row = await skillRow("deploy");
     expect((await within(row).findByTestId(MARK)).textContent).toContain(
       `On ${HOST_NAME} only`,
     );

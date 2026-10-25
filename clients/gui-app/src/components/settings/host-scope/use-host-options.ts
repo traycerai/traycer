@@ -7,6 +7,8 @@ import type {
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
+import { HOST_NOT_SERVICE_RUN_CODE } from "@traycer-clients/shared/platform/host-service-notices";
+import { settledEnsureFailure } from "@/lib/host/host-ensure-failure";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
@@ -237,10 +239,18 @@ export function useHostOptions(): HostOptions {
   // copy names this lane", which is total over every kind including the
   // teardown ones, and going through it here would lose the KIND this row
   // needs to tell "being installed or started" apart from "being removed".
-  const provisioningLaneKind =
-    useRunnerHostControllerStatusQuery().data?.mutation?.kind ?? null;
+  const controllerStatus = useRunnerHostControllerStatusQuery().data;
+  const provisioningLaneKind = controllerStatus?.mutation?.kind ?? null;
   const localHostSettingUp =
     provisioningLaneKind !== null && mutationBringsHostUp(provisioningLaneKind);
+  // The row's second line once an ensure has been refused over a host a
+  // person started in a terminal that does not answer: main's own words, read
+  // where "setting up" is, and gone once that host answers (main clears it).
+  const settledFailure = settledEnsureFailure(controllerStatus, false);
+  const localHostTerminalRunNote =
+    settledFailure?.code === HOST_NOT_SERVICE_RUN_CODE
+      ? settledFailure.message
+      : null;
 
   // The authority's own verdicts, and the flag that says whether it has
   // reached any. These are what make every row below say the same thing the
@@ -273,6 +283,7 @@ export function useHostOptions(): HostOptions {
         leases,
         authorityAttached,
         localHostSettingUp,
+        localHostTerminalRunNote,
         sandboxes,
         nowMs,
       }),
@@ -286,6 +297,7 @@ export function useHostOptions(): HostOptions {
       leases,
       authorityAttached,
       localHostSettingUp,
+      localHostTerminalRunNote,
       sandboxes,
       nowMs,
     ],

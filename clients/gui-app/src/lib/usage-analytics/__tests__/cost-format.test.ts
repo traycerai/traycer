@@ -153,7 +153,7 @@ describe("servedByScopeNote", () => {
   it("states the this-machine-only scope for a local-served response", () => {
     const note = servedByScopeNote("local", null);
     expect(note).not.toBeNull();
-    expect(note).toMatch(/this machine/i);
+    expect(note).toMatch(/this computer/i);
   });
 
   it("keeps the local-plane wording even under a host filter - the plane, not the pick, is what bounds it", () => {
@@ -161,7 +161,7 @@ describe("servedByScopeNote", () => {
     // limits the number is that the plane cannot see another machine at all.
     // Saying "other hosts aren't included" there would imply a cross-device
     // read that was merely narrowed.
-    expect(servedByScopeNote("local", "Studio Mac")).toMatch(/this machine/i);
+    expect(servedByScopeNote("local", "Studio Mac")).toMatch(/this computer/i);
   });
 });
 

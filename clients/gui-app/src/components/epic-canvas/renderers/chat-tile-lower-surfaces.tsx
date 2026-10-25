@@ -66,6 +66,7 @@ import {
   CHAT_STREAM_RECONNECTING_COPY,
   ChatComposerDeliveryStatus,
 } from "@/components/chat/composer/chat-composer-delivery-status";
+import { ChatComposerOpencodeLineHeld } from "@/components/chat/composer/chat-composer-opencode-line-held";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -951,6 +952,7 @@ function LiveChatComposer(props: {
             onContinue={model.composer.onContinueOnTeamHosts}
           />
           <ChatComposerDeliveryStatus />
+          <ChatComposerOpencodeLineHeld />
         </>
       }
       suggestedPrompt={model.composer.suggestedPrompt}

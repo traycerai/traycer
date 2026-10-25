@@ -256,7 +256,7 @@ export function ProviderSetupManualCommand(props: {
       <code className="rounded-sm bg-foreground/8 px-1 py-px font-mono text-overline text-foreground/90">
         {props.command}
       </code>{" "}
-      in your own terminal on that machine does the same.
+      in your own terminal on that computer does the same.
     </span>
   );
 }

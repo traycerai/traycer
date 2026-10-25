@@ -368,7 +368,7 @@ function localPlaneHostName(
   currentHostId: string | null,
   hostNames: ReadonlyMap<string, string>,
 ): string {
-  if (currentHostId === null) return "This machine";
+  if (currentHostId === null) return "This computer";
   return resolveUsageHostName(currentHostId, hostNames);
 }
 

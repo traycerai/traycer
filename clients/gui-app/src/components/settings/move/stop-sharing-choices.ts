@@ -1,4 +1,7 @@
-import type { StopChoice } from "@/components/settings/move/stop-sharing-copy";
+import type {
+  StopChoice,
+  StopChoiceOrigin,
+} from "@/components/settings/move/stop-sharing-copy";
 
 export interface StopManagedRow {
   readonly kind: string;
@@ -12,7 +15,9 @@ export interface StopNeedsChoiceRow {
   readonly key: string;
   readonly label: string;
   readonly detail: string | null;
-  readonly reason: "edited_here" | "depended_on";
+  readonly origin: StopChoiceOrigin;
+  /** The names of the rows that depend on it. */
+  readonly usedBy: readonly string[];
 }
 
 export interface StopChoiceEntry {
@@ -45,6 +50,15 @@ export function stopSharingConfirmEnabled(
   choices: StopChoiceMap,
 ): boolean {
   return needsChoice.every((row) => choices[stopRowAddress(row)] !== undefined);
+}
+
+/** The rows that need no choice: the stop removes them from this computer. */
+export function stopRemovedRows(
+  managed: readonly StopManagedRow[],
+  needsChoice: readonly StopNeedsChoiceRow[],
+): readonly StopManagedRow[] {
+  const choosing = new Set(needsChoice.map(stopRowAddress));
+  return managed.filter((row) => !choosing.has(stopRowAddress(row)));
 }
 
 export function stopChoiceEntries(

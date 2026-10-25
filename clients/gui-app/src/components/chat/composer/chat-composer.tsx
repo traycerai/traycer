@@ -98,6 +98,7 @@ import {
 import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { sideChatSlashCommands } from "@/lib/chats/side-chat-command";
 import {
+  SIGNED_OUT_SEND_HINT,
   useProviderReauthGate,
   type ProviderReauthGate,
   type ProviderReauthReason,
@@ -1109,9 +1110,7 @@ function resolveSendBlockedHint(args: {
   if (args.profileDisabled) {
     return "Profile disabled — enable it or choose another profile";
   }
-  if (args.signedOut) {
-    return "Signed out of the provider — sign in to send messages";
-  }
+  if (args.signedOut) return SIGNED_OUT_SEND_HINT;
   if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;

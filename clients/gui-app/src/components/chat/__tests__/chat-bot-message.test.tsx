@@ -14,7 +14,17 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostEntryFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotAnnouncement,
@@ -35,6 +45,7 @@ import {
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -42,9 +53,27 @@ import {
 } from "@/stores/chats/rendered-messages";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
-const mocks = vi.hoisted(() => ({
-  openLink:
-    vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
+const mocks = vi.hoisted(
+  (): {
+    openLink: Mock<
+      (url: string, kind: string, event: unknown) => Promise<void>
+    >;
+    hostLabel: { current: string | null };
+  } => ({
+    openLink:
+      vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
+    hostLabel: { current: null },
+  }),
+);
+
+// The host directory is the boundary: which label a host id carries.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostDirectoryEntryForHostId: (
+    hostId: string | null,
+  ): HostDirectoryEntry | null =>
+    hostId === null || mocks.hostLabel.current === null
+      ? null
+      : { ...hostEntryFixture(hostId), label: mocks.hostLabel.current },
 }));
 
 vi.mock("@/lib/links/open-link", async (importOriginal) => ({
@@ -57,11 +86,13 @@ const POST_ID = "post-1";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.hostLabel.current = null;
   mocks.openLink.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   cleanup();
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
 });
 
 function channelPresentation(
@@ -195,6 +226,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 3,
           lastReplyAt: Date.now() - 5 * 60_000,
           unread: false,
+          replying: false,
         }),
         openThread,
       ),
@@ -215,7 +247,12 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 0, lastReplyAt: null, unread: false }),
+        () => ({
+          replyCount: 0,
+          lastReplyAt: null,
+          unread: false,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -241,7 +278,12 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 2, lastReplyAt: 1_000, unread: true }),
+        () => ({
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: true,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -254,7 +296,12 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 2, lastReplyAt: 1_000, unread: false }),
+        () => ({
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -356,6 +403,9 @@ describe("<ChatMessage /> bot rows", () => {
 
     const link = screen.getByTestId("bot-announcement-link");
     expect(link.textContent).toBe("https://example.com/proposal/7");
+    expect(
+      within(screen.getByTestId("bot-announcement")).getByText("New proposal"),
+    ).toBeTruthy();
     expect(mocks.openLink).not.toHaveBeenCalled();
 
     await user.click(link);
@@ -365,6 +415,40 @@ describe("<ChatMessage /> bot rows", () => {
       "https://example.com/proposal/7",
     );
   });
+
+  it.each<readonly [string | null, string]>([
+    [null, "this computer"],
+    ["Office Mac", "Office Mac"],
+  ])(
+    "draws a retrospective sheet link as a Review action that opens that host's sheet (directory label %s)",
+    async (label, hostName) => {
+      const user = userEvent.setup();
+      const hostId = "host/a b";
+      mocks.hostLabel.current = label;
+      renderRow(
+        botRow({
+          kind: "proposal",
+          link: `environment/retrospective?host=${encodeURIComponent(hostId)}`,
+        }),
+        presentation,
+      );
+
+      expect(screen.queryByText(/environment\/retrospective/)).toBeNull();
+      const row = screen.getByTestId("bot-announcement");
+      expect(
+        within(row).getByText("Shared by an earlier version"),
+      ).toBeTruthy();
+      expect(within(row).queryByText("New proposal")).toBeNull();
+      expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+
+      await user.click(screen.getByTestId("bot-announcement-review"));
+
+      const state = useRetrospectiveSheetStore.getState();
+      expect(state.open).toBe(true);
+      expect(state.target).toEqual({ hostId, hostName });
+    },
+  );
 
   it("shows an epic-relative path as the path it is, not as a link", () => {
     renderRow(
@@ -471,7 +555,12 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       const user = userEvent.setup();
       const threadLine = vi.fn<
         (postMessageId: string) => ChatBotThreadLine | null
-      >(() => ({ replyCount: 2, lastReplyAt: 1_000, unread: false }));
+      >(() => ({
+        replyCount: 2,
+        lastReplyAt: 1_000,
+        unread: false,
+        replying: false,
+      }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
       renderRow(
         announcementRow(kind),

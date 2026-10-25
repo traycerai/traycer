@@ -87,6 +87,14 @@ function detachReader(node: HTMLElement, scrollTop: number): number {
   return node.scrollTop;
 }
 
+async function settleOneFrame(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
 function expectPixelStable(node: HTMLElement, parked: number): void {
   expect(Math.abs(node.scrollTop - parked)).toBeLessThanOrEqual(
     PIXEL_STABILITY_EPSILON_PX,
@@ -221,6 +229,7 @@ interface RenderTimelineOptions {
   readonly followLatchRef:
     | RefObject<ChatTimelineFollowLatch | null>
     | undefined;
+  readonly isReattachSuppressed: (() => boolean) | undefined;
 }
 
 interface RerenderTimelineOptions {
@@ -269,6 +278,7 @@ function renderTimeline(
         onListMetricsChange={options.onListMetricsChange}
         onFollowIntentChange={options.onFollowIntentChange}
         followLatchRef={options.followLatchRef}
+        isReattachSuppressed={options.isReattachSuppressed}
       />
     </div>
   );
@@ -1109,6 +1119,149 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       await settleLegendList();
 
       expectPixelStable(node, parked);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 6. A recovering transcript's clamp does not reattach a detached reader
+  // -----------------------------------------------------------------------
+
+  describe("a detached reader clamped to the end while the transcript recovers", () => {
+    /** The browser clamps an offset past the new end to that end, and says
+     *  so with a scroll report. */
+    function clampToEnd(node: HTMLElement): number {
+      node.scrollTop = maxScrollTop(node);
+      fireNativeScroll(node);
+      return node.scrollTop;
+    }
+
+    it("stays detached and unmoved through the store's recovery, then reconciles once it lifts", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const onFollowIntentChange = vi.fn();
+      let recovering = false;
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        onFollowIntentChange,
+        isReattachSuppressed: () => recovering,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      detachReader(node, 900);
+      onFollowIntentChange.mockClear();
+      recovering = true;
+
+      // Rows collapse under the reader: the content now ends above the
+      // reader's offset, and every maintain trigger sees the strict bottom.
+      setLegendListScrollContainerScrollHeightOverride(
+        VIEWPORT_HEIGHT_PX + 300,
+      );
+      const clamped = clampToEnd(node);
+      expect(clamped).toBe(300);
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node
+            ? makeResizeEntry(target, VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)
+            : null,
+        );
+      });
+      await settleLegendList();
+
+      // The recovery restores the content, and streaming grows it.
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const grown = growAssistantInPlace(
+        messages,
+        messages[rowCount - 1]?.id ?? "",
+        " streamed during recovery",
+      );
+      rerenderMessages(grown, undefined);
+      await settleLegendList();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expectPixelStable(node, clamped);
+
+      // Recovery lifts while the content still ends at the reader: the next
+      // maintain pass reconciles under the ordinary clamp contract.
+      recovering = false;
+      setLegendListScrollContainerScrollHeightOverride(
+        VIEWPORT_HEIGHT_PX + 300,
+      );
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node
+            ? makeResizeEntry(target, VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)
+            : null,
+        );
+      });
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+      const next = appendAssistantRows(grown, 1, "after-recovery");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+      expectAtTrueEnd(node);
+    });
+
+    it("holds a structural commit's clamp until its layout settles, then reconciles", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const onFollowIntentChange = vi.fn();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        onFollowIntentChange,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      detachReader(node, 900);
+      onFollowIntentChange.mockClear();
+
+      // A commit that changes the key sequence shortens the transcript past
+      // the reader, and the browser clamps them to its new end before the
+      // list has settled.
+      const shortened = messages.slice(0, 8);
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(shortened.length),
+      );
+      rerenderMessages(shortened, undefined);
+      clampToEnd(node);
+
+      // Its layout keeps moving until after the list's own callbacks have
+      // gone quiet: the clamp waits for the content to hold still.
+      const settledHeight = contentHeightForRowCount(shortened.length);
+      for (let frame = 0; frame < 20; frame += 1) {
+        setLegendListScrollContainerScrollHeightOverride(
+          settledHeight - (frame % 2) * 10,
+        );
+        await settleOneFrame();
+      }
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // Nothing else fires now; the settle itself reconciles the clamp.
+      setLegendListScrollContainerScrollHeightOverride(settledHeight);
+      await settleLegendList();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+      const next = appendAssistantRows(shortened, 1, "after-settle");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+      expectAtTrueEnd(node);
     });
   });
 });

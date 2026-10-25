@@ -26,6 +26,7 @@ function hostOption(hostId: string): HostScopeOption {
     isActive: false,
     connectable: true,
     settingUp: false,
+    terminalRunNote: null,
     registered: true,
     platform: null,
     version: null,

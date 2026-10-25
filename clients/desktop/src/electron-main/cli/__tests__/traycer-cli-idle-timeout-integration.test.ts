@@ -1,4 +1,11 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -187,4 +194,44 @@ describe("streamTraycerCliJson idle budget against a real subprocess", () => {
       idleBudgetMs - armStampToleranceMs,
     );
   }, 20_000);
+  it("settles on the killed child's exit while a grandchild still holds its stdout", async () => {
+    // The child reports once, spawns a grandchild that inherits stdout and
+    // outlives it, then goes silent. SIGKILL ends the child, but `close`
+    // waits for the grandchild's copy of the pipe, so only `exit` can settle.
+    const grandchildLifetimeMs = 8_000;
+    const pidFile = join(scriptDir, "grandchild.pid");
+    const script = `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+process.stdout.write(JSON.stringify({ type: "progress", stage: "resolve", percent: null, bytes: null, totalBytes: null, message: "resolving", timestamp: new Date().toISOString() }) + "\\n");
+const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => undefined, ${grandchildLifetimeMs})"], { stdio: ["ignore", "inherit", "inherit"] });
+writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid));
+setInterval(() => undefined, 1000);
+`;
+    const path = join(scriptDir, "fake-cli.mjs");
+    writeFileSync(path, script, "utf8");
+    chmodSync(path, 0o755);
+    const idleBudgetMs = 700;
+    const started = Date.now();
+    try {
+      await expect(
+        streamTraycerCliJson<unknown>({
+          args: ["host", "download", "--automatic"],
+          onEvent: () => undefined,
+          env: null,
+          idleTimeoutMs: idleBudgetMs,
+          signal: null,
+        }),
+      ).rejects.toThrow(`produced no output for ${idleBudgetMs}ms`);
+      expect(Date.now() - started).toBeLessThan(grandchildLifetimeMs - 3_000);
+    } finally {
+      if (existsSync(pidFile)) {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 30_000);
 });

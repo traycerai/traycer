@@ -140,6 +140,14 @@ vi.mock("@/components/settings/panels/permissions/judge-tab", () => ({
 vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
   ActivityTab: (): ReactNode => <div data-testid="activity-body" />,
 }));
+// Permissions' Browser agent access region reads its host through the real
+// binding, which this suite's scoped-binding fixture does not carry. The
+// region has its own suite (`browser-agent-access-group.test.tsx`).
+vi.mock("@/components/settings/panels/browser-agent-access-group", () => ({
+  BrowserAgentAccessGroup: (): ReactNode => (
+    <div data-testid="browser-agent-access-probe" />
+  ),
+}));
 
 // ---- helpers --------------------------------------------------------------
 

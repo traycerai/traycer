@@ -431,7 +431,7 @@ function NotificationRowMain(props: {
 
   const remoteHint =
     props.remoteHostLabel === null
-      ? "Act on this from that machine — it cannot be applied here."
+      ? "Act on this from that computer — it cannot be applied here."
       : `Act on this from ${props.remoteHostLabel} — it cannot be applied here.`;
 
   return (

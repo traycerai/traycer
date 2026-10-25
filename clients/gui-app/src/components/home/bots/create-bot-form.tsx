@@ -118,14 +118,17 @@ export function CreateBotForm(props: {
   readonly connectableHostIds: ReadonlyArray<string>;
   /** Each connectable host's environment (`useHostEnvironmentBindings`). */
   readonly environmentBindings: HostEnvironmentBindings;
-  readonly onDone: () => void;
+  /** Runs once the bot exists and its tab is open. */
+  readonly onCreated: () => void;
+  readonly onCancel: () => void;
 }): ReactNode {
   const {
     environmentId,
     environmentLabel,
     connectableHostIds,
     environmentBindings,
-    onDone,
+    onCreated,
+    onCancel,
   } = props;
   const [title, setTitle] = useState("");
   const [directive, setDirective] = useState("");
@@ -228,7 +231,7 @@ export function CreateBotForm(props: {
             hostId,
             title: response.bot.title,
           });
-          onDone();
+          onCreated();
           navigateToTabIntent(
             navigate,
             botTabIntent(response.bot.botId),
@@ -319,7 +322,7 @@ export function CreateBotForm(props: {
           variant="ghost"
           size="sm"
           disabled={create.isPending}
-          onClick={onDone}
+          onClick={onCancel}
         >
           Cancel
         </Button>
@@ -359,7 +362,7 @@ export function CreateBotNoHost(props: {
   if (checking) {
     return (
       <p className="text-ui-xs text-muted-foreground" aria-busy="true">
-        Finding a machine that runs {environmentLabel}&apos;s bots…
+        Finding a computer that runs {environmentLabel}&apos;s bots…
       </p>
     );
   }
@@ -368,8 +371,8 @@ export function CreateBotNoHost(props: {
       className="text-ui-xs text-muted-foreground"
       data-testid="create-bot-no-host"
     >
-      This bot needs a machine that runs bots for {environmentLabel}. Set one up
-      in{" "}
+      This bot needs a computer that runs bots for {environmentLabel}. Set one
+      up in{" "}
       <Button
         type="button"
         variant="link"
@@ -384,7 +387,7 @@ export function CreateBotNoHost(props: {
       {someUnchecked ? (
         <span data-testid="create-bot-unchecked">
           {" "}
-          Some of your machines couldn&apos;t be checked.{" "}
+          Some of your computers couldn&apos;t be checked.{" "}
           <Button type="button" variant="link" size="xs" onClick={onRetry}>
             Retry
           </Button>

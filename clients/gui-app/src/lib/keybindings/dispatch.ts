@@ -7,6 +7,8 @@ import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { inVisualOrder } from "@/stores/tabs/tab-visual-order-store";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import type { HeaderTab } from "@/stores/tabs/types";
+import { isTracyEntryRef } from "@/stores/bots/tracy-entry";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -360,7 +362,7 @@ function tabDigitSequenceState(
   digits: ReadonlyArray<number>,
 ): LeaderDigitSequenceState {
   if (digits.length === 0 || digits[0] === 0) return "invalid";
-  const tabCount = getHeaderTabs().length;
+  const tabCount = numberedHeaderTabs().length;
   const index = digitsToIndex(digits);
   if (index < 0 || index >= tabCount) return "invalid";
   return hasLongerTabSlotWithPrefix(digits, tabCount) ? "ambiguous" : "exact";
@@ -517,9 +519,17 @@ export function isRepeatSensitiveAction(id: ActionId): boolean {
 // ---------------------------------------------------------------------------
 
 // A digit opens the tab its badge is on, and next/previous step to the row
-// drawn beside the current one: both follow the strip's drawn order.
+// drawn beside the current one: both follow the strip's drawn order. The
+// fixed Tracy entry is drawn beside Home, not among the tabs, so like Home it
+// takes no digit and no step.
+function numberedHeaderTabs(): ReadonlyArray<HeaderTab> {
+  return inVisualOrder(getHeaderTabs()).filter(
+    (tab) => !isTracyEntryRef({ kind: tab.kind, id: tab.id }),
+  );
+}
+
 function switchToTabByIndex(router: KeybindingRouter, index: number): boolean {
-  const allTabs = inVisualOrder(getHeaderTabs());
+  const allTabs = numberedHeaderTabs();
   if (index < 0 || index >= allTabs.length) return false;
   const tab = allTabs[index];
   router.navigateToTabIntent(tabResolveIntent(tab));
@@ -527,7 +537,7 @@ function switchToTabByIndex(router: KeybindingRouter, index: number): boolean {
 }
 
 function moveHeaderTabFocus(router: KeybindingRouter, delta: -1 | 1): boolean {
-  const allTabs = inVisualOrder(getHeaderTabs());
+  const allTabs = numberedHeaderTabs();
   if (allTabs.length === 0) return false;
   const pathname = router.getPathname();
   const activeIndex = allTabs.findIndex((tab) => tabMatchesPath(tab, pathname));

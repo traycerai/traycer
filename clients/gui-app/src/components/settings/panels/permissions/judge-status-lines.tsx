@@ -357,9 +357,9 @@ function JudgeWarningSentence(props: {
         />
       );
     case "unsupported-harness":
-      return `This machine can't run a judge on ${providerLabel}. Pick another provider.`;
+      return `This host can't run a judge on ${providerLabel}. Pick another provider.`;
     case "unrecognized":
-      return `This machine's judge is set to ${props.stored.harnessId}, which this version of the app doesn't know. Pick another provider.`;
+      return `This host's judge is set to ${props.stored.harnessId}, which this version of the app doesn't know. Pick another provider.`;
     case "provider":
       return (
         <ProviderBlockerSentence
@@ -369,7 +369,7 @@ function JudgeWarningSentence(props: {
         />
       );
     case "model":
-      return `${props.stored.model} is no longer offered on this machine. Pick another model, or Auto mode asks you instead.`;
+      return `${props.stored.model} is no longer offered on this host. Pick another model, or Auto mode asks you instead.`;
     case "profile":
       return `The account this judge used was removed from ${providerLabel}. Pick another account, or Auto mode asks you instead.`;
   }
@@ -384,28 +384,28 @@ function ProviderBlockerSentence(props: {
     case "Turned off":
       return (
         <>
-          {props.label} is turned off on this machine. Turn it on under{" "}
+          {props.label} is turned off on this host. Turn it on under{" "}
           {props.fixLink}, or pick another.
         </>
       );
     case "Signed out":
       return (
         <>
-          {props.label} is signed out on this machine. Sign in under{" "}
+          {props.label} is signed out on this host. Sign in under{" "}
           {props.fixLink}, or pick another.
         </>
       );
     case "Not installed":
       return (
         <>
-          {props.label} isn&apos;t installed on this machine. Install it under{" "}
+          {props.label} isn&apos;t installed on this host. Install it under{" "}
           {props.fixLink}, or pick another.
         </>
       );
     case "Not available":
       return (
         <>
-          {props.label} isn&apos;t available on this machine. Check it under{" "}
+          {props.label} isn&apos;t available on this host. Check it under{" "}
           {props.fixLink}, or pick another.
         </>
       );

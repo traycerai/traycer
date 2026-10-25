@@ -542,6 +542,7 @@ function resolvedSandbox(input: {
     localService: undefined,
     hasLiveSession: () => false,
     localHostSettingUp: false,
+    localHostTerminalRunNote: null,
     sandboxes: [
       sandboxSummaryFixture({
         id: "sbx_1",

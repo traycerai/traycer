@@ -104,10 +104,10 @@ describe("cohortFromPlanes", () => {
 });
 
 describe("stillLocalFromPlanes", () => {
-  it("names the planes that have not moved", () => {
+  it("names the planes not in Personal yet", () => {
     expect(
       stillLocalFromPlanes(planes("local", "moved", "shared_unrecorded")),
-    ).toEqual([{ id: "records", summary: "settings have not moved" }]);
+    ).toEqual([{ id: "records", summary: "settings are not in Personal yet" }]);
   });
 });
 
@@ -116,7 +116,7 @@ describe("planeMoveSheetLabel", () => {
     ["local", "on this computer"],
     ["moved", "already in Personal"],
     ["shared_unrecorded", "already shared by an earlier version"],
-    ["stopped", "not sharing"],
+    ["stopped", "stopped using Personal"],
   ] as const)("%s reads %s", (state, label) => {
     expect(planeMoveSheetLabel(state)).toBe(label);
   });

@@ -13,6 +13,7 @@ import type { ConfigurationItem } from "@/hooks/environment/team/use-configurati
 import {
   useCanEditConfiguration,
   useConfigurationSource,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
@@ -22,8 +23,15 @@ import {
 } from "./configuration-write-issue";
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
+import { ConfigurationReadFailed } from "./team-read-failed";
+import { usePickedTeamLabel } from "./team-pick-label";
 
 export function TeamVariablesAndShells(): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const source = useConfigurationSource();
+  const teamName =
+    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
+    "this team";
   const query = useConfigurationVariablesQuery();
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
@@ -36,15 +44,20 @@ export function TeamVariablesAndShells(): ReactNode {
   return (
     <SettingsPanelShell
       title="Variables & shells"
-      description="Variables and shells for hosts running this team."
+      description={
+        personal
+          ? "Plain values every computer and sandbox running Personal gets, and the shell agents run in."
+          : `Plain values every host running ${teamName} gets, and the shell agents run in.`
+      }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationOsPicker value={os} onChange={setOs} />
       <ConfigurationWriteFeedback issue={issue} />
       {query.isError ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Couldn't read variables and shells.
-        </p>
+        <ConfigurationReadFailed
+          page="variables and shells"
+          onRetry={() => void query.refetch()}
+        />
       ) : null}
       {query.isPending ? <MutedAgentSpinner /> : null}
       {query.data === undefined ? null : (
