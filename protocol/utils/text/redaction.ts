@@ -426,17 +426,41 @@ const HOME_FOLDER_NAME_CHAR = String.raw`[^\s/\\:'"\x60<>|()*?,;]`;
 const HOME_FOLDER_NAME_BARE = `${HOME_FOLDER_NAME_CHAR}+(?:'${HOME_FOLDER_NAME_CHAR}+)*`;
 
 /**
- * The segment right after a `Users` (macOS, Windows) or `home` (Linux) path
- * segment, under either separator, and under doubled ones (a JSON-escaped
- * Windows path). Where a separator follows, the whole segment goes, with any
- * run of spaces or tabs before or between its words (a macOS full-name
- * folder, `/Users/Mary Jane/...`); where none does, only the bare name, so
- * `/Users/name is missing` and `'/home/name' failed, see /tmp/x` keep their
- * prose. Whitespace after the last word is not taken, so a home root in prose
- * (`under /Users/ and /home/`) is not read as a name.
+ * What may stand right before an absolute path: the start of the value, also
+ * with the `null` origin {@link reduceUrlToOriginAndPath} gives a `file:` URL
+ * (`null/Users/...`); whitespace; a quote, bracket or `=`, `,`, `;`, `|`; or
+ * a colon (a drive letter, a scheme, a path list) unless two slashes and a
+ * host follow it (`https://home/...`). A path segment or a host never is, so a
+ * `users` or `home` segment inside a URL path, a route or a module id
+ * (`https://x.test/api/users/42`, `@/components/home/...`) is no home root.
+ */
+const HOME_ROOT_START = String.raw`^(?:null)?|[\s"'\x60(\[{<>=,;|]|:(?!//[^/])`;
+
+/**
+ * The mounts a home root is reached under: WSL (`/mnt/c`), Cygwin
+ * (`/cygdrive/c`), Git Bash and MSYS (`/c`, captured, so a bare letter
+ * counts only before the exact `Users` a Windows path names), a macOS volume
+ * (`/Volumes/<disk>`, `/System/Volumes/Data`), FreeBSD's `/usr`, Silverblue's
+ * `/var`, and the Windows share of a WSL distribution
+ * (`\\wsl$\<distro>`, `\\wsl.localhost\<distro>`).
+ */
+const HOME_ROOT_MOUNT = String.raw`[/\\]+(?:mnt[/\\]+[a-z]|cygdrive[/\\]+[a-z]|([a-z])|(?:System[/\\]+)?Volumes[/\\]+[^/\\\r\n]+|usr|var|wsl(?:\$|\.localhost)[/\\]+[^\s/\\]+)`;
+
+/**
+ * The segment right after a `Users` (macOS, Windows) or `home` (Linux) root
+ * that starts an absolute path, under either separator, and under doubled ones
+ * (a JSON-escaped Windows path). Where a separator follows, the whole segment
+ * goes, with any run of spaces or tabs before or between its words (a macOS
+ * full-name folder, `/Users/Mary Jane/...`); where none does, only the bare
+ * name, so `/Users/name is missing` and `'/home/name' failed, see /tmp/x`
+ * keep their prose. Whitespace after the last word is not taken, so a home
+ * root in prose (`under /Users/ and /home/`) is not read as a name.
+ *
+ * Linear in the input: each quantified run is followed by a part that cannot
+ * take its characters.
  */
 const HOME_FOLDER_NAME_PATTERN = new RegExp(
-  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
+  String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
   "gi",
 );
 
@@ -456,5 +480,16 @@ const HOME_FOLDER_NAME_PATTERN = new RegExp(
  * Idempotent.
  */
 export function redactHomeDirectoryNames(value: string): string {
-  return value.replace(HOME_FOLDER_NAME_PATTERN, `$1${REDACTED}`);
+  return value.replace(
+    HOME_FOLDER_NAME_PATTERN,
+    (
+      path: string,
+      root: string,
+      driveLetter: string | undefined,
+      rootName: string,
+    ) =>
+      driveLetter !== undefined && rootName !== "Users"
+        ? path
+        : `${root}${REDACTED}`,
+  );
 }

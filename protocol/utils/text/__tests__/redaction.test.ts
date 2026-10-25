@@ -228,6 +228,56 @@ describe("redactHomeDirectoryNames", () => {
       "open '/home/synthetic-user' failed, see /tmp/x",
       "open '/home/<redacted>' failed, see /tmp/x",
     ],
+    // Home roots behind a mount, drive or volume prefix, and after a delimiter.
+    ["/mnt/c/Users/Syn/x", "/mnt/c/Users/<redacted>/x"],
+    ["/c/Users/Syn/x", "/c/Users/<redacted>/x"],
+    ["/cygdrive/c/Users/Syn/x", "/cygdrive/c/Users/<redacted>/x"],
+    [
+      "/System/Volumes/Data/Users/Syn/x",
+      "/System/Volumes/Data/Users/<redacted>/x",
+    ],
+    [
+      "/Volumes/Macintosh HD/Users/Syn/x",
+      "/Volumes/Macintosh HD/Users/<redacted>/x",
+    ],
+    ["/usr/home/syn/x", "/usr/home/<redacted>/x"],
+    ["\\\\wsl$\\Ubuntu\\home\\syn\\x", "\\\\wsl$\\Ubuntu\\home\\<redacted>\\x"],
+    [
+      "\\\\wsl.localhost\\Ubuntu\\home\\syn\\x",
+      "\\\\wsl.localhost\\Ubuntu\\home\\<redacted>\\x",
+    ],
+    ["    at f (/Users/syn/x.js:1:1)", "    at f (/Users/<redacted>/x.js:1:1)"],
+    ["    at /home/syn/x.js:1:1", "    at /home/<redacted>/x.js:1:1"],
+    ['{"cwd":"/home/syn/x"}', '{"cwd":"/home/<redacted>/x"}'],
+    ["cwd=/home/syn/x", "cwd=/home/<redacted>/x"],
+    ["file:///C:/Users/Syn/x.js", "file:///C:/Users/<redacted>/x.js"],
+    ["file:///mnt/c/Users/Syn/x.js", "file:///mnt/c/Users/<redacted>/x.js"],
+    [
+      '{"p":"C:\\\\Users\\\\Syn\\\\x"}',
+      '{"p":"C:\\\\Users\\\\<redacted>\\\\x"}',
+    ],
+    ["\\\\?\\C:\\Users\\Syn\\x", "\\\\?\\C:\\Users\\<redacted>\\x"],
+    ["PATH=/usr/bin:/home/syn/bin", "PATH=/usr/bin:/home/<redacted>/bin"],
+    ["null/Users/syn/x.html", "null/Users/<redacted>/x.html"],
+    ["[/home/syn/x]", "[/home/<redacted>/x]"],
+    ["a\n/home/syn/x", "a\n/home/<redacted>/x"],
+    // A users or home segment inside a web route, a URL path or a module id is
+    // no home root.
+    [
+      "https://credit.test/api/collab/users/lookup",
+      "https://credit.test/api/collab/users/lookup",
+    ],
+    ["POST /api/collab/users/lookup", "POST /api/collab/users/lookup"],
+    ["/api/collab/users/lookup", "/api/collab/users/lookup"],
+    ["https://api.test/users/42", "https://api.test/users/42"],
+    ["http://localhost:3000/users/42", "http://localhost:3000/users/42"],
+    ["/x/users/42", "/x/users/42"],
+    ["/a/home/feed", "/a/home/feed"],
+    ["https://home/feed", "https://home/feed"],
+    [
+      "@/components/home/landing-draft-surface",
+      "@/components/home/landing-draft-surface",
+    ],
   ])("rewrites %j to %j", (input, expected) => {
     expect(redactHomeDirectoryNames(input)).toBe(expected);
     expect(redactHomeDirectoryNames(expected)).toBe(expected);

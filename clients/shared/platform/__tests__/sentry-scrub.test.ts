@@ -148,6 +148,41 @@ describe("shared client Sentry scrub", () => {
       expect(json).not.toContain("SyntheticUser");
     });
 
+    it("keeps a module id with a home segment in a console breadcrumb and still redacts a frame path", () => {
+      // The line `appLogger.warn` writes for a failed chunk warm-up.
+      const line = `[traycer-log] ${JSON.stringify({
+        source: "gui-app",
+        level: "warn",
+        message: "[warm-route-chunks] chunk warm-up failed",
+        fields: {
+          module: "@/components/home/landing-draft-surface",
+          error: { name: "TypeError", messageLength: 12, stack: null },
+        },
+      })}`;
+      const event: ClientSentryEvent = {
+        breadcrumbs: [{ message: line }],
+        exception: {
+          values: [
+            {
+              stacktrace: {
+                frames: [
+                  { filename: "/Users/syn/x.js", abs_path: "/Users/syn/x.js" },
+                ],
+              },
+            },
+          ],
+        },
+      };
+      scrubSentryEventInPlace(event);
+      expect(event.breadcrumbs?.[0]?.message).toContain(
+        "@/components/home/landing-draft-surface",
+      );
+      expect(event.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({
+        filename: "/Users/<redacted>/x.js",
+        abs_path: "/Users/<redacted>/x.js",
+      });
+    });
+
     it("groups events that differ only by the home name, and is idempotent", () => {
       const a = buildEvent("synthetic-user", "SyntheticUser");
       const b = buildEvent("other-synthetic-user", "OtherSyntheticUser");
