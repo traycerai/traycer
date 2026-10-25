@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
@@ -6,6 +13,7 @@ import {
   handPendingSandboxSend,
   pickedRunSettings,
   requestedAgentReadiness,
+  returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
   readStagedSandbox,
@@ -17,10 +25,16 @@ import {
   usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { listDraftInventory } from "@/lib/drafts/draft-inventory";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { runSilentCapableEpicTerminalCreate } from "@/lib/terminals/epic-terminal-silent-create";
 import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
   harnessRow,
+  pendingSend,
   providerRow,
 } from "./pending-send-fixtures";
 
@@ -216,6 +230,187 @@ describe("handPendingSandboxSend", () => {
 
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(readStagedSandbox(pendingSendSurfaceKey(id))).toBeNull();
+  });
+});
+
+describe("returnPendingSandboxSend", () => {
+  function signInAsPendingSendOwner(): void {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+  }
+
+  function contentWith(text: string) {
+    return {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text }],
+        },
+      ],
+    };
+  }
+
+  it("preserves an occupied task composer and puts a returned send in a fresh closed landing draft", () => {
+    signInAsPendingSendOwner();
+    const occupiedContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "keep my replacement" }],
+        },
+      ],
+    };
+    useNewConversationModalStore
+      .getState()
+      .setContent("epic-1", occupiedContent);
+    useNewConversationModalStore.getState().setSettings("epic-1", {
+      ...PICKED_SETTINGS,
+      model: "a different model",
+    });
+    usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+
+    const returned = returnPendingSandboxSend("send-1");
+
+    expect(returned.kind).toBe("landing-draft");
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({
+      content: occupiedContent,
+      settings: { model: "a different model" },
+    });
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+    ]);
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+  });
+
+  it("keeps every orphaned return in its own closed landing draft", () => {
+    signInAsPendingSendOwner();
+    // An existing settings-only pick is an occupied modal, even without text.
+    useNewConversationModalStore
+      .getState()
+      .setSettings("epic-1", PICKED_SETTINGS);
+    usePendingSandboxSendStore.getState().add(
+      pendingSend({
+        id: "send-a",
+        content: contentWith("first returned message"),
+        text: "first returned message",
+      }),
+    );
+    usePendingSandboxSendStore.getState().add(
+      pendingSend({
+        id: "send-b",
+        content: contentWith("second returned message"),
+        text: "second returned message",
+      }),
+    );
+
+    const first = returnPendingSandboxSend("send-a");
+    const second = returnPendingSandboxSend("send-b");
+
+    expect(first.kind).toBe("landing-draft");
+    expect(second.kind).toBe("landing-draft");
+    if (first.kind !== "landing-draft" || second.kind !== "landing-draft") {
+      throw new Error("expected landing drafts");
+    }
+    expect(first.draftId).not.toBe(second.draftId);
+    const rows = listDraftInventory({
+      scope: { surface: "landing", activeDraftId: null },
+      filter: "current",
+      landing: useLandingDraftStore.getState().drafts,
+      composer: {},
+      newChat: {},
+      openChatIds: new Set(),
+      liveSessionHostIds: new Set(),
+    });
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: first.draftId,
+          kind: "landing",
+          preview: "first returned message",
+          open: false,
+        }),
+        expect.objectContaining({
+          id: second.draftId,
+          kind: "landing",
+          preview: "second returned message",
+          open: false,
+        }),
+      ]),
+    );
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+  });
+});
+
+describe("runSilentCapableEpicTerminalCreate", () => {
+  it("adopts the durable terminal the host already created after a duplicate create refusal", async () => {
+    const scope = { kind: "epic" as const, epicId: "epic-1" };
+    const terminal: PlainTerminalProjection = {
+      record: {
+        terminalId: "terminal-pending-send",
+        hostId: mockLocalHostEntry.hostId,
+        scope,
+        launch: {
+          cwd: "/home/sandbox",
+          shellCommand: "/bin/zsh",
+          shellArgs: [],
+        },
+        manualTitle: null,
+        revision: 1,
+        createdAt: "2026-10-25T00:00:00.000Z",
+        updatedAt: "2026-10-25T00:00:00.000Z",
+      },
+      runtime: { status: "dormant" },
+    };
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "terminal-request",
+      handlers: {
+        "terminal.plain.create": () => {
+          throw new Error("terminal already exists");
+        },
+        "terminal.plain.list": () => ({
+          coverage: "complete-fleet",
+          scope,
+          terminals: [terminal],
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(new QueryClient()),
+      messenger,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+
+    await expect(
+      runSilentCapableEpicTerminalCreate({
+        client: spine.createRequester(mockLocalHostEntry),
+        request: {
+          terminalId: terminal.record.terminalId,
+          scope,
+          cwd: "/home/sandbox",
+          cols: 80,
+          rows: 24,
+        },
+      }),
+    ).resolves.toEqual(terminal);
+    expect(messenger.calls.map((call) => call.method)).toEqual([
+      "terminal.plain.create",
+      "terminal.plain.list",
+    ]);
   });
 });
 

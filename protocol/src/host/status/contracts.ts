@@ -853,9 +853,12 @@ export const hostStatusUpgradeV17ToV18 = defineUpgradePath<
 export const hostStatusAgentSessionSchema = lazySchema(() =>
   z.object({
     kind: z.enum(["chat", "terminal-agent"]),
-    /** The task (epic) it runs in; `null` when the host does not know it. */
+    /** The task (epic) it runs in; `null` when private or unknown to the caller. */
     taskId: z.string().nullable(),
-    /** The chat id, or the terminal agent's session id. */
+    /**
+     * Canonical chat or terminal-agent session id only for its owner. Other
+     * callers receive an opaque response-local id that cannot open a session.
+     */
     sessionId: z.string().min(1),
     name: z.string().nullable(),
     /** Mid-turn now: the live dot. */
@@ -872,7 +875,12 @@ export type HostStatusAgentSession = z.infer<
  */
 export const hostStatusTerminalSessionSchema = lazySchema(() =>
   z.object({
+    /** The task (epic) it runs in; `null` when private or unknown to the caller. */
     taskId: z.string().nullable(),
+    /**
+     * Canonical terminal id only for its owner. Other callers receive an
+     * opaque response-local id that cannot open a session.
+     */
     sessionId: z.string().min(1),
     name: z.string().nullable(),
   }),

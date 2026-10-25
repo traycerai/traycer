@@ -8,6 +8,7 @@
  * `providers` answers, `epic.createChat` and the terminal create.
  */
 import { useSyncExternalStore } from "react";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   recordNegotiatedHostManifest,
@@ -70,6 +71,11 @@ import {
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
+import {
+  recordMapStorageKey,
+  recordMapStoragePrefix,
+} from "@/lib/persist/keys";
 import {
   PendingSandboxSendStrip,
   PendingSandboxSendsDriver,
@@ -108,6 +114,7 @@ const mocks = vi.hoisted(() => ({
   answerListeners: new Set<() => void>(),
   answerVersion: 0,
   createChatCalls: [] as unknown[],
+  createChatError: null as Error | null,
   openTile: vi.fn<(intent: unknown) => void>(),
   openEnvironmentPage:
     vi.fn<
@@ -247,6 +254,9 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
         clientHostId: client === null ? null : client.hostId,
         input,
       });
+      if (mocks.createChatError !== null) {
+        return Promise.reject(mocks.createChatError);
+      }
       return Promise.resolve({
         chatId: input.chatId,
         initialTurnStarted: true,
@@ -274,6 +284,15 @@ vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
     readonly hostId: string;
     readonly cwd: string;
   }) => ({ type: "terminal", hostId: target.hostId, cwd: target.cwd }),
+  mintPendingSandboxTerminalTile: (
+    target: { readonly hostId: string; readonly cwd: string },
+    sendId: string,
+  ) => ({
+    type: "terminal",
+    hostId: target.hostId,
+    cwd: target.cwd,
+    sendId,
+  }),
 }));
 vi.mock("@/lib/commands/actions/new-chat", () => ({
   openCreatedChatWhenProjectedWithNavigation: vi.fn(),
@@ -507,6 +526,7 @@ beforeEach(() => {
   userSignedIn();
   mocks.hostAnswers.clear();
   mocks.createChatCalls.length = 0;
+  mocks.createChatError = null;
   mocks.openTile.mockReset();
   mocks.openEnvironmentPage.mockReset();
   mocks.environments = [];
@@ -794,6 +814,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(
       SANDBOX_HOST,
     );
+    expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(SEND_ID);
   });
 
   it("shows the setup line above the pending message, and the line opens to its steps", () => {
@@ -843,6 +864,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(
       SANDBOX_HOST,
     );
+    expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(SEND_ID);
     expect(createChatCalls()).toEqual([]);
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(readStagedSandbox(SURFACE)).toBeNull();
@@ -854,21 +876,17 @@ describe("a send waiting for the requested agent on its sandbox", () => {
 describe("a send that survives a reload", () => {
   /** The two persisted stores as a reload finds them. */
   async function reload(): Promise<void> {
-    const staged = localStorage.getItem(
+    const staged = snapshotRecordMapStorage(
       persistKey(STORE_KEYS.stagedSandboxSend),
     );
-    const sends = localStorage.getItem(
+    const sends = snapshotRecordMapStorage(
       persistKey(STORE_KEYS.pendingSandboxSend),
     );
     cleanup();
     useStagedSandboxStore.setState({ bySurface: {} });
     usePendingSandboxSendStore.setState({ sends: {} });
-    if (staged !== null) {
-      localStorage.setItem(persistKey(STORE_KEYS.stagedSandboxSend), staged);
-    }
-    if (sends !== null) {
-      localStorage.setItem(persistKey(STORE_KEYS.pendingSandboxSend), sends);
-    }
+    restoreRecordMapStorage(persistKey(STORE_KEYS.stagedSandboxSend), staged);
+    restoreRecordMapStorage(persistKey(STORE_KEYS.pendingSandboxSend), sends);
     await useStagedSandboxStore.persist.rehydrate();
     await usePendingSandboxSendStore.persist.rehydrate();
   }
@@ -969,10 +987,10 @@ describe("a send that survives a reload", () => {
     seed(SEEDED);
 
     const record = localStorage.getItem(
-      persistKey(STORE_KEYS.pendingSandboxSend),
+      recordMapStorageKey(persistKey(STORE_KEYS.pendingSandboxSend), SEND_ID),
     );
     const stage = localStorage.getItem(
-      persistKey(STORE_KEYS.stagedSandboxSend),
+      recordMapStorageKey(persistKey(STORE_KEYS.stagedSandboxSend), SURFACE),
     );
 
     if (record === null || stage === null) throw new Error("nothing persisted");
@@ -995,6 +1013,163 @@ describe("a send that survives a reload", () => {
       "epicConfirmed",
       "delivery",
     ]);
+  });
+
+  it("keeps independent pending records when stale windows each persist one", () => {
+    const name = persistKey(STORE_KEYS.pendingSandboxSend);
+    const first = createRecordMapStorage("sends");
+    const second = createRecordMapStorage("sends");
+    first.getItem(name);
+    second.getItem(name);
+    const p = pendingSend({ id: "send-p" });
+    const q = pendingSend({ id: "send-q" });
+
+    first.setItem(
+      name,
+      JSON.stringify({ state: { sends: { [p.id]: p } }, version: 1 }),
+    );
+    second.setItem(
+      name,
+      JSON.stringify({ state: { sends: { [q.id]: q } }, version: 1 }),
+    );
+    const newStorage = createRecordMapStorage("sends");
+
+    expect(localStorage.getItem(recordMapStorageKey(name, p.id))).toBe(
+      JSON.stringify(p),
+    );
+    expect(localStorage.getItem(recordMapStorageKey(name, q.id))).toBe(
+      JSON.stringify(q),
+    );
+    expect(JSON.parse(newStorage.getItem(name) ?? "{}")).toMatchObject({
+      state: { sends: { [p.id]: p, [q.id]: q } },
+    });
+  });
+
+  it("keeps a pending stage when a stale composer window persists its own pick", () => {
+    const name = persistKey(STORE_KEYS.stagedSandboxSend);
+    const first = createRecordMapStorage("bySurface");
+    const second = createRecordMapStorage("bySurface");
+    first.getItem(name);
+    second.getItem(name);
+    const pendingKey = pendingSendSurfaceKey("send-p");
+    const composerKey = "landing:window-2";
+    const pending = { phase: "creating", clientRequestId: "send-p" };
+    const composer = { phase: "staged" };
+
+    first.setItem(
+      name,
+      JSON.stringify({
+        state: { bySurface: { [pendingKey]: pending } },
+        version: 1,
+      }),
+    );
+    second.setItem(
+      name,
+      JSON.stringify({
+        state: { bySurface: { [composerKey]: composer } },
+        version: 1,
+      }),
+    );
+    const newStorage = createRecordMapStorage("bySurface");
+
+    expect(localStorage.getItem(recordMapStorageKey(name, pendingKey))).toBe(
+      JSON.stringify(pending),
+    );
+    expect(localStorage.getItem(recordMapStorageKey(name, composerKey))).toBe(
+      JSON.stringify(composer),
+    );
+    expect(JSON.parse(newStorage.getItem(name) ?? "{}")).toMatchObject({
+      state: { bySurface: { [pendingKey]: pending, [composerKey]: composer } },
+    });
+  });
+});
+
+describe("a send opened in two windows", () => {
+  it("rehydrates after a foreign owner releases and does not deliver its stale pending record", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    const foreignHold = Promise.withResolvers<void>();
+    const locks = {
+      request: vi.fn(
+        (_name: string, _options: LockOptions, callback: () => Promise<void>) =>
+          foreignHold.promise.then(callback),
+      ),
+    };
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: locks,
+    });
+    try {
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+
+      await waitFor(() => {
+        expect(locks.request).toHaveBeenCalledTimes(1);
+      });
+      expect(createChatCalls()).toEqual([]);
+
+      // The other window finished while this one waited. Its storage event has
+      // not reached this stale window; the grant-time rehydrate is the guard.
+      localStorage.setItem(
+        recordMapStorageKey(persistKey(STORE_KEYS.pendingSandboxSend), SEND_ID),
+        "null",
+      );
+      localStorage.setItem(
+        recordMapStorageKey(persistKey(STORE_KEYS.stagedSandboxSend), SURFACE),
+        "null",
+      );
+      foreignHold.resolve();
+
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(createChatCalls()).toEqual([]);
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+    } finally {
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
+  });
+
+  it("cancels a queued lock when its driver unmounts", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    const locks = {
+      request: vi.fn(
+        (
+          _name: string,
+          _options: LockOptions,
+          _callback: () => Promise<void>,
+        ) => new Promise<void>(() => undefined),
+      ),
+    };
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: locks,
+    });
+    try {
+      seed(SEEDED);
+      const view = mount();
+
+      await waitFor(() => {
+        expect(locks.request).toHaveBeenCalledTimes(1);
+      });
+      view.unmount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(locks.request.mock.calls.at(0)?.[1].signal?.aborted).toBe(true);
+      expect(createChatCalls()).toEqual([]);
+    } finally {
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
   });
 });
 
@@ -1200,29 +1375,76 @@ describe("a send whose task may not exist yet", () => {
   };
 
   it("gives a record that came back from a reload without its task confirmed back to a start-task draft, creating and waking nothing", async () => {
-    // Seeded the way a rehydrated record is: this window never handed it.
-    seed({
-      ...SEEDED,
-      send: { epicConfirmed: false },
-      phase: "creating",
-      created: false,
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
     });
-    mocks.createSandbox.mockResolvedValue(CREDITS_REFUSED);
-    mount();
+    try {
+      // Seeded the way a rehydrated record is: this window never handed it.
+      seed({
+        ...SEEDED,
+        send: { epicConfirmed: false },
+        phase: "creating",
+        created: false,
+      });
+      mocks.createSandbox.mockResolvedValue(CREDITS_REFUSED);
+      mount();
 
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(readStagedSandbox(SURFACE)).toBeNull();
-    expect(mocks.createSandbox).not.toHaveBeenCalled();
-    expect(mocks.wake).not.toHaveBeenCalled();
-    expect(createChatCalls()).toEqual([]);
-    // Its only copy is not dropped: the message is a draft again, put away
-    // in the Drafts list, with the composer left where it was.
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
-    ]);
-    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(createChatCalls()).toEqual([]);
+      // Its only copy is not dropped: the message is a draft again, put away
+      // in the Drafts list, with the composer left where it was.
+      expect(useLandingDraftStore.getState().drafts).toMatchObject([
+        { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+      ]);
+      expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+    } finally {
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
+  });
+
+  it("keeps an unconfirmed send in a shell without exclusive locks", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Reflect.deleteProperty(navigator, "locks");
+    try {
+      seed({
+        ...SEEDED,
+        send: { epicConfirmed: false },
+        phase: "creating",
+        created: false,
+      });
+      mount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+      expect(readStagedSandbox(SURFACE)).not.toBeNull();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+    } finally {
+      if (originalLocks !== undefined) {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
   });
 
   it("gives a confirmed send whose stage is gone back to its task's composer, and leaves another account's send alone", async () => {
@@ -1554,6 +1776,70 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
   });
 });
 
+describe("a fork waiting on its sandbox", () => {
+  it("keeps its staged handoff after a checkpoint-publishing rejection and retries only after Retry", async () => {
+    seed({
+      ...SEEDED,
+      send: {
+        request: {
+          kind: "fork",
+          parentId: null,
+          title: "Sandbox fork",
+          forkSource: {
+            boundary: "assistantMessage",
+            sourceChatId: "source-chat",
+            assistantMessageId: "assistant-message-1",
+            interviewBlockId: null,
+            carriedInterviews: "settled",
+            sourceOwnerUserId: null,
+          },
+          tabId: "tab-1",
+        },
+      },
+    });
+    mocks.createChatError = new HostRpcError({
+      code: "E_FORK_BOUNDARY_NOT_PUBLISHED",
+      message: "Checkpoint is still publishing.",
+      requestId: "request-1",
+      method: "epic.createChat",
+      fatalDetails: null,
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toEqual({ kind: "not-sent" });
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      createdSandboxId: SANDBOX_ID,
+      failure: { kind: "not-sent" },
+    });
+    expect(createChatCalls()).toHaveLength(1);
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toMatchObject({
+      delivery: null,
+    });
+    expect(
+      within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+        name: "Retry",
+      }),
+    ).toBeDefined();
+
+    mocks.createChatError = null;
+    fireEvent.click(
+      within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    await waitForCreateChats(2);
+    expect(createChatCalls()[1]?.input.chatId).toBe(
+      createChatCalls()[0]?.input.chatId,
+    );
+  });
+});
+
 describe("the ready line above an agent whose first message waited", () => {
   function delivered(): PendingSandboxSend {
     return pendingSend({
@@ -1613,23 +1899,40 @@ function flattenKeys(value: unknown): Record<string, true> {
   return keys;
 }
 
-/** The one send in the persisted pending-sends JSON. */
+/** The one send in its own persisted record. */
 function sendOf(json: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(json);
-  if (typeof parsed !== "object" || parsed === null || !("state" in parsed)) {
+  if (typeof parsed !== "object" || parsed === null) {
     throw new Error("unexpected persisted shape");
   }
-  const state = parsed.state;
-  if (typeof state !== "object" || state === null || !("sends" in state)) {
-    throw new Error("unexpected persisted shape");
+  return Object.fromEntries(Object.entries(parsed));
+}
+
+function snapshotRecordMapStorage(
+  name: string,
+): ReadonlyArray<readonly [string, string]> {
+  const prefix = recordMapStoragePrefix(name);
+  const entries: Array<readonly [string, string]> = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key === null || (key !== name && !key.startsWith(prefix))) continue;
+    const value = localStorage.getItem(key);
+    if (value !== null) entries.push([key, value]);
   }
-  const sends = state.sends;
-  if (typeof sends !== "object" || sends === null) {
-    throw new Error("unexpected persisted shape");
+  return entries;
+}
+
+function restoreRecordMapStorage(
+  name: string,
+  entries: ReadonlyArray<readonly [string, string]>,
+): void {
+  const prefix = recordMapStoragePrefix(name);
+  const keys: string[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key === name || (key !== null && key.startsWith(prefix)))
+      keys.push(key);
   }
-  const first: unknown = Object.values(sends)[0];
-  if (typeof first !== "object" || first === null) {
-    throw new Error("unexpected persisted shape");
-  }
-  return Object.fromEntries(Object.entries(first));
+  for (const key of keys) localStorage.removeItem(key);
+  for (const [key, value] of entries) localStorage.setItem(key, value);
 }

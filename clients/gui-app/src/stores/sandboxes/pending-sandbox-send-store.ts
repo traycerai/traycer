@@ -6,9 +6,15 @@ import type { CreateChatForkSourceV11 } from "@traycer/protocol/host/epic/unary-
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import { PENDING_SEND_SURFACE_PREFIX } from "@/stores/composer/staged-sandbox-store";
+import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
 /** What a pending send makes on its sandbox once the requested agent is ready. */
 export type PendingSandboxSendRequest =
@@ -155,7 +161,7 @@ export const usePendingSandboxSendStore =
       }),
       {
         ...basePersistOptions(persistKey(STORE_KEYS.pendingSandboxSend)),
-        storage: createJSONStorage(() => localStorage),
+        storage: createJSONStorage(() => createRecordMapStorage("sends")),
         // Pasted images are kept by hash, as a sent draft's are.
         partialize: (state) => ({
           sends: Object.fromEntries(
@@ -168,6 +174,11 @@ export const usePendingSandboxSendStore =
       },
     ),
   );
+
+installCrossWindowRehydrate(
+  usePendingSandboxSendStore,
+  persistKey(STORE_KEYS.pendingSandboxSend),
+);
 
 // A send's message is the only copy of it once its draft is gone: its images
 // stay rooted against the landing GC until it is delivered, when its agent's

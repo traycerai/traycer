@@ -5,7 +5,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { v4 as uuidv4 } from "uuid";
+import { v5 as uuidv5 } from "uuid";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -26,7 +27,7 @@ import {
   useStagedSandboxWaker,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
-  mintNewEpicTerminalTile,
+  mintPendingSandboxTerminalTile,
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { findDefaultModel } from "@/components/home/data/landing-options";
@@ -72,6 +73,11 @@ import {
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
+  holdPendingSandboxSendOwnership,
+  ownsPendingSandboxSend,
+  ownsPendingSandboxSendExclusively,
+} from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import {
   settleVerdict,
   stagedRunActive,
 } from "@/lib/sandboxes/staged-sandbox-run";
@@ -115,14 +121,51 @@ const SEND_OWNER_STAYS: HandoffOwnerWatch = () => () => undefined;
  */
 export function PendingSandboxSendsDriver(): ReactNode {
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  const stages = useStagedSandboxStore((state) => state.bySurface);
   const ids = usePendingSandboxSendStore(
     useShallow((state) =>
       Object.values(state.sends)
-        .filter((send) => send.delivery === null && send.userId === userId)
+        .filter((send) => {
+          if (send.delivery !== null || send.userId !== userId) return false;
+          const stage = stages[pendingSendSurfaceKey(send.id)];
+          // Once a terminal is ready, its visible task strip owns the open.
+          // A background window must let that window take the lock.
+          return !(
+            send.request.kind === "terminal" &&
+            stage?.phase === "handoff" &&
+            stage.failure === null
+          );
+        })
         .map((send) => send.id),
     ),
   );
-  return ids.map((id) => <PendingSendDriver key={id} id={id} />);
+  return ids.map((id) => <OwnedPendingSendDriver key={id} id={id} />);
+}
+
+/**
+ * Only one window drives a send. A queued window re-reads storage when it
+ * takes ownership: its hydrated copy may already have been delivered or
+ * cancelled. Closing the owner releases the lock for the next window.
+ */
+function OwnedPendingSendDriver(props: { readonly id: string }): ReactNode {
+  const navigatorWithLocks: { readonly locks?: LockManager } = navigator;
+  const [owned, setOwned] = useState(
+    () =>
+      ownsPendingSandboxSend(props.id) ||
+      navigatorWithLocks.locks === undefined,
+  );
+  useEffect(() => {
+    let disposed = false;
+    const ownership = holdPendingSandboxSendOwnership(props.id);
+    void ownership.ready.then((granted) => {
+      if (!disposed && granted) setOwned(true);
+    });
+    return () => {
+      disposed = true;
+      ownership.release();
+    };
+  }, [props.id]);
+  return owned ? <PendingSendDriver id={props.id} /> : null;
 }
 
 function PendingSendDriver(props: { readonly id: string }): ReactNode {
@@ -148,7 +191,10 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
   // it is dropped, so no sandbox is billed for a task that is not there.
   const epicConfirmed = send?.epicConfirmed;
   const lostTask =
-    send !== null && !epicConfirmed && !pendingSandboxSendHandedHere(props.id);
+    send !== null &&
+    !epicConfirmed &&
+    !pendingSandboxSendHandedHere(props.id) &&
+    ownsPendingSandboxSendExclusively(props.id);
   // Its message goes back to a start-task draft: the send held its only copy.
   useEffect(() => {
     if (lostTask) returnPendingSandboxSend(props.id);
@@ -454,8 +500,11 @@ function prepareAndDeliverSend(input: {
         latest === null ||
         latest.phase !== "handoff" ||
         latest.failure !== null ||
+        latest.createdHostId !== hostId ||
+        !ownsPendingSandboxSend(send.id) ||
         !Object.hasOwn(sends, send.id) ||
-        sends[send.id].delivery !== null
+        sends[send.id].delivery !== null ||
+        (useAuthStore.getState().profile?.userId ?? null) !== send.userId
       ) {
         return;
       }
@@ -557,9 +606,15 @@ function deliverPendingSend(input: {
   const now = Date.now();
   const userId = send.userId;
   const epicId = send.epicId;
-  const chatId = uuidv4();
-  const messageId = uuidv4();
-  const clientActionId = uuidv4();
+  const chatId = uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL);
+  const messageId = uuidv5(
+    `pending-sandbox-send:${send.id}:message`,
+    uuidv5.URL,
+  );
+  const clientActionId = uuidv5(
+    `pending-sandbox-send:${send.id}:action`,
+    uuidv5.URL,
+  );
   useInitialChatHandoffStore.getState().register({
     hostId,
     userId,
@@ -646,10 +701,9 @@ function deliverPendingSend(input: {
 }
 
 /**
- * Forks the chat onto the sandbox, once, by the same rule as a message: the
- * send is marked delivered and its stage cleared before the create goes out.
- * The fork opens in the tab its dialog was in. A refusal or a failure is
- * reported by the create itself, and the send ends with it.
+ * Keeps the fork pending until its create settles. Its stable chat id makes
+ * taking it up after a window closes safe; a checkpoint still publishing
+ * stays on the same sandbox's pending line for retry.
  */
 function deliverPendingFork(input: {
   readonly send: PendingSandboxSend;
@@ -661,20 +715,12 @@ function deliverPendingFork(input: {
   readonly navigateNestedFocus: NavigateNestedFocus;
 }): void {
   const { send, request, stage, hostId, settings } = input;
+  if (deliveriesPreparing.has(send.id)) return;
+  deliveriesPreparing.add(send.id);
   const now = Date.now();
-  const chatId = uuidv4();
-  usePendingSandboxSendStore.getState().markDelivered(send.id, {
-    chatId,
-    hostId,
-    sandboxId: stage.createdSandboxId ?? "",
-    readySeconds: Math.max(
-      0,
-      Math.round((now - (stage.startedAt ?? now)) / 1000),
-    ),
-  });
-  useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
+  const chatId = uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL);
   const ended = (): void => {
-    usePendingSandboxSendStore.getState().remove(send.id);
+    endPendingSandboxSend(send.id);
   };
   void input
     .createChat({
@@ -695,6 +741,25 @@ function deliverPendingFork(input: {
         ended();
         return;
       }
+      const { sends } = usePendingSandboxSendStore.getState();
+      const current = sends[send.id];
+      if (
+        !Object.hasOwn(sends, send.id) ||
+        current.delivery !== null ||
+        (useAuthStore.getState().profile?.userId ?? null) !== send.userId
+      ) {
+        return;
+      }
+      usePendingSandboxSendStore.getState().markDelivered(send.id, {
+        chatId,
+        hostId,
+        sandboxId: stage.createdSandboxId ?? "",
+        readySeconds: Math.max(
+          0,
+          Math.round((now - (stage.startedAt ?? now)) / 1000),
+        ),
+      });
+      useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
       Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
         source: "direct_ui",
         include_history: true,
@@ -711,7 +776,26 @@ function deliverPendingFork(input: {
         navigateNestedFocus: input.navigateNestedFocus,
       });
     })
-    .catch(ended);
+    .catch((error: unknown) => {
+      if (
+        error instanceof HostRpcError &&
+        error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
+      ) {
+        const { sends } = usePendingSandboxSendStore.getState();
+        const current = sends[send.id];
+        if (
+          !Object.hasOwn(sends, send.id) ||
+          current.delivery !== null ||
+          (useAuthStore.getState().profile?.userId ?? null) !== send.userId
+        ) {
+          return;
+        }
+        notSent(pendingSendSurfaceKey(send.id));
+        return;
+      }
+      ended();
+    })
+    .finally(() => deliveriesPreparing.delete(send.id));
 }
 
 /**
@@ -785,7 +869,7 @@ function PendingSendItem(props: {
       open: (target: TerminalLaunchTarget) => {
         openTile(
           tileIntent(
-            mintNewEpicTerminalTile({ ...target, epicId }),
+            mintPendingSandboxTerminalTile({ ...target, epicId }, props.id),
             { tabId: props.tabId },
             "explicit",
             "direct_ui",
@@ -793,7 +877,7 @@ function PendingSendItem(props: {
         );
       },
     }),
-    [epicId, openTile, props.tabId],
+    [epicId, openTile, props.id, props.tabId],
   );
   const newHost = useNewHostActions(
     surfaceKey,
@@ -866,8 +950,30 @@ function useOpenTerminalWhenUp(
   const sendId = send?.id ?? null;
   useEffect(() => {
     if (!terminalReady || sendId === null) return;
-    openTerminal();
-    endPendingSandboxSend(sendId);
+    let disposed = false;
+    const ownership = holdPendingSandboxSendOwnership(sendId);
+    void ownership.ready.then((granted) => {
+      const { sends } = usePendingSandboxSendStore.getState();
+      const current = sends[sendId];
+      const currentStage = readStagedSandbox(pendingSendSurfaceKey(sendId));
+      if (
+        disposed ||
+        !granted ||
+        !Object.hasOwn(sends, sendId) ||
+        current.delivery !== null ||
+        currentStage?.phase !== "handoff" ||
+        currentStage.failure !== null ||
+        (useAuthStore.getState().profile?.userId ?? null) !== current.userId
+      ) {
+        return;
+      }
+      openTerminal();
+      endPendingSandboxSend(sendId);
+    });
+    return () => {
+      disposed = true;
+      ownership.release();
+    };
   }, [openTerminal, sendId, terminalReady]);
 }
 

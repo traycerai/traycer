@@ -34,6 +34,8 @@ import { mintDraftId } from "@/lib/drafts/draft-ids";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+import { reservePendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 
 /** Whether the agent the person asked for can take the message on the sandbox. */
 export type RequestedAgentReadiness =
@@ -119,6 +121,19 @@ export function handPendingSandboxSend(
   if (stage === null || stage.phase === "handoff") return null;
   const id = uuidv4();
   const surfaceKey = pendingSendSurfaceKey(id);
+  reservePendingSandboxSendOwnership(id);
+  handedThisSession.add(id);
+  const store = useStagedSandboxStore.getState();
+  store.adopt(input.fromSurfaceKey, surfaceKey);
+  // Publish the stage first: a different window must never see a send with
+  // its stage missing, nor mint a different sandbox create key for it.
+  store.report(surfaceKey, {
+    clientRequestId: stage.clientRequestId ?? id,
+    ownerId: null,
+    sendTaken: true,
+    terminalLaunch: null,
+    openTerminal: false,
+  });
   usePendingSandboxSendStore.getState().add({
     id,
     userId: useAuthStore.getState().profile?.userId ?? null,
@@ -130,17 +145,6 @@ export function handPendingSandboxSend(
     createdAt: input.now,
     epicConfirmed: input.epicConfirmed,
     delivery: null,
-  });
-  handedThisSession.add(id);
-  const store = useStagedSandboxStore.getState();
-  store.adopt(input.fromSurfaceKey, surfaceKey);
-  // The message is this send's; a terminal asked for on the composer's stage
-  // is dropped with the move.
-  store.report(surfaceKey, {
-    ownerId: null,
-    sendTaken: true,
-    terminalLaunch: null,
-    openTerminal: false,
   });
   return id;
 }
@@ -164,15 +168,16 @@ export function confirmPendingSandboxSendEpic(id: string): void {
 
 /** Ends a pending send: its stage and its record go; a sandbox it made stays. */
 export function endPendingSandboxSend(id: string): void {
-  useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(id));
   usePendingSandboxSendStore.getState().remove(id);
+  useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(id));
+  handedThisSession.delete(id);
 }
 
 /** Where an undelivered send's message went back to. */
 export type ReturnedPendingSandboxSend =
   /** Nothing to give back: a terminal ask, a fork (its chat is still there), or a send already gone. */
   | { readonly kind: "none" }
-  /** Its task never came to be: a put-away start-task draft holds it now. */
+  /** A put-away start-task draft holds it, preserving any occupied task draft. */
   | { readonly kind: "landing-draft"; readonly draftId: string }
   /** Its task's new-agent composer holds it now, for the pane it named. */
   | {
@@ -186,8 +191,8 @@ export type ReturnedPendingSandboxSend =
  * Ends a send that was not delivered and gives its whole message back, as
  * the person wrote it: once handed, the send is the message's only copy, so
  * no exit drops it. Its text, mentions and images, and the agent, model and
- * mode it was sent with, go back to the task's new-agent composer when the
- * task exists, and to a fresh start-task draft when it does not: put away,
+ * mode it was sent with, go back to the task's empty new-agent composer when
+ * available, and to a fresh start-task draft otherwise: put away,
  * at the top of the Drafts list, so a give-back on a reload or a sign-in
  * never takes over the composer; a caller with the person's attention opens
  * it.
@@ -198,14 +203,30 @@ export function returnPendingSandboxSend(
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
   const send = sends[id];
-  if (send.delivery !== null) return { kind: "none" };
+  if (
+    send.delivery !== null ||
+    (useAuthStore.getState().profile?.userId ?? null) !== send.userId
+  ) {
+    return { kind: "none" };
+  }
   const { request } = send;
   // Written back before the record goes, so the images stay rooted throughout.
   let returned: ReturnedPendingSandboxSend = { kind: "none" };
-  if (request.kind === "chat" && send.epicConfirmed) {
-    const modal = useNewConversationModalStore.getState();
+  const modal = useNewConversationModalStore.getState();
+  const draft = modal.draftPatchesByEpicId[send.epicId];
+  // Settings, workspace and selection can be a draft even before its first
+  // character. Never replace a person's intervening choice on a give-back.
+  const occupied =
+    draft !== undefined &&
+    ((draft.content !== null && !isEmptyLandingDraftContent(draft.content)) ||
+      draft.settings !== null ||
+      draft.workspace !== null ||
+      draft.composerMode !== null ||
+      draft.selection !== null);
+  if (request.kind === "chat" && send.epicConfirmed && !occupied) {
     modal.setContent(send.epicId, send.content);
     modal.setSettings(send.epicId, send.settings);
+    modal.clearSelection(send.epicId);
     returned = {
       kind: "task",
       epicId: send.epicId,

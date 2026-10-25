@@ -18,6 +18,11 @@ export const scopeBucket = (value: string | null): string =>
 
 export const persistKey = (name: string): string => `${PERSIST_PREFIX}:${name}`;
 
+export const recordMapStoragePrefix = (name: string): string =>
+  `${name}:records:`;
+export const recordMapStorageKey = (name: string, id: string): string =>
+  `${recordMapStoragePrefix(name)}${encodeURIComponent(id)}`;
+
 export const scopedPersistKey = (name: string, ...segments: string[]): string =>
   [persistKey(name), ...segments].join(":");
 

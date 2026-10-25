@@ -1,4 +1,5 @@
 import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { recordMapStoragePrefix } from "@/lib/persist/keys";
 import { pendingSendSurfaceKey } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -243,11 +244,11 @@ describe("staged sandbox store", () => {
       step: "booting",
       stepAt: 4_000,
     });
-    const persisted = localStorage.getItem(STAGE_STORAGE_KEY);
+    const persisted = persistedStageStorage();
 
     useStagedSandboxStore.setState({ bySurface: {} });
     expect(readStagedSandbox(key)).toBeNull();
-    if (persisted !== null) localStorage.setItem(STAGE_STORAGE_KEY, persisted);
+    restoreStageStorage(persisted);
     await useStagedSandboxStore.persist.rehydrate();
 
     expect(readStagedSandbox(key)).toMatchObject({
@@ -301,17 +302,49 @@ const STAGE_STORAGE_KEY = persistKey(STORE_KEYS.stagedSandboxSend);
 
 /** The surfaces the store wrote to storage. */
 function persistedSurfaceKeys(): string[] {
-  const raw = localStorage.getItem(STAGE_STORAGE_KEY);
-  if (raw === null) return [];
-  const parsed: unknown = JSON.parse(raw);
-  if (typeof parsed !== "object" || parsed === null || !("state" in parsed)) {
-    return [];
+  const prefix = recordMapStoragePrefix(STAGE_STORAGE_KEY);
+  const keys: string[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (
+      key !== null &&
+      key.startsWith(prefix) &&
+      localStorage.getItem(key) !== "null"
+    ) {
+      keys.push(decodeURIComponent(key.slice(prefix.length)));
+    }
   }
-  const state = parsed.state;
-  if (typeof state !== "object" || state === null) return [];
-  if (!("bySurface" in state)) return [];
-  const bySurface = state.bySurface;
-  return typeof bySurface === "object" && bySurface !== null
-    ? Object.keys(bySurface)
-    : [];
+  return keys;
+}
+
+function persistedStageStorage(): ReadonlyArray<readonly [string, string]> {
+  const prefix = recordMapStoragePrefix(STAGE_STORAGE_KEY);
+  const entries: Array<readonly [string, string]> = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (
+      key === null ||
+      (key !== STAGE_STORAGE_KEY && !key.startsWith(prefix))
+    ) {
+      continue;
+    }
+    const value = localStorage.getItem(key);
+    if (value !== null) entries.push([key, value]);
+  }
+  return entries;
+}
+
+function restoreStageStorage(
+  entries: ReadonlyArray<readonly [string, string]>,
+): void {
+  const prefix = recordMapStoragePrefix(STAGE_STORAGE_KEY);
+  const keys: string[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key === STAGE_STORAGE_KEY || (key !== null && key.startsWith(prefix))) {
+      keys.push(key);
+    }
+  }
+  for (const key of keys) localStorage.removeItem(key);
+  for (const [key, value] of entries) localStorage.setItem(key, value);
 }

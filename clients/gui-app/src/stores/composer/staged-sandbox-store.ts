@@ -1,12 +1,18 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  basePersistOptions,
+  installCrossWindowRehydrate,
+  persistKey,
+  STORE_KEYS,
+} from "@/lib/persist";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
   StageConfiguration,
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
 /**
  * What a composer surface has picked and not yet started: a new sandbox to
@@ -211,6 +217,7 @@ interface StagedSandboxStoreState {
       Pick<
         StagedSandbox,
         | "phase"
+        | "clientRequestId"
         | "ownerId"
         | "createdSandboxId"
         | "createdHostId"
@@ -364,10 +371,32 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.stagedSandboxSend)),
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => createRecordMapStorage("bySurface")),
       partialize: (state) => ({ bySurface: persistedStages(state.bySurface) }),
+      merge: (persisted, current) => ({
+        ...current,
+        bySurface: {
+          // A different window writes only pending sends. Its snapshot must
+          // never erase this window's unsubmitted composer picks.
+          ...Object.fromEntries(
+            Object.entries(current.bySurface).filter(
+              ([key]) => !key.startsWith(PENDING_SEND_SURFACE_PREFIX),
+            ),
+          ),
+          ...(
+            persisted as
+              | Partial<Pick<StagedSandboxStoreState, "bySurface">>
+              | undefined
+          )?.bySurface,
+        },
+      }),
     },
   ),
+);
+
+installCrossWindowRehydrate(
+  useStagedSandboxStore,
+  persistKey(STORE_KEYS.stagedSandboxSend),
 );
 
 /**
