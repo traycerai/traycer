@@ -21,6 +21,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
   ChatActiveTurn,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -435,6 +439,30 @@ function emitTurnState(
   });
 }
 
+/** A status line of the chat's stream, as its transport reports one. */
+function emitConnectionStatus(
+  chatId: string,
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): void {
+  const callbacks = session(chatId).callbacks();
+  act(() => {
+    callbacks.onConnectionStatus(status, reason, null);
+  });
+}
+
+/** The host refusing the stream for good, which the transport does not redial. */
+const TERMINAL_CLOSE: StreamCloseReason = {
+  kind: "fatalError",
+  details: {
+    code: "CHAT_INVALID",
+    reason: "The chat can no longer be read.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+    retryable: false,
+  },
+};
+
 /** Holds the open thread in its store, as the bot tab above the view does. */
 function ChannelHarness(props: { readonly directive: string }): ReactNode {
   const openThread = useBotOpenThread(BOT_ID);
@@ -598,6 +626,30 @@ describe("<BotChannelView /> the channel's typing line", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
+  });
+
+  it("clears when the trunk's stream closes for good with its turn still counted as running, and reports no failure", async () => {
+    await mountAwaitingDirectReply({ messages: [], ...RUNNING });
+    await screen.findByTestId("bot-channel-replying");
+
+    emitConnectionStatus(TRUNK_ID, "closed", TERMINAL_CLOSE);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
+    });
+    // A closed stream keeps the host's last reading and no frame will clear
+    // it, and losing the stream proves nothing about the turn.
+    expect(session(TRUNK_ID).handle.store.getState().turnInProgress).toBe(true);
+    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+  });
+
+  it("keeps replying while the trunk's stream reconnects, as its turn may yet be running", async () => {
+    await mountAwaitingDirectReply({ messages: [], ...RUNNING });
+    await screen.findByTestId("bot-channel-replying");
+
+    emitConnectionStatus(TRUNK_ID, "reconnecting", null);
+
+    expect(screen.getByTestId("bot-channel-replying")).toBeTruthy();
   });
 
   it("stays out while the trunk runs with no direct post waiting", async () => {

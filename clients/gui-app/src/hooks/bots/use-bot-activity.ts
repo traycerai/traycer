@@ -287,8 +287,13 @@ function useSessionValue<T>(
 
 function readSessionTurn(state: ChatSessionState): SessionTurn {
   // The host's own `turnInProgress`; an active turn from a host that
-  // predates the field.
-  const replying = state.turnInProgress ?? state.activeTurn !== null;
+  // predates the field. A stream that ended keeps its last reading and no
+  // frame will clear it, so a closed session reads idle, never replying; a
+  // reconnect still holds it, as the turn may yet be running.
+  const ended =
+    state.connectionStatus === "closed" || state.fatalClose !== null;
+  const replying =
+    !ended && (state.turnInProgress ?? state.activeTurn !== null);
   let queue: SessionTurn["queue"] = "empty";
   if (state.queue.status === "paused") queue = "paused";
   else if (state.queue.items.length > 0) queue = "pending";
