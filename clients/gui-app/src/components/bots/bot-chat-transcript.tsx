@@ -87,9 +87,13 @@ const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 const CHAT_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 
-/** When the last send to `chatId` that succeeded was submitted; `null` for none. */
-function useLastSendTo(chatId: string): number | null {
-  const submitted = useMutationState({
+/**
+ * The newest successful send to `chatId`, by the cache's mutation id, which
+ * only grows; `null` for none. A mutation the cache later drops can only
+ * lower this, and lowering is never read as a send.
+ */
+function useNewestSendTo(chatId: string): number | null {
+  const sent = useMutationState({
     filters: {
       mutationKey: botMutationKeys.conversationSend(),
       status: "success",
@@ -102,36 +106,49 @@ function useLastSendTo(chatId: string): number | null {
         "conversationId" in variables
           ? variables.conversationId
           : null;
-      return conversationId === chatId ? mutation.state.submittedAt : null;
+      return conversationId === chatId ? mutation.mutationId : null;
     },
   });
-  return submitted.reduce<number | null>(
-    (latest, at) =>
-      at !== null && (latest === null || at > latest) ? at : latest,
+  return sent.reduce<number | null>(
+    (newest, id) =>
+      id !== null && (newest === null || id > newest) ? id : newest,
     null,
   );
 }
 
 /**
- * While `waiting`, re-subscribes once for each send to `chatId` that
- * succeeds: the send is the write that creates the chat on the host.
+ * Re-subscribes once a send to `chatId` succeeds while the view `waiting`
+ * on a chat the host had not created: the send is the write that creates it.
+ * A send that lands while the subscription is still connecting is owed to
+ * the first close after it; one the live view has caught up with is owed
+ * nothing. Sends from before mount are not counted.
  */
 function useResubscribeOnNextSend(input: {
   readonly chatId: string;
   readonly waiting: boolean;
+  readonly caughtUp: boolean;
   readonly retry: () => void;
 }): void {
-  const { chatId, waiting, retry } = input;
-  const lastSend = useLastSendTo(chatId);
-  const seenSend = useRef(lastSend);
+  const { chatId, waiting, caughtUp, retry } = input;
+  const newestSend = useNewestSendTo(chatId);
+  const countedSend = useRef(newestSend);
+  const sendOwed = useRef(false);
   useEffect(() => {
-    if (!waiting || lastSend === seenSend.current) {
-      seenSend.current = lastSend;
+    if (
+      newestSend !== null &&
+      (countedSend.current === null || newestSend > countedSend.current)
+    ) {
+      countedSend.current = newestSend;
+      sendOwed.current = true;
+    }
+    if (caughtUp) {
+      sendOwed.current = false;
       return;
     }
-    seenSend.current = lastSend;
+    if (!waiting || !sendOwed.current) return;
+    sendOwed.current = false;
     retry();
-  }, [lastSend, retry, waiting]);
+  }, [caughtUp, newestSend, retry, waiting]);
 }
 
 /**
@@ -257,6 +274,7 @@ function BotChatTranscriptBody(props: {
   useResubscribeOnNextSend({
     chatId,
     waiting: channelNotHereYet,
+    caughtUp: state.snapshotLoaded && state.fatalClose === null,
     retry: state.retry,
   });
   const profile = useAuthStore((s) => s.profile);

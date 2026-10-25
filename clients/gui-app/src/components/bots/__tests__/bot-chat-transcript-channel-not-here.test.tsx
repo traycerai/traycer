@@ -162,16 +162,18 @@ function mountTranscript(surface: BotTranscriptSurface): void {
 }
 
 /** A `bot.conversation.send` to `conversationId` that succeeds, through the mutation cache. */
-async function sendSucceeded(conversationId: string): Promise<void> {
-  await act(async () => {
-    await queryClient
-      .getMutationCache()
-      .build(queryClient, {
-        mutationKey: botMutationKeys.conversationSend(),
-        mutationFn: () => Promise.resolve({ messageId: "m-1" }),
-      })
-      .execute({ botId: BOT_ID, conversationId, text: "hi" });
+async function sendSucceeded(
+  conversationId: string,
+): Promise<{ readonly evict: () => void }> {
+  const mutation = queryClient.getMutationCache().build(queryClient, {
+    mutationKey: botMutationKeys.conversationSend(),
+    mutationFn: () => Promise.resolve({ messageId: "m-1" }),
   });
+  await act(async () => {
+    await mutation.execute({ botId: BOT_ID, conversationId, text: "hi" });
+  });
+  // The cache dropping it, as its garbage collection does once unobserved.
+  return { evict: () => queryClient.getMutationCache().remove(mutation) };
 }
 
 beforeEach(() => {
@@ -231,6 +233,45 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     expect(retry).toHaveBeenCalledTimes(1);
 
     await sendSucceeded(CHAT_ID);
+    expect(retry).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-subscribes for a send that landed while the subscription was still connecting, once the close arrives", async () => {
+    mountTranscript(CHANNEL_SURFACE);
+    // Connecting: no close yet, and no snapshot.
+    act(() => {
+      store.setState({ fatalClose: null });
+    });
+    await sendSucceeded(CHAT_ID);
+    expect(retry).not.toHaveBeenCalled();
+
+    act(() => {
+      store.setState({ fatalClose: NOT_ON_HOST });
+    });
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("owes nothing for a send the live channel already showed", async () => {
+    mountTranscript(CHANNEL_SURFACE);
+    act(() => {
+      store.setState({ fatalClose: null, snapshotLoaded: true });
+    });
+    await sendSucceeded(CHAT_ID);
+
+    act(() => {
+      store.setState({ fatalClose: NOT_ON_HOST, snapshotLoaded: false });
+    });
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("does not take a send the cache drops for a new one", async () => {
+    mountTranscript(CHANNEL_SURFACE);
+    const first = await sendSucceeded(CHAT_ID);
+    const second = await sendSucceeded(CHAT_ID);
+    expect(retry).toHaveBeenCalledTimes(2);
+
+    act(() => second.evict());
+    act(() => first.evict());
     expect(retry).toHaveBeenCalledTimes(2);
   });
 
