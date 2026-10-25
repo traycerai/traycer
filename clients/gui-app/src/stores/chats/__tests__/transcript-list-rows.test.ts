@@ -14,6 +14,10 @@ import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assis
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   applyIndexChange,
+  applyRangeResponse,
+  applySkeletonChunk,
+  applyWindowedSnapshot,
+  emptyTranscriptWindow,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
@@ -231,6 +235,7 @@ function windowOf(input: {
   liveMessages?: readonly Message[];
   liveEvents?: readonly ChatEvent[];
   staleSpans?: readonly SpanFixture[];
+  carriedSkeleton?: readonly (RowSkeletonEntry | undefined)[];
 }): TranscriptWindow {
   const messageLedger = new Map<
     string,
@@ -298,6 +303,7 @@ function windowOf(input: {
     records: { messages: messageLedger, events: eventLedger, revision: 0 },
     spans,
     staleSpans,
+    carriedSkeleton: input.carriedSkeleton ?? [],
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
     snapshotProvisionalMessageIds: [],
@@ -780,6 +786,9 @@ describe("transcriptListRows", () => {
     });
 
     expect(kinds(rows)).toEqual(["P:0", `H:${liveId}`]);
+    // The placeholder yields the id to the hydrated row rather than draw it
+    // twice - see `placeholderRowsFor`.
+    expect(rows.map((row) => row.key)).toEqual([unplacedRowKey(0), liveId]);
   });
 
   it("keeps a genuinely pending null-record row after void placeholders", () => {
@@ -2019,6 +2028,491 @@ describe("tier-parameterized backing", () => {
 
     expect(kinds(rows)).toEqual([`H:${steerRowId}`]);
     expect(rows[0].ordinal).toBe(0);
+  });
+});
+
+/*
+ * A send voids the index, and before the carried skeleton every row in the
+ * list changed key at once - LegendList then re-walked the whole transcript
+ * against sizes it had cached for OTHER rows under the synthetic keys, and the
+ * reader jumped. These drive the real folds into the real merge and pin that a
+ * row the client can still name keeps its key from the void to completeness.
+ */
+describe("the carried skeleton through a void", () => {
+  function entry(
+    rowId: string,
+    role: RowSkeletonEntry["role"],
+    byteLength: number,
+  ): RowSkeletonEntry {
+    return {
+      rowId,
+      createdAt: 1000,
+      role,
+      byteLength,
+      bodyDigest: `d-${rowId}`,
+    };
+  }
+
+  /** A fresh object per call, as a redelivered chunk would carry. */
+  function heterogeneous(rowIds: readonly string[]): RowSkeletonEntry[] {
+    return rowIds.map((rowId, index) =>
+      entry(rowId, index % 2 === 0 ? "user" : "assistant", 64 << index),
+    );
+  }
+
+  function userRecord(messageId: string): Extract<Message, { role: "user" }> {
+    return {
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 1,
+      sessionAnchor: null,
+    };
+  }
+
+  function snapshot(
+    window: TranscriptWindow,
+    epoch: number,
+    rowCount: number,
+  ): TranscriptWindow {
+    return applyWindowedSnapshot(
+      window,
+      {
+        epoch,
+        rowCount,
+        indexRevision: null,
+        tail: { fromOrdinal: rowCount, messages: [], events: [] },
+      },
+      null,
+      null,
+    );
+  }
+
+  function chunk(
+    window: TranscriptWindow,
+    fromOrdinal: number,
+    entries: readonly RowSkeletonEntry[],
+    isFinal: boolean,
+  ): TranscriptWindow {
+    return applySkeletonChunk(window, {
+      epoch: window.epoch,
+      fromOrdinal,
+      entries: [...entries],
+      isFinal,
+    });
+  }
+
+  function opened(rowIds: readonly string[]): TranscriptWindow {
+    return chunk(
+      snapshot(emptyTranscriptWindow(), 1, rowIds.length),
+      0,
+      heterogeneous(rowIds),
+      true,
+    );
+  }
+
+  function reindexed(
+    window: TranscriptWindow,
+    epoch: number,
+    rowCount: number,
+  ): TranscriptWindow {
+    return applyIndexChange(window, {
+      activeTurnId: null,
+      epoch,
+      rowCount,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+  }
+
+  function keys(rows: readonly TranscriptListRow[]): string[] {
+    return rows.map((row) => row.key);
+  }
+
+  function provenances(rows: readonly TranscriptListRow[]): string[] {
+    return rows.map((row) =>
+      row.kind === "hydrated" ? "hydrated" : row.provenance,
+    );
+  }
+
+  function expectUniqueKeys(rows: readonly TranscriptListRow[]): void {
+    expect(new Set(keys(rows)).size).toBe(rows.length);
+  }
+
+  it("keeps every surviving key from the void through to completeness", () => {
+    const ids = ["r-0", "r-1", "r-2", "r-3", "r-4", "r-5"];
+    const pending = pendingModel("pending-send");
+    const before = opened(ids);
+    const beforeRows = transcriptListRows({
+      window: before,
+      rendered: [pending],
+    });
+    expect(keys(beforeRows)).toEqual([...ids, "pending-send"]);
+
+    // The send: one new row, and the index voided under it.
+    const voided = reindexed(before, 2, 7);
+    expect(voided.invalidated).toBe(true);
+    const voidRows = transcriptListRows({
+      window: voided,
+      rendered: [pending],
+    });
+    expect(keys(voidRows)).toEqual([...ids, unplacedRowKey(6), "pending-send"]);
+    expect(provenances(voidRows)).toEqual([
+      ...ids.map(() => "carried"),
+      "index",
+      "hydrated",
+    ]);
+    // Each carried row shows the descriptor the voided index held for it.
+    voidRows.slice(0, 6).forEach((row, ordinal) => {
+      expect(row.kind === "placeholder" ? row.entry : null).toBe(
+        before.skeleton[ordinal],
+      );
+    });
+
+    const partial = chunk(voided, 0, heterogeneous(["r-0", "r-1"]), false);
+    const partialRows = transcriptListRows({
+      window: partial,
+      rendered: [pending],
+    });
+    expect(keys(partialRows)).toEqual(keys(voidRows));
+    expect(provenances(partialRows).slice(0, 3)).toEqual([
+      "index",
+      "index",
+      "carried",
+    ]);
+
+    const snapshotted = snapshot(partial, 2, 7);
+    expect(snapshotted.invalidated).toBe(false);
+    const snapshotRows = transcriptListRows({
+      window: snapshotted,
+      rendered: [pending],
+    });
+    expect(keys(snapshotRows)).toEqual(keys(voidRows));
+
+    const ranged = applyRangeResponse(
+      snapshotted,
+      {
+        requestId: "req-0",
+        epoch: 2,
+        fromOrdinal: 0,
+        rowIds: ["r-0", "r-1"],
+        incompleteRowIds: [],
+        messages: [userRecord("r-0"), userRecord("r-1")],
+        events: [],
+        rowContext: {},
+        reachedStart: true,
+        reachedEnd: false,
+      },
+      null,
+      null,
+    );
+    const hydratedModels = [model("r-0"), model("r-1"), pending];
+    const rangeRows = transcriptListRows({
+      window: ranged,
+      rendered: hydratedModels,
+    });
+    expect(keys(rangeRows)).toEqual(keys(voidRows));
+    expect(kinds(rangeRows).slice(0, 3)).toEqual(["H:r-0", "H:r-1", "P:2"]);
+
+    // A null-revision snapshot announces a full restream, from ordinal 0.
+    const restreaming = chunk(
+      ranged,
+      0,
+      heterogeneous(["r-0", "r-1", "r-2", "r-3"]),
+      false,
+    );
+    const restreamRows = transcriptListRows({
+      window: restreaming,
+      rendered: hydratedModels,
+    });
+    expect(keys(restreamRows)).toEqual(keys(voidRows));
+    expect(provenances(restreamRows).slice(2, 6)).toEqual([
+      "index",
+      "index",
+      "carried",
+      "carried",
+    ]);
+
+    const complete = chunk(
+      restreaming,
+      4,
+      heterogeneous(["r-4", "r-5", "r-6"]),
+      true,
+    );
+    expect(complete.skeletonComplete).toBe(true);
+    const completeRows = transcriptListRows({
+      window: complete,
+      rendered: hydratedModels,
+    });
+    expect(keys(completeRows)).toEqual([...ids, "r-6", "pending-send"]);
+
+    for (const rows of [
+      voidRows,
+      partialRows,
+      snapshotRows,
+      rangeRows,
+      restreamRows,
+      completeRows,
+    ]) {
+      expectUniqueKeys(rows);
+      // A carried row is never hydrated by the carry: a new epoch still owes
+      // the bodies an authoritative range.
+      for (const row of rows) {
+        if (row.ordinal !== null && row.ordinal >= 2) {
+          expect(row.kind).toBe("placeholder");
+        }
+      }
+    }
+  });
+
+  it("gives a renamed row its new seat mid-void without dropping its key", () => {
+    // The replacement index inserts a row before the carried range, so every
+    // carried ordinal after it is stale. A chunk landing WHILE the window is
+    // still invalidated names `a` one ordinal down: its key moves with it, and
+    // its old carried seat yields rather than draw it twice.
+    const voided = reindexed(opened(["a", "b", "c", "d"]), 2, 5);
+    const shifted = chunk(voided, 0, heterogeneous(["new", "a"]), false);
+    expect(shifted.invalidated).toBe(true);
+
+    const shiftedRows = transcriptListRows({ window: shifted, rendered: [] });
+    expect(keys(shiftedRows)).toEqual([
+      "new",
+      "a",
+      "c",
+      "d",
+      unplacedRowKey(4),
+    ]);
+    expect(provenances(shiftedRows)).toEqual([
+      "index",
+      "index",
+      "carried",
+      "carried",
+      "index",
+    ]);
+
+    // `b`'s old seat is authority's now, so it is absent - not duplicated -
+    // until the chunk naming it arrives.
+    const complete = chunk(shifted, 2, heterogeneous(["b", "c", "d"]), true);
+    const completeRows = transcriptListRows({ window: complete, rendered: [] });
+    expect(keys(completeRows)).toEqual(["new", "a", "b", "c", "d"]);
+    expectUniqueKeys(shiftedRows);
+    expectUniqueKeys(completeRows);
+  });
+
+  it("drops a carried row the complete replacement never names", () => {
+    const voided = reindexed(opened(["a", "b", "c"]), 2, 2);
+    // Ordinals past the new `rowCount` are never emitted.
+    expect(keys(transcriptListRows({ window: voided, rendered: [] }))).toEqual([
+      "a",
+      "b",
+    ]);
+
+    const partial = chunk(voided, 0, heterogeneous(["a"]), false);
+    expect(keys(transcriptListRows({ window: partial, rendered: [] }))).toEqual(
+      ["a", "b"],
+    );
+
+    const complete = chunk(partial, 1, heterogeneous(["c"]), true);
+    expect(complete.carriedSkeleton).toEqual([]);
+    expect(
+      keys(transcriptListRows({ window: complete, rendered: [] })),
+    ).toEqual(["a", "c"]);
+  });
+
+  it("keeps the first carry through a repeated void", () => {
+    const first = reindexed(opened(["a", "b", "c"]), 2, 4);
+    const second = reindexed(first, 3, 5);
+    expect(keys(transcriptListRows({ window: second, rendered: [] }))).toEqual([
+      "a",
+      "b",
+      "c",
+      unplacedRowKey(3),
+      unplacedRowKey(4),
+    ]);
+  });
+
+  it("carries a partial replacement into a second void", () => {
+    const voided = reindexed(opened(["a", "b", "c"]), 2, 3);
+    const partial = chunk(voided, 0, heterogeneous(["a"]), false);
+    const second = reindexed(partial, 3, 3);
+    expect(keys(transcriptListRows({ window: second, rendered: [] }))).toEqual([
+      "a",
+      unplacedRowKey(1),
+      unplacedRowKey(2),
+    ]);
+  });
+
+  it("empties the list on a zero-row void and carries nothing past it", () => {
+    const zeroed = reindexed(opened(["a", "b"]), 2, 0);
+    expect(transcriptListRows({ window: zeroed, rendered: [] })).toEqual([]);
+
+    const refilled = reindexed(zeroed, 3, 2);
+    expect(
+      keys(transcriptListRows({ window: refilled, rendered: [] })),
+    ).toEqual([unplacedRowKey(0), unplacedRowKey(1)]);
+  });
+
+  it("keeps a hole in the carry an unplaced key", () => {
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        carriedSkeleton: [skeletonEntry("a"), undefined, skeletonEntry("c")],
+      }),
+      rendered: [],
+    });
+
+    expect(keys(rows)).toEqual(["a", unplacedRowKey(1), "c"]);
+    expect(rows[1]).toMatchObject({ entry: null, provenance: "index" });
+  });
+
+  it("does not emit a carried entry at an ordinal a split-turn hold suppressed", () => {
+    // The live pre-split unit replaces the stale row at its old ordinal, and
+    // that ordinal is suppressed. The carry still describes a row there, under
+    // an id nothing else draws - so only suppression running first keeps it
+    // out of the list.
+    const turnId = "turn-carried-split";
+    const queueItemId = "queue-carried-split";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const assistant = liveSplitAssistant(turnId, queueItemId);
+    const part0Id = assistantSliceRowId(turnId, 0, true);
+    const part1Id = assistantSliceRowId(turnId, 1, true);
+    const steerId = queueSteerRowId(queueItemId);
+
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        staleSpans: [{ ...span(2, [part0Id]), messages: [assistant] }],
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantRowId(turnId)),
+          undefined,
+        ],
+        skeletonComplete: false,
+        invalidated: false,
+        liveMessages: [assistant],
+        carriedSkeleton: [undefined, undefined, skeletonEntry("old-row-2")],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(part0Id, transientId),
+        modelWithoutPersistentMessageId(steerId),
+        modelWithPersistentMessageId(part1Id, transientId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual([
+      "P:0",
+      `H:${part0Id}`,
+      `H:${steerId}`,
+      `H:${part1Id}`,
+    ]);
+    expect(keys(rows)).not.toContain("old-row-2");
+  });
+
+  it("never draws a live turn twice when the carry also names it", () => {
+    // `voidedTranscriptWindow` keeps the transient live assistant so the
+    // streaming turn stays on screen, and the index it voided named that
+    // turn's row. The turn draws at the tail; its carried seat must yield.
+    const turnId = "turn-live-through-void";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const transient: Extract<Message, { role: "assistant" }> = {
+      ...steeredAssistant(turnId, "unused"),
+      messageId: transientId,
+      blocks: [],
+    };
+    const liveRowId = assistantRowId(turnId);
+    const before = windowOf({
+      rowCount: 2,
+      spans: [],
+      skeleton: [skeletonEntry("prior-user"), skeletonEntry(liveRowId)],
+      skeletonComplete: true,
+      invalidated: false,
+      liveMessages: [transient],
+    });
+    const rendered = [modelWithPersistentMessageId(liveRowId, transientId)];
+
+    const voided = reindexed(before, 2, 3);
+    expect(voided.liveMessages).toEqual([transient]);
+    const voidRows = transcriptListRows({ window: voided, rendered });
+    expect(keys(voidRows)).toEqual([
+      "prior-user",
+      unplacedRowKey(1),
+      unplacedRowKey(2),
+      liveRowId,
+    ]);
+    expectUniqueKeys(voidRows);
+
+    // The same through the normal merge once the snapshot clears the void.
+    const snapshotRows = transcriptListRows({
+      window: snapshot(voided, 2, 3),
+      rendered,
+    });
+    expect(keys(snapshotRows)).toEqual(keys(voidRows));
+    expectUniqueKeys(snapshotRows);
+  });
+
+  it("gives a row the skeleton or the carry holds twice one placeholder", () => {
+    // A null-revision snapshot restreams into the array it already holds, so a
+    // chunk moving `c` earlier leaves its old entry standing behind it - and a
+    // void mid-stream carries both.
+    const restreaming = chunk(
+      snapshot(opened(["a", "b", "c", "d"]), 1, 4),
+      0,
+      heterogeneous(["x", "c"]),
+      false,
+    );
+    expect(restreaming.skeleton.map((held) => held?.rowId)).toEqual([
+      "x",
+      "c",
+      "c",
+      "d",
+    ]);
+    // Before the void, the authoritative tier holds the same two copies.
+    const restreamRows = transcriptListRows({
+      window: restreaming,
+      rendered: [],
+    });
+    expectUniqueKeys(restreamRows);
+    expect(keys(restreamRows)).toEqual(["x", unplacedRowKey(1), "c", "d"]);
+    expect(restreamRows.filter((row) => row.key === "c")).toEqual([
+      expect.objectContaining({ kind: "placeholder", provenance: "index" }),
+    ]);
+
+    const voided = reindexed(restreaming, 2, 4);
+    expect(voided.carriedSkeleton).toBe(restreaming.skeleton);
+
+    const rows = transcriptListRows({ window: voided, rendered: [] });
+    expectUniqueKeys(rows);
+    expect(keys(rows)).toEqual(["x", unplacedRowKey(1), "c", "d"]);
+    expect(rows.filter((row) => row.key === "c")).toEqual([
+      expect.objectContaining({ kind: "placeholder", provenance: "carried" }),
+    ]);
+  });
+
+  it("reuses carried row objects across chunks that do not name them", () => {
+    const voided = reindexed(opened(["a", "b", "c"]), 2, 3);
+    const voidRows = transcriptListRows({ window: voided, rendered: [] });
+    const partial = chunk(voided, 0, heterogeneous(["a"]), false);
+    const partialRows = transcriptListRows({ window: partial, rendered: [] });
+
+    expect(partialRows[1]).toBe(voidRows[1]);
+    expect(partialRows[2]).toBe(voidRows[2]);
+    // And across streaming renders of one window.
+    expect(
+      transcriptListRows({
+        window: partial,
+        rendered: [pendingModel("pending-user")],
+      })[2],
+    ).toBe(partialRows[2]);
   });
 });
 
