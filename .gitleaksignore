@@ -7,3 +7,6 @@ b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings
 8c61d896384cc4818aa0565a3b9844c4eed22d49:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3460
 8c61d896384cc4818aa0565a3b9844c4eed22d49:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3568
 8c61d896384cc4818aa0565a3b9844c4eed22d49:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:generic-api-key:524
+5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:generic-api-key:524
+5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3475
+5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3583
