@@ -2460,6 +2460,33 @@ describe("the carried skeleton through a void", () => {
     expectUniqueKeys(snapshotRows);
   });
 
+  it("gives a row the carry holds twice one placeholder", () => {
+    // A null-revision snapshot restreams into the array it already holds, so a
+    // chunk moving `c` earlier leaves its old entry standing behind it - and a
+    // void mid-stream carries both.
+    const restreaming = chunk(
+      snapshot(opened(["a", "b", "c", "d"]), 1, 4),
+      0,
+      heterogeneous(["x", "c"]),
+      false,
+    );
+    expect(restreaming.skeleton.map((held) => held?.rowId)).toEqual([
+      "x",
+      "c",
+      "c",
+      "d",
+    ]);
+    const voided = reindexed(restreaming, 2, 4);
+    expect(voided.carriedSkeleton).toBe(restreaming.skeleton);
+
+    const rows = transcriptListRows({ window: voided, rendered: [] });
+    expectUniqueKeys(rows);
+    expect(keys(rows)).toEqual(["x", unplacedRowKey(1), "c", "d"]);
+    expect(rows.filter((row) => row.key === "c")).toEqual([
+      expect.objectContaining({ kind: "placeholder", provenance: "carried" }),
+    ]);
+  });
+
   it("reuses carried row objects across chunks that do not name them", () => {
     const voided = reindexed(opened(["a", "b", "c"]), 2, 3);
     const voidRows = transcriptListRows({ window: voided, rendered: [] });
