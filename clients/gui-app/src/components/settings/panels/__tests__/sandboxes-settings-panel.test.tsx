@@ -301,7 +301,11 @@ const host = {
     readonly effectiveRole: "admin" | "editor" | "viewer";
     readonly inviteState: "accepted" | "pending";
   }>,
-  put: null as null | (() => EnvironmentConfigurationItemWriteResponse),
+  put: null as
+    | null
+    | (() =>
+        | EnvironmentConfigurationItemWriteResponse
+        | Promise<EnvironmentConfigurationItemWriteResponse>),
 };
 let harness: TeamPageHarness | null = null;
 
@@ -571,6 +575,35 @@ describe("<SandboxesSettingsPanel />", () => {
             revision: 3,
           },
         ]);
+      });
+    });
+
+    it("keeps the save's label and shows the working dots while it is in flight", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      let finish: (
+        response: EnvironmentConfigurationItemWriteResponse,
+      ) => void = () => undefined;
+      host.put = () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        });
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      fireEvent.change(idle, { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+      const saving = await screen.findByTestId("sandboxes-defaults-saving");
+      const save = screen.getByTestId("sandboxes-defaults-save");
+      expect(save.contains(saving)).toBe(true);
+      expect(screen.getByRole("button", { name: "Save defaults" })).toBe(save);
+      expect(save).toHaveProperty("disabled", true);
+
+      act(() => {
+        finish({ outcome: "saved", revision: 4 });
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId("sandboxes-defaults-saving")).toBeNull();
       });
     });
 

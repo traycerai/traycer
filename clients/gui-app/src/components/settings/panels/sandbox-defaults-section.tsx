@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -452,6 +453,14 @@ function SandboxDefaultsForm(props: {
           data-testid="sandboxes-defaults-save"
         >
           Save defaults
+          {props.saving ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId="sandboxes-defaults-saving"
+              variant={undefined}
+              tone="muted"
+            />
+          ) : null}
         </Button>
         <span className="text-ui-xs text-muted-foreground">
           New sandboxes take these; sandboxes you already have keep theirs.
