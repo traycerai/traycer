@@ -17,6 +17,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -320,7 +321,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
 function mountPanel(
   thread: BotThreadPanelThread,
   messages: ReadonlyArray<Message>,
-): ReturnType<typeof render> {
+): RenderResult {
   mocks.handle = {
     store: createThreadStore(messages, () => () => undefined),
   } as ChatSessionStoreHandle;
