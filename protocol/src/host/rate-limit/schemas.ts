@@ -798,12 +798,13 @@ export function mapCursorAvailableToUnavailable(
 
 /**
  * The Kimi analogue of `mapCursorAvailableToUnavailable`, for every bridge
- * below the 6.0 line. A Kimi-available snapshot has no representation in any
- * frozen union, so it degrades to the unavailable `unsupported_provider` shape -
- * the exact row a pre-Kimi-usage host returns for it today. `"kimi"` is in
- * every frozen `provider` enum from `providerIdSchemaV30` on, so the result
- * reparses cleanly through every older union. Any other snapshot (or `null`)
- * passes through unchanged.
+ * below `host.getRateLimitUsage@6.0`, `providers.refreshProfileStatus@4.0` and
+ * `agent.getProviderProfileRateLimits@8.0`. A Kimi-available snapshot has no
+ * representation in any frozen union, so it degrades to the unavailable
+ * `unsupported_provider` shape - the exact row a pre-Kimi-usage host returns
+ * for it today. `"kimi"` is in every frozen `provider` enum from
+ * `providerIdSchemaV30` on, so the result reparses cleanly through every older
+ * union. Any other snapshot (or `null`) passes through unchanged.
  */
 export function mapKimiAvailableToUnavailable(
   providerRateLimits: ProviderRateLimits | null,
@@ -1305,8 +1306,9 @@ export type ProvidersRefreshProfileStatusResponseV20 = z.infer<
 /**
  * Frozen `providers.refreshProfileStatus@3.0` response: the 1.5.1 tags
  * shipped this line, so it stops tracking the live union and ranges over
- * `providerRateLimitsSchemaV151`. v4.0 carries the live union (Kimi) with
- * fail-closed bridges to every older line.
+ * `providerRateLimitsSchemaV151`. v4.0 carries the live union (Kimi); its
+ * bridges degrade a Kimi reading to `unsupported_provider` and fail closed on
+ * anything else an older line cannot represent.
  */
 export const providersRefreshProfileStatusResponseSchemaV30 = lazySchema(() =>
   z.object({

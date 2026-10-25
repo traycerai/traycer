@@ -1809,8 +1809,8 @@ describe("host.getRateLimitUsage v5.0 antigravity arm + downgrade bridges", () =
 // reading to the `unsupported_provider` row a pre-Kimi host returns, then does
 // what the 5 -> N bridge to that major does. The sibling methods that carry the
 // same union (`providers.refreshProfileStatus` 4.0 and
-// `agent.getProviderProfileRateLimits` 8.0) cannot name a provider the request
-// did not ask for, so their bridges refuse a Kimi reading instead.
+// `agent.getProviderProfileRateLimits` 8.0) degrade the same way, so an older
+// client keeps the row it got before Kimi usage existed instead of an error.
 describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
   const WINDOW_5H = {
     usedPercent: 12,
@@ -2125,7 +2125,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
     const refreshRegistry = hostRpcRegistry["providers.refreshProfileStatus"];
 
     it.each([3, 2, 1] as const)(
-      "refuses a kimi-available snapshot through the registry 4 -> %i",
+      "degrades a kimi-available snapshot to the unsupported_provider row through the registry 4 -> %i",
       (toMajor) => {
         expect(
           downgradeResponseAcrossMajors(
@@ -2137,15 +2137,33 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
             }),
           ),
         ).toEqual({
-          ok: false,
-          error: {
-            code: "DOWNGRADE_UNSUPPORTED",
-            message:
-              "Refreshing this provider's profile status requires a newer Traycer client.",
-          },
+          ok: true,
+          value: { providerRateLimits: kimiUnsupported },
         });
       },
     );
+
+    // The degrade is Kimi-only: an arm the 1.0 line cannot represent still
+    // fails closed.
+    it("still refuses an antigravity-available snapshot through the registry 4 -> 1", () => {
+      expect(
+        downgradeResponseAcrossMajors(
+          refreshRegistry,
+          4,
+          1,
+          providersRefreshProfileStatusResponseSchema.parse({
+            providerRateLimits: antigravityAvailable,
+          }),
+        ),
+      ).toEqual({
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Refreshing this provider's profile status requires a newer Traycer client.",
+        },
+      });
+    });
 
     it.each([3, 2, 1] as const)(
       "passes a codex unavailable snapshot through the registry 4 -> %i",
@@ -2165,7 +2183,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
       hostRpcRegistry["agent.getProviderProfileRateLimits"];
 
     it.each([7, 6, 5, 4, 3, 2, 1] as const)(
-      "refuses a kimi-available snapshot through the registry 8 -> %i",
+      "degrades a kimi-available snapshot to the unsupported_provider row through the registry 8 -> %i",
       (toMajor) => {
         expect(
           downgradeResponseAcrossMajors(
@@ -2174,12 +2192,32 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
             toMajor,
             agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
               rateLimits: kimiAvailable,
-              usageUpdatedAt: null,
+              usageUpdatedAt: 1_735_689_600_000,
             }),
           ),
-        ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+        ).toEqual({
+          ok: true,
+          value: {
+            rateLimits: kimiUnsupported,
+            usageUpdatedAt: 1_735_689_600_000,
+          },
+        });
       },
     );
+
+    it("still refuses an antigravity-available snapshot through the registry 8 -> 1", () => {
+      expect(
+        downgradeResponseAcrossMajors(
+          profileRegistry,
+          8,
+          1,
+          agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+            rateLimits: antigravityAvailable,
+            usageUpdatedAt: null,
+          }),
+        ),
+      ).toEqual({ ok: false, error: DOWNGRADE_UNSUPPORTED_ERROR });
+    });
 
     it.each([7, 6, 5, 4, 3, 2, 1] as const)(
       "passes a codex unavailable snapshot through the registry 8 -> %i",

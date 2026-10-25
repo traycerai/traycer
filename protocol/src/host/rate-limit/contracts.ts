@@ -30,6 +30,7 @@ import {
   mapKimiAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   type ProviderRateLimits,
+  type ProvidersRefreshProfileStatusResponse,
   type RateLimitUsageRequestV12,
   type RateLimitUsageRequestV40,
   type RateLimitUsageResponseV12,
@@ -268,15 +269,27 @@ export const providersRefreshProfileStatusDowngradeV30ToV10 =
     },
   });
 
-// Refreshing a profile names one provider, so every 4.0 bridge passes the
-// response through or refuses it: a Kimi-available snapshot has no arm on any
-// older line and fails that line's parse. The message names no provider so it
-// stays honest as the enum grows.
+// A Kimi-available snapshot has no arm on any older line, but `"kimi"` is in
+// every older provider enum, so every 4.0 bridge degrades it to the
+// `unsupported_provider` row a pre-Kimi-usage host returned, then passes the
+// response through or refuses it. The message names no provider so it stays
+// honest as the enum grows.
 const REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT = {
   code: "DOWNGRADE_UNSUPPORTED" as const,
   message:
     "Refreshing this provider's profile status requires a newer Traycer client.",
 };
+
+function withKimiRefreshDegraded(
+  response: ProvidersRefreshProfileStatusResponse,
+): { providerRateLimits: ProviderRateLimits | null } {
+  return {
+    ...response,
+    providerRateLimits: mapKimiAvailableToUnavailable(
+      response.providerRateLimits,
+    ),
+  };
+}
 
 export const providersRefreshProfileStatusUpgradeV30ToV40 = defineUpgradePath<
   typeof providersRefreshProfileStatusV30,
@@ -298,8 +311,9 @@ export const providersRefreshProfileStatusDowngradeV40ToV30 =
     to: { major: 3, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
-      const parsed =
-        providersRefreshProfileStatusResponseSchemaV30.safeParse(response);
+      const parsed = providersRefreshProfileStatusResponseSchemaV30.safeParse(
+        withKimiRefreshDegraded(response),
+      );
       return parsed.success
         ? { ok: true, value: parsed.data }
         : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
@@ -315,8 +329,9 @@ export const providersRefreshProfileStatusDowngradeV40ToV20 =
     to: { major: 2, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
-      const parsed =
-        providersRefreshProfileStatusResponseSchemaV20.safeParse(response);
+      const parsed = providersRefreshProfileStatusResponseSchemaV20.safeParse(
+        withKimiRefreshDegraded(response),
+      );
       return parsed.success
         ? { ok: true, value: parsed.data }
         : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
@@ -332,8 +347,9 @@ export const providersRefreshProfileStatusDowngradeV40ToV10 =
     to: { major: 1, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
-      const parsed =
-        providersRefreshProfileStatusResponseSchemaV10.safeParse(response);
+      const parsed = providersRefreshProfileStatusResponseSchemaV10.safeParse(
+        withKimiRefreshDegraded(response),
+      );
       return parsed.success
         ? { ok: true, value: parsed.data }
         : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };

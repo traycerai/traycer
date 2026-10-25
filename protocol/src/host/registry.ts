@@ -13696,7 +13696,8 @@ const HOST_RPC_RATE_LIMIT_REGISTRY_DEFINITION = {
     degrade: { kind: "unsupported" },
     // v1.0 is frozen at the twenty provider ids `1.3.0` shipped, v2.0 at the
     // twenty-one `1.5.0` shipped and v3.0 at the union `1.5.1` shipped; v4.0
-    // carries the live union (Kimi), and every bridge fails closed for a
+    // carries the live union (Kimi). Every 4.0 bridge degrades a Kimi reading
+    // to the `unsupported_provider` row and fails closed for any other
     // snapshot the older line cannot represent (one provider per response, so
     // there is nothing to filter).
     1: {
