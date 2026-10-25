@@ -304,7 +304,11 @@ export function CommentComposer(props: CommentComposerProps) {
 
   const isEmpty = useEditorState({
     editor,
-    selector: ({ editor: current }) => current?.isEmpty ?? true,
+    // Before the editor mounts, answer from the content it will open with:
+    // an edit composer's Save must not flash disabled on the first frames.
+    selector: ({ editor: current }) =>
+      current?.isEmpty ??
+      (props.sharedDraft?.content ?? initialContent) === null,
   });
   useEpicDraftGuard(
     epicId,

@@ -135,6 +135,18 @@ export interface CommentThreadCardProps {
   };
 }
 
+/** What the card quotes: canvas-wide anchors carry a label, not page text. */
+function threadQuotedText(
+  artifactType: CommentArtifactKind,
+  thread: CommentThreadWire,
+): string {
+  if (artifactType !== "canvas") return thread.data.quotedText ?? "";
+  if (thread.data.anchorKind === "artifact") return "Whole canvas";
+  if (thread.data.anchorKind === "canvas-point")
+    return thread.data.label ?? "Pinned on canvas";
+  return thread.data.quotedText ?? "";
+}
+
 /**
  * Thread body and actions shared by the sidebar and frame popovers.
  *
@@ -149,18 +161,6 @@ export interface CommentThreadCardProps {
  * Mutation invalidation is handled by the mutation hooks themselves; this
  * component only kicks them off and reacts to `isPending` for spinners.
  */
-/** What the card quotes: canvas-wide anchors carry a label, not page text. */
-function threadQuotedText(
-  artifactType: CommentArtifactKind,
-  thread: CommentThreadWire,
-): string {
-  if (artifactType !== "canvas") return thread.data.quotedText ?? "";
-  if (thread.data.anchorKind === "artifact") return "Whole canvas";
-  if (thread.data.anchorKind === "canvas-point")
-    return thread.data.label ?? "Pinned on canvas";
-  return thread.data.quotedText ?? "";
-}
-
 export function CommentThreadCard(props: CommentThreadCardProps) {
   const {
     epicId,

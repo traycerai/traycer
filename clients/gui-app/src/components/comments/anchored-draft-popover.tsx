@@ -213,11 +213,15 @@ export function AnchoredDraftPopover(props: {
       hostId === null
         ? null
         : readNegotiatedMethodVersion(hostId, "epic.createCommentThread");
+    // Anchored threads negotiate at 1.2; the canvas-point anchor is 1.3's
+    // request growth, so an older host must refuse it here rather than
+    // reject the wire call.
+    const neededMinor = draft.anchor.kind === "canvas-point" ? 3 : 2;
     if (
       version === null ||
       version === false ||
       version.major !== 1 ||
-      version.minor < 2
+      version.minor < neededMinor
     ) {
       setFailure({
         draftId: draft.draftId,

@@ -744,7 +744,9 @@ import {
   epicCreateCommentThreadV10,
   epicCreateCommentThreadV11,
   epicCreateCommentThreadV12,
+  epicCreateCommentThreadV13,
   epicCreateCommentThreadUpgradeV11ToV12,
+  epicCreateCommentThreadUpgradeV12ToV13,
   epicCreateCommentThreadUpgradeV10ToV11,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -823,7 +825,9 @@ import {
   epicListCommentThreadsV10,
   epicListCommentThreadsV11,
   epicListCommentThreadsV12,
+  epicListCommentThreadsV13,
   epicListCommentThreadsUpgradeV11ToV12,
+  epicListCommentThreadsUpgradeV12ToV13,
   epicListCommentThreadsUpgradeV10ToV11,
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
@@ -9590,7 +9594,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.createCommentThread": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicCreateCommentThreadV10,
@@ -9604,6 +9608,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: {
           contract: epicCreateCommentThreadV12,
           upgradeFromPreviousVersion: epicCreateCommentThreadUpgradeV11ToV12,
+        },
+        // 1.3 adds the canvas-point anchor, REQUEST growth only: the GUI
+        // refuses a point draft below 1.3, so no projection is needed.
+        3: {
+          contract: epicCreateCommentThreadV13,
+          upgradeFromPreviousVersion: epicCreateCommentThreadUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -9697,7 +9707,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.listCommentThreads": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicListCommentThreadsV10,
@@ -9711,6 +9721,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         2: {
           contract: epicListCommentThreadsV12,
           upgradeFromPreviousVersion: epicListCommentThreadsUpgradeV11ToV12,
+        },
+        // 1.3's `anchorKind` gains `canvas-point` over 1.2's frozen enum,
+        // which is response VALUE growth: host dispatch projects a point
+        // thread to a whole-artifact anchor for pre-1.3 callers.
+        3: {
+          contract: epicListCommentThreadsV13,
+          upgradeFromPreviousVersion: epicListCommentThreadsUpgradeV12ToV13,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
