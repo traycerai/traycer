@@ -15,7 +15,6 @@ import {
   CanvasCommentPins,
   CanvasCommentPointPins,
   CanvasCommentsControl,
-  CanvasCommentsSidebar,
 } from "./canvas-comments";
 import type { CanvasSelection } from "./canvas-selection-store";
 import {
@@ -308,7 +307,6 @@ export function CanvasSelectionProvider(
       ),
       renderToolbarControls: () =>
         commentsEnabled ? <CanvasCommentsControl registry={registry} /> : null,
-      renderCommentsSidebar: () => <CanvasCommentsSidebar scope={scope} />,
       renderCommentDraft: () =>
         props.viewOnly === true ? null : (
           <AnchoredDraftPopover

@@ -2,14 +2,7 @@ import {
   useActiveThreadId,
   useCommentThreadsStore,
 } from "@/stores/comments/comment-threads-store";
-import { Button } from "@/components/ui/button";
 import { FrameCommentsToolbar } from "@/components/comments/frame-comments";
-import { CommentSidebarPanel } from "@/components/comments/comment-sidebar-panel";
-import {
-  useLeftPanelStore,
-  DEFAULT_LEFT_PANEL_ID,
-} from "@/stores/epics/left-panel-store";
-import { X } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   queryOptions,
@@ -393,42 +386,5 @@ export function CanvasCommentsControl(props: {
       active={view?.commenting === true}
       onToggle={() => view?.setCommenting(!view.commenting)}
     />
-  );
-}
-
-export function CanvasCommentsSidebar(props: {
-  readonly scope: CanvasAnnotationScope;
-}) {
-  const { epicId, artifactId, viewTabId } = props.scope;
-  const open = useLeftPanelStore(
-    (state) =>
-      state.activePanelIdByTabId[viewTabId] === "comments" &&
-      !state.mainCollapsedByTabId[viewTabId],
-  );
-  if (!open) return null;
-  return (
-    <aside
-      aria-label="Comments sidebar"
-      className="flex h-full w-1/3 min-w-0 max-w-sm shrink-0 flex-col border-r bg-background"
-    >
-      <div className="flex shrink-0 items-center justify-between p-2">
-        <span className="text-ui-sm font-medium">Comments</span>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          aria-label="Close comments"
-          onClick={() =>
-            useLeftPanelStore
-              .getState()
-              .setActivePanelId(viewTabId, DEFAULT_LEFT_PANEL_ID)
-          }
-        >
-          <X />
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1">
-        <CommentSidebarPanel epicId={epicId} activeArtifactId={artifactId} />
-      </div>
-    </aside>
   );
 }
