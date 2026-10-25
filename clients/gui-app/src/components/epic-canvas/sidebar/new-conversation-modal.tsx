@@ -509,6 +509,17 @@ export function NewConversationModalHost(props: {
   );
   // See `NewConversationModalDialog`: published by the open dialog's content.
   const dismissPickerRef = useRef<(() => boolean) | null>(null);
+  // The body is a React SIBLING of the dialog (the portal below), so Radix's
+  // own "was this pointer-down inside my React tree" check on the dialog never
+  // sees the body's events. React still routes events from the body's DOM
+  // (nested inside the dialog's node) through the dialog's React capture, so
+  // plain clicks in the body are fine - but an overlay the body opens that
+  // portals to `document.body`, such as the model picker, is neither in the
+  // dialog's DOM nor in its React tree, and the dialog dismissed itself on
+  // every click in it. The body's React capture sees those (React capture
+  // follows portals), so it records the pointer-down here and the dialog
+  // declines to treat that same event as an outside interaction.
+  const bodyPointerDownRef = useRef<Event | null>(null);
   const [overlayBoundaryEl, setOverlayBoundaryEl] =
     useState<HTMLElement | null>(null);
   // The composer picker store outlives the body's focus-driven unmount. A fresh
@@ -547,30 +558,40 @@ export function NewConversationModalHost(props: {
           if (!next) closeRequestOwnedBy(epicId, tabId);
         }}
         dismissPickerRef={dismissPickerRef}
+        bodyPointerDownRef={bodyPointerDownRef}
         onOverlayBoundary={setOverlayBoundaryEl}
         attachBody={attachBody}
       />
       {mountBody
         ? createPortal(
-            <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
-              <PortalConcealmentProvider value={concealed}>
-                <SurfaceActivityProvider active>
-                  <KeyboardOwnerContext value={isOpen}>
-                    <NewConversationTransientContext.Provider value={transient}>
-                      <NewConversationModalBody
-                        epicId={epicId}
-                        tabId={tabId}
-                        placement={bodyRequest.placement}
-                        parentId={bodyRequest.parentId}
-                        hostId={bodyRequest.hostId}
-                        dismissPickerRef={dismissPickerRef}
-                        onSubmitted={onSubmitted}
-                      />
-                    </NewConversationTransientContext.Provider>
-                  </KeyboardOwnerContext>
-                </SurfaceActivityProvider>
-              </PortalConcealmentProvider>
-            </DialogOverlayBoundaryContext.Provider>,
+            <div
+              className="contents"
+              onPointerDownCapture={(event) => {
+                bodyPointerDownRef.current = event.nativeEvent;
+              }}
+            >
+              <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
+                <PortalConcealmentProvider value={concealed}>
+                  <SurfaceActivityProvider active>
+                    <KeyboardOwnerContext value={isOpen}>
+                      <NewConversationTransientContext.Provider
+                        value={transient}
+                      >
+                        <NewConversationModalBody
+                          epicId={epicId}
+                          tabId={tabId}
+                          placement={bodyRequest.placement}
+                          parentId={bodyRequest.parentId}
+                          hostId={bodyRequest.hostId}
+                          dismissPickerRef={dismissPickerRef}
+                          onSubmitted={onSubmitted}
+                        />
+                      </NewConversationTransientContext.Provider>
+                    </KeyboardOwnerContext>
+                  </SurfaceActivityProvider>
+                </PortalConcealmentProvider>
+              </DialogOverlayBoundaryContext.Provider>
+            </div>,
             bodyContainer,
           )
         : null}
@@ -582,6 +603,8 @@ function NewConversationModalDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
+  /** The last pointer-down inside the body's React tree; see the host. */
+  readonly bodyPointerDownRef: RefObject<Event | null>;
   readonly onOverlayBoundary: (element: HTMLElement | null) => void;
   /** Attaches the host's body container to the open dialog's body slot. */
   readonly attachBody: (slot: HTMLDivElement | null) => void;
@@ -590,6 +613,7 @@ function NewConversationModalDialog(props: {
     open,
     onOpenChange,
     dismissPickerRef,
+    bodyPointerDownRef,
     onOverlayBoundary,
     attachBody,
   } = props;
@@ -634,12 +658,18 @@ function NewConversationModalDialog(props: {
         className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
-        // Same portal rule as the worktree pickers: the host switcher's list
-        // mounts outside this dialog, so a click in it reads as an interaction
-        // from outside. Dismissing on that would throw away the form someone is
-        // in the middle of filling, for the crime of choosing a host in it.
+        // A pointer-down the body's React tree already saw is the body's own
+        // (the model picker's rows and effort slider portal to `document.body`
+        // and would otherwise read as outside; see `bodyPointerDownRef`). The
+        // host switcher's list mounts outside the body's tree as well as this
+        // dialog, so it keeps its own check. Dismissing on either would throw
+        // away the form someone is in the middle of filling, for the crime of
+        // choosing a model or a host in it.
         onInteractOutside={(event) => {
-          if (isHostSwitcherListInteraction(event.target)) {
+          if (
+            event.detail.originalEvent === bodyPointerDownRef.current ||
+            isHostSwitcherListInteraction(event.target)
+          ) {
             event.preventDefault();
           }
         }}
