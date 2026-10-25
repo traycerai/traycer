@@ -165,6 +165,7 @@ export function BotUnderTheHoodPanel(props: {
                   hostId={hostId}
                   thread={shownThread}
                   prefix="Thread: "
+                  fetchCold
                 />
               )}
             </h3>
@@ -227,15 +228,18 @@ function SessionsElsewhere(props: {
 
 /**
  * A thread named by the start of the post it answers, read from the
- * channel's row: a summary carries no post text.
+ * channel's row: a summary carries no post text. The shown session's
+ * heading fetches an old post's row; a row of the list names the thread
+ * from what the channel has loaded.
  */
 function ThreadExcerpt(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly thread: BotThreadSummary;
   readonly prefix: string;
+  readonly fetchCold: boolean;
 }): ReactNode {
-  const { botId, hostId, thread, prefix } = props;
+  const { botId, hostId, thread, prefix, fetchCold } = props;
   if (thread.anchor === null) return `${prefix}Thread`;
   return (
     <ChannelPostText
@@ -243,6 +247,7 @@ function ThreadExcerpt(props: {
       hostId={hostId}
       conversationId={thread.conversationId}
       messageId={thread.anchor.messageId}
+      fetchCold={fetchCold}
     >
       {(text) => `${prefix}${threadExcerpt(text)}`}
     </ChannelPostText>
@@ -391,6 +396,7 @@ function BotThreadsListBody(props: {
                 hostId={hostId}
                 thread={thread}
                 prefix=""
+                fetchCold={false}
               />
             </span>
             <span className="flex flex-wrap gap-x-2 text-ui-xs text-muted-foreground">

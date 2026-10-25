@@ -18,6 +18,7 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 
 interface ThreadListAnswer {
   readonly trunkCostUsd: number | null;
@@ -26,6 +27,7 @@ interface ThreadListAnswer {
 
 const mocks = vi.hoisted(() => {
   const answers: Record<string, ThreadListAnswer> = {};
+  const channelPosts: Record<string, string> = {};
   return {
     client: { stub: "tab-host-client" },
     refetchThreads: vi.fn<() => void>(),
@@ -33,7 +35,7 @@ const mocks = vi.hoisted(() => {
     sessionRequests: [] as string[],
     state: {
       /** Post text by message id: the channel's rows. */
-      channelPosts: {},
+      channelPosts,
       channelHandle: null as ChatSessionStoreHandle | null,
       connectable: { hostIds: [] as string[], resolved: true },
       usageSupported: true,
@@ -107,6 +109,9 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
     return chatId === CHANNEL_ID ? channelHandle() : null;
   },
 }));
+vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
+  useChatLocateRow: () => null,
+}));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => mocks.state.connectable,
 }));
@@ -166,7 +171,14 @@ function channelRow(messageId: string, text: string): Message {
 /** The channel's session, holding the rows `thread()` registered. */
 function channelHandle(): ChatSessionStoreHandle {
   if (mocks.state.channelHandle === null) {
-    const store = createStore<Pick<ChatSessionState, "messages">>(() => ({
+    const store = createStore<
+      Pick<
+        ChatSessionState,
+        "messages" | "transcriptWindow" | "holdTranscriptOrdinal"
+      >
+    >(() => ({
+      transcriptWindow: emptyTranscriptWindow(),
+      holdTranscriptOrdinal: () => () => undefined,
       messages: Object.entries(mocks.state.channelPosts).map(([id, text]) =>
         channelRow(id, text),
       ),

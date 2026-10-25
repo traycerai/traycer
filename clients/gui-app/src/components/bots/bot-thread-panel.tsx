@@ -238,6 +238,7 @@ function ListedThread(
             hostId={hostId}
             conversationId={conversationId}
             messageId={anchor.messageId}
+            fetchCold
           >
             {(text) => (
               <ThreadAnchor
