@@ -252,17 +252,30 @@ vi.mock("@/components/bots/bot-under-the-hood-panel", () => ({
     <div data-testid="stub-under-the-hood" data-paused={String(props.paused)} />
   ),
 }));
-// The panel takes the bot, whether it is main and whether its environment is
-// a person's own, and nothing else: no prop says which host serves the tab,
-// so no control can be gated on it. The stub lists the props it was given.
+// The panel takes the bot, whether it is main, whether its environment is a
+// person's own, its channel, its environment's bots and how to close, and
+// nothing else: no prop says which host serves the tab, so no control can be
+// gated on it. The stub lists the props it was given.
 vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotSettingsPanel: (props: { isMain: boolean | null; personal: boolean }) => (
+  BotChannelSettingsPanel: (props: {
+    isMain: boolean | null;
+    personal: boolean;
+    channelId: string | null;
+    onClose: () => void;
+  }) => (
     <div
       data-testid="stub-settings"
       data-prop-names={Object.keys(props).join(",")}
       data-is-main={String(props.isMain)}
       data-personal={String(props.personal)}
-    />
+      data-channel-id={props.channelId ?? "none"}
+    >
+      <button
+        type="button"
+        data-testid="stub-settings-close"
+        onClick={props.onClose}
+      />
+    </div>
   ),
 }));
 
@@ -728,7 +741,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("true");
   });
 
-  it("keeps Settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
+  it("keeps the channel settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -736,10 +749,10 @@ describe("<BotTabSurface /> paused", () => {
     });
     render(surface());
 
-    await user.click(screen.getByTestId("bot-tab-view-settings"));
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot,isMain,personal");
+    ).toBe("bot,isMain,personal,channelId,environmentBots,onClose");
   });
 
   it.each<readonly [string, "user" | "organization", string]>([
@@ -754,12 +767,39 @@ describe("<BotTabSurface /> paused", () => {
       ];
       render(surface());
 
-      await user.click(screen.getByTestId("bot-tab-view-settings"));
+      await user.click(screen.getByTestId("bot-channel-settings-open"));
       expect(
         screen.getByTestId("stub-settings").getAttribute("data-personal"),
       ).toBe(expected);
     },
   );
+
+  it("opens the channel's settings beside the channel from the ⋮, for the bot's channel, and closes them back to the ⋮, from their close or the ⋮ again", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    const open = screen.getByTestId("bot-channel-settings-open");
+    expect(open.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+
+    await user.click(open);
+    const panel = screen.getByTestId("stub-settings");
+    expect(open.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.getAttribute("data-channel-id")).toBe("conversation-app");
+    // The channel stays: the panel sits beside it, not instead of it.
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+
+    await user.click(within(panel).getByTestId("stub-settings-close"));
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+    expect(document.activeElement).toBe(open);
+
+    // The ⋮ closes them too.
+    await user.click(open);
+    expect(screen.getByTestId("stub-settings")).toBeTruthy();
+    await user.click(open);
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+    expect(open.getAttribute("aria-expanded")).toBe("false");
+  });
 
   it.each([
     ["a team's", "organization", "Acme", "Members of Acme"],
@@ -805,7 +845,7 @@ describe("<BotTabSurface /> paused", () => {
     ];
     render(surface());
 
-    await user.click(screen.getByTestId("bot-tab-view-settings"));
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-personal"),
     ).toBe("false");
@@ -929,7 +969,7 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the bot's picture, the channel's name and its tabs only, even for the environment's main bot", () => {
+  it("draws the header as the bot's picture, the channel's name, its two views and the settings ⋮ only, even for the environment's main bot", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -940,10 +980,13 @@ describe("<BotTabSurface /> main bot", () => {
       within(header)
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
-    ).toEqual(["Messages", "Under the hood", "Settings"]);
+    ).toEqual(["Messages", "Under the hood"]);
     expect(header.textContent).toBe(
-      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hoodSettings`,
+      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hood`,
     );
+    expect(
+      within(header).getByRole("button", { name: "Channel settings" }),
+    ).toBe(screen.getByTestId("bot-channel-settings-open"));
   });
 
   it.each([
@@ -958,7 +1001,7 @@ describe("<BotTabSurface /> main bot", () => {
       mocks.state.mainBotIds = mainBotIds;
       render(surface());
 
-      await user.click(screen.getByTestId("bot-tab-view-settings"));
+      await user.click(screen.getByTestId("bot-channel-settings-open"));
       expect(
         screen.getByTestId("stub-settings").getAttribute("data-is-main"),
       ).toBe(expected);

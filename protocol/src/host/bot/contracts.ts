@@ -27,6 +27,10 @@ import {
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
   botUpdateReplyModeRequestSchema,
+  botNotificationLevelReadRequestSchema,
+  botNotificationLevelReadResponseSchema,
+  botNotificationLevelSetRequestSchema,
+  botNotificationLevelSetResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -123,6 +127,25 @@ export const botUpdateReplyModeV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botUpdateReplyModeRequestSchema,
   responseSchema: botUpdateResponseSchema,
+});
+
+/**
+ * `bot.notificationLevel.read@1.0` / `.set@1.0`: the caller's notification
+ * level per conversation of a bot, kept in the cloud and proxied by any
+ * host, like the rest of the namespace's cloud reads.
+ */
+export const botNotificationLevelReadV10 = defineRpcContract({
+  method: "bot.notificationLevel.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationLevelReadRequestSchema,
+  responseSchema: botNotificationLevelReadResponseSchema,
+});
+
+export const botNotificationLevelSetV10 = defineRpcContract({
+  method: "bot.notificationLevel.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationLevelSetRequestSchema,
+  responseSchema: botNotificationLevelSetResponseSchema,
 });
 
 export const botDeleteV10 = defineRpcContract({

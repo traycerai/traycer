@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Hash } from "lucide-react";
+import { EllipsisVertical, Hash } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ import {
 } from "@/stores/bots/bot-open-thread-store";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
-import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -62,12 +62,10 @@ import {
 } from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
 
-type BotTabView = "messages" | "under-the-hood" | "settings";
+type BotTabView = "messages" | "under-the-hood";
 
 function isBotTabView(value: string): value is BotTabView {
-  return (
-    value === "messages" || value === "under-the-hood" || value === "settings"
-  );
+  return value === "messages" || value === "under-the-hood";
 }
 
 /**
@@ -90,7 +88,8 @@ function isBotTabView(value: string): value is BotTabView {
  *
  * Laid out as Slack is (decision 41): the person's environments and their
  * bots as channels down the side, and the bot's channel beside them, with
- * its under-the-hood view and its settings as the channel's tabs.
+ * its under-the-hood view as the channel's other tab and its settings
+ * behind the header's ⋮.
  *
  * Bound to ONE host at a time through `TabHostProvider`; everything below
  * reads that host - the stream, the conversation list, every write. A tab
@@ -396,6 +395,13 @@ function BotTabContent(props: {
     setSessionChatId(null);
     onViewChange("under-the-hood");
   }, [onViewChange]);
+  // The channel's settings open beside it from the header's ⋮.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const toggleSettings = useCallback(
+    () => setSettingsOpen((open) => !open),
+    [],
+  );
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const viewer = useAuthStore((s) => s.profile);
   const owner = useMemo((): BotOwner | null => {
     if (environment === null) return null;
@@ -433,15 +439,19 @@ function BotTabContent(props: {
         <aside className="hidden min-h-0 w-1/5 max-w-64 shrink-0 flex-col border-r border-border/60 @3xl:flex">
           <BotChannelSidebar activeBotId={botId} hostId={hostId} />
         </aside>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="relative flex min-h-0 min-w-0 flex-1">
           <Tabs
             value={view}
             onValueChange={(next) => {
               if (isBotTabView(next)) onViewChange(next);
             }}
-            className="flex min-h-0 flex-1 flex-col gap-0"
+            className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
           >
-            <BotChannelHeader title={snapshot.bot.title} />
+            <BotChannelHeader
+              title={snapshot.bot.title}
+              settingsOpen={settingsOpen}
+              onToggleSettings={toggleSettings}
+            />
             {streamError === null ? null : (
               // A fatal close AFTER a snapshot: the last reading stays on
               // screen, marked as such, and the retry sits on top of it.
@@ -500,17 +510,17 @@ function BotTabContent(props: {
                 onSelectSession={setSessionChatId}
               />
             </TabsContent>
-            <TabsContent
-              value="settings"
-              className="flex min-h-0 flex-1 flex-col"
-            >
-              <BotSettingsPanel
-                bot={snapshot.bot}
-                isMain={isMain}
-                personal={personal}
-              />
-            </TabsContent>
           </Tabs>
+          {settingsOpen ? (
+            <BotChannelSettingsPanel
+              bot={snapshot.bot}
+              isMain={isMain}
+              personal={personal}
+              channelId={snapshot.bot.appConversationChatId}
+              environmentBots={environmentBots}
+              onClose={closeSettings}
+            />
+          ) : null}
         </div>
       </div>
     </BotIdentityContext>
@@ -651,10 +661,23 @@ function ErrorNotice(props: {
 
 /**
  * Slack's channel header: the bot's picture (its card on hover and click),
- * `# name` and the channel's tabs under it. What the bot is for is the top
- * of its channel; nothing else sits here.
+ * `# name`, the ⋮ that opens the channel's settings, and the channel's views
+ * under it. What the bot is for is the top of its channel; nothing else
+ * sits here.
  */
-function BotChannelHeader(props: { readonly title: string }): ReactNode {
+function BotChannelHeader(props: {
+  readonly title: string;
+  readonly settingsOpen: boolean;
+  readonly onToggleSettings: () => void;
+}): ReactNode {
+  const { settingsOpen } = props;
+  // Focus goes back to the ⋮ when the settings close.
+  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const wasOpenRef = useRef(settingsOpen);
+  useEffect(() => {
+    if (wasOpenRef.current && !settingsOpen) settingsButtonRef.current?.focus();
+    wasOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
   return (
     <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
       <div className="flex min-w-0 items-center gap-2">
@@ -675,6 +698,19 @@ function BotChannelHeader(props: { readonly title: string }): ReactNode {
           <Hash className="size-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{props.title}</span>
         </h1>
+        <Button
+          ref={settingsButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Channel settings"
+          aria-expanded={settingsOpen}
+          data-testid="bot-channel-settings-open"
+          className="ml-auto"
+          onClick={props.onToggleSettings}
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Button>
       </div>
       <TabsList variant="line" aria-label="Channel view">
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
@@ -685,9 +721,6 @@ function BotChannelHeader(props: { readonly title: string }): ReactNode {
           data-testid="bot-tab-view-under-the-hood"
         >
           Under the hood
-        </TabsTrigger>
-        <TabsTrigger value="settings" data-testid="bot-tab-view-settings">
-          Settings
         </TabsTrigger>
       </TabsList>
     </header>
