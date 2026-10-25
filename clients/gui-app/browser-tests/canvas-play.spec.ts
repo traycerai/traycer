@@ -332,10 +332,10 @@ test.describe("comments mode and the shared sidebar", () => {
   // header, so the Comments toggle (`CanvasCommentsControl`) is reachable
   // both in edit mode and in fullscreen - the toggle and the pin/mode state
   // it drives are the same regardless of which surface the toggle is
-  // clicked from. The shared sidebar, in turn, is only MOUNTED by the
-  // canvas itself while fullscreen (`presentation.sidebar`); outside it,
-  // the page around the canvas owns that slot, which is why the sidebar
-  // claim below is proven in fullscreen specifically.
+  // clicked from. The shared sidebar is the app's rail panel, a SIBLING of
+  // the canvas tile (the fixture mounts it as the app's left panel does), so
+  // it stays visible while a board is fullscreen; a pin click brings it
+  // forward through the left-panel store (`useActivateCommentThread`).
   test("comments mode shows the pin without touching the playing board", async ({
     page,
   }) => {
@@ -519,7 +519,7 @@ test.describe("relative links and the query-navigation reload", () => {
   });
 });
 
-test.describe("the fullscreen sidebar's draft across an exit and reenter", () => {
+test.describe("the sidebar's draft across a fullscreen exit and reenter", () => {
   test("a reply typed in fullscreen survives Back to canvas and reentering, and Edit's menu is reachable there too", async ({
     page,
   }) => {
@@ -538,9 +538,9 @@ test.describe("the fullscreen sidebar's draft across an exit and reenter", () =>
       "true",
     );
 
-    // The left-panel selection the pin click made is untouched by leaving
-    // fullscreen, so the sidebar (and the thread it had open) reappear
-    // without picking the pin again.
+    // The rail sidebar is a sibling of the tile, so leaving fullscreen must
+    // not unmount it or drop the left-panel selection the pin click made -
+    // the typed reply has to still be there after a round trip.
     await page.getByRole("button", { name: "Play A fullscreen" }).click();
     await expect(canvasSurface(page)).toHaveAttribute(
       "data-canvas-fullscreen",
@@ -550,14 +550,15 @@ test.describe("the fullscreen sidebar's draft across an exit and reenter", () =>
     await expect(reply).toHaveText("in progress reply");
 
     // The actions menu (and the composer it opens) portal to
-    // `document.body` by default, below the fullscreen surface's own
-    // manual top-layer popover; a real click through to a state change -
-    // the edit composer appearing, pre-filled and typable - is what tells
-    // "exists in the DOM" apart from "actually reachable" in that stack.
+    // `document.body`; fullscreen is tile-scoped ordinary stacking, so the
+    // menu must still be clickable while a board is fullscreen. A real click
+    // through to a state change - the edit composer appearing, pre-filled
+    // and typable - is what tells "exists in the DOM" apart from "actually
+    // reachable" in that stack.
     await commentsSidebar(page)
       .getByRole("button", { name: "Comment actions" })
       .click();
-    await canvasSurface(page).getByRole("menuitem", { name: "Edit" }).click();
+    await page.getByRole("menuitem", { name: "Edit" }).click();
     const editDraft = commentsSidebar(page)
       .locator('[contenteditable="true"]')
       .first();
