@@ -92,9 +92,12 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
   };
 }
 
-function refusalFrom(initiatorId: string): SteerRestartRefusal {
+function refusalFrom(
+  initiatorId: string,
+  clientActionId: string,
+): SteerRestartRefusal {
   return {
-    clientActionId: "steer-1",
+    clientActionId,
     queueItemId: "queue-1",
     newSettings: SETTINGS,
     reasons: ["images"],
@@ -137,7 +140,9 @@ describe("steer restart refusal routing", () => {
     );
 
     act(() => {
-      handle.store.setState({ steerRestartRefusal: refusalFrom("tile-b") });
+      handle.store.setState({
+        steerRestartRefusals: [refusalFrom("tile-b", "steer-1")],
+      });
     });
 
     expect(tileA.result.current.steerRestart.open).toBe(false);
@@ -154,14 +159,16 @@ describe("steer restart refusal routing", () => {
       true,
       "tile-b",
     );
-    expect(handle.store.getState().steerRestartRefusal).toBeNull();
+    expect(handle.store.getState().steerRestartRefusals).toEqual([]);
     expect(tileB.result.current.steerRestart.open).toBe(false);
     expect(tileA.result.current.steerRestart.open).toBe(false);
   });
 
   it("asks for a refusal that arrived before the sending tile rendered again", () => {
     const handle = createHandle();
-    handle.store.setState({ steerRestartRefusal: refusalFrom("tile-b") });
+    handle.store.setState({
+      steerRestartRefusals: [refusalFrom("tile-b", "steer-1")],
+    });
 
     const tileB = renderHook(() =>
       useChatQueueActions(
@@ -180,7 +187,50 @@ describe("steer restart refusal routing", () => {
     });
 
     // Cancel leaves the prompt queued and the question answered.
-    expect(handle.store.getState().steerRestartRefusal).toBeNull();
+    expect(handle.store.getState().steerRestartRefusals).toEqual([]);
     expect(tileB.result.current.steerRestart.open).toBe(false);
+  });
+
+  it("keeps another tile's question open when one tile answers its own", () => {
+    const handle = createHandle();
+    const tileA = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-a",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+    const tileB = renderHook(() =>
+      useChatQueueActions(
+        tileInput(
+          handle,
+          "tile-b",
+          vi.fn<ChatActions["queueSteerNow"]>(() => null),
+        ),
+      ),
+    );
+
+    act(() => {
+      handle.store.setState({
+        steerRestartRefusals: [
+          refusalFrom("tile-a", "steer-1"),
+          refusalFrom("tile-b", "steer-2"),
+        ],
+      });
+    });
+    expect(tileA.result.current.steerRestart.open).toBe(true);
+    expect(tileB.result.current.steerRestart.open).toBe(true);
+
+    act(() => {
+      tileB.result.current.steerRestart.onOpenChange(false);
+    });
+
+    expect(tileB.result.current.steerRestart.open).toBe(false);
+    expect(tileA.result.current.steerRestart.open).toBe(true);
+    expect(handle.store.getState().steerRestartRefusals).toEqual([
+      refusalFrom("tile-a", "steer-1"),
+    ]);
   });
 });

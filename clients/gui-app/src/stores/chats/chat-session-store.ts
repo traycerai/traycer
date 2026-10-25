@@ -81,6 +81,7 @@ import {
   UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS,
   accountForQueueEdits,
   foldQueueEditAck,
+  foldQueueEditSteerAwaitingConfirmation,
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
@@ -1882,13 +1883,15 @@ export interface ChatSessionState {
    */
   readonly queueEditRecords: QueueEditRecords;
   /**
-   * The newest queued steer the host refused because it would end the running
-   * turn and the person had not confirmed that, from the row's Steer button or
-   * a queue edit's Cmd/Ctrl+Enter. The queue's confirm dialog takes it
-   * ({@link ChatSessionState.takeSteerRestartRefusal}), asks, and sends it
-   * again confirmed; the host's notice for the refusal is not shown.
+   * Each queued steer the host refused because it would end the running turn
+   * and the person had not confirmed that, from a row's Steer button or a
+   * queue edit's Cmd/Ctrl+Enter, oldest first. Two rows steered within one
+   * round trip are both refused, so each waits here until its own tile's
+   * confirm dialog takes it ({@link ChatSessionState.takeSteerRestartRefusal}),
+   * asks, and sends it again confirmed; the host's notice for a refusal is not
+   * shown.
    */
-  readonly steerRestartRefusal: SteerRestartRefusal | null;
+  readonly steerRestartRefusals: ReadonlyArray<SteerRestartRefusal>;
   /**
    * Sends that have gone {@link UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS} on an
    * open stream without an ack. A DISPLAY fact and nothing else: the pending
@@ -2147,8 +2150,8 @@ export interface ChatSessionState {
     initiatorId: string,
   ) => string | null;
   /**
-   * Clears and returns the steer refusal named, or `null` when it is no longer
-   * the current one. Its tile calls it once the person answers the dialog.
+   * Removes and returns the steer refusal named, or `null` when it is no
+   * longer held. Its tile calls it once the person answers the dialog.
    */
   takeSteerRestartRefusal: (
     clientActionId: string,
@@ -2950,7 +2953,7 @@ function rejectionSurfaces(input: {
     queueEditRecordForAction(state.queueEditRecords, frame.clientActionId) !==
       null ||
     // A steer refused for want of confirmation is asked about by the queue's
-    // confirm dialog (`steerRestartRefusal`), not reported as a failure.
+    // confirm dialog (`steerRestartRefusals`), not reported as a failure.
     frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
   ) {
     return {
@@ -7878,7 +7881,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     /**
      * Hold a steer the host refused because it would end the running turn and
      * was sent unconfirmed. The queue's confirm dialog asks the person
-     * (`steerRestartRefusal`), so the refusal is not an error to show.
+     * (`steerRestartRefusals`), so the refusal is not an error to show.
      *
      * A named function rather than an inline branch because `onActionAck` is
      * already at this workspace's complexity ceiling.
@@ -7905,15 +7908,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         return;
       }
       suppressNoticeAfterDispatch(frame.clientActionId);
-      set({
-        steerRestartRefusal: {
-          clientActionId: frame.clientActionId,
-          queueItemId: refusedSteer.queueItemId,
-          newSettings: steer.newSettings,
-          reasons: frame.steerRestartReasons ?? [],
-          initiatorId: steer.initiatorId,
-        },
-      });
+      const refusal: SteerRestartRefusal = {
+        clientActionId: frame.clientActionId,
+        queueItemId: refusedSteer.queueItemId,
+        newSettings: steer.newSettings,
+        reasons: frame.steerRestartReasons ?? [],
+        initiatorId: steer.initiatorId,
+      };
+      set((state) => ({
+        steerRestartRefusals: [...state.steerRestartRefusals, refusal],
+      }));
     };
 
     /**
@@ -10485,7 +10489,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingCancelRestorations: {},
       failedSendRestoration: null,
       queueEditRecords: {},
-      steerRestartRefusal: null,
+      steerRestartRefusals: [],
       unconfirmedSendActionIds: EMPTY_UNCONFIRMED_SEND_ACTION_IDS,
       hashOnlyRecoveries: {},
       currentComposerSettings: null,
@@ -11603,11 +11607,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           initiatorId,
         }),
       takeSteerRestartRefusal: (clientActionId) => {
-        const refusal = get().steerRestartRefusal;
-        if (refusal === null || refusal.clientActionId !== clientActionId) {
-          return null;
-        }
-        set({ steerRestartRefusal: null });
+        const refusals = get().steerRestartRefusals;
+        const refusal =
+          refusals.find((held) => held.clientActionId === clientActionId) ??
+          null;
+        if (refusal === null) return null;
+        set({
+          steerRestartRefusals: refusals.filter((held) => held !== refusal),
+        });
         return refusal;
       },
       queueAbortSteer: (queueItemId) => {
@@ -12912,18 +12919,21 @@ function queueEditSurfacesForAck(
   frame: ChatActionAckFrame,
   surfaces: HandBackSurfaces,
 ): HandBackSurfaces & Pick<ChatSessionState, "queueEditRecords"> {
-  const fold = foldQueueEditAck(state.queueEditRecords, {
-    clientActionId: frame.clientActionId,
-    // A steer refused for want of confirmation is not a failed submission:
-    // the confirm dialog takes it over (`steerRestartRefusal`) and sends it
-    // again, so the edit settles without a "not applied" notice.
-    status:
-      frame.status === "rejected" &&
-      frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
-        ? "accepted"
-        : frame.status,
-    reason: frame.reason ?? null,
-  });
+  // A steer refused for want of confirmation is not a failed submission: the
+  // confirm dialog takes it over and sends it again, so the edit says nothing
+  // about it - neither "not applied" nor that it went ahead.
+  const fold =
+    frame.status === "rejected" &&
+    frame.code === QUEUE_STEER_RESTART_UNCONFIRMED_CODE
+      ? foldQueueEditSteerAwaitingConfirmation(
+          state.queueEditRecords,
+          frame.clientActionId,
+        )
+      : foldQueueEditAck(state.queueEditRecords, {
+          clientActionId: frame.clientActionId,
+          status: frame.status,
+          reason: frame.reason ?? null,
+        });
   return {
     queueEditRecords: fold.records,
     ...withQueueEditSettlements(

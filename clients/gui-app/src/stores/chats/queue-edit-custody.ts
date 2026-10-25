@@ -28,12 +28,17 @@ export type QueueEditIntent = "save" | "steer";
  * later SEEN to hold can account for it. The two are kept apart because they
  * are owed different things - a pending frame is owed patience, an unconfirmed
  * one is owed evidence.
+ *
+ * `confirming` is a steer the host refused until the person confirms ending
+ * the running turn: the confirm dialog owns it from there, so it is answered,
+ * and nothing about it is told here, applied or not.
  */
 export type QueueEditFrameOutcome =
   | "pending"
   | "accepted"
   | "rejected"
-  | "unconfirmed";
+  | "unconfirmed"
+  | "confirming";
 
 /**
  * An edited queued prompt, held from the moment the composer is cleared until
@@ -359,7 +364,9 @@ function settleQueueEditRecord(
       requestedChanges: next.requestedChanges,
     });
   }
-  const landedWhole = next.edit === "accepted" && next.followUp === "accepted";
+  const landedWhole =
+    next.edit === "accepted" &&
+    (next.followUp === "accepted" || next.followUp === "confirming");
   const refusedAndAnswered =
     next.edit === "rejected" && next.followUp !== "pending";
   return {
@@ -410,6 +417,31 @@ export function foldQueueEditAck(
     cause: "refused",
     hostReason: answersEdit ? ack.reason : null,
   });
+  return {
+    records:
+      next === null
+        ? withoutQueueEditRecord(records, record.editActionId)
+        : withQueueEditRecord(records, next),
+    settlements,
+  };
+}
+
+/**
+ * Fold a steer the host refused until the person confirms ending the turn.
+ * Unchanged for an action id that is no record's steer.
+ */
+export function foldQueueEditSteerAwaitingConfirmation(
+  records: QueueEditRecords,
+  clientActionId: string,
+): QueueEditFold {
+  const record = queueEditRecordForAction(records, clientActionId);
+  if (record === null || record.followUpActionId !== clientActionId) {
+    return { records, settlements: NO_SETTLEMENTS };
+  }
+  const { record: next, settlements } = settleQueueEditRecord(
+    { ...record, followUp: "confirming" },
+    { cause: "refused", hostReason: null },
+  );
   return {
     records:
       next === null

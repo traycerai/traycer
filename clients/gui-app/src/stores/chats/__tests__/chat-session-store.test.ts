@@ -8627,13 +8627,15 @@ describe("createChatSessionStore", () => {
     });
 
     expect(harness.handle.store.getState().errorNotices).toEqual([]);
-    expect(harness.handle.store.getState().steerRestartRefusal).toEqual({
-      clientActionId,
-      queueItemId: "queue-1",
-      newSettings: settings,
-      reasons: ["images", "skills"],
-      initiatorId: "tile-1",
-    });
+    expect(harness.handle.store.getState().steerRestartRefusals).toEqual([
+      {
+        clientActionId,
+        queueItemId: "queue-1",
+        newSettings: settings,
+        reasons: ["images", "skills"],
+        initiatorId: "tile-1",
+      },
+    ]);
     expect(
       harness.handle.store.getState().takeSteerRestartRefusal("other-action"),
     ).toBeNull();
@@ -8641,10 +8643,48 @@ describe("createChatSessionStore", () => {
       harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
     ).toMatchObject({ queueItemId: "queue-1" });
     // Taken once, when the sending tile's dialog is answered.
-    expect(harness.handle.store.getState().steerRestartRefusal).toBeNull();
+    expect(harness.handle.store.getState().steerRestartRefusals).toEqual([]);
     expect(
       harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
     ).toBeNull();
+  });
+
+  it("keeps each refusal until its own dialog is answered when two steers are refused first", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    // Two rows steered within one round trip: nothing disables the second
+    // row's Steer while the first steer's refusal is still on its way.
+    const first = harness.handle.store
+      .getState()
+      .queueSteerNow("queue-1", SETTINGS, false, "tile-1");
+    const second = harness.handle.store
+      .getState()
+      .queueSteerNow("queue-2", SETTINGS, false, "tile-2");
+    if (first === null || second === null) throw new Error("Expected steers");
+    for (const clientActionId of [first, second]) {
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId,
+        action: "queueSteerNow",
+        status: "rejected",
+        reason: "Steering this message now would end the current turn.",
+        code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+        backgroundStopTaskIds: [],
+        token: null,
+        steerRestartReasons: ["images"],
+      });
+    }
+
+    expect(
+      harness.handle.store.getState().takeSteerRestartRefusal(first),
+    ).toMatchObject({ queueItemId: "queue-1", initiatorId: "tile-1" });
+    expect(
+      harness.handle.store.getState().takeSteerRestartRefusal(second),
+    ).toMatchObject({ queueItemId: "queue-2", initiatorId: "tile-2" });
+    expect(harness.handle.store.getState().errorNotices).toEqual([]);
   });
 
   it("reconciles file-edit approval snapshots and sends decisions", () => {

@@ -1023,6 +1023,82 @@ describe("an edit refused while its follow-up is applied", () => {
   });
 });
 
+describe("an edit refused while its steer waits for the person to confirm ending the turn", () => {
+  function refuseSteerUnconfirmed(target: Harness, clientActionId: string) {
+    target.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "Steering this message now would end the current turn.",
+      code: "QUEUE_STEER_RESTART_UNCONFIRMED",
+      backgroundStopTaskIds: [],
+      token: null,
+      steerRestartReasons: ["harness"],
+    });
+  }
+
+  function followUpAloneNotices(target: Harness) {
+    return target.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
+      );
+  }
+
+  // The steer has not happened: the confirm dialog holds it, and the person
+  // may still cancel. Saying it "was still steered" would be false either way.
+  it("does not say the steer went ahead when the text's refusal comes first", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [],
+    );
+
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+    refuseSteerUnconfirmed(harness, followUpActionId);
+
+    const state = harness.handle.store.getState();
+    expect(followUpAloneNotices(harness)).toEqual([]);
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+    expect(state.takeSteerRestartRefusal(followUpActionId)).toMatchObject({
+      queueItemId: QUEUE_ITEM_ID,
+    });
+  });
+
+  it("does not say the steer went ahead when the steer's refusal comes first", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [],
+    );
+
+    refuseSteerUnconfirmed(harness, followUpActionId);
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+    });
+
+    const state = harness.handle.store.getState();
+    expect(followUpAloneNotices(harness)).toEqual([]);
+    expect(state.failedSendRestoration?.content).toEqual(EDITED);
+    expect(state.queueEditRecords).toEqual({});
+  });
+});
+
 describe("cancelling a row retires its returned queue-edit records", () => {
   function retainedAfterReconnect(): {
     readonly started: Harness;

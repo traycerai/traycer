@@ -157,16 +157,16 @@ export function useChatQueueActions(
   // because it would end the running turn. Read, not taken: it stays in the
   // store until this tile's dialog is answered, so a pane that was unfocused
   // when the refusal arrived asks once it is focused again, and another pane
-  // on the same chat never claims it. An older host never refuses: it restarts
-  // the turn as it always did.
-  const storedRefusal = useStore(
+  // on the same chat never claims it. This tile's oldest refusal is asked
+  // first; the next one opens once it is answered. An older host never
+  // refuses: it restarts the turn as it always did.
+  const ownRefusal = useStore(
     handle.store,
-    (state) => state.steerRestartRefusal,
+    (state) =>
+      state.steerRestartRefusals.find(
+        (refusal) => refusal.initiatorId === tileInstanceId,
+      ) ?? null,
   );
-  const ownRefusal =
-    storedRefusal !== null && storedRefusal.initiatorId === tileInstanceId
-      ? storedRefusal
-      : null;
   const steerRestartPrompt: {
     readonly queueItemId: string;
     readonly newSettings: ChatRunSettings | null;
