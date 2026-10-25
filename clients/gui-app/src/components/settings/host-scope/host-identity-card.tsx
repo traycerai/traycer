@@ -349,8 +349,14 @@ function HostIdentityHealth(props: {
   );
 }
 
+/**
+ * The header's kind tag. The machine this app runs on reads `This computer`,
+ * never `Local`: `Local` is the Environment dropdown's badge for a computer
+ * whose settings are not in Personal yet, and a computer without a Local row
+ * must not wear it.
+ */
 function hostKindTag(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "Local";
+  if (host.isLocalMachine) return "This computer";
   return host.sandbox === null ? "Remote" : "Sandbox";
 }
 

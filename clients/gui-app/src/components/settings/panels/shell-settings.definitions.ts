@@ -7,9 +7,9 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 export const SHELL = defineSettingsSection("shell", {
   page: {
     availableWhen: alwaysAvailable,
-    label: "Variables and shells",
+    label: "Variables & shells",
     description:
-      "How Traycer launches terminals, the host, and provider harnesses.",
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
     keywords: [
       "terminal",
       "bash",

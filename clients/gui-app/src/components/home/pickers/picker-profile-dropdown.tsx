@@ -198,6 +198,7 @@ function PickerProfileDropdownView({
       usagePresentation={usagePresentation}
       eligibilityControls={null}
       admissionByProfileId={props.admissionByProfileId}
+      showTerminalBadge
     />
   );
 }

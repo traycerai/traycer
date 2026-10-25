@@ -570,7 +570,7 @@ function ProbeStatus(props: {
   } else if (probe.exists) {
     content = { text: "found, but not executable", tone: "warn" };
   } else {
-    content = { text: "not found on this machine", tone: "warn" };
+    content = { text: "not found on this computer", tone: "warn" };
   }
   return (
     <div className="min-h-[1.25rem] px-1 py-1 text-ui-xs">

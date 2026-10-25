@@ -33,6 +33,13 @@ import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-
 import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "@/components/chat/composer/profile-disabled-banner";
 import { useProfileEligibilityGate } from "@/components/chat/composer/use-profile-eligibility-gate";
+import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
+import {
+  SIGNED_OUT_SEND_HINT,
+  useLandingProviderReauthGate,
+  type ProviderReauthGate,
+} from "@/components/chat/composer/use-provider-reauth-gate";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -344,9 +351,9 @@ export function LandingComposer(props: LandingComposerProps) {
   // `globalLastRunSettings` fallback - validated against this composer's
   // resolved host (the one this draft will actually create the chat on) via
   // the same machinery `useComposerToolbarStore` runs for every composer
-  // surface. Never authoritative: the landing composer has no reauth gate of
-  // its own to defend a dead pin with a banner, so a genuinely-removed profile
-  // must be corrected to ambient here rather than silently submitted as the
+  // surface. Never authoritative: the landing composer's reauth gate does not
+  // defend a dead pin (`useLandingProviderReauthGate`), so a genuinely-removed
+  // profile must be corrected to ambient here rather than silently submitted as the
   // new chat's initial settings. The catalog reads through the same
   // `hostClient` - the composer's pinned/followed host, NOT the app-wide
   // default (P1.2 retired the picker's rebind of that default).
@@ -366,6 +373,12 @@ export function LandingComposer(props: LandingComposerProps) {
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const profileEligibility = useProfileEligibilityGate(
+    hostClient,
+    harnessId,
+    profileId,
+    chatComposerActive,
+  );
+  const reauthGate = useLandingProviderReauthGate(
     hostClient,
     harnessId,
     profileId,
@@ -490,6 +503,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const packGate = useProviderPackGate(harnessId);
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
     workspaceDisabledHint: workspaceGate.disabledHint,
+    signedOut: reauthGate.signedOut,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
     profileDisabled: profileEligibility.disabled,
@@ -977,7 +991,17 @@ export function LandingComposer(props: LandingComposerProps) {
               }}
             />
           ) : null}
+          {profileEligibility.disabled ? null : (
+            <LandingReauthBanner
+              gate={reauthGate}
+              hostId={resolvedHostId}
+              onContinueOnAmbient={() =>
+                commitProfileSelection(toolbarStore, null)
+              }
+            />
+          )}
           {!profileEligibility.disabled &&
+          !reauthGate.signedOut &&
           rateLimitPrompt.kind === "visible" ? (
             <ProfileRateLimitSwitchBanner
               key={rateLimitPrompt.warningKey}
@@ -1043,23 +1067,61 @@ export function LandingComposer(props: LandingComposerProps) {
 }
 
 /**
+ * The sign-in banner over the landing composer while its gate refuses a send.
+ * The banner reads the host it signs in on as a tab's; this composer has no
+ * tab, so its placement stands in, and a move to another host remounts the
+ * banner rather than carrying a sign-in across.
+ */
+function LandingReauthBanner(props: {
+  readonly gate: ProviderReauthGate;
+  readonly hostId: string | null;
+  readonly onContinueOnAmbient: () => void;
+}): ReactNode {
+  const { gate, hostId } = props;
+  if (gate.providerId === null || gate.reason === null || hostId === null) {
+    return null;
+  }
+  return (
+    <TabHostContext.Provider key={hostId} value={hostId}>
+      <ProviderReauthBanner
+        providerId={gate.providerId}
+        state={gate.state}
+        reason={gate.reason}
+        profileId={gate.profileId}
+        profileLabel={gate.profileLabel}
+        epicId={null}
+        viewTabId={null}
+        onContinueOnAmbient={
+          gate.reason === "provider_unauthenticated"
+            ? null
+            : props.onContinueOnAmbient
+        }
+      />
+    </TabHostContext.Provider>
+  );
+}
+
+/**
  * Whether submit is blocked by a gate that owes the user copy, and that copy.
  * Returned as a pair for the same reason `resolveSendBlock` does it in
  * `chat-composer.tsx`: a reason that kills the button without supplying its
  * hint leaves a grey button that reads as broken.
  *
  * Priority matches the chat composer's, and mirrors severity: the workspace
- * gate first (nothing can run, and the user has to fix it), then the
+ * gate first (nothing can run, and the user has to fix it), then the profile
+ * and sign-in gates (the user acts, and the banner above says how), then the
  * managed-pack gate (self-resolving, and it says so). Ordered the other way, a
  * user with an unusable workspace would sit through `Preparing… 40%` and find
  * the button still dead once the download finished, with the real reason only
  * appearing then.
  *
- * A staged sandbox ahead of its handoff drops the profile and pack gates:
- * they are this host's, and the send runs again on the sandbox under its own.
+ * A staged sandbox ahead of its handoff drops the profile, sign-in and pack
+ * gates: they are this host's, and the send runs again on the sandbox under
+ * its own.
  */
 function resolveLandingSubmitBlock(args: {
   readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
   readonly profileDisabled: boolean;
@@ -1071,13 +1133,15 @@ function resolveLandingSubmitBlock(args: {
   if (args.stagedAhead) {
     return { submitBlocked: false, submitBlockedHint: null };
   }
+  let reasonHint = args.packPreparingHint;
+  if (args.profileDisabled) {
+    reasonHint = "Profile disabled — enable it or choose another profile";
+  } else if (args.signedOut) {
+    reasonHint = SIGNED_OUT_SEND_HINT;
+  }
   return {
-    submitBlocked: args.profileDisabled || args.packBlocked,
-    submitBlockedHint:
-      args.workspaceDisabledHint ??
-      (args.profileDisabled
-        ? "Profile disabled — enable it or choose another profile"
-        : args.packPreparingHint),
+    submitBlocked: args.profileDisabled || args.signedOut || args.packBlocked,
+    submitBlockedHint: args.workspaceDisabledHint ?? reasonHint,
   };
 }
 

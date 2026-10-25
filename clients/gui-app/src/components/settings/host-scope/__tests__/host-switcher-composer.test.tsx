@@ -695,7 +695,16 @@ describe("<HostSwitcher /> composer mode computers", () => {
     expect(screen.getByTestId("settings-host-switcher").textContent).toContain(
       "windows-test-machine",
     );
-    expect(row("local-win").textContent).not.toContain("This computer");
+    // Only a screen reader hears what the row is (`This computer`); the row
+    // shows the machine's name.
+    expect(
+      within(row("local-win")).queryByText("This computer", {
+        ignore: ".sr-only, script, style",
+      }),
+    ).toBeNull();
+    expect(
+      within(row("local-win")).getByText("windows-test-machine"),
+    ).toBeDefined();
   });
 
   it("says OS and Active under another computer's name, drawn as a monitor", () => {

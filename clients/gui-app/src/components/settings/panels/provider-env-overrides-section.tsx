@@ -7,19 +7,55 @@ import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import { EnvOverrideEditor } from "./env-override-editor";
+import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
+import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
+import {
+  EnvOverrideEditor,
+  type KeyRefusal,
+  type KeyRefusalFor,
+} from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 
 type ProviderId = ProviderCliState["providerId"];
 
 const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
 
+/**
+ * A provider's variables refuse a key the way Variables does, except the
+ * provider's own key variable, whose home is its Account tab: the value is
+ * cleared, not carried, so the key neither stays in the row nor travels.
+ */
+function providerKeyRefusal(
+  refusal: KeyRefusal | null,
+  keyVariable: string,
+  providerName: string,
+  onOpenAccount: (() => void) | null,
+): KeyRefusalFor {
+  if (refusal === null) return null;
+  return (name) =>
+    onOpenAccount === null || name !== keyVariable
+      ? refusal
+      : {
+          before: `This is ${providerName}'s key. Set it on `,
+          link: `${providerName}'s Account tab`,
+          after: ".",
+          clearsValue: true,
+          onLink: onOpenAccount,
+        };
+}
+
 export function ProviderEnvOverridesSection({
   providerId,
   overrides,
   envOverrideScope,
+  onOpenAccount,
 }: {
   readonly providerId: ProviderId;
+  /**
+   * Opens this provider's Account tab, where its own key is kept; `null` for
+   * a provider without one.
+   */
+  readonly onOpenAccount: (() => void) | null;
   readonly overrides: readonly {
     readonly key: string;
     readonly value: string | null;
@@ -33,6 +69,12 @@ export function ProviderEnvOverridesSection({
   // a base URL's token), so a sandbox gets none: the editor is disabled and
   // nothing is sent.
   const credentialRefusal = useHostCredentialRefusal(null);
+  // The same rule as Variables: a key-shaped value is refused for Secrets.
+  const keyShaped = useKeyShapedSecret();
+  const onHold = useHeldValueReviews(
+    "env_override",
+    `${providerIdToGuiHarnessId(providerId)}:`,
+  );
   const disabled =
     setOverride.isPending ||
     deleteOverride.isPending ||
@@ -85,6 +127,13 @@ export function ProviderEnvOverridesSection({
       <CredentialRefusalNote refusal={credentialRefusal} />
       <EnvOverrideEditor
         rowNotes={NO_ROW_NOTES}
+        onHold={onHold}
+        keyRefusal={providerKeyRefusal(
+          keyShaped.refusal,
+          envNamePlaceholder(providerId),
+          providerName,
+          onOpenAccount,
+        )}
         credentialRefusal={credentialRefusal}
         overrides={overrides}
         disabled={disabled}
@@ -101,6 +150,7 @@ export function ProviderEnvOverridesSection({
         onCommit={onCommit}
         onDelete={(key) => deleteOverride.mutate({ providerId, key })}
       />
+      {keyShaped.dialog}
     </div>
   );
 }

@@ -16,7 +16,6 @@ export const environmentMutationKeys = {
   localOverrideSet: () => ["config.env.localOverride.set"] as const,
   localOverrideClear: () => ["config.env.localOverride.clear"] as const,
   remoteAccessSet: () => ["host.remoteAccess.set"] as const,
-  hostBind: () => ["environment.host.bind"] as const,
   setMainBot: () => ["environment.setMainBot"] as const,
   moveAccept: () => ["environment.move.accept"] as const,
   moveStop: () => ["environment.move.stop"] as const,
@@ -25,8 +24,16 @@ export const environmentMutationKeys = {
     ["environment.configuration.items.delete"] as const,
   configurationMcpServersPut: () =>
     ["environment.configuration.mcpServers.put"] as const,
+  configurationMcpServersDelete: () =>
+    ["environment.configuration.mcpServers.delete"] as const,
+  configurationMcpServersSetEnabled: () =>
+    ["environment.configuration.mcpServers.setEnabled"] as const,
   configurationSkillsUpload: () =>
     ["environment.configuration.skills.upload"] as const,
+  configurationSkillsRemove: () =>
+    ["environment.configuration.skills.remove"] as const,
+  configurationSkillsSetProviders: () =>
+    ["environment.configuration.skills.setProviders"] as const,
   configurationPolicyPut: () =>
     ["environment.configuration.policy.put"] as const,
   membersInvite: () => ["environment.members.invite"] as const,

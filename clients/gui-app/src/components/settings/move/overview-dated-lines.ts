@@ -12,10 +12,10 @@ export const SHARED_BY_EARLIER_VERSION_LINE = "Shared by an earlier version";
 
 export const SHARED_BY_EARLIER_VERSION_DETAILS_LABEL = "Details";
 
-export const NO_MOVE_SHEET_ACCEPTANCE = "No move-sheet acceptance recorded";
+export const NO_MOVE_SHEET_ACCEPTANCE = "You never approved this upload.";
 
 export function stoppedSharingLine(at: number): string {
-  return `This computer stopped sharing on ${formatEvidenceDate(at)}`;
+  return `This computer stopped using Personal on ${formatEvidenceDate(at)}`;
 }
 
 /**

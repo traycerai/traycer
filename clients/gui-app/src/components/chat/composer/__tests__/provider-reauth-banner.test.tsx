@@ -100,6 +100,8 @@ const mocks = vi.hoisted(() => ({
   hostKind: "local",
   /** What `useHostCredentialRefusal` answers for the tab's host; `null` takes sign-ins. */
   credentialRefusal: null as string | null,
+  /** What `useTabHostClient` answers; `null` is a tab host not reachable now. */
+  tabClient: { id: "tab-client" } as { id: string } | null,
 }));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -108,6 +110,7 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 
 afterEach(() => {
   mocks.credentialRefusal = null;
+  mocks.tabClient = { id: "tab-client" };
 });
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -123,7 +126,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({ id: "tab-client" }),
+  useTabHostClient: () => mocks.tabClient,
 }));
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
@@ -210,7 +213,6 @@ vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
 }));
 
-import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import { ProviderReauthBanner } from "../provider-reauth-banner";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
@@ -253,11 +255,11 @@ function mockStartLoginAlwaysSucceeds(): void {
   );
 }
 
-/** Presses Authenticate and lets the start's answer land: the flow reads it
+/** Presses Sign in and lets the start's answer land: the flow reads it
  *  from `mutateAsync`'s promise, a microtask after the fake settles. */
 async function clickAuthenticate(): Promise<void> {
   await act(() => {
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     return Promise.resolve();
   });
 }
@@ -552,7 +554,50 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+
+  it("asks for a sign-in to run the provider, never a reconnect, for the terminal login", () => {
+    const { container } = render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByText("Sign in to Claude Code to run it.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect(container.textContent).not.toMatch(/reconnect/i);
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
+  it("says the host is unavailable, and to sign in once it is back, when the tab's host cannot be reached", () => {
+    mocks.tabClient = null;
+    const { container } = render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "This agent's host is unavailable. Sign in once it's back online.",
+      ),
+    ).toBeDefined();
+    expect(container.textContent).not.toMatch(/reconnect/i);
   });
 
   // The host-gating redesign: a control that spawns a CLI is refused for a
@@ -573,7 +618,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(
       "Claude Code is turned off. Turn it on to sign in or manage its profiles.",
     );
@@ -599,7 +644,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
 
   it("still withholds the OAuth button on a remote host when oauthArgs is empty but non-null", () => {
@@ -619,7 +664,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
   // The host settled that nothing can run Antigravity on this Mac. The banner
@@ -654,11 +699,11 @@ describe("<ProviderReauthBanner />", () => {
         "Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.",
       ),
     ).toBeDefined();
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(mocks.startLoginMutate).not.toHaveBeenCalled();
   });
 
-  it("keeps offering Authenticate when a host that omits the field has a runnable CLI", () => {
+  it("keeps offering Sign in when a host that omits the field has a runnable CLI", () => {
     render(
       <ProviderReauthBanner
         epicId={null}
@@ -672,7 +717,7 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
 
   // Row 1 of the terminal-login contract table: the banner is one of three
@@ -696,7 +741,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(
       screen.getByRole("button", { name: /Sign in from a terminal/ }),
     ).toBeDefined();
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
   // Reasonix is a terminal-login provider with its own setup guidance
@@ -809,7 +854,9 @@ describe("<ProviderReauthBanner />", () => {
       "Preparing Copilot… 30%",
     );
     // And not the CLI-only stub either: this is not a provider with no route.
-    expect(screen.queryByText(/Reconnect Copilot from its CLI/)).toBeNull();
+    expect(
+      screen.queryByText(/Sign in from Copilot's own CLI, then check again/),
+    ).toBeNull();
   });
 
   it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
@@ -869,7 +916,7 @@ describe("<ProviderReauthBanner />", () => {
         />,
       );
 
-      expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
       expect(
         screen.queryByRole("button", { name: /Sign in from a terminal/ }),
       ).not.toBeNull();
@@ -922,7 +969,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(
       screen.queryByRole("button", { name: /Sign in from a terminal/ }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
   it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
@@ -941,7 +988,7 @@ describe("<ProviderReauthBanner />", () => {
 
     // Droid has no spawnable OAuth login, so no Authenticate button is offered -
     // it would only hang on "Waiting for browser sign-in…".
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     // The FACTORY_API_KEY paste form is the reconnect path instead.
     expect(
       screen.getByPlaceholderText("Paste your FACTORY_API_KEY"),
@@ -998,7 +1045,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.refreshProviders).toHaveBeenCalled();
   });
 
-  it("awaits the login-completion edge on Authenticate (no polling)", async () => {
+  it("awaits the login-completion edge on Sign in (no polling)", async () => {
     mocks.startLoginMutate.mockImplementation(
       (
         _vars: { providerId: string },
@@ -1650,7 +1697,7 @@ describe("<ProviderReauthBanner />", () => {
         "This can take up to a minute. The sign-in page opens as soon as it is ready.",
       ),
     ).toBeDefined();
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
@@ -1681,10 +1728,10 @@ describe("<ProviderReauthBanner />", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const authenticateButton = screen.getByRole("button", {
-      name: /Authenticate/,
+      name: "Sign in",
     });
     expect(authenticateButton).toHaveProperty("disabled", true);
     expect(screen.queryByText("Starting Claude Code…")).toBeNull();
@@ -1830,9 +1877,11 @@ describe("<ProviderReauthBanner />", () => {
     );
 
     // Remote host → no OAuth loopback; no token vars → no paste form either.
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(screen.getByText(/Reconnect .* from its CLI/)).toBeDefined();
+    expect(
+      screen.getByText(/Sign in from .*'s own CLI, then check again/),
+    ).toBeDefined();
   });
 
   it("still offers the paste form on a remote host when OAuth is unavailable", () => {
@@ -1851,7 +1900,7 @@ describe("<ProviderReauthBanner />", () => {
     );
 
     // OAuth needs a local host, but pasting a credential works on any host.
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
   });
 
@@ -1870,8 +1919,9 @@ describe("<ProviderReauthBanner />", () => {
     );
 
     expect(screen.getByPlaceholderText("Paste your API key")).toBeDefined();
+    expect(screen.getByText("Sign in with an API key or token")).toBeDefined();
     expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
 
     fireEvent.change(screen.getByPlaceholderText("Paste your API key"), {
       target: { value: "  cursor-key  " },
@@ -1904,7 +1954,7 @@ describe("<ProviderReauthBanner />", () => {
           "This agent's Claude Code profile is no longer available.",
         ),
       ).toBeDefined();
-      expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
       fireEvent.click(
         screen.getByRole("button", { name: "Continue on Terminal account" }),
       );
@@ -2065,7 +2115,7 @@ describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () =>
       screen.getByRole("button", { name: "Try another account" }),
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 
   it("opens the provider's verification link through the auth link opener", async () => {
@@ -2146,7 +2196,7 @@ describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () =>
     });
 
     expect(screen.queryByText(HEADLINE)).toBeNull();
-    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
 });
 
@@ -2183,11 +2233,9 @@ describe("<ProviderReauthBanner /> on a host that takes no credentials", () => {
       />,
     );
 
-    expect(
-      screen.getByText(providerSignedOutMessage("claude-code")),
-    ).toBeDefined();
+    expect(screen.getByText("Claude Code is signed out.")).toBeDefined();
     expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
-    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: /terminal/i })).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByLabelText(/token|key/i)).toBeNull();
@@ -2283,7 +2331,7 @@ describe("<ProviderReauthBanner /> on a host that takes no credentials", () => {
     );
 
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
-    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
 });
 

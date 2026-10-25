@@ -4,16 +4,18 @@ import {
   stopRowAddress,
   stopSharingConfirmEnabled,
   type StopChoiceEntry,
+  type StopManagedRow,
   type StopNeedsChoiceRow,
 } from "@/components/settings/move/stop-sharing-choices";
 import {
-  KEEP_LOCALLY,
+  KEEP_ON_THIS_COMPUTER,
   REMOVE_FROM_THIS_COMPUTER,
-  RESOLVE,
-  STOP_SHARING_CONFIRM,
 } from "@/components/settings/move/stop-sharing-copy";
 import { StopSharingSheet } from "@/components/settings/move/stop-sharing-sheet";
-import { stopNeedsChoiceFromPreview } from "@/components/settings/move/stop-preview-rows";
+import {
+  stopManagedFromPreview,
+  stopNeedsChoiceFromPreview,
+} from "@/components/settings/move/stop-preview-rows";
 
 afterEach(() => {
   cleanup();
@@ -25,14 +27,16 @@ const NEEDS: readonly StopNeedsChoiceRow[] = [
     key: "LOG_LEVEL",
     label: "LOG_LEVEL",
     detail: "warn",
-    reason: "edited_here",
+    origin: "changed_here",
+    usedBy: [],
   },
   {
     kind: "variable",
     key: "EDITOR",
     label: "EDITOR",
     detail: null,
-    reason: "depended_on",
+    origin: "depended_on",
+    usedBy: ["work", "home"],
   },
 ];
 
@@ -71,7 +75,7 @@ describe("stopSharingConfirmEnabled", () => {
     expect(
       stopSharingConfirmEnabled(NEEDS, {
         [logLevel]: "keep_locally",
-        [editor]: "resolve",
+        [editor]: "remove_from_this_computer",
       }),
     ).toBe(true);
   });
@@ -81,13 +85,72 @@ describe("stopSharingConfirmEnabled", () => {
   });
 });
 
+describe("StopSharingSheet row names", () => {
+  it("names page-held and env-override rows from a preview by their page or provider", () => {
+    const row = (kind: string, key: string, label: string) => ({
+      kind,
+      key,
+      os: "any" as const,
+      label,
+      detail: null,
+    });
+    const preview = {
+      managed: [row("fallback_policy", "fallback", "fallback / owner")],
+      needsChoice: [
+        {
+          row: row("browser_agent_access", "browser", "browser / agentAccess"),
+          reason: "edited_here" as const,
+          origin: "changed_here" as const,
+          usedBy: [],
+        },
+        {
+          row: row(
+            "env_override",
+            "claude-code:ANTHROPIC_BASE_URL",
+            "ANTHROPIC_BASE_URL",
+          ),
+          reason: "edited_here" as const,
+          origin: "from_this_computer" as const,
+          usedBy: [],
+        },
+      ],
+    };
+    render(
+      <StopSharingSheet
+        open
+        hostName="MacBook Pro"
+        managed={stopManagedFromPreview(preview)}
+        needsChoice={stopNeedsChoiceFromPreview(preview)}
+        changedRows={null}
+        previewStatus="ready"
+        confirmPending={false}
+        onOpenChange={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    );
+
+    const text = document.body.textContent;
+    expect(text).toContain("Model routing");
+    expect(text).toContain("Browser agent access");
+    expect(text).toContain("Claude Code: ANTHROPIC_BASE_URL");
+    expect(text).not.toContain("fallback / owner");
+    expect(text).not.toContain("browser / agentAccess");
+  });
+});
+
 describe("StopSharingSheet", () => {
-  it("keeps Stop sharing disabled until every choice is made, then sends them", () => {
+  it("keeps Stop using Personal disabled until every choice is made, then sends them", () => {
     const onStop = vi.fn();
     renderSheet(onStop);
     const confirm = screen.getByTestId("stop-sharing-confirm");
     expect(confirm instanceof HTMLButtonElement && confirm.disabled).toBe(true);
-    expect(confirm.textContent).toContain(STOP_SHARING_CONFIRM);
+    expect(confirm.textContent).toBe("Stop using Personal");
+    expect(
+      screen.getByRole("heading", {
+        name: "Stop using Personal on this computer",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
 
     fireEvent.click(
       screen.getByTestId("stop-sharing-choice-variable-LOG_LEVEL-keep_locally"),
@@ -124,6 +187,8 @@ describe("StopSharingSheet", () => {
             detail: null,
           },
           reason: "edited_here",
+          origin: "changed_here",
+          usedBy: [],
         },
         {
           row: {
@@ -134,6 +199,8 @@ describe("StopSharingSheet", () => {
             detail: null,
           },
           reason: "depended_on",
+          origin: "depended_on",
+          usedBy: [],
         },
       ],
     });
@@ -151,7 +218,9 @@ describe("StopSharingSheet", () => {
       />,
     );
 
-    fireEvent.click(screen.getAllByRole("button", { name: KEEP_LOCALLY })[0]);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: KEEP_ON_THIS_COMPUTER })[0],
+    );
     fireEvent.click(
       screen.getAllByRole("button", { name: REMOVE_FROM_THIS_COMPUTER })[1],
     );
@@ -163,14 +232,166 @@ describe("StopSharingSheet", () => {
     ]);
   });
 
-  it("offers Keep locally, Remove from this computer and Resolve on each row", () => {
+  it("offers only Keep on this computer and Remove from this computer on each row", () => {
     renderSheet(vi.fn());
-    expect(screen.getAllByRole("button", { name: KEEP_LOCALLY })).toHaveLength(
-      2,
-    );
     expect(
-      screen.getAllByRole("button", { name: REMOVE_FROM_THIS_COMPUTER }),
+      screen.getAllByRole("button", { name: "Keep on this computer" }),
     ).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: RESOLVE })).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: "Remove from this computer" }),
+    ).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
+    expect(
+      screen
+        .getByTestId("stop-sharing-needs-choice")
+        .querySelectorAll("button"),
+    ).toHaveLength(4);
+  });
+
+  it.each([
+    [
+      "from_this_computer",
+      [],
+      "Came from this computer. Choose what happens to it here when you stop.",
+    ],
+    [
+      "changed_here",
+      [],
+      "Changed on this computer. Choose what happens to it here when you stop.",
+    ],
+    [
+      "depended_on",
+      ["work", "home"],
+      "Used by work, home. Choose what happens to it here when you stop.",
+    ],
+    [
+      "depended_on",
+      [],
+      "Other settings use it. Choose what happens to it here when you stop.",
+    ],
+  ] as const)(
+    "reads the %s row (used by %j) as: %s",
+    (origin, usedBy, line) => {
+      render(
+        <StopSharingSheet
+          open
+          hostName="MacBook Pro"
+          managed={[]}
+          needsChoice={[
+            {
+              kind: "variable",
+              key: "ONLY",
+              label: "ONLY",
+              detail: null,
+              origin,
+              usedBy,
+            },
+          ]}
+          changedRows={null}
+          previewStatus="ready"
+          confirmPending={false}
+          onOpenChange={vi.fn()}
+          onStop={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(line)).toBeTruthy();
+    },
+  );
+});
+
+describe("StopSharingSheet groups", () => {
+  const REMOVED_ROW: StopManagedRow = {
+    kind: "variable",
+    key: "NODE_OPTIONS",
+    label: "NODE_OPTIONS",
+    detail: null,
+  };
+
+  function renderGroups(
+    managed: readonly StopManagedRow[],
+    needsChoice: readonly StopNeedsChoiceRow[],
+  ): void {
+    render(
+      <StopSharingSheet
+        open
+        hostName="MacBook Pro"
+        managed={managed}
+        needsChoice={needsChoice}
+        changedRows={null}
+        previewStatus="ready"
+        confirmPending={false}
+        onOpenChange={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    );
+  }
+
+  it("shows both groups, a needs-choice row only under its heading and a removed row only under its own", () => {
+    renderGroups(
+      [
+        REMOVED_ROW,
+        ...NEEDS.map(({ kind, key, label, detail }) => ({
+          kind,
+          key,
+          label,
+          detail,
+        })),
+      ],
+      NEEDS,
+    );
+
+    const choosing = screen.getByTestId("stop-sharing-needs-choice");
+    const removed = screen.getByTestId("stop-sharing-managed");
+    expect(choosing.textContent).toContain(
+      "Choose what stays on this computer",
+    );
+    expect(removed.textContent).toContain(
+      "Removed from this computer when you stop",
+    );
+    expect(removed.textContent).toContain(
+      "These came from Personal. Stopping removes them from this computer only; they stay in Personal and come back if you move this computer to Personal again.",
+    );
+    expect(removed.textContent).toContain("NODE_OPTIONS");
+    expect(removed.textContent).not.toContain("LOG_LEVEL");
+    expect(choosing.textContent).toContain("LOG_LEVEL");
+    expect(choosing.textContent).not.toContain("NODE_OPTIONS");
+    expect(screen.queryByTestId("stop-sharing-managed-empty")).toBeNull();
+  });
+
+  it("shows only the removed group when no row needs a choice, with confirm enabled", () => {
+    renderGroups([REMOVED_ROW], []);
+
+    expect(screen.queryByTestId("stop-sharing-needs-choice")).toBeNull();
+    expect(screen.getByTestId("stop-sharing-managed")).toBeTruthy();
+    const confirm = screen.getByTestId("stop-sharing-confirm");
+    expect(confirm instanceof HTMLButtonElement && confirm.disabled).toBe(
+      false,
+    );
+  });
+
+  it("shows only the choice group when every row needs one", () => {
+    renderGroups(
+      NEEDS.map(({ kind, key, label, detail }) => ({
+        kind,
+        key,
+        label,
+        detail,
+      })),
+      NEEDS,
+    );
+
+    expect(screen.getByTestId("stop-sharing-needs-choice")).toBeTruthy();
+    expect(screen.queryByTestId("stop-sharing-managed")).toBeNull();
+  });
+
+  it("says nothing from Personal is on this computer when both groups are empty", () => {
+    renderGroups([], []);
+
+    expect(screen.queryByTestId("stop-sharing-needs-choice")).toBeNull();
+    expect(screen.queryByTestId("stop-sharing-managed")).toBeNull();
+    expect(screen.getByTestId("stop-sharing-managed-empty").textContent).toBe(
+      "Nothing from Personal is on this computer.",
+    );
   });
 });

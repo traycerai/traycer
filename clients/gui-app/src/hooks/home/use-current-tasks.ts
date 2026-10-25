@@ -41,6 +41,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import {
+  rereadAgentActivity,
   useActivityFleetCoverage,
   type ActivityFleetCoverage,
 } from "@/stores/agent-activity-store";
@@ -76,6 +77,8 @@ export interface CurrentTasks {
   readonly pinsComplete: boolean;
   readonly activityCoverage: ActivityFleetCoverage;
   readonly isPending: boolean;
+  /** Asks again for what is running: the activity plane and failed reads. */
+  readonly retryActivity: () => void;
 }
 
 export function useCurrentTasks(): CurrentTasks {
@@ -107,6 +110,10 @@ export function useCurrentTasks(): CurrentTasks {
         ? "partial"
         : activityCoverage,
     isPending: pins.isPending || hydration.isFetching,
+    retryActivity: () => {
+      rereadAgentActivity();
+      hydration.refetchOwnerReads();
+    },
   };
 }
 
@@ -255,6 +262,7 @@ function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
   readonly items: readonly HistoryItem[];
   readonly isFetching: boolean;
   readonly hasOwnerReadError: boolean;
+  readonly refetchOwnerReads: () => void;
 } {
   const localRows = useLocalHomedOpenTaskRows(input.openEpicIds, input.userId);
   const cloudAuthorized = useAuthStore((state) =>
@@ -315,6 +323,7 @@ function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
     items,
     isFetching: taskContexts.isFetching || localRows.isFetching,
     hasOwnerReadError: localRows.hasError,
+    refetchOwnerReads: localRows.refetchFailed,
   };
 }
 

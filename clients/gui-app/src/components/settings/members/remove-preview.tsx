@@ -6,7 +6,6 @@ import {
   RETRY_LABEL,
   SHARED_SIGN_INS_LABEL,
   paidSandboxesLabel,
-  removeActivityLine,
   removeCannotRecall,
   removeConfirmLabel,
   removeLinkedPlanConsequence,
@@ -16,7 +15,7 @@ import {
   removePreviewLead,
   removePreviewTitle,
   removeSharedSignInConsequence,
-  removeTimingRule,
+  removeWorkNow,
   removeWorkNowLabel,
 } from "@/components/settings/members/copy";
 import {
@@ -43,50 +42,46 @@ function removePreviewRows(
   teamName: string,
   preview: RemovePreviewModel,
 ): readonly PreviewTableRow[] {
-  const rows: PreviewTableRow[] = [];
-  const activity = removeActivityLine(preview);
-  const workNow =
-    activity === null
-      ? removeTimingRule(memberName)
-      : `${activity}. ${removeTimingRule(memberName)}`;
-  rows.push({
-    label: removeWorkNowLabel(memberName),
-    value: workNow,
-  });
-  if (preview.sharedSignIns.length > 0) {
-    rows.push({
+  return [
+    {
+      label: removeWorkNowLabel(memberName),
+      value: removeWorkNow(memberName, preview),
+    },
+    {
       label: SHARED_SIGN_INS_LABEL,
-      value: removeSharedSignInConsequence(teamName),
-    });
-  }
-  rows.push({
-    label: paidSandboxesLabel(memberName),
-    value: removePaidSandboxesConsequence(
-      memberName,
-      teamName,
-      preview.paidSandboxes,
-    ),
-  });
-  rows.push({
-    label: LINKED_PLAN_LABEL,
-    value: removeLinkedPlanConsequence(preview.linkedPlan),
-  });
-  rows.push({
-    label: CANNOT_RECALL_LABEL,
-    value: removeCannotRecall(memberName, teamName),
-  });
-  return rows;
+      value: removeSharedSignInConsequence(teamName, preview.sharedSignIns),
+    },
+    {
+      label: paidSandboxesLabel(memberName),
+      value: removePaidSandboxesConsequence(
+        memberName,
+        teamName,
+        preview.paidSandboxes,
+      ),
+    },
+    {
+      label: LINKED_PLAN_LABEL,
+      value: removeLinkedPlanConsequence(preview.linkedPlan),
+    },
+    {
+      label: CANNOT_RECALL_LABEL,
+      value: removeCannotRecall(memberName, teamName),
+    },
+  ];
 }
 
 /**
- * Offboarding preview for an accepted member. Omits the activity line when
- * turns, terminals, or hostName are null. Never names a clock. A preview that
- * could not be read says so, offers Retry, and keeps Remove off: nothing is
- * shown as a consequence that was not read.
+ * Offboarding preview for an accepted member. Every row shows each time,
+ * "None." when it has nothing; work the serving host cannot count is never
+ * given a count. Never names a clock. A preview that could not be read says
+ * so, offers Retry, and keeps Remove off: nothing is shown as a consequence
+ * that was not read.
  */
 export function RemovePreviewDialog(props: {
   readonly open: boolean;
   readonly memberName: string;
+  /** The confirm button's name for the member: their first name. */
+  readonly confirmName: string;
   readonly teamName: string;
   readonly preview: PreviewState<RemovePreviewModel>;
   readonly busy: boolean;
@@ -183,7 +178,7 @@ export function RemovePreviewDialog(props: {
                 tone="inherit"
               />
             ) : null}
-            {removeConfirmLabel(props.memberName)}
+            {removeConfirmLabel(props.confirmName)}
           </Button>
         </DialogFooter>
       </DialogContent>

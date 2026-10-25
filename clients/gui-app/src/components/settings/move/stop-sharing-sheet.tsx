@@ -1,13 +1,15 @@
 /**
- * Preview of what Personal manages on this computer and what needs a choice
- * before Stop sharing can complete. Confirm stays disabled until every
- * needs-choice row has `Keep locally`, `Remove from this computer` or
- * `Resolve`. `changedRows` is non-null after the host refused a stop because
- * the preview changed: the rows that appeared since, which need a choice.
+ * Preview of what Personal manages on this computer, in two groups: the rows
+ * that need a choice before Stop using Personal can complete, and the rows the
+ * stop removes from this computer. Confirm stays disabled until every
+ * needs-choice row has `Keep on this computer` or `Remove from this computer`.
+ * `changedRows` is non-null after the host refused a stop because the preview
+ * changed: the rows that appeared since, which need a choice.
  */
 import { useState, type ReactNode } from "react";
 import {
   stopChoiceEntries,
+  stopRemovedRows,
   stopRowAddress,
   stopSharingConfirmEnabled,
   type StopChoiceEntry,
@@ -19,9 +21,10 @@ import {
   STOP_CHOICES,
   STOP_SHARING_CONFIRM,
   STOP_SHARING_KEEP,
-  STOP_SHARING_MANAGED,
   STOP_SHARING_MANAGED_EMPTY,
   STOP_SHARING_NEEDS_CHOICE,
+  STOP_SHARING_REMOVED,
+  STOP_SHARING_REMOVED_LINE,
   STOP_SHARING_TITLE,
   stopChoiceReasonLine,
   stopPreviewChangedLine,
@@ -86,6 +89,7 @@ function StopSharingBody(props: {
   const previewReady = props.previewStatus === "ready";
   const confirmEnabled =
     previewReady && stopSharingConfirmEnabled(props.needsChoice, choices);
+  const removed = stopRemovedRows(props.managed, props.needsChoice);
 
   return (
     <DialogContent
@@ -134,27 +138,14 @@ function StopSharingBody(props: {
                 )}
               </p>
             ) : null}
-            <section data-testid="stop-sharing-managed">
-              <h3 className="mb-2 text-ui-sm font-medium text-foreground">
-                {STOP_SHARING_MANAGED}
-              </h3>
-              {props.managed.length === 0 ? (
-                <p className="text-ui-sm text-muted-foreground">
-                  {STOP_SHARING_MANAGED_EMPTY}
-                </p>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {props.managed.map((row) => (
-                    <PreviewRow
-                      key={stopRowAddress(row)}
-                      label={row.label}
-                      detail={row.detail}
-                      testId={`stop-sharing-managed-${row.kind}-${row.key}`}
-                    />
-                  ))}
-                </ul>
-              )}
-            </section>
+            {removed.length === 0 && props.needsChoice.length === 0 ? (
+              <p
+                className="text-ui-sm text-muted-foreground"
+                data-testid="stop-sharing-managed-empty"
+              >
+                {STOP_SHARING_MANAGED_EMPTY}
+              </p>
+            ) : null}
             {props.needsChoice.length > 0 ? (
               <section data-testid="stop-sharing-needs-choice">
                 <h3 className="mb-2 text-ui-sm font-medium text-foreground">
@@ -173,7 +164,7 @@ function StopSharingBody(props: {
                         testId={`stop-sharing-choice-label-${row.kind}-${row.key}`}
                       />
                       <p className="text-ui-xs text-muted-foreground">
-                        {stopChoiceReasonLine(row.reason)}
+                        {stopChoiceReasonLine(row.origin, row.usedBy)}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {STOP_CHOICES.map((action) => {
@@ -204,6 +195,26 @@ function StopSharingBody(props: {
                         })}
                       </div>
                     </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+            {removed.length > 0 ? (
+              <section data-testid="stop-sharing-managed">
+                <h3 className="mb-1 text-ui-sm font-medium text-foreground">
+                  {STOP_SHARING_REMOVED}
+                </h3>
+                <p className="mb-2 text-ui-xs text-muted-foreground">
+                  {STOP_SHARING_REMOVED_LINE}
+                </p>
+                <ul className="flex flex-col gap-2">
+                  {removed.map((row) => (
+                    <PreviewRow
+                      key={stopRowAddress(row)}
+                      label={row.label}
+                      detail={row.detail}
+                      testId={`stop-sharing-managed-${row.kind}-${row.key}`}
+                    />
                   ))}
                 </ul>
               </section>

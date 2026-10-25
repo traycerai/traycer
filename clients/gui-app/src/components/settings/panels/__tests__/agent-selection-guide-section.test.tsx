@@ -250,6 +250,7 @@ vi.mock(
   },
 );
 
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 
@@ -348,6 +349,7 @@ describe("AgentSelectionGuideSection", () => {
 
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -542,6 +544,51 @@ describe("AgentSelectionGuideSection", () => {
       screen.queryByRole("heading", { name: "Choose an agent" }),
     ).toBeNull();
   });
+
+  it("names the page by the guide agents read, and carries no description line of its own", () => {
+    render(<AgentsSettingsPanel />);
+
+    expect(screen.getByTestId("agents-guide-caption").textContent).toContain(
+      "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
+    );
+    expect(screen.queryByText(/Instructions for choosing Traycer/)).toBeNull();
+    expect(screen.queryByText(/Provider-native subagents/)).toBeNull();
+    expect(
+      screen.getByTestId("agents-selection-guide-revert").textContent,
+    ).toBe("Reset to default");
+  });
+
+  it.each([
+    [
+      "Personal",
+      { kind: "personal" } as const,
+      "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost.",
+    ],
+    [
+      "a Local row",
+      { kind: "local", hostId: "local", hostName: "Local host" } as const,
+      "This replaces your agent selection instructions with defaults based on the providers currently available on Local host. Your custom instructions will be lost.",
+    ],
+  ])(
+    "confirms a reset under %s in that pick's words",
+    (_name, pick, sentence) => {
+      guideMocks.queryData = {
+        content: "claude guide",
+        generatedDefaultContent: "codex guide",
+      };
+      useSettingsEnvironmentPickStore.setState({ pick });
+      renderPanel();
+
+      fireEvent.click(screen.getByTestId("agents-selection-guide-revert"));
+
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).toContain("Reset to default instructions?");
+      expect(dialog.textContent).toContain(sentence);
+      expect(screen.getByTestId("confirm-action").textContent).toBe(
+        "Reset to default",
+      );
+    },
+  );
 
   it("reverts through the host reset API instead of sending generated content back", async () => {
     guideMocks.queryData = {
