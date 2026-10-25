@@ -933,6 +933,7 @@ import {
   epicStateSubscribeV12,
   epicStateSubscribeV13,
   epicStateSubscribeV14,
+  epicStateSubscribeV15,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -14518,7 +14519,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -14537,6 +14538,9 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         // The host drops new-kind rows for peers below 1.3.
         3: { contract: epicStateSubscribeV13 },
         4: { contract: epicStateSubscribeV14 },
+        // 1.5's thread rows gain the canvas-point anchor kind; the host
+        // serves pre-1.5 subscribers a whole-artifact reading instead.
+        5: { contract: epicStateSubscribeV15 },
       },
     },
   },

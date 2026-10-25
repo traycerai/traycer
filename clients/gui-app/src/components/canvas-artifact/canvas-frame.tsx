@@ -177,11 +177,16 @@ export function CanvasBoardFrame({
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const appliedNavigation = useRef<typeof navigation>(null);
+  // What the navigation prop says RIGHT NOW, for a navigateCanvas() reply
+  // that lands after the prop moved on: a cleared entry must reset the board
+  // even when the clear arrived while the request was still in flight.
+  const latestNavigation = useRef<typeof navigation>(null);
   // The live document adopted a revision in place, so its server mount still
   // holds the pre-adoption bytes.
   const adoptedDocument = useRef(false);
   const [remountEpoch, setRemountEpoch] = useState(0);
   const navigate = useCallback((): void => {
+    latestNavigation.current = navigation;
     const bridge = bridgeRef.current;
     // A cleared navigation entry (play stopped) discards wherever the played
     // document went: the board comes back as a fresh mount of its own source.
@@ -206,8 +211,22 @@ export function CanvasBoardFrame({
       return;
     }
     void bridge.navigateCanvas(navigation).then((applied) => {
-      if (applied && bridgeRef.current === bridge)
+      if (!applied || bridgeRef.current !== bridge) return;
+      if (latestNavigation.current === navigation) {
         appliedNavigation.current = navigation;
+        return;
+      }
+      // Stopped while this request was in flight: the document just went
+      // somewhere no longer wanted, so reset it like the cleared-entry
+      // branch would have. A REPLACED navigation needs nothing here - its
+      // own call is already pending and records itself.
+      if (
+        latestNavigation.current === null ||
+        latestNavigation.current === undefined
+      ) {
+        adoptedDocument.current = false;
+        setRemountEpoch((epoch) => epoch + 1);
+      }
     });
   }, [navigation]);
   useEffect(navigate, [navigate]);
