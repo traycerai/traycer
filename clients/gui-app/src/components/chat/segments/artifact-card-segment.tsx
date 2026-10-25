@@ -109,11 +109,12 @@ function ArtifactDiffToggle(props: {
  * the grip, is the drag node. The column is reserved even for a non-draggable
  * card (rendered empty) so icons stay aligned across a mixed list.
  *
- * Only `setNodeRef` + `listeners` are attached: the row wraps a real open
- * button, so spreading dnd-kit's default `attributes` (which set `role="button"`
- * + `tabIndex` on this div) would nest interactive/focusable elements - and
- * without them the unfocusable row never activates the root KeyboardSensor.
- * The card stays keyboard-openable via its inner buttons.
+ * Only `setNodeRef` + the pointer listeners are attached: the row wraps a
+ * real open button, so spreading dnd-kit's default `attributes` (which set
+ * `role="button"` + `tabIndex` on this div) would nest interactive/focusable
+ * elements, and the keyboard activator is stripped because keydowns from the
+ * nested buttons bubble here. The card stays keyboard-openable via its inner
+ * buttons.
  */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
@@ -144,8 +145,13 @@ function ArtifactCardHeaderRow(props: {
     sticky && "sticky top-0 z-20 border-b border-border/40 shadow-sm",
     draggable && (isDragging ? "cursor-grabbing" : "cursor-grab"),
   );
+  // The KeyboardSensor's Enter/Space activator rides in the listeners, and
+  // keydowns from the nested open/diff buttons bubble to this row: strip it
+  // so those keys keep operating the buttons.
+  const pointerDragListeners = { ...dragListeners };
+  delete pointerDragListeners.onKeyDown;
   return (
-    <div ref={dragRef} className={className} {...dragListeners}>
+    <div ref={dragRef} className={className} {...pointerDragListeners}>
       <span
         aria-hidden
         className="flex w-4 shrink-0 items-center justify-center"
