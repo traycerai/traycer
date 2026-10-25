@@ -24,7 +24,20 @@ export interface CanvasNodeActions {
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly frameEvents: CanvasFrameEvents | null;
   readonly renameBoard: (path: string, title: string) => void;
-  readonly toggleInteractive: (path: string) => void;
+  readonly startPlay: (path: string) => void;
+  readonly play: boolean;
+  readonly fullscreenPath: string | null;
+  readonly navigation: Readonly<
+    Record<
+      string,
+      | {
+          readonly search: string;
+          readonly hash: string;
+          readonly visit: number;
+        }
+      | undefined
+    >
+  >;
   readonly resize: (
     id: string,
     frame: { x: number; y: number; width: number; height: number },

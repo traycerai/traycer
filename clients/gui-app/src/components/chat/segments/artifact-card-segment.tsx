@@ -19,7 +19,6 @@ import {
   EPIC_NODE_LABELS,
   isEpicArtifactKind,
   isMarkdownArtifactKind,
-  EPIC_NODE_ICONS,
   EPIC_NODE_SENTENCE_NOUNS,
 } from "@/lib/artifacts/node-display";
 import {
@@ -527,10 +526,12 @@ type ObjectArtifactCardProps = ArtifactCardSegmentProps & {
 };
 
 function ObjectArtifactCardLabel(props: ObjectArtifactCardProps) {
-  const Icon = EPIC_NODE_ICONS[props.artifactKind];
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <Icon className="size-4 shrink-0" />
+      <StaticEpicNodeIcon
+        type={props.artifactKind}
+        className="size-4 shrink-0"
+      />
       <span className="min-w-0 flex-1 truncate">
         {props.title || EPIC_NODE_LABELS[props.artifactKind]}
       </span>
@@ -547,8 +548,8 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
   const epicId = useOpenEpicId();
   const hostId = useTabHostId();
   const { openTile } = useEpicTileNavigation();
-  const disabled =
-    live === null || tombstone !== null || props.operation === "delete";
+  const unavailable = tombstone !== null || props.operation === "delete";
+  const disabled = live === null || unavailable;
   const title = live?.title ?? tombstone?.title ?? props.title;
   return (
     <button
@@ -576,6 +577,9 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
       }}
     >
       <ObjectArtifactCardLabel {...props} title={title} />
+      {unavailable ? (
+        <span className="text-ui-xs text-muted-foreground">Unavailable</span>
+      ) : null}
     </button>
   );
 }

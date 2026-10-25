@@ -95,7 +95,13 @@ export function CanvasToolbar(props: {
 export function CanvasViewControls(props: {
   readonly viewOnly: boolean;
   readonly play: boolean;
+  readonly commenting?: boolean;
   readonly setPlay: (play: boolean) => void;
+  readonly prototypes: readonly {
+    readonly path: string;
+    readonly title: string;
+  }[];
+  readonly onStart: (path: string) => void;
   readonly inspectorOpen: boolean;
   readonly toggleInspector: () => void;
   readonly trailing: ReactNode;
@@ -105,33 +111,39 @@ export function CanvasViewControls(props: {
   readonly canRedo: boolean;
   readonly zoom: CanvasZoomModel;
 }) {
-  // Leaving play returns to panning when the canvas is view-only.
-  const stopLabel = props.viewOnly ? "Pan" : "Edit";
-  const StopIcon = props.viewOnly ? Hand : MousePointer2;
-  const playLabel = props.play ? stopLabel : "Play";
   return (
     <div
       role="toolbar"
       aria-label="Canvas view"
       className="flex items-center gap-0.5 rounded-lg border bg-popover p-1 shadow-sm"
     >
-      <TooltipWrapper
-        label={props.play ? `Back to ${playLabel.toLowerCase()}` : "Play"}
-        side="bottom"
-        sideOffset={undefined}
-        align={undefined}
-      >
+      {props.play && !props.commenting ? (
         <Button
-          variant={props.play ? "secondary" : "ghost"}
-          size="icon-sm"
-          aria-label={`${playLabel} canvas`}
-          aria-pressed={props.play}
-          onClick={() => props.setPlay(!props.play)}
+          variant="secondary"
+          size="sm"
+          onClick={() => props.setPlay(false)}
         >
-          {props.play ? <StopIcon /> : <Play />}
+          <MousePointer2 />
+          Playing · Back to {props.viewOnly ? "canvas" : "editing"}
         </Button>
-      </TooltipWrapper>
-      {props.viewOnly ? null : (
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm">
+            <Play />
+            Prototypes
+            <ChevronDown />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {props.prototypes.map(({ path, title }) => (
+            <DropdownMenuItem key={path} onSelect={() => props.onStart(path)}>
+              {title}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {props.viewOnly || props.play || props.commenting ? null : (
         <TooltipWrapper
           label={props.inspectorOpen ? "Hide inspector" : "Show inspector"}
           side="bottom"
@@ -150,7 +162,10 @@ export function CanvasViewControls(props: {
         </TooltipWrapper>
       )}
       {props.trailing}
-      <ZoomMenu {...props} />
+      <ZoomMenu
+        {...props}
+        viewOnly={props.viewOnly || props.play || props.commenting === true}
+      />
     </div>
   );
 }

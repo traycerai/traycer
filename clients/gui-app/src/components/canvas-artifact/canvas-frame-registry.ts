@@ -31,6 +31,8 @@ const EMPTY_FRAME: CanvasSelectionFrame = {
 export interface CanvasCommentView {
   readonly tool: CanvasTool;
   readonly play: boolean;
+  readonly commenting: boolean;
+  readonly setCommenting: (enabled: boolean) => void;
   readonly viewOnly: boolean;
   readonly order: readonly string[];
   readonly sourceForBoard: (path: string) => SandboxSource | null;

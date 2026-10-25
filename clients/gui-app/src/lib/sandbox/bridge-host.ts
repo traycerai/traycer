@@ -1,4 +1,8 @@
 import {
+  parseCanvasZoomGesture,
+  type CanvasZoomGesture,
+} from "./canvas-bridge";
+import {
   parseCanvasSiblingLayout,
   type CanvasSiblingLayout,
 } from "./canvas-layout-bridge";
@@ -103,6 +107,7 @@ const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
+  readonly onCanvasZoom?: (gesture: CanvasZoomGesture) => void;
   readonly onHtmlZoom?: (scale: number) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
@@ -525,6 +530,15 @@ export class SandboxBridgeHost {
     );
   }
 
+  navigateCanvas(destination: {
+    readonly search: string;
+    readonly hash: string;
+  }): Promise<boolean> {
+    return this.canvasRequest("navigate", destination).then(
+      (result) => result !== null,
+    );
+  }
+
   setMode(mode: CanvasMode): Promise<boolean> {
     return this.canvasRequest("set-mode", { mode }).then(
       (result) => result !== null,
@@ -591,6 +605,11 @@ export class SandboxBridgeHost {
     if (selection !== null) this.options.events.onTextSelection?.(selection);
   }
 
+  private receiveCanvasZoom(params: unknown): void {
+    const gesture = parseCanvasZoomGesture(params);
+    if (gesture !== null) this.options.events.onCanvasZoom?.(gesture);
+  }
+
   private receiveCanvasNotification(method: string, params: unknown): void {
     if (
       !this.canvasDocumentProven() ||
@@ -611,6 +630,8 @@ export class SandboxBridgeHost {
       if (element !== null) this.options.events.onDoubleClick?.(element);
     } else if (method === "traycer/canvas/text-selection") {
       this.receiveCanvasTextSelection(params);
+    } else if (method === "traycer/canvas/zoom") {
+      this.receiveCanvasZoom(params);
     } else if (method === "traycer/canvas/relative-link") {
       const href = parseCanvasRelativeLink(params);
       if (href !== null) this.options.events.onRelativeLink?.(href);

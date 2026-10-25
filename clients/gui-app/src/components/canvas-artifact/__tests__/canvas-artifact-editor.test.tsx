@@ -387,18 +387,23 @@ describe("CanvasArtifactEditor pages and boards", () => {
     expect(screen.getByRole("img", { name: "Landing preview" })).toBeDefined();
   });
 
-  it("toggles a board between preview and playable", () => {
+  it("starts play from a board's own Play button without persisting anything", () => {
     const { store } = mountEditor();
-    const toggle = screen.getByRole("button", { name: "Play Home on canvas" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(toggle);
+    const before = store.getSnapshot().layout.boards[HOME];
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
 
-    expect(store.getSnapshot().layout.boards[HOME].is_interactive).toBe(true);
+    // Play is a view, not a document edit: nothing about the board changed.
+    expect(store.getSnapshot().layout.boards[HOME]).toEqual(before);
+    // The per-board Play button is gone once the canvas is playing; the way
+    // back is the "Playing" button in its place.
     expect(
-      screen
-        .getByRole("button", { name: "Play Home on canvas" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
+      screen.queryByRole("button", { name: "Play Home on canvas" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Playing · Back to editing" }),
+    ).toBeDefined();
   });
 
   it("reorders boards from the reading order under the current page", () => {
@@ -643,28 +648,23 @@ describe("CanvasArtifactEditor board frames in play", () => {
     expect(overlayCount()).toBe(2);
   });
 
-  it("keeps the shield in play mode while the board is not marked interactive", () => {
-    mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expect(overlayCount()).toBe(2);
-  });
-
-  it("keeps the shield on a board marked interactive while the canvas is editing", () => {
+  it("lifts the shield from every board once any board starts play, with no per-board gate", () => {
     mountEditor();
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
-    expect(overlayCount()).toBe(2);
+    expect(overlayCount()).toBe(0);
   });
 
-  it("lets only a board that is marked interactive, in play mode, take input", () => {
+  it("brings the shield back on every board on the way back to editing", () => {
     mountEditor();
     fireEvent.click(
       screen.getByRole("button", { name: "Play Home on canvas" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    // Home is interactive and playing; Checkout is not.
-    expect(overlayCount()).toBe(1);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Playing · Back to editing" }),
+    );
+    expect(overlayCount()).toBe(2);
   });
 });
 
@@ -1017,20 +1017,6 @@ describe.each([
 });
 
 describe("CanvasArtifactEditor board shield and panning", () => {
-  // xyflow never starts a pan from inside an element carrying this class, so a
-  // shield wearing it (or sitting in something that does) swallows the drag a
-  // Hand or Play pan needs.
-  function expectShieldsPanThrough(): void {
-    const noPan = flow.noPanClassName ?? "nopan";
-    const shields = document.querySelectorAll<HTMLElement>(
-      "[data-canvas-frame-overlay]",
-    );
-    expect(shields.length).toBeGreaterThan(0);
-    for (const shield of shields) {
-      expect(shield.closest(`.${noPan}`)).toBeNull();
-    }
-  }
-
   it("lets a drag over an unmarked board pan in Hand mode", () => {
     mountEditor();
     fireEvent.click(screen.getByRole("button", { name: "Hand (H)" }));
@@ -1079,11 +1065,9 @@ describe("CanvasArtifactEditor board shield and panning", () => {
     ).toHaveLength(2);
   });
 
-  it("lets a drag over an unmarked board pan in play mode", () => {
-    mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expectShieldsPanThrough();
-  });
+  // Play now removes every board's shield outright (see "CanvasArtifactEditor
+  // board frames in play"), so there is no shield left to pan through here;
+  // that case is covered by `overlayCount()` there instead.
 });
 
 describe("CanvasArtifactEditor late resize commits", () => {

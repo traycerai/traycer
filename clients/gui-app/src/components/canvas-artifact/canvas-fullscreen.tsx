@@ -1,120 +1,118 @@
-import { useState } from "react";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
+import type { CanvasFrameEvents } from "./canvas-frame";
 import { CanvasErrorPill } from "./canvas-error-pill";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronDown } from "lucide-react";
 import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
-import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { CanvasBoardFrame, type CanvasFrameEvents } from "./canvas-frame";
-import { boardFrame } from "./canvas-model";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  WINDOW_LEADING_INSET_CLASS,
+  WINDOW_TRAILING_INSET_CLASS,
+} from "@/components/layout/header/title-bar-drag";
+import { cn } from "@/lib/utils";
+
+export type CanvasFullscreenSizing = "fit" | "fill";
+
 export function CanvasFullscreen({
   path,
-  viewOnly,
   snapshot,
-  sourceForBoard,
+  errors,
   events,
+  viewOnly,
+  sizing,
+  onSizing,
   onSelect,
   onClose,
+  container,
 }: {
-  readonly viewOnly: boolean;
-  readonly path: string;
+  readonly path: string | null;
   readonly snapshot: CanvasLayoutSnapshot;
-  readonly sourceForBoard: (path: string) => SandboxSource | null;
-  readonly events: CanvasFrameEvents | null;
+  readonly errors: Readonly<Record<string, CanvasPageError | null | undefined>>;
+  readonly events: CanvasFrameEvents;
+  readonly viewOnly: boolean;
+  readonly sizing: CanvasFullscreenSizing;
+  readonly onSizing: (mode: CanvasFullscreenSizing) => void;
   readonly onSelect: (path: string) => void;
   readonly onClose: () => void;
+  readonly container: HTMLElement | null;
 }) {
-  const [error, setError] = useState<CanvasPageError | null>(null);
+  if (path === null) return null;
   const board = snapshot.boards[path];
-  if (!Object.hasOwn(snapshot.boards, path)) return null;
-  const frame = boardFrame(board);
-  const index = snapshot.order.indexOf(path);
-  const source = sourceForBoard(path);
+  const error = errors[path] ?? null;
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-2 border-b bg-background px-3 py-2",
+        WINDOW_LEADING_INSET_CLASS,
+        WINDOW_TRAILING_INSET_CLASS,
+      )}
     >
-      <DialogContent
-        layout="banded"
-        className="w-full grid-rows-[auto_minmax(0,1fr)] sm:max-w-full"
-        style={{
-          height: "var(--spacing-safe-dvh)",
-          maxWidth: "var(--safe-area-width)",
-        }}
-        aria-describedby={undefined}
-        onKeyDown={(event) => {
-          if (event.code === "Escape") onClose();
-        }}
+      <Button data-canvas-exit variant="ghost" size="sm" onClick={onClose}>
+        <ArrowLeft />
+        Back to canvas
+      </Button>
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="min-w-0"
+            aria-label="Choose board"
+          >
+            <span className="truncate">{board.title || path}</span>
+            <ChevronDown />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent container={container}>
+          {snapshot.order
+            .filter((item) => Object.hasOwn(snapshot.boards, item))
+            .map((item) => (
+              <DropdownMenuItem key={item} onSelect={() => onSelect(item)}>
+                {snapshot.boards[item].title || item}
+              </DropdownMenuItem>
+            ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <CanvasErrorPill
+        error={error}
+        onAdd={
+          viewOnly
+            ? null
+            : () => {
+                if (error === null) return;
+                onClose();
+                events.onAddError?.(path, error);
+              }
+        }
+      />
+      {events.renderToolbarControls?.()}
+      <div
+        className="ml-auto flex shrink-0 items-center gap-1"
+        role="group"
+        aria-label="Board sizing"
       >
-        <div className="flex items-center gap-3 border-b px-4 py-2 pr-12">
-          <DialogTitle size="sm" className="min-w-0 flex-1">
-            {board.title || path}
-          </DialogTitle>
-          <CanvasErrorPill
-            error={error}
-            onAdd={
-              viewOnly
-                ? null
-                : () => {
-                    if (error !== null) {
-                      onClose();
-                      events?.onAddError?.(path, error);
-                    }
-                  }
-            }
-          />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Previous board"
-            disabled={index <= 0}
-            onClick={() => onSelect(snapshot.order[index - 1])}
-          >
-            <ChevronLeft />
-          </Button>
-          <span className="text-ui-xs tabular-nums text-muted-foreground">
-            {index + 1} / {snapshot.order.length}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Next board"
-            disabled={index >= snapshot.order.length - 1}
-            onClick={() => onSelect(snapshot.order[index + 1])}
-          >
-            <ChevronRight />
-          </Button>
-        </div>
-        <div className="min-h-0 overflow-auto bg-canvas p-4">
-          {/* Board pixels are the authored viewport, not a fixed layout surface. */}
-          <div
-            className="relative mx-auto bg-background shadow-sm"
-            style={{ width: frame.w, height: frame.h }}
-          >
-            {source === null ? (
-              <div className="flex h-full items-center justify-center text-muted-foreground">
-                {board.title || path}
-              </div>
-            ) : (
-              <CanvasBoardFrame
-                key={path}
-                mode="play"
-                onError={setError}
-                path={path}
-                title={board.title || path}
-                source={source}
-                events={events}
-                fullscreen
-              />
-            )}
-            {events?.renderOverlay?.(path, false)}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+        <Button
+          size="sm"
+          variant={sizing === "fit" ? "secondary" : "ghost"}
+          aria-pressed={sizing === "fit"}
+          onClick={() => onSizing("fit")}
+        >
+          Fit
+        </Button>
+        <Button
+          size="sm"
+          variant={sizing === "fill" ? "secondary" : "ghost"}
+          aria-pressed={sizing === "fill"}
+          onClick={() => onSizing("fill")}
+        >
+          Fill width
+        </Button>
+      </div>
+    </div>
   );
 }

@@ -7,6 +7,7 @@ import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
@@ -924,6 +925,96 @@ describe("<ArtifactCardSegment />", () => {
       // are plain buttons.
       expect(dnd.draggables).toHaveLength(1);
       expect(screen.getAllByRole("button")).toHaveLength(4);
+    });
+
+    afterEach(() => {
+      useSettingsStore.setState({ artifactIconColorMode: "byType" });
+    });
+
+    it("shows a neutral 'Unavailable' label and a disabled, non-openable button for a tombstoned object artifact", () => {
+      projection.deleted["h1"] = {
+        id: "h1",
+        kind: "html",
+        title: "My Page",
+        status: null,
+        deletedAt: "2026-01-01T00:00:00.000Z",
+      };
+      render(
+        <ArtifactCardSegment
+          findUnitId={null}
+          operation="update"
+          artifactKind="html"
+          artifactId="h1"
+          title="Fallback Title"
+          change={null}
+        />,
+      );
+
+      expect(screen.getByText("Unavailable")).toBeTruthy();
+      const button = screen.getByRole("button");
+      expect(button).toHaveProperty("disabled", true);
+      fireEvent.click(button);
+      expect(tileNavigation.openTile).not.toHaveBeenCalled();
+    });
+
+    it("shows 'Unavailable' for a delete operation on an object artifact even while its live projection still resolves", () => {
+      projection.artifacts["h1"] = {
+        id: "h1",
+        kind: "canvas",
+        title: "Board",
+        status: null,
+      };
+      render(
+        <ArtifactCardSegment
+          findUnitId={null}
+          operation="delete"
+          artifactKind="canvas"
+          artifactId="h1"
+          title="Fallback Title"
+          change={null}
+        />,
+      );
+
+      expect(screen.getByText("Unavailable")).toBeTruthy();
+      expect(screen.getByRole("button")).toHaveProperty("disabled", true);
+    });
+
+    it("tints the object card's icon with the configured per-kind color, and mutes it when color mode is 'none'", () => {
+      projection.artifacts["h1"] = {
+        id: "h1",
+        kind: "html",
+        title: "My Page",
+        status: null,
+      };
+      const configuredColor =
+        useSettingsStore.getState().artifactIconColors.html;
+      const { container, rerender } = render(
+        <ArtifactCardSegment
+          findUnitId={null}
+          operation="create"
+          artifactKind="html"
+          artifactId="h1"
+          title={null}
+          change={null}
+        />,
+      );
+      const icon = container.querySelector("svg");
+      expect(icon?.style.getPropertyValue("--swatch")).toBe(configuredColor);
+
+      useSettingsStore.setState({ artifactIconColorMode: "none" });
+      rerender(
+        <ArtifactCardSegment
+          findUnitId={null}
+          operation="create"
+          artifactKind="html"
+          artifactId="h1"
+          title={null}
+          change={null}
+        />,
+      );
+      const mutedIcon = container.querySelector("svg");
+      expect(mutedIcon?.classList.contains("text-muted-foreground")).toBe(true);
+      expect(mutedIcon?.style.getPropertyValue("--swatch")).toBe("");
     });
   });
 });

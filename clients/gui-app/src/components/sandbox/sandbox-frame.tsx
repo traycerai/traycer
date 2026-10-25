@@ -1,3 +1,4 @@
+import type { CanvasZoomGesture } from "@/lib/sandbox/canvas-bridge";
 import type {
   CanvasPageError,
   CanvasElement,
@@ -160,6 +161,7 @@ function artifactUnavailable(
 
 export interface SandboxFrameProps {
   readonly onHtmlZoom?: (scale: number) => void;
+  readonly onCanvasZoom?: (gesture: CanvasZoomGesture) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
@@ -478,6 +480,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
       behavior: "instant",
     });
   });
+  const onCanvasZoom = useEffectEvent((gesture: CanvasZoomGesture) =>
+    props.onCanvasZoom?.(gesture),
+  );
   const onHtmlZoom = useEffectEvent((scale: number) =>
     props.onHtmlZoom?.(scale),
   );
@@ -639,6 +644,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       post: (message) => iframe.contentWindow?.postMessage(message, "*"),
       events: {
         onHtmlZoom,
+        onCanvasZoom,
         onDoubleClick,
         onTextSelection,
         onPageError,

@@ -61,6 +61,8 @@ function viewWith(revealBoard: (path: string) => boolean): CanvasCommentView {
   return {
     tool: "select",
     play: false,
+    commenting: false,
+    setCommenting: () => undefined,
     viewOnly: false,
     order: [BOARD],
     sourceForBoard: () => null,

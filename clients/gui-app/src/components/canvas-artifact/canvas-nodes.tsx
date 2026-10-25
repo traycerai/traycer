@@ -14,7 +14,7 @@ import {
   type NodeProps,
   type OnResizeEnd,
 } from "@xyflow/react";
-import { Expand, MousePointer2, Play } from "lucide-react";
+import { Expand, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -94,7 +94,8 @@ function CanvasBoardOverlay({
   readonly interactive: boolean;
   readonly actions: CanvasNodeActions;
 }) {
-  if (interactive) return <CanvasPlayPins actions={actions} path={path} />;
+  if (interactive && !actions.selectionEnabled)
+    return <CanvasPlayPins actions={actions} path={path} />;
   // The self variant enables hits without adding xyflow's no-pan marker, so
   // a hand drag that starts here pans the canvas instead of reaching the page.
   // Comment pins and an open thread stay above it and keep their own markers.
@@ -125,33 +126,30 @@ function CanvasPlayPins(props: {
 function CanvasBoardButtons({
   path,
   title,
-  interactive,
   actions,
 }: {
   readonly path: string;
   readonly title: string;
-  readonly interactive: boolean;
   readonly actions: CanvasNodeActions;
 }) {
   return (
     <div className="touch-auto flex items-center gap-0.5">
-      {actions.viewOnly ? null : (
+      {actions.play ? null : (
         <Button
           type="button"
           size="icon-xs"
-          variant={interactive ? "secondary" : "ghost"}
+          variant="ghost"
           aria-label={`Play ${title} on canvas`}
-          aria-pressed={interactive}
-          onClick={() => actions.toggleInteractive(path)}
+          onClick={() => actions.startPlay(path)}
         >
-          {interactive ? <Play /> : <MousePointer2 />}
+          <Play />
         </Button>
       )}
       <Button
         type="button"
         size="icon-xs"
         variant="ghost"
-        aria-label={`Open ${title} full screen`}
+        aria-label={`Play ${title} fullscreen`}
         onClick={() => actions.fullscreen(path)}
       >
         <Expand />
@@ -161,33 +159,33 @@ function CanvasBoardButtons({
 }
 
 /**
- * The name strip above a board. It is counter-scaled against the viewport zoom
- * so it reads at the same size at every zoom, while staying inside the node so
- * it remains the board's drag handle.
+ * The caption occupies authored canvas space, so it cannot grow into nearby
+ * headings as the viewport zooms out. It remains the board's drag handle.
  */
 function CanvasBoardHeader({
   path,
   title,
   error,
-  interactive,
   actions,
 }: {
   readonly path: string;
   readonly title: string;
   readonly error: CanvasPageError | null;
-  readonly interactive: boolean;
   readonly actions: CanvasNodeActions;
 }) {
   const zoom = useStore((state) => state.transform[2]);
+  // Preserve legibility near normal zoom, with a bounded 54px canvas
+  // footprint instead of ever-growing screen-sized captions.
+  const captionScale = Math.min(1.5, 1 / zoom);
   const [renaming, setRenaming] = useState(false);
   return (
     <div
       data-canvas-board-handle=""
-      className="absolute bottom-full left-0 flex origin-bottom-left cursor-grab items-center gap-1 pb-0.5 text-muted-foreground"
+      className="absolute bottom-full left-0 flex origin-bottom-left cursor-grab items-center gap-1 rounded-t-md border border-b-0 border-border bg-background px-2 text-foreground"
       style={{
         height: BOARD_HEADER_HEIGHT,
-        width: `${zoom * 100}%`,
-        transform: `scale(${1 / zoom})`,
+        width: `${100 / captionScale}%`,
+        transform: `scale(${captionScale})`,
       }}
     >
       <div className="min-w-10 flex-1">
@@ -201,9 +199,9 @@ function CanvasBoardHeader({
           />
         ) : (
           <span
-            className="block truncate text-ui-sm"
+            className="block truncate text-ui-sm font-semibold"
             onDoubleClick={() => {
-              if (!actions.viewOnly) setRenaming(true);
+              if (!actions.viewOnly && !actions.play) setRenaming(true);
             }}
           >
             {title}
@@ -220,12 +218,7 @@ function CanvasBoardHeader({
               }
         }
       />
-      <CanvasBoardButtons
-        path={path}
-        title={title}
-        interactive={interactive}
-        actions={actions}
-      />
+      <CanvasBoardButtons path={path} title={title} actions={actions} />
     </div>
   );
 }
@@ -283,12 +276,13 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
   if (board === null) return null;
   const frame = boardFrame(board);
   const title = board.title || boardName(data.path);
-  const interactive = data.play && board.is_interactive === true;
+  const interactive = data.play;
+  const fullscreen = actions.fullscreenPath === data.path;
   return (
     <div
       className={cn(
-        "relative h-full w-full rounded-(--canvas-radius) bg-card shadow-sm ring-1 ring-border",
-        selected && "ring-2 ring-ring",
+        "relative h-full w-full rounded-(--canvas-radius) bg-card shadow-md ring-1 ring-foreground/25",
+        selected && !data.play && "ring-2 ring-ring",
       )}
       style={
         {
@@ -299,18 +293,19 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
       <NodeResizer
         handleClassName="z-10"
         lineClassName="z-10"
-        isVisible={!actions.viewOnly && selected ? !data.play : false}
+        isVisible={!actions.viewOnly && !data.play && selected}
         minWidth={80}
         minHeight={60}
         onResizeEnd={onResizeEnd}
       />
-      <CanvasBoardHeader
-        path={data.path}
-        title={title}
-        error={error}
-        interactive={board.is_interactive === true}
-        actions={actions}
-      />
+      {fullscreen ? null : (
+        <CanvasBoardHeader
+          path={data.path}
+          title={title}
+          error={error}
+          actions={actions}
+        />
+      )}
       <div className="relative h-full w-full overflow-hidden rounded-(--canvas-radius)">
         {source === null ? (
           <div
@@ -337,7 +332,8 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
               title={title}
               source={source}
               events={actions.frameEvents}
-              fullscreen={false}
+              fullscreen={fullscreen}
+              navigation={actions.navigation[data.path] ?? null}
               mode={interactive ? "play" : "edit"}
               onError={setError}
             />
@@ -371,12 +367,13 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
   );
   if (note === null) return null;
   const type = note.type ?? "sticky";
-  const editing = !actions.viewOnly && actions.editingNote === data.path;
+  const readOnly = actions.viewOnly || data.play;
+  const editing = !readOnly && actions.editingNote === data.path;
   return (
     <div
       className={cn(
         "relative h-full w-full",
-        selected && "outline outline-1 outline-ring",
+        selected && !data.play && "outline outline-1 outline-ring",
         type === "sticky" &&
           "rounded-sm border border-border bg-(--canvas-note-fill) p-3 shadow-sm",
         type === "title" && "p-1",
@@ -390,12 +387,12 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
       <CanvasNoteToolbar
         id={data.path}
         note={note}
-        visible={!actions.viewOnly && !data.play && (selected || editing)}
+        visible={!readOnly && (selected || editing)}
       />
       <NodeResizer
         handleClassName="z-10"
         lineClassName="z-10"
-        isVisible={!actions.viewOnly && selected ? !data.play : false}
+        isVisible={!actions.viewOnly && !data.play && selected}
         minWidth={12}
         minHeight={12}
         onResizeEnd={onResizeEnd}
@@ -403,7 +400,7 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
       <CanvasNoteContent
         note={note}
         imageSource={imageSource}
-        viewOnly={actions.viewOnly}
+        viewOnly={readOnly}
         editing={editing}
         onEdit={() => actions.setEditingNote(data.path)}
         onCommit={(text) => {

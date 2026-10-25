@@ -120,6 +120,7 @@ function EditingControls(props: {
 export function CanvasEditingOverlay(props: {
   readonly scope: CanvasAnnotationScope;
   readonly tileId: string;
+  readonly commenting: boolean;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
   readonly onPick: (
@@ -149,6 +150,8 @@ export function CanvasEditingOverlay(props: {
   const [dismissed, setDismissed] = useState<string | null>(null);
   const entry = props.registry.get(props.boardPath);
   const request = currentRetype(selection, entry, generation, dismissed);
+  if (props.commenting)
+    return <CanvasSelectionOverlay {...props} hideAction hideHandles />;
   const controls =
     selection === null ? null : (
       <EditingControls

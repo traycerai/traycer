@@ -1,6 +1,8 @@
+import { FrameCommentPortalContext } from "./frame-comment-surface-context";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import type { CommentAnchor } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  useContext,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -57,6 +59,7 @@ export function AnchoredDraftPopover(props: {
   const composer = useRef<CommentComposerHandle | null>(null);
   const floatingRef = useRef<HTMLDialogElement | null>(null);
   const paneContainer = usePanePortalContainer();
+  const commentContainer = useContext(FrameCommentPortalContext);
   const focused = usePaneFocused();
   const pending = createThread.isPending || edit.isPending;
   const dismiss = useCallback((): boolean => {
@@ -266,6 +269,6 @@ export function AnchoredDraftPopover(props: {
         className={undefined}
       />
     </dialog>,
-    paneContainer ?? document.body,
+    commentContainer ?? paneContainer ?? document.body,
   );
 }

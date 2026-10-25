@@ -299,3 +299,26 @@ export function parseCanvasPageError(value: unknown): CanvasPageError | null {
 export function parseCanvasRelativeLink(value: unknown): string | null {
   return canvasRecord(value) && text(value.href, 8192) ? value.href : null;
 }
+
+export interface CanvasZoomGesture {
+  readonly delta: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+export function parseCanvasZoomGesture(
+  value: unknown,
+): CanvasZoomGesture | null {
+  if (
+    !canvasRecord(value) ||
+    !coordinate(value.delta) ||
+    !coordinate(value.x) ||
+    !coordinate(value.y)
+  )
+    return null;
+  return {
+    delta: Math.max(-240, Math.min(240, value.delta)),
+    x: value.x,
+    y: value.y,
+  };
+}

@@ -228,6 +228,7 @@ function mountOverlay() {
         tileId="canvas-tile-1"
         boardPath={BOARD_PATH}
         registry={registry}
+        commenting={false}
         onPick={() => undefined}
         onRetire={() => undefined}
         onEscape={() => undefined}
@@ -279,21 +280,21 @@ describe("a selected range's action bar", () => {
   const chatOne = (): HTMLElement | null =>
     screen.queryByRole("menuitem", { name: "Chat one" });
 
-  it("offers Add to chat for a range of source text, with no formatting controls", async () => {
+  it("offers Send to chat for a range of source text, with no formatting controls", async () => {
     mountOverlay();
     select(LITERAL);
     expect(
-      await screen.findByRole("button", { name: "Add to chat" }),
+      await screen.findByRole("button", { name: "Send to chat" }),
     ).toBeDefined();
     expect(formatting()).toBeNull();
     expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
   });
 
-  it("offers Add to chat, and no formatting, for a range the page generated", async () => {
+  it("offers Send to chat, and no formatting, for a range the page generated", async () => {
     mountOverlay();
     select(GENERATED);
     expect(
-      await screen.findByRole("button", { name: "Add to chat" }),
+      await screen.findByRole("button", { name: "Send to chat" }),
     ).toBeDefined();
     expect(formatting()).toBeNull();
   });
@@ -301,14 +302,14 @@ describe("a selected range's action bar", () => {
   it("sits in the pane around the frame", async () => {
     mountOverlay();
     select(LITERAL);
-    const button = await screen.findByRole("button", { name: "Add to chat" });
+    const button = await screen.findByRole("button", { name: "Send to chat" });
     expect(stage?.contains(button)).toBe(true);
   });
 
-  it("lists the chats only in the popover that Add to chat opens", async () => {
+  it("lists the chats only in the popover that Send to chat opens", async () => {
     mountOverlay();
     select(LITERAL);
-    const button = await screen.findByRole("button", { name: "Add to chat" });
+    const button = await screen.findByRole("button", { name: "Send to chat" });
     expect(chatOne()).toBeNull();
 
     fireEvent.click(button);
@@ -321,7 +322,7 @@ describe("a selected range's action bar", () => {
   it("attaches nothing until a chat is chosen from the popover", async () => {
     mountOverlay();
     select(LITERAL);
-    const button = await screen.findByRole("button", { name: "Add to chat" });
+    const button = await screen.findByRole("button", { name: "Send to chat" });
     // An attach started by opening would run through the mutation's promise
     // chain, so the click is awaited inside act to flush that interaction's work.
     // The opened roster is the phase observed; this does not bound later
@@ -340,7 +341,7 @@ describe("a selected range's action bar", () => {
 
 describe("attaching a selected range to a chat", () => {
   function chooseChatOne(): void {
-    fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send to chat" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Chat one" }));
   }
   // A successful attach ends in onSuccess, which reveals the chat and closes
@@ -360,7 +361,7 @@ describe("attaching a selected range to a chat", () => {
   it("attaches a record carrying the range, its quote and where it sits in the source", async () => {
     mountOverlay();
     select(LITERAL);
-    await screen.findByRole("button", { name: "Add to chat" });
+    await screen.findByRole("button", { name: "Send to chat" });
     await addToChat();
 
     expect(outside.attach.mock.calls[0][0]).toMatchObject({
@@ -391,7 +392,7 @@ describe("attaching a selected range to a chat", () => {
   it("reveals the chat it attached to and closes the popover", async () => {
     mountOverlay();
     select(LITERAL);
-    await screen.findByRole("button", { name: "Add to chat" });
+    await screen.findByRole("button", { name: "Send to chat" });
     await addToChat();
     expect(outside.reveal).toHaveBeenCalledWith("chat-1");
     expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
@@ -401,7 +402,7 @@ describe("attaching a selected range to a chat", () => {
     outside.source.current = null;
     mountOverlay();
     select(LITERAL);
-    await screen.findByRole("button", { name: "Add to chat" });
+    await screen.findByRole("button", { name: "Send to chat" });
     chooseChatOne();
 
     // The refusal never reveals or closes the popover; its completion is the alert.
@@ -415,7 +416,7 @@ describe("attaching a selected range to a chat", () => {
     outside.source.current = null;
     mountOverlay();
     select(GENERATED);
-    await screen.findByRole("button", { name: "Add to chat" });
+    await screen.findByRole("button", { name: "Send to chat" });
     await addToChat();
 
     const record = attachedRecord();
@@ -437,7 +438,7 @@ describe("attaching a selected range to a chat", () => {
         marker: 0,
       }),
     );
-    await screen.findByRole("button", { name: "Add to chat" });
+    await screen.findByRole("button", { name: "Send to chat" });
     await addToChat();
     expect(attachedRecord().elements[0]).toMatchObject({
       textRange: { quote: "BIG" },

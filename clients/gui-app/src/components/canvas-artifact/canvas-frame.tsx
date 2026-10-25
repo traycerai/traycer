@@ -29,6 +29,10 @@ export interface CanvasPanelControls {
 }
 /** Selection and editing compose through these seams outside the opaque frame. */
 export interface CanvasFrameEvents {
+  readonly onZoom?: (
+    delta: number,
+    point: { readonly x: number; readonly y: number },
+  ) => void;
   readonly commentsEnabled?: boolean;
   readonly onCanvasView?: (view: CanvasCommentView | null) => void;
   readonly onPaneComment?: (point: {
@@ -62,7 +66,9 @@ export interface CanvasFrameEvents {
     store: CanvasLayoutStore,
     panel: CanvasPanelControls,
   ) => ReactNode;
-  /** Controls placed in the canvas's top-right toolbar pill (the comments list). */
+  readonly renderCommentDraft?: () => ReactNode;
+  readonly renderCommentsSidebar?: () => ReactNode;
+  /** The independent commenting-mode control. */
   readonly renderToolbarControls?: () => ReactNode;
 }
 const NO_PERMISSIONS = [] as const;
@@ -75,6 +81,7 @@ export function CanvasBoardFrame({
   fullscreen,
   mode,
   onError,
+  navigation,
 }: {
   readonly path: string;
   readonly title: string;
@@ -83,10 +90,31 @@ export function CanvasBoardFrame({
   readonly fullscreen: boolean;
   readonly mode: CanvasMode;
   readonly onError?: (error: CanvasPageError | null) => void;
+  readonly navigation?: {
+    readonly search: string;
+    readonly hash: string;
+    readonly visit: number;
+  } | null;
 }) {
   const actions = useContext(CanvasNodeContext);
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const appliedNavigation = useRef<typeof navigation>(null);
+  const navigate = useCallback((): void => {
+    const bridge = bridgeRef.current;
+    if (
+      bridge === null ||
+      navigation === null ||
+      navigation === undefined ||
+      navigation === appliedNavigation.current
+    )
+      return;
+    void bridge.navigateCanvas(navigation).then((applied) => {
+      if (applied && bridgeRef.current === bridge)
+        appliedNavigation.current = navigation;
+    });
+  }, [navigation]);
+  useEffect(navigate, [navigate]);
   const fittedPathRef = useRef<string | null>(null);
   useEffect(() => {
     events?.onSource?.(path, source);
@@ -110,10 +138,13 @@ export function CanvasBoardFrame({
   );
   const onStatus = useCallback(
     (status: SandboxStatus) => {
-      if (status === "ready") void bridgeRef.current?.setMode(mode);
+      if (status === "ready") {
+        void bridgeRef.current?.setMode(mode);
+        navigate();
+      }
       events?.onStatus(path, status);
     },
-    [events, path, mode],
+    [events, path, mode, navigate],
   );
   const onFrame = useCallback(
     (iframe: HTMLIFrameElement | null) => {
@@ -174,6 +205,15 @@ export function CanvasBoardFrame({
       onPageError={(error) => {
         onError?.(error);
         events?.onPageError?.(path, error);
+      }}
+      onCanvasZoom={(gesture) => {
+        const frame = frameRef.current;
+        if (frame === null || fullscreen) return;
+        const bounds = frame.getBoundingClientRect();
+        events?.onZoom?.(gesture.delta, {
+          x: bounds.left + (gesture.x * bounds.width) / frame.clientWidth,
+          y: bounds.top + (gesture.y * bounds.height) / frame.clientHeight,
+        });
       }}
       onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
       ref={onFrame}

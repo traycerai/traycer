@@ -30,6 +30,7 @@ import { CanvasFrameEventsContext } from "../canvas-surface-context";
 import { CanvasLayoutStore } from "../canvas-layout-store";
 import { CanvasSelectionProvider } from "../canvas-selection-provider";
 import { useCanvasSelectionStore } from "../canvas-selection-store";
+import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 
 // The clipboard boundary, panels and annotation action are other tests' subjects,
 // and the real ones need a query client and the host's edit transport. The
@@ -269,14 +270,26 @@ function selectedSelector(): string | null {
   return useCanvasSelectionStore.getState().selection?.element.selector ?? null;
 }
 
+function resetCommentThreads(): void {
+  useCommentThreadsStore.setState({
+    activeByEpicId: {},
+    hoverByEpicId: {},
+    flashByEpicId: {},
+    draftByEpicId: {},
+    artifactByEpicId: {},
+  });
+}
+
 beforeEach(() => {
   useCanvasSelectionStore.getState().clear();
+  resetCommentThreads();
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   useCanvasSelectionStore.getState().clear();
+  resetCommentThreads();
 });
 
 describe("CanvasSelectionProvider picks", () => {
@@ -417,6 +430,76 @@ describe("CanvasSelectionProvider board selection", () => {
   });
 });
 
+/**
+ * A minimal `onCanvasView` report with comment mode wired to the given spy,
+ * matching the shape the toolbar/editor's real view supplies.
+ */
+function reportCommentingView(
+  provider: MountedProvider,
+  commenting: boolean,
+  setCommenting: Mock<(enabled: boolean) => void>,
+): void {
+  act(() =>
+    provider.events().onCanvasView?.({
+      tool: "select",
+      play: false,
+      commenting,
+      setCommenting,
+      viewOnly: false,
+      order: [],
+      sourceForBoard: () => null,
+      revealBoard: () => true,
+      setTool: () => undefined,
+      clearNodeSelection: () => undefined,
+    }),
+  );
+}
+
+describe("CanvasSelectionProvider comment mode", () => {
+  const EPIC_ID = "epic-1";
+
+  it("clears the active comment thread on a pick while commenting, without touching the mode itself", async () => {
+    const provider = mountProvider("artifact-a");
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    reportCommentingView(provider, true, setCommenting);
+    act(() =>
+      useCommentThreadsStore.getState().setActiveThread(EPIC_ID, "thread-1"),
+    );
+
+    await answer(provider.pick(), element("div.a"));
+
+    expect(
+      useCommentThreadsStore.getState().activeByEpicId[EPIC_ID],
+    ).toBeNull();
+    expect(setCommenting).not.toHaveBeenCalled();
+  });
+
+  it("leaves an active comment thread alone when a pick happens outside comment mode", async () => {
+    const provider = mountProvider("artifact-a");
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    reportCommentingView(provider, false, setCommenting);
+    act(() =>
+      useCommentThreadsStore.getState().setActiveThread(EPIC_ID, "thread-1"),
+    );
+
+    await answer(provider.pick(), element("div.a"));
+
+    expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
+      "thread-1",
+    );
+  });
+
+  it("turns comment mode off on Escape, alongside the selection - composer lifecycle, not the editor's own state", () => {
+    const provider = mountProvider("artifact-a");
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    reportCommentingView(provider, true, setCommenting);
+
+    pressEscape();
+
+    expect(setCommenting).toHaveBeenCalledWith(false);
+  });
+});
+
 describe("CanvasSelectionProvider Escape", () => {
   it("clears the element first and the board only on the next press", async () => {
     const provider = mountProvider("artifact-a");
@@ -438,6 +521,8 @@ describe("CanvasSelectionProvider Escape", () => {
       provider.events().onCanvasView?.({
         tool: "select",
         play: false,
+        commenting: false,
+        setCommenting: () => undefined,
         viewOnly: false,
         order: [],
         sourceForBoard: () => null,
@@ -462,6 +547,8 @@ describe("CanvasSelectionProvider Escape", () => {
       provider.events().onCanvasView?.({
         tool: "select",
         play: false,
+        commenting: false,
+        setCommenting: () => undefined,
         viewOnly: false,
         order: [],
         sourceForBoard: () => null,

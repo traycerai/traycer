@@ -162,7 +162,10 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
     onExpandedChange(false);
   }, [isExpanded, onExpandedChange, onActivateAnchor]);
 
-  const quotedText = thread.data.quotedText ?? "";
+  const quotedText =
+    artifactType === "canvas" && thread.data.anchorKind === "artifact"
+      ? "Whole canvas"
+      : (thread.data.quotedText ?? "");
 
   return (
     <article

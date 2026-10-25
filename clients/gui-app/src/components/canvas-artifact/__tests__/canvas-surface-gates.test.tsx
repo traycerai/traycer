@@ -6,7 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { ComponentType, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeChange, NodeProps } from "@xyflow/react";
@@ -14,10 +14,7 @@ import type {
   SandboxFrameProps,
   SandboxSource,
 } from "@/components/sandbox/sandbox-frame";
-import {
-  readCanvasLayout,
-  setBoardMetadata,
-} from "@traycer/protocol/persistence/epic/canvas-layout";
+import { readCanvasLayout } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   SandboxBridgeHost,
@@ -220,7 +217,10 @@ function canvasBridge() {
   });
   bridges.push(bridge);
   const setMode = vi.spyOn(bridge, "setMode").mockResolvedValue(true);
-  return { bridge, setMode };
+  const navigateCanvas = vi
+    .spyOn(bridge, "navigateCanvas")
+    .mockResolvedValue(true);
+  return { bridge, setMode, navigateCanvas };
 }
 
 const HTML_SOURCE: SandboxSource = { kind: "html", html: "<p>page</p>" };
@@ -344,7 +344,7 @@ describe("a view-only canvas (the phone)", () => {
     expect(screen.queryByRole("button", { name: "Inspector" })).toBeNull();
     // The reading aids stay.
     expect(screen.getByRole("button", { name: "Pages" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "Play canvas" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Prototypes" })).toBeDefined();
     await user.click(screen.getByRole("button", { name: /, zoom$/ }));
     expect(
       screen.getByRole("menuitem", { name: "Fit to screen" }),
@@ -365,11 +365,24 @@ describe("a view-only canvas (the phone)", () => {
       expect(screen.getByRole("menuitem", { name: label })).toBeDefined();
   });
 
-  it("calls the play toggle's way back Pan, not Edit", () => {
+  it("plays from a board's own Play button and labels the way back for a reader", () => {
     mount({ viewOnly: true });
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expect(screen.getByRole("button", { name: "Pan canvas" })).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Edit canvas" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Playing · Back to canvas" }),
+    ).toBeDefined();
+  });
+
+  it("labels the way back to editing, not to a view-only canvas, when editing is allowed", () => {
+    mount({ viewOnly: false });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Playing · Back to editing" }),
+    ).toBeDefined();
   });
 
   it("still lets the reader move between pages but not change them", () => {
@@ -382,17 +395,17 @@ describe("a view-only canvas (the phone)", () => {
       expect(screen.queryByRole("button", { name: label })).toBeNull();
   });
 
-  it("shows board titles as plain text, with no rename or play toggle", () => {
+  it("shows board titles as plain text, with no rename, but still offers to play them", () => {
     mount({ viewOnly: true });
     // The header title, and the preview standing in for the unloaded page.
     expect(screen.getAllByText("Home")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "Rename Home" })).toBeNull();
+    // Play is how a reader runs a prototype; it is not an editing action.
     expect(
-      screen.queryByRole("button", { name: "Play Home on canvas" }),
-    ).toBeNull();
-    // Full screen is reading, not editing.
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    ).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Open Home full screen" }),
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
     ).toBeDefined();
   });
 
@@ -621,17 +634,22 @@ describe("the frame's mode", () => {
     expect(setMode).not.toHaveBeenCalledWith("play");
   });
 
-  it("does not play a board until the canvas is played and the board is playable", () => {
-    mount({ live: true });
+  it("plays every board, not only the one that started play", () => {
+    // Play has no per-board "is_interactive" gate any more: starting it from
+    // Home's own button is enough to switch every board on the canvas, since
+    // the whole canvas is now either editing or playing.
+    mount({ live: true, onlyBoard: null });
     const setMode = ready("Home");
     setMode.mockClear();
 
-    // Canvas playing, board not marked playable.
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expect(setMode).not.toHaveBeenCalledWith("play");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
+
+    expect(setMode).toHaveBeenLastCalledWith("play");
   });
 
-  it("plays a playable board when the canvas is played, and edits again after", () => {
+  it("returns every board to edit mode on the way back", () => {
     mount({ live: true });
     const setMode = ready("Home");
     fireEvent.click(
@@ -639,39 +657,33 @@ describe("the frame's mode", () => {
     );
     setMode.mockClear();
 
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    expect(setMode).toHaveBeenLastCalledWith("play");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Playing · Back to editing" }),
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit canvas" }));
     expect(setMode).toHaveBeenLastCalledWith("edit");
   });
 
-  it("plays a board the author marked playable for a view-only reader too", () => {
-    mount({
-      viewOnly: true,
-      live: true,
-      prepare: (store) =>
-        store.transact((layout) =>
-          setBoardMetadata(layout, HOME, {
-            title: undefined,
-            is_interactive: true,
-            radius: undefined,
-          }),
-        ),
-    });
+  it("starts play for a view-only reader too, with the reader's own way back", () => {
+    mount({ viewOnly: true, live: true });
     const setMode = ready("Home");
     setMode.mockClear();
 
-    fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home on canvas" }),
+    );
     expect(setMode).toHaveBeenLastCalledWith("play");
-    fireEvent.click(screen.getByRole("button", { name: "Pan canvas" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Playing · Back to canvas" }),
+    );
     expect(setMode).toHaveBeenLastCalledWith("edit");
   });
 
   it("puts a fullscreen board in play mode", () => {
     mount({ live: true });
     fireEvent.click(
-      screen.getByRole("button", { name: "Open Home full screen" }),
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
     );
     const setMode = ready("Home");
     expect(setMode).toHaveBeenCalledWith("play");
@@ -679,93 +691,151 @@ describe("the frame's mode", () => {
   });
 });
 
+// The fullscreen board promotes the existing Canvas surface in place; there is
+// no separate dialog any more, so a test reads its `data-canvas-fullscreen`
+// marker instead of scoping to a dialog role.
+function canvasSurface(): HTMLElement {
+  return screen.getByRole("application", { name: "Canvas" });
+}
+function isFullscreen(): boolean {
+  return canvasSurface().hasAttribute("data-canvas-fullscreen");
+}
+
+async function chooseBoardInFullscreen(
+  user: UserEvent,
+  title: string,
+): Promise<void> {
+  await user.click(screen.getByRole("button", { name: "Choose board" }));
+  await user.click(screen.getByRole("menuitem", { name: title }));
+}
+
+/**
+ * The fullscreen header bar, scoped off of its "Back to canvas" button. A
+ * board that just stopped being fullscreen keeps its own inline header (and
+ * so its own error pill) once it is an ordinary board again, so a query for
+ * "the" error pill must stay inside this header to mean the fullscreen one.
+ */
+function fullscreenHeader(): HTMLElement {
+  const back = screen.getByRole("button", { name: "Back to canvas" });
+  const header = back.closest("div");
+  if (header === null)
+    throw new Error("no fullscreen header around Back to canvas");
+  return header;
+}
+
 describe("the fullscreen board", () => {
   function openFullscreen(overrides: Partial<Options>) {
     mount({ live: true, ...overrides });
     fireEvent.click(
-      screen.getByRole("button", { name: "Open Home full screen" }),
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
     );
-    return screen.getByRole("dialog");
   }
 
-  it("shows the page's error beside the title", () => {
-    const dialog = openFullscreen({});
+  it("shows the page's error with a way to send it to chat", () => {
+    openFullscreen({});
     fromPage("Home", (props) => props.onPageError?.(pageError("boom")));
-    expect(within(dialog).getByRole("status").textContent).toBe("boom");
+    expect(within(fullscreenHeader()).getByRole("status").textContent).toBe(
+      "boom",
+    );
     expect(
-      within(dialog).getByRole("button", { name: "Add to chat" }),
+      within(fullscreenHeader()).getByRole("button", { name: "Add to chat" }),
     ).toBeDefined();
   });
 
-  it("leaves fullscreen when the error is added, so the chat's picker is not stacked under the modal", () => {
+  it("leaves fullscreen when the error is added, so the chat's picker is not stacked under it", () => {
     const events = frameEvents({ onAddError: vi.fn() });
-    const dialog = openFullscreen({ frameEvents: events });
+    openFullscreen({ frameEvents: events });
     const error = pageError("boom");
     fromPage("Home", (props) => props.onPageError?.(error));
 
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Add to chat" }),
+      within(fullscreenHeader()).getByRole("button", { name: "Add to chat" }),
     );
 
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(isFullscreen()).toBe(false);
     expect(events.onAddError).toHaveBeenCalledTimes(1);
     expect(events.onAddError).toHaveBeenCalledWith(HOME, error);
   });
 
   it("shows a view-only reader the error without Add to chat", () => {
-    const dialog = openFullscreen({ viewOnly: true });
+    openFullscreen({ viewOnly: true });
     fromPage("Home", (props) => props.onPageError?.(pageError("boom")));
-    expect(within(dialog).getByRole("status")).toBeDefined();
+    expect(within(fullscreenHeader()).getByRole("status").textContent).toBe(
+      "boom",
+    );
     expect(
-      within(dialog).queryByRole("button", { name: "Add to chat" }),
+      within(fullscreenHeader()).queryByRole("button", {
+        name: "Add to chat",
+      }),
     ).toBeNull();
   });
 
-  it("opens the board a link points at, and ignores links that point elsewhere", () => {
+  it("opens the board a link points at, and ignores links that point elsewhere", async () => {
     const onRelativeLink = vi.fn();
-    const dialog = openFullscreen({
-      frameEvents: frameEvents({ onRelativeLink }),
-    });
-    expect(within(dialog).getByText("Home")).toBeDefined();
+    openFullscreen({ frameEvents: frameEvents({ onRelativeLink }) });
+    expect(screen.getByText("Home")).toBeDefined();
 
     fromPage("Home", (props) =>
       props.onRelativeLink?.("https://example.com/checkout.html"),
     );
     fromPage("Home", (props) => props.onRelativeLink?.("../../escape.html"));
     fromPage("Home", (props) => props.onRelativeLink?.("missing.html"));
-    expect(within(screen.getByRole("dialog")).getByText("Home")).toBeDefined();
+    expect(screen.getByText("Home")).toBeDefined();
 
     fromPage("Home", (props) => props.onRelativeLink?.("checkout.html#pay"));
-    expect(
-      within(screen.getByRole("dialog")).getByText("Checkout"),
-    ).toBeDefined();
+    expect(screen.getByText("Checkout")).toBeDefined();
     // The host hears about every link, resolved or not.
     expect(onRelativeLink).toHaveBeenCalledTimes(4);
     expect(onRelativeLink).toHaveBeenLastCalledWith(HOME, "checkout.html#pay");
+
+    // The hash survives to the board it lands on, so once Checkout's own
+    // page is ready, the bridge is asked to apply it.
+    const { bridge, navigateCanvas } = canvasBridge();
+    await act(async () => {
+      fromPage("Checkout", (props) => props.onBridge?.(bridge));
+      fromPage("Checkout", (props) => props.onStatus("ready"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(navigateCanvas).toHaveBeenCalledExactlyOnceWith({
+      search: "",
+      hash: "#pay",
+      visit: 1,
+    });
   });
 
-  it("drops the old board's error when the next board has no page to run", () => {
-    const dialog = openFullscreen({ onlyBoard: HOME });
+  it("shows the error of whichever board is currently fullscreen, not a stale one", async () => {
+    // Every board keeps running once promoted into fullscreen, so its error
+    // is tracked per path at the editor, not reset by a remount; the header
+    // must still show only the error of the board on screen right now.
+    const user = userEvent.setup();
+    openFullscreen({});
     fromPage("Home", (props) => props.onPageError?.(pageError("boom")));
-    expect(within(dialog).getByRole("status")).toBeDefined();
+    expect(within(fullscreenHeader()).getByRole("status").textContent).toBe(
+      "boom",
+    );
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Next board" }));
-    const next = screen.getByRole("dialog");
-    expect(within(next).getAllByText("Checkout").length).toBeGreaterThan(0);
-    expect(within(next).queryByRole("status")).toBeNull();
+    await chooseBoardInFullscreen(user, "Checkout");
+    expect(within(fullscreenHeader()).queryByRole("status")).toBeNull();
+
+    await chooseBoardInFullscreen(user, "Home");
+    expect(within(fullscreenHeader()).getByRole("status").textContent).toBe(
+      "boom",
+    );
   });
 
-  it("starts the next board with a clean error", () => {
-    const dialog = openFullscreen({});
+  it("drops the old board's error when the next board has no page to run", async () => {
+    const user = userEvent.setup();
+    openFullscreen({ onlyBoard: HOME });
     fromPage("Home", (props) => props.onPageError?.(pageError("boom")));
-    expect(within(dialog).getByRole("status")).toBeDefined();
+    expect(within(fullscreenHeader()).getByRole("status")).toBeDefined();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Next board" }));
-    // The new page mounts its bridge, which is what clears the previous
-    // board's error.
-    const { bridge } = canvasBridge();
-    fromPage("Checkout", (props) => props.onBridge?.(bridge));
-    expect(within(screen.getByRole("dialog")).queryByRole("status")).toBeNull();
+    await chooseBoardInFullscreen(user, "Checkout");
+
+    expect(
+      screen.getByRole("button", { name: "Choose board" }).textContent,
+    ).toBe("Checkout");
+    expect(within(fullscreenHeader()).queryByRole("status")).toBeNull();
   });
 });
 
@@ -775,7 +845,7 @@ describe("a link in a board on the canvas", () => {
     mount({ live: true, frameEvents: frameEvents({ onRelativeLink }) });
     fromPage("Home", (props) => props.onRelativeLink?.("nowhere.html"));
     expect(onRelativeLink).toHaveBeenCalledWith(HOME, "nowhere.html");
-    // Nothing navigates: no dialog opens for a canvas link.
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // Nothing navigates: a link elsewhere on the canvas never opens fullscreen.
+    expect(isFullscreen()).toBe(false);
   });
 });

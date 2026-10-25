@@ -1,10 +1,13 @@
-import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
+import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useEpicLaneCommentThreads,
   useEpicLaneCommentThreadsDroppedAt,
 } from "@/hooks/comments/use-lane-comment-threads";
-import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
+import {
+  revealCommentThreadAnchor,
+  requestCommentThreadAnchorReveal,
+} from "@/lib/comments/comment-editor-registry";
 import {
   useEpicArtifact,
   useEpicCommentRoomAvailability,
@@ -54,8 +57,7 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       ? artifactRecord.kind
       : null;
 
-  // HTML and canvas comments live beside their document.
-  if (artifactRecord === null || !isMarkdownArtifactKind(artifactKind)) {
+  if (artifactRecord === null || !isCommentArtifactKind(artifactKind)) {
     return null;
   }
 
@@ -73,7 +75,9 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       canModerate={false}
       onActivateThread={(threadId) => {
         setFlashThread(epicId, threadId);
-        revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
+        if (artifactKind === "canvas")
+          requestCommentThreadAnchorReveal(epicId, activeArtifactId, threadId);
+        else revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
       }}
     />
   );

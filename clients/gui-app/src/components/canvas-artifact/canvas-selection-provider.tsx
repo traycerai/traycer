@@ -1,14 +1,17 @@
+import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnchoredDraftPopover } from "@/components/comments/anchored-draft-popover";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useActivateCommentThread } from "@/hooks/comments/use-activate-comment-thread";
 import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
-import { CanvasCommentIndex, CanvasCommentPins } from "./canvas-comments";
-import { FrameCommentsToolbar } from "@/components/comments/frame-comments";
-import { FrameCommentSurfaceProvider } from "@/components/comments/frame-comment-surface";
+import {
+  CanvasCommentIndex,
+  CanvasCommentPins,
+  CanvasCommentsControl,
+  CanvasCommentsSidebar,
+} from "./canvas-comments";
 import type { CanvasSelection } from "./canvas-selection-store";
 import {
   useCallback,
@@ -77,10 +80,6 @@ export function CanvasSelectionProvider(
   const queryClient = useQueryClient();
   const paneFocused = usePaneFocused();
   const commentsEnabled = useFrameCommentsEnabled() && props.viewOnly !== true;
-  const activateThread = useActivateCommentThread({
-    ...scope,
-    artifactType: "canvas",
-  });
   const [draftOwner] = useState(() => crypto.randomUUID());
   const [commentMessage, setCommentMessage] = useState<string | null>(null);
   const openComment = useCallback(
@@ -121,6 +120,8 @@ export function CanvasSelectionProvider(
       path: string,
       point: { x: number; y: number; additive?: boolean },
     ): void => {
+      if (registry.view?.commenting)
+        useCommentThreadsStore.getState().setActiveThread(epicId, null);
       const entry = registry.get(path);
       const bridge = entry.bridge;
       if (bridge === null || entry.sha256 === null) return;
@@ -179,7 +180,7 @@ export function CanvasSelectionProvider(
             .completeAdditivePick(selectionOwner, generation, null, null);
         });
     },
-    [artifactId, registry, selectionOwner, openComment],
+    [artifactId, registry, selectionOwner, openComment, epicId],
   );
   const retire = useCallback(
     (path: string): void => {
@@ -189,7 +190,7 @@ export function CanvasSelectionProvider(
     [registry, selectionOwner],
   );
   const escapeSelection = useCallback((): void => {
-    registry.view?.setTool("select");
+    registry.view?.setCommenting(false);
     requestSequence.current += 1;
     const state = useCanvasSelectionStore.getState();
     const hadElement =
@@ -215,6 +216,7 @@ export function CanvasSelectionProvider(
       },
       onPaneComment: (point) => {
         if (!commentsEnabled) return;
+        useCommentThreadsStore.getState().setActiveThread(epicId, null);
         useAnchoredDraftStore.getState().setDraft(epicId, {
           draftId: crypto.randomUUID(),
           tileId: draftOwner,
@@ -227,14 +229,20 @@ export function CanvasSelectionProvider(
           rect: { ...point, width: 0, height: 0 },
         });
       },
-      renderToolbarControls: () => (
-        <FrameCommentsToolbar
-          epicId={epicId}
-          artifactId={artifactId}
-          viewTabId={viewTabId}
-          artifactType="canvas"
-        />
-      ),
+      renderToolbarControls: () =>
+        commentsEnabled ? <CanvasCommentsControl registry={registry} /> : null,
+      renderCommentsSidebar: () => <CanvasCommentsSidebar scope={scope} />,
+      renderCommentDraft: () =>
+        props.viewOnly === true ? null : (
+          <AnchoredDraftPopover
+            epicId={epicId}
+            artifactId={artifactId}
+            tileId={draftOwner}
+            hostClient={hostClient}
+            onCreated={() => undefined}
+            onClosed={() => undefined}
+          />
+        ),
       onSource: (path, source) => {
         registry.update(path, { source });
         parent?.onSource?.(path, source);
@@ -397,6 +405,7 @@ export function CanvasSelectionProvider(
           {editing && props.viewOnly !== true ? (
             <CanvasEditingOverlay
               scope={scope}
+              commenting={registry.view?.commenting === true}
               tileId={draftOwner}
               boardPath={path}
               registry={registry}
@@ -436,7 +445,7 @@ export function CanvasSelectionProvider(
       draftOwner,
       openComment,
       props.viewOnly,
-      viewTabId,
+      hostClient,
     ],
   );
   useEffect(() => {
@@ -491,6 +500,10 @@ export function CanvasSelectionProvider(
     const escape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || event.defaultPrevented || !paneFocused)
         return;
+      if (
+        useAnchoredDraftStore.getState().byEpicId[epicId]?.tileId === draftOwner
+      )
+        return;
       escapeSelection();
       event.preventDefault();
     };
@@ -500,92 +513,77 @@ export function CanvasSelectionProvider(
       window.removeEventListener("keydown", escape);
       useCanvasSelectionStore.getState().retire(selectionOwner, null);
     };
-  }, [selectionOwner, paneFocused, escapeSelection]);
+  }, [selectionOwner, paneFocused, escapeSelection, epicId, draftOwner]);
   return (
-    <FrameCommentSurfaceProvider>
-      <CanvasFrameEventsContext value={events}>
-        <div className="relative h-full w-full">
-          {props.viewOnly === true ? (
-            props.children
-          ) : (
-            <CanvasClipboardBoundary
-              artifactId={artifactId}
-              registry={registry}
-            >
-              {props.children}
-            </CanvasClipboardBoundary>
-          )}
-          <CanvasCommentIndex
-            scope={scope}
-            tileId={draftOwner}
-            registry={registry}
-          />
-          {props.viewOnly === true ? null : (
-            <AnchoredDraftPopover
-              epicId={epicId}
-              artifactId={artifactId}
-              tileId={draftOwner}
-              hostClient={hostClient}
-              onCreated={activateThread}
-              onClosed={() => registry.view?.setTool("select")}
-            />
-          )}
-          {commentMessage === null ? null : (
-            <div
-              role="status"
-              className="absolute bottom-2 left-2 z-30 rounded-md border bg-popover p-2 text-ui-xs text-popover-foreground"
-            >
-              {commentMessage}
+    <CanvasFrameEventsContext value={events}>
+      <div className="relative h-full w-full">
+        {props.viewOnly === true ? (
+          props.children
+        ) : (
+          <CanvasClipboardBoundary artifactId={artifactId} registry={registry}>
+            {props.children}
+          </CanvasClipboardBoundary>
+        )}
+        <CanvasCommentIndex
+          scope={scope}
+          tileId={draftOwner}
+          registry={registry}
+        />
+        {commentMessage === null ? null : (
+          <div
+            role="status"
+            className="absolute bottom-2 left-2 z-30 rounded-md border bg-popover p-2 text-ui-xs text-popover-foreground"
+          >
+            {commentMessage}
+          </div>
+        )}
+        {errorAttachment === null ? null : (
+          <div className="absolute right-2 top-2 z-30 flex max-w-full items-start gap-1 rounded-md border bg-popover p-2 text-popover-foreground shadow-sm">
+            <div className="flex min-w-0 flex-col gap-2">
+              <p className="max-w-80 truncate text-ui-xs">
+                {errorAttachment.error.message}
+              </p>
+              <CanvasAnnotationAction
+                key={`${errorAttachment.path}:${errorAttachment.error.message}:${errorAttachment.error.stack}`}
+                scope={scope}
+                captureRect={() => null}
+                record={() => ({
+                  kind: "browser-annotation",
+                  annotationId: crypto.randomUUID(),
+                  source: {
+                    kind: "canvas",
+                    artifactId,
+                    artifactTitle,
+                    boardPath: errorAttachment.path,
+                    canvasPage: registry.get(errorAttachment.path).page,
+                  },
+                  capturedAt: Date.now(),
+                  comment: [
+                    errorAttachment.error.message,
+                    errorAttachment.error.stack,
+                  ]
+                    .filter((line) => line !== null)
+                    .join("\n"),
+                  counts: { elements: 0, regions: 0, strokes: 0 },
+                  elements: [],
+                  imageFileName: null,
+                  imageHash: null,
+                  droppedElementCount: 0,
+                })}
+              />
             </div>
-          )}
-          {errorAttachment === null ? null : (
-            <div className="absolute right-2 top-2 z-30 flex max-w-full items-start gap-1 rounded-md border bg-popover p-2 text-popover-foreground shadow-sm">
-              <div className="flex min-w-0 flex-col gap-2">
-                <p className="max-w-80 truncate text-ui-xs">
-                  {errorAttachment.error.message}
-                </p>
-                <CanvasAnnotationAction
-                  key={`${errorAttachment.path}:${errorAttachment.error.message}:${errorAttachment.error.stack}`}
-                  scope={scope}
-                  captureRect={() => null}
-                  record={() => ({
-                    kind: "browser-annotation",
-                    annotationId: crypto.randomUUID(),
-                    source: {
-                      kind: "canvas",
-                      artifactId,
-                      artifactTitle,
-                      boardPath: errorAttachment.path,
-                      canvasPage: registry.get(errorAttachment.path).page,
-                    },
-                    capturedAt: Date.now(),
-                    comment: [
-                      errorAttachment.error.message,
-                      errorAttachment.error.stack,
-                    ]
-                      .filter((line) => line !== null)
-                      .join("\n"),
-                    counts: { elements: 0, regions: 0, strokes: 0 },
-                    elements: [],
-                    imageFileName: null,
-                    imageHash: null,
-                    droppedElementCount: 0,
-                  })}
-                />
-              </div>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label="Dismiss error attachment"
-                onClick={() => setErrorAttachment(null)}
-              >
-                <X />
-              </Button>
-            </div>
-          )}
-        </div>
-      </CanvasFrameEventsContext>
-    </FrameCommentSurfaceProvider>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Dismiss error attachment"
+              onClick={() => setErrorAttachment(null)}
+            >
+              <X />
+            </Button>
+          </div>
+        )}
+      </div>
+    </CanvasFrameEventsContext>
   );
 }
 

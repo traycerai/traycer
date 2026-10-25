@@ -515,6 +515,32 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     element?.scrollIntoView({ block: "center", inline: "nearest" });
     return { revealed: element !== null };
   };
+  const navigate = (
+    params: Record<string, unknown>,
+  ): Record<string, unknown> | null => {
+    if (
+      typeof params.search !== "string" ||
+      typeof params.hash !== "string" ||
+      (params.search !== "" && !params.search.startsWith("?")) ||
+      (params.hash !== "" && !params.hash.startsWith("#")) ||
+      params.search.includes("#") ||
+      params.search.length + params.hash.length > 8192
+    )
+      return null;
+    // Only suffixes of this already-proven document may change. Queries
+    // need a load so authored startup code sees location.search; hashes
+    // stay in the same document and deliver the ordinary hashchange event.
+    if (location.search !== params.search) {
+      const destination = new URL(location.href);
+      destination.search = params.search;
+      destination.hash = params.hash;
+      window.setTimeout(() => location.replace(destination.href), 0);
+    } else if (location.hash !== params.hash) {
+      location.hash = params.hash;
+    }
+    return {};
+  };
+
   const answer = (
     method: unknown,
     params: Record<string, unknown>,
@@ -545,6 +571,8 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       }
       case "traycer/canvas/reveal-element":
         return revealElement(params);
+      case "traycer/canvas/navigate":
+        return navigate(params);
       case "traycer/canvas/set-mode":
         if (params.mode !== "edit" && params.mode !== "play") return null;
         mode = params.mode;
@@ -625,6 +653,26 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       });
     },
     true,
+  );
+  // Pinch/modified-wheel belongs to the canvas; ordinary wheel scrolling
+  // remains inside the prototype. Coordinates are local CSS pixels.
+  document.addEventListener(
+    "wheel",
+    (event) => {
+      if (
+        config.canvasLinks === "native" ||
+        !event.ctrlKey ||
+        event.defaultPrevented
+      )
+        return;
+      event.preventDefault();
+      notify("traycer/canvas/zoom", {
+        delta: event.deltaY * ([1, 16, innerHeight][event.deltaMode] ?? 1),
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    { passive: false },
   );
   // Before the ordinary bootstrap's window-bubble link handler drops custom
   // schemes. Page target handlers still get their normal turn in Play.
