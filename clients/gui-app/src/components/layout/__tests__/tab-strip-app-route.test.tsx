@@ -128,6 +128,11 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
+// The retrospective and move sheets RootComponent mounts app-wide read this
+// computer's host through a <HostRuntimeProvider> this tree does not build.
+vi.mock("@/components/settings/move/environment-sheets-host", () => ({
+  EnvironmentSheetsHost: () => null,
+}));
 
 vi.mock("@/components/layout/host-status-footer", () => ({
   HostStatusFooter: () => null,
