@@ -784,7 +784,7 @@ describe("<ImportLoginsDialog /> import", () => {
     await screen.findByText("Logins imported");
     expect(bridge.importCalls).toHaveLength(1);
     expect(
-      screen.getByText("Signed in to 1 site on this machine (2 cookies)."),
+      screen.getByText("Signed in to 1 site on this computer (2 cookies)."),
     ).not.toBeNull();
     expect(
       screen.getByText(
@@ -793,7 +793,7 @@ describe("<ImportLoginsDialog /> import", () => {
     ).not.toBeNull();
   });
 
-  it("shows the saved-on-this-machine copy when nothing was pushed", async () => {
+  it("shows the saved-on-this-computer copy when nothing was pushed", async () => {
     const bridge = new TestBridge({});
     bridge.sources = [source({})];
     bridge.scanBySourceId.set(
@@ -819,7 +819,7 @@ describe("<ImportLoginsDialog /> import", () => {
     await screen.findByText("Logins imported");
     expect(
       screen.getByText(
-        "Saved on this machine. Hosts pick it up at the next capture.",
+        "Saved on this computer. Hosts pick it up at the next capture.",
       ),
     ).not.toBeNull();
   });

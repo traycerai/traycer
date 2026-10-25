@@ -131,6 +131,12 @@ export function DetailsDrawer(props: {
   readonly onRecover: (recovery: DetailsRecovery) => void;
   readonly onSubjectSelect: (subject: DetailsSubject, title: string) => void;
   readonly onBack: (() => void) | null;
+  /**
+   * The subject's own actions, under its status; `null` for none. They never
+   * wait on the status: until it is read, or when it cannot be, they stand
+   * alone.
+   */
+  readonly controls: ReactNode;
 }): ReactNode {
   const status = props.entry?.status();
   const history = props.entry?.history();
@@ -166,34 +172,44 @@ export function DetailsDrawer(props: {
             />
           ) : null}
           {props.error === null ? null : (
-            <div role="alert" className="flex flex-col items-start gap-2">
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1"
+            >
               <p className="text-warning-foreground">{props.error}</p>
               <Button
                 type="button"
-                size="sm"
-                variant="outline"
+                size="inline"
+                variant="link"
                 onClick={props.onRetry}
               >
                 Retry
               </Button>
             </div>
           )}
-          {status === undefined || history === undefined ? null : (
+          {/* The controls keep one place, so they never remount (and lose
+              what they hold) when the status arrives. */}
+          {status === undefined && props.controls === null ? null : (
             <Tabs defaultValue="status">
               <TabsList variant="line" className="max-w-full flex-wrap">
                 <TabsTrigger value="status">Status</TabsTrigger>
                 {hasHistory ? (
                   <TabsTrigger value="history">History</TabsTrigger>
                 ) : null}
-                <TabsTrigger value="export">Export diagnostics</TabsTrigger>
+                {status === undefined ? null : (
+                  <TabsTrigger value="export">Export diagnostics</TabsTrigger>
+                )}
               </TabsList>
               <TabsContent value="status">
-                <CurrentStatus
-                  status={status}
-                  onRecover={props.onRecover}
-                  pending={props.recoveryPending}
-                  onSubjectSelect={props.onSubjectSelect}
-                />
+                {status === undefined ? null : (
+                  <CurrentStatus
+                    status={status}
+                    onRecover={props.onRecover}
+                    pending={props.recoveryPending}
+                    onSubjectSelect={props.onSubjectSelect}
+                  />
+                )}
+                {props.controls}
               </TabsContent>
               {hasHistory ? (
                 <TabsContent value="history">
@@ -204,35 +220,49 @@ export function DetailsDrawer(props: {
                   />
                 </TabsContent>
               ) : null}
-              <TabsContent value="export">
-                <div className="flex flex-col items-start gap-3 py-3">
-                  <p className="text-muted-foreground">
-                    Save diagnostics without values. You choose whether to share
-                    the file with support.
-                  </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={props.exportPending}
-                    onClick={props.onExport}
-                  >
-                    Save diagnostics
-                    {props.exportPending ? (
-                      <AgentSpinningDots
-                        className={undefined}
-                        testId={undefined}
-                        variant={undefined}
-                        tone="muted"
-                      />
-                    ) : null}
-                  </Button>
-                </div>
-              </TabsContent>
+              {status === undefined ? null : (
+                <DetailsExportTab
+                  pending={props.exportPending}
+                  onExport={props.onExport}
+                />
+              )}
             </Tabs>
           )}
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function DetailsExportTab(props: {
+  readonly pending: boolean;
+  readonly onExport: () => void;
+}): ReactNode {
+  return (
+    <TabsContent value="export">
+      <div className="flex flex-col items-start gap-3 py-3">
+        <p className="text-muted-foreground">
+          Save diagnostics without values. You choose whether to share the file
+          with support.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.pending}
+          onClick={props.onExport}
+        >
+          Save diagnostics
+          {props.pending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+              tone="muted"
+            />
+          ) : null}
+        </Button>
+      </div>
+    </TabsContent>
   );
 }

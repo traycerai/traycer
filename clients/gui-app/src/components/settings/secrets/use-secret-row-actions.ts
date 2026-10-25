@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -13,7 +13,7 @@ export function useSecretRowActions(props: {
   readonly secret: EnvironmentSecret;
   readonly onChanged: () => void;
 }) {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId, resolved } = useAddressedEnvironment();
   const queryClient = useQueryClient();
   const versions = useHostQuery<
     HostRpcRegistry,
@@ -30,7 +30,7 @@ export function useSecretRowActions(props: {
             method: "environment.secrets.versions",
             version: { major: 1, minor: 1 },
           },
-    options: { enabled: true },
+    options: { enabled: resolved },
   });
   const verify = useHostMutation<HostRpcRegistry, "environment.secrets.verify">(
     {

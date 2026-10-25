@@ -55,8 +55,15 @@ const UNREADABLE: ScheduledTaskXmlQuery = {
   reason: "access denied",
 };
 
-/** A queue of `queryTaskXml` answers, consumed one per call (last repeats). */
-function queueDeps(queries: readonly ScheduledTaskXmlQuery[]): {
+/**
+ * A queue of `queryTaskXml` answers, consumed one per call (last repeats),
+ * and the hidden-task probe's answer to each read, by read number (`false`
+ * past the end).
+ */
+function queueDepsWithProbe(
+  queries: readonly ScheduledTaskXmlQuery[],
+  hiddenAnswers: readonly boolean[],
+): {
   readonly deps: WindowsTaskOwnershipDeps;
   readonly queryCount: () => number;
 } {
@@ -70,9 +77,20 @@ function queueDeps(queries: readonly ScheduledTaskXmlQuery[]): {
       },
       callerSid: () => CALLER_SID,
       resolveAccountSid: async () => null,
+      taskHiddenFromCaller: async () => {
+        // Asked right after the read that just ran, which is read number `i`.
+        return hiddenAnswers[i - 1] ?? false;
+      },
     },
     queryCount: () => i,
   };
+}
+
+function queueDeps(queries: readonly ScheduledTaskXmlQuery[]): {
+  readonly deps: WindowsTaskOwnershipDeps;
+  readonly queryCount: () => number;
+} {
+  return queueDepsWithProbe(queries, []);
 }
 
 function stageMock(): {
@@ -293,6 +311,41 @@ describe("windows-task-gate: create is read -> stage -> confirm-read -> verb (R3
       xml: taskXml(CALLER_SID, "reread"),
     });
     expect(queryCount()).toBe(4);
+  });
+
+  describe("a task hidden from the caller (Task Scheduler hides another user's task, so the reads find none)", () => {
+    it("create-if-absent is refused with access denied and the re-read finds the task hidden: other-owner, not the raw create error", async () => {
+      const { deps, queryCount } = queueDepsWithProbe(
+        [ABSENT, ABSENT, ABSENT],
+        [false, false, true],
+      );
+      const gate = await createGate(deps);
+      const { stage } = stageMock();
+      const { run, calls } = fakeRunner([
+        createIfAbsentExits1("ERROR: Access is denied."),
+      ]);
+
+      await expect(gate.exec(run, stage, RUN_OPTIONS)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+        details: { reason: "other-owner" },
+      });
+      expect(withoutF(calls)).toHaveLength(1);
+      expect(withF(calls)).toHaveLength(0);
+      expect(queryCount()).toBe(3);
+    });
+
+    it("a task already hidden at the confirm-read is refused before any /Create", async () => {
+      const { deps } = queueDepsWithProbe([ABSENT, ABSENT], [false, true]);
+      const gate = await createGate(deps);
+      const { stage } = stageMock();
+      const { run, calls } = fakeRunner([CREATE_IF_ABSENT_EXITS_0]);
+
+      await expect(gate.exec(run, stage, RUN_OPTIONS)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+        details: { reason: "other-owner" },
+      });
+      expect(createCalls(calls)).toHaveLength(0);
+    });
   });
 
   describe("test 27: classification never reads stdout/stderr text - only the re-read decides", () => {

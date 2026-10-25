@@ -42,7 +42,6 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { MoveSheet } from "@/components/settings/move-sheet";
 import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
@@ -71,8 +70,8 @@ export interface SettingsSidebarProps {
 /**
  * The sidebar carries the scope model.
  *
- * Getting started leads, followed by Application and Account, and the
- * host group goes last, headed by ONE picker with its scoped sections beneath.
+ * Getting started leads, followed by Application, Account and Environment,
+ * and the host group goes last, headed by ONE picker with its scoped sections beneath.
  * The picker is deliberately NOT a level of navigation: Providers already
  * spends the app's nesting budget on a rail plus a tab bar, so a host tier
  * here would have made the deepest page four levels down. See
@@ -178,7 +177,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           race its open state, and unmounting it while a search runs would tear
           down a dialog that is open. */}
       <AddHostDialog />
-      <MoveSheet />
     </aside>
   );
 }

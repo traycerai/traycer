@@ -3,6 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
+import {
+  NO_NOTICES,
+  NO_OVERRIDES,
+  NO_REVIEW,
+  PersonalPageContext,
+} from "@/components/settings/personal/personal-page-context";
+import type { PersonalHostState } from "@/components/settings/personal/personal-page-status";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
 const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
@@ -182,5 +192,121 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
       { providerId: "cursor", apiKey: "sk-secret" },
       expect.anything(),
     );
+  });
+});
+
+describe("ProviderApiKeySection custody sentence", () => {
+  const READY: PersonalHostState = {
+    kind: "ready",
+    status: environmentStatusFixture({}),
+  };
+  function deviceLine(host: string, provider: string, envName: string) {
+    return `Stored encrypted on ${host} only. Other computers and sandboxes running Personal don't get this key. When no key is saved here, ${provider} uses ${envName} from ${host}'s shell.`;
+  }
+  /** Where Personal does not run, there are no other computers to name. */
+  function shortDeviceLine(host: string, provider: string, envName: string) {
+    return `Stored encrypted on ${host} only. When no key is saved here, ${provider} uses ${envName} from ${host}'s shell.`;
+  }
+
+  function renderOn(
+    providerId: ProviderCliState["providerId"],
+    hostState: PersonalHostState | null,
+  ): void {
+    const section = (
+      <ProviderApiKeySection
+        state={apiKeyState(providerId)}
+        draft=""
+        onDraftChange={() => undefined}
+      />
+    );
+    render(
+      hostState === null ? (
+        section
+      ) : (
+        <PersonalPageContext.Provider
+          value={{
+            section: "providers",
+            pick: PERSONAL_PICK,
+            state: hostState,
+            line: null,
+            hostName: "Studio",
+            localOverrides: NO_OVERRIDES,
+            hostId: "host-1",
+            client: null,
+            notices: NO_NOTICES,
+            review: NO_REVIEW,
+          }}
+        >
+          {section}
+        </PersonalPageContext.Provider>
+      ),
+    );
+  }
+
+  it("states Personal's custody and links how Traycer handles it for a provider whose key becomes Personal's secret", () => {
+    renderOn("cursor", READY);
+
+    expect(screen.getByText(SECRET_CUSTODY_SENTENCE)).toBeDefined();
+    expect(screen.getByText("How Traycer handles this")).toBeDefined();
+    expect(screen.queryByText(/^Stored encrypted on /)).toBeNull();
+  });
+
+  it.each([
+    [
+      "a provider whose key stays on its host (kiro)",
+      "kiro",
+      READY,
+      deviceLine("Studio", "Kiro", "KIRO_API_KEY"),
+    ],
+    [
+      "a page outside Personal (a Local row)",
+      "cursor",
+      null,
+      shortDeviceLine("this computer", "Cursor", "CURSOR_API_KEY"),
+    ],
+    [
+      "a host not running Personal",
+      "cursor",
+      { kind: "not-set-up" } satisfies PersonalHostState,
+      shortDeviceLine("Studio", "Cursor", "CURSOR_API_KEY"),
+    ],
+  ] as const)(
+    "names the one host that keeps the key for %s",
+    (_label, id, host, sentence) => {
+      renderOn(id, host);
+
+      expect(screen.getByText(sentence)).toBeDefined();
+      expect(screen.queryByText(SECRET_CUSTODY_SENTENCE)).toBeNull();
+      expect(screen.queryByText("How Traycer handles this")).toBeNull();
+    },
+  );
+
+  it("a Local row says where the key is kept and never mentions Personal", () => {
+    renderOn("cursor", null);
+
+    const line = screen.getByText(/^Stored encrypted on /);
+    expect(line.textContent).toBe(
+      "Stored encrypted on this computer only. When no key is saved here, Cursor uses CURSOR_API_KEY from this computer's shell.",
+    );
+    expect(line.textContent).not.toMatch(/Personal/);
+  });
+
+  it("names the host even when the saved key came from the shell", () => {
+    render(
+      <ProviderApiKeySection
+        state={{
+          ...apiKeyState("kiro"),
+          apiKey: { supported: true, configured: true, source: "env" },
+        }}
+        draft=""
+        onDraftChange={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        shortDeviceLine("this computer", "Kiro", "KIRO_API_KEY"),
+      ),
+    ).toBeDefined();
   });
 });

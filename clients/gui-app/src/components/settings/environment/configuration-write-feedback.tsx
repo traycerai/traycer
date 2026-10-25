@@ -10,7 +10,9 @@ export function ConfigurationWriteFeedback(props: {
     return <ConfigurationConflict changedBy={props.issue.changedBy} />;
   return (
     <p role="status" className="text-ui-sm text-muted-foreground">
-      You no longer have access to change these settings.
+      {props.issue.kind === "refused"
+        ? props.issue.line
+        : "You no longer have access to change these settings."}
     </p>
   );
 }

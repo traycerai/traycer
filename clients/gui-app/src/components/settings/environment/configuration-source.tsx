@@ -4,7 +4,13 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 export type ConfigurationSource =
   | { readonly kind: "host" }
   | {
+      /**
+       * Read from the cloud, through the window's host on the viewer's
+       * session: a team's configuration, or Personal's when the window's
+       * host does not run it.
+       */
       readonly kind: "pool";
+      readonly configuration: "personal" | "team";
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
@@ -21,10 +27,20 @@ export function useConfigurationSource(): ConfigurationSource {
   return useContext(ConfigurationSourceContext);
 }
 
-/** Null retains the existing host-bound secret RPC contract. */
+/**
+ * A team's id on its pages, else null. Only the provider link dialog's
+ * team-or-Personal branch reads it; the calls themselves name their
+ * environment through `useAddressedEnvironment`.
+ */
 export function useConfigurationEnvironmentId(): string | null {
   const source = useConfigurationSource();
   return source.kind === "pool" ? source.environmentId : null;
+}
+
+/** Whether the page reads Personal from the cloud, for its Personal wording. */
+export function useConfigurationIsPersonal(): boolean {
+  const source = useConfigurationSource();
+  return source.kind === "pool" && source.configuration === "personal";
 }
 
 export function useCanEditConfiguration(): boolean {

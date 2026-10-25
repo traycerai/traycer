@@ -213,6 +213,7 @@ vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   openFallbackTab,
   renderWithFallbackQueryClient,
@@ -264,6 +265,10 @@ function modelTriggerText(): string {
 }
 
 beforeEach(() => {
+  // A Local row reads the host's own page, which names the host it configures.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: "host-a", hostName: "Studio" },
+  });
   scopeMocks.hostId = "host-a";
   scopeMocks.hostName = "Studio";
   scopeMocks.queryData = respond({ tierGroups: groups("opus") });
@@ -278,6 +283,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 /** R4's own catalog entry: a full {@link GuiAgentModelOption}, no field left to a partial. */
@@ -363,6 +369,26 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     // silently pointing somewhere else.
     expect(
       screen.getByText(/Applies to your chat agents on Laptop/),
+    ).toBeTruthy();
+  });
+
+  it("describes a Personal pick by Personal's computers and sandboxes, and a Local pick by the host", () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    const personal = renderPanel();
+    expect(
+      screen.getByText(
+        "Applies to your agents on every computer and sandbox running Personal.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Applies to your chat agents on/)).toBeNull();
+    personal.unmount();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-a", hostName: "Studio" },
+    });
+    renderPanel();
+    expect(
+      screen.getByText(/Applies to your chat agents on Studio/),
     ).toBeTruthy();
   });
 

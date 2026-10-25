@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Fallback).
  * Update that file whenever this settings surface changes.
  */
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   useCallback,
   useEffect,
@@ -134,6 +135,7 @@ import {
 
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamModelRouting } from "@/components/settings/environment/team-model-routing";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * Settings ▸ Host ▸ Fallback.
@@ -144,8 +146,11 @@ import { TeamModelRouting } from "@/components/settings/environment/team-model-r
  */
 export function FallbackSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
   return source.kind === "pool" ? (
-    <TeamModelRouting />
+    <TeamModelRouting key={configurationKey} />
   ) : (
     <HostFallbackSettingsPanel />
   );
@@ -153,6 +158,7 @@ export function FallbackSettingsPanel(): ReactNode {
 
 function HostFallbackSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
+  const pick = useEnvironmentPick();
   const realBinding = useHostBinding();
 
   // The same governed narrow the agent-guide section makes, for the same
@@ -171,7 +177,11 @@ function HostFallbackSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Model routing"
-      description={fallbackPanelDescription(scope)}
+      description={
+        pick.kind === "personal"
+          ? "Applies to your agents on every computer and sandbox running Personal."
+          : fallbackPanelDescription(scope)
+      }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <HostScopeGate scope={scope} skeleton={<FallbackPanelSkeleton />}>

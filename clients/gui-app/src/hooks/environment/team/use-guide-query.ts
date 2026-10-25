@@ -6,11 +6,11 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { environmentMutationKeys } from "@/lib/query-keys";
 
 export function useConfigurationGuideQuery() {
   const source = useConfigurationSource();
@@ -40,16 +40,10 @@ export function useConfigurationGuideQuery() {
 export function useConfigurationGuideMutations() {
   const scope = useTeamViewingHost();
   const queries = useQueryClient();
-  const reread = (environmentId: string, hostId: string | null): void => {
-    invalidateEnvironmentHostReports(queries, environmentId);
-    void queries.invalidateQueries({
-      queryKey: hostQueryKeys.method(
-        hostId,
-        "environment.configuration.guide.get",
-        { environmentId },
-      ),
-    });
-  };
+  const reread = (environmentId: string): void =>
+    invalidateConfigurationReads(queries, environmentId, [
+      "environment.configuration.guide.get",
+    ]);
   const set = useHostScopedMutationForClient(scope.client, {
     method: "environment.configuration.guide.set",
     mutationKey: environmentMutationKeys.configurationGuideSet(),
@@ -59,8 +53,7 @@ export function useConfigurationGuideMutations() {
       cloudVerdictPreflight("environment.configuration.guide.set")();
       return Promise.resolve(request);
     },
-    onSuccess: (_result, request, hostId) =>
-      reread(request.environmentId, hostId),
+    onSuccess: (_result, request) => reread(request.environmentId),
   });
   const reset = useHostScopedMutationForClient(scope.client, {
     method: "environment.configuration.guide.reset",
@@ -71,8 +64,7 @@ export function useConfigurationGuideMutations() {
       cloudVerdictPreflight("environment.configuration.guide.reset")();
       return Promise.resolve(request);
     },
-    onSuccess: (_result, request, hostId) =>
-      reread(request.environmentId, hostId),
+    onSuccess: (_result, request) => reread(request.environmentId),
   });
   return { set, reset };
 }

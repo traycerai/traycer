@@ -59,6 +59,7 @@ function buildOne(input: {
     // The helper models one host at a time and none of these cases is about a
     // machine mid-install; the "setting up" row state has its own test.
     localHostSettingUp: false,
+    localHostTerminalRunNote: null,
     sandboxes: null,
     nowMs: 0,
   });
@@ -162,6 +163,7 @@ describe("buildHostScopeOptions connectable — the route, not the lease", () =>
       ],
       authorityAttached: true,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: null,
       nowMs: 0,
     });
@@ -219,6 +221,7 @@ describe("buildHostScopeOptions connectable — composed against real mapped ent
       localService: undefined,
       hasLiveSession: () => hasLiveSession,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: null,
       nowMs: 0,
     });
@@ -469,6 +472,7 @@ describe("buildHostScopeOptions settingUp", () => {
       localService: undefined,
       hasLiveSession: () => false,
       localHostSettingUp: true,
+      localHostTerminalRunNote: null,
       sandboxes: null,
       nowMs: 0,
     });
@@ -490,6 +494,7 @@ describe("buildHostScopeOptions settingUp", () => {
       localService: undefined,
       hasLiveSession: () => false,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: null,
       nowMs: 0,
     });
@@ -528,6 +533,7 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       localService: undefined,
       hasLiveSession: () => false,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: null,
       nowMs: 0,
     });
@@ -562,6 +568,7 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
       localService: undefined,
       hasLiveSession: () => false,
       localHostSettingUp: false,
+      localHostTerminalRunNote: null,
       sandboxes: null,
       nowMs: 0,
     });

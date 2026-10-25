@@ -79,7 +79,7 @@ export function HostScopeGate(props: {
       <HostScopeNotice
         tone="warn"
         title="Couldn't load your hosts"
-        detail="The list of machines on your account didn't come back. Nothing here is missing — it just hasn't loaded."
+        detail="The list of hosts on your account didn't come back. Nothing here is missing — it just hasn't loaded."
         action={
           <Button
             type="button"

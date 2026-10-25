@@ -13,7 +13,10 @@
  * floor, like every environment method (`environment/contracts.ts`).
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   environmentItemKindSchema,
@@ -93,6 +96,49 @@ export const environmentMovePlanV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMovePlanRequestSchema,
   responseSchema: environmentMovePlanResponseSchema,
+});
+
+/**
+ * `@1.1` adds `sameNameInPersonal`: rows that look like a key whose name
+ * Personal already holds as a secret. Secret values are never read back, so
+ * the two cannot be compared; the move leaves this computer's value here and
+ * uploads nothing for it. Such a row counts in no other list. It also adds
+ * `guideDiffers`: this computer's agent selection guide has the person's
+ * edits, which the move never puts over Personal's. Not a row: it counts in no
+ * list and has no choice. A `@1.0` answer upgrades with no such rows and
+ * `guideDiffers` false.
+ */
+export const environmentMovePlanResponseSchemaV11 = lazySchema(() =>
+  environmentMovePlanResponseSchema.extend({
+    rows: environmentMovePlanResponseSchema.shape.rows.extend({
+      sameNameInPersonal: z.array(environmentMoveRowSchema).default([]),
+    }),
+    guideDiffers: z.boolean().default(false),
+  }),
+);
+export type EnvironmentMovePlanResponseV11 = z.infer<
+  typeof environmentMovePlanResponseSchemaV11
+>;
+
+export const environmentMovePlanV11 = defineRpcContract({
+  method: "environment.move.plan",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentMovePlanRequestSchema,
+  responseSchema: environmentMovePlanResponseSchemaV11,
+});
+
+export const environmentMovePlanUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentMovePlanV10,
+  typeof environmentMovePlanV11
+>({
+  from: environmentMovePlanV10.schemaVersion,
+  to: environmentMovePlanV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    rows: { ...response.rows, sameNameInPersonal: [] },
+    guideDiffers: false,
+  }),
 });
 
 /**
@@ -177,6 +223,64 @@ export const environmentMoveStopPreviewV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMoveStopPreviewRequestSchema,
   responseSchema: environmentMoveStopPreviewResponseSchema,
+});
+
+/**
+ * `@1.1` adds, on each `needsChoice` row, why it needs a choice (`origin`)
+ * and what depends on it (`usedBy`):
+ *
+ * - `from_this_computer`: its value was on this computer before Personal
+ *   wrote it there, or the host cannot tell where it came from;
+ * - `changed_here`: this computer holds its own value over it;
+ * - `depended_on`: other items depend on it, named in `usedBy` (empty for
+ *   every other origin).
+ *
+ * `reason` keeps its `@1.0` meaning for older clients: `edited_here` for the
+ * first two origins. A `@1.0` answer upgrades `edited_here` to
+ * `changed_here`, which is all a `@1.0` host meant by it, and `depended_on`
+ * with no `usedBy`, since it never named them.
+ */
+export const environmentMoveStopPreviewResponseSchemaV11 = lazySchema(() =>
+  environmentMoveStopPreviewResponseSchema.extend({
+    needsChoice: z.array(
+      z.object({
+        row: environmentMoveRowSchema,
+        reason: z.enum(["edited_here", "depended_on"]),
+        origin: z.enum(["from_this_computer", "changed_here", "depended_on"]),
+        usedBy: z.array(environmentMoveRowSchema),
+      }),
+    ),
+  }),
+);
+export type EnvironmentMoveStopPreviewResponseV11 = z.infer<
+  typeof environmentMoveStopPreviewResponseSchemaV11
+>;
+
+export const environmentMoveStopPreviewV11 = defineRpcContract({
+  method: "environment.move.stopPreview",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentMoveStopPreviewRequestSchema,
+  responseSchema: environmentMoveStopPreviewResponseSchemaV11,
+});
+
+export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentMoveStopPreviewV10,
+  typeof environmentMoveStopPreviewV11
+>({
+  from: environmentMoveStopPreviewV10.schemaVersion,
+  to: environmentMoveStopPreviewV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    needsChoice: response.needsChoice.map((entry) => ({
+      ...entry,
+      origin:
+        entry.reason === "edited_here"
+          ? ("changed_here" as const)
+          : ("depended_on" as const),
+      usedBy: [],
+    })),
+  }),
 });
 
 /**

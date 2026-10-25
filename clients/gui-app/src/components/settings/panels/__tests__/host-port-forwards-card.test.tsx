@@ -322,7 +322,7 @@ describe("<HostPortForwardsCard />", () => {
       const owned = await screen.findByTestId("host-port-forwards-owned");
       const held = screen.getByTestId("host-port-forwards-held");
       expect(owned.textContent).toContain("Forwards on this host");
-      expect(held.textContent).toContain("Ports other machines hold here");
+      expect(held.textContent).toContain("Ports other hosts hold here");
       const refresh = screen.getByTestId("host-port-forwards-refresh");
       expect(
         held.compareDocumentPosition(refresh) &
@@ -996,7 +996,7 @@ describe("<HostPortForwardsCard />", () => {
       });
     });
 
-    it("names an unknown host another machine", async () => {
+    it("names an unknown host another host", async () => {
       scopeHosts.current = [];
       const fixture = createCardFixture();
       fixture.setListResponse({
@@ -1013,7 +1013,7 @@ describe("<HostPortForwardsCard />", () => {
       await waitFor(() => {
         expect(
           screen.getByTestId("host-port-forward-owned-owned-1").textContent,
-        ).toContain("another machine:3000");
+        ).toContain("another host:3000");
       });
     });
   });

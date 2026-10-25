@@ -80,6 +80,7 @@ import {
   useConfigurationSource,
   useCanEditConfiguration,
 } from "@/components/settings/environment/configuration-source";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 
 const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
@@ -520,9 +521,14 @@ function ProviderSkillsTabBody({
       >
         {globalOnly ? (
           <p className="text-ui-xs text-muted-foreground">
-            {team
-              ? "Available to agents running this team."
-              : "Applies to every workspace on this host."}
+            {source.kind === "pool" ? (
+              <CloudSkillsScopeCaption
+                configuration={source.configuration}
+                providerLabel={providerLabel}
+              />
+            ) : (
+              "Applies to every workspace on this host."
+            )}
           </p>
         ) : (
           <McpScopePicker
@@ -587,6 +593,17 @@ function ProviderSkillsTabBody({
       {renderDialogs()}
     </div>
   );
+}
+
+/** Where a cloud configuration's global skill applies. */
+function CloudSkillsScopeCaption(props: {
+  readonly configuration: "personal" | "team";
+  readonly providerLabel: string;
+}): ReactNode {
+  const name = useConfigurationName();
+  return props.configuration === "personal"
+    ? `Which of Personal's skills ${props.providerLabel} uses, on every computer and sandbox running Personal.`
+    : `Which of ${name}'s skills ${props.providerLabel} uses, on every host running ${name}.`;
 }
 
 function skillAfterUpdate(
@@ -1115,8 +1132,12 @@ function SkillRow({
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
-      {/* Beside the row, not inside it: the mark can hold its own button. */}
-      <PersonalEntryMark target={markTarget} name={skill.name} />
+      {/* Beside the row, not inside it: the mark can hold its own button. A
+          built-in reads "Built-in" alone: it is the environment's or the
+          tool's, never one computer's. */}
+      {skill.source === "managed" ? null : (
+        <PersonalEntryMark target={markTarget} name={skill.name} />
+      )}
     </li>
   );
 }

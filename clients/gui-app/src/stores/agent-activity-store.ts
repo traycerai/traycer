@@ -260,6 +260,17 @@ export interface OpenAgentActivityStreamInput {
   readonly plane: AgentActivityPlaneSelector | null;
 }
 
+/** One reopen per open activity stream, for {@link rereadAgentActivity}. */
+const liveStreamRereads = new Set<() => void>();
+
+/**
+ * Reopens every open activity stream now, so each serving host sends a fresh
+ * state frame: the person's Retry on `Couldn't check running tasks.`.
+ */
+export function rereadAgentActivity(): void {
+  for (const reread of [...liveStreamRereads]) reread();
+}
+
 export function openAgentActivityStream(
   input: OpenAgentActivityStreamInput,
 ): () => void {
@@ -325,8 +336,16 @@ export function openAgentActivityStream(
   }
 
   openClient();
+  const reread = (): void => {
+    const client = currentClient;
+    currentClient = null;
+    client?.close();
+    openClient();
+  };
+  liveStreamRereads.add(reread);
   return () => {
     disposed = true;
+    liveStreamRereads.delete(reread);
     reopenScheduler.dispose();
     const client = currentClient;
     currentClient = null;

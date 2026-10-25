@@ -147,7 +147,7 @@ export function judgeWarningCause(input: {
  * this says why.
  */
 export function judgeNoModelsLine(providerLabel: string): string {
-  return `${providerLabel} offers no models on this machine. Pick another provider.`;
+  return `${providerLabel} offers no models on this host. Pick another provider.`;
 }
 
 /**

@@ -1193,8 +1193,10 @@ import {
   environmentListV10,
   environmentListV11,
   environmentMembersUpgradeV10ToV11,
+  environmentMembersUpgradeV11ToV12,
   environmentMembersV10,
   environmentMembersV11,
+  environmentMembersV12,
   environmentSetMainBotV10,
 } from "@traycer/protocol/host/environment/contracts";
 import { ENVIRONMENT_REDESIGN_RPC_METHODS } from "@traycer/protocol/host/environment/redesign-rpc-methods";
@@ -8970,7 +8972,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "environment.members": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentMembersV10,
@@ -8979,6 +8981,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: environmentMembersV11,
           upgradeFromPreviousVersion: environmentMembersUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentMembersV12,
+          upgradeFromPreviousVersion: environmentMembersUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

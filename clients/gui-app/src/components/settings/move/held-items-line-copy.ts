@@ -1,12 +1,22 @@
 /**
  * Secrets page held-items line. Self-retiring: the parent omits it when no
- * held row is left. `Review them` is the verb that opens the retrospective
- * sheet.
+ * held row is left. `Review them` (`Review it` for one) is the verb that
+ * opens the retrospective sheet. Values and commands are counted apart, and
+ * a kind with none is left out.
  */
-export function heldItemsLineText(count: number, hostName: string): string {
-  const items = count === 1 ? "1 item" : `${count} items`;
-  const verb = count === 1 ? "is" : "are";
-  return `${items} from ${hostName} ${verb} not in use · Review them`;
+export function heldItemsLineText(
+  counts: { readonly values: number; readonly commands: number },
+  hostName: string,
+): string {
+  const parts: string[] = [];
+  if (counts.values > 0) {
+    parts.push(counts.values === 1 ? "1 value" : `${counts.values} values`);
+  }
+  if (counts.commands > 0) {
+    parts.push(
+      counts.commands === 1 ? "1 command" : `${counts.commands} commands`,
+    );
+  }
+  const one = counts.values + counts.commands === 1;
+  return `${parts.join(" and ")} from ${hostName} ${one ? "is" : "are"} on hold until you choose · ${one ? "Review it" : "Review them"}`;
 }
-
-export const HELD_ITEMS_REVIEW_LABEL = "Review them";

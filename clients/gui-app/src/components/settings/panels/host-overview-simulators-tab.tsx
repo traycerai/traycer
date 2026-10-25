@@ -189,7 +189,7 @@ function SimulatorEnabledRow(props: {
   let description: string;
   if (switches.unreadable) {
     description =
-      "Couldn't read this host's mobile simulators setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings.";
+      "Couldn't read this host's mobile simulators setting. Repair Traycer's config.json on that computer, or back it up before resetting it, then reopen Settings.";
   } else if (!switches.enabled && status !== null) {
     // Off: the Platforms row is not drawn, so its answer rides here.
     description = `${rowDescription} ${platformSummary(status.platforms)}`;
