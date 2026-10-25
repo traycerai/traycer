@@ -63,4 +63,26 @@ describe("CLI Sentry init", () => {
     ]);
     expect(JSON.stringify(result)).not.toContain("synthetic-user");
   });
+
+  it("scrubs a Windows home name with a space inside its parentheses", async () => {
+    vi.stubEnv("TRAYCER_CLI_SENTRY_DSN", "https://public@sentry.invalid/1");
+    await import("../sentry");
+
+    const path = "C:\\Users\\Syn (Work Account)\\.traycer\\cli\\main.js";
+    const result = captured[0]?.beforeSend?.({
+      exception: {
+        values: [
+          {
+            value: `Cannot find module '${path}'`,
+            stacktrace: { frames: [{ filename: path, abs_path: path }] },
+          },
+        ],
+      },
+    });
+    const redacted = "C:\\Users\\<redacted>\\.traycer\\cli\\main.js";
+    expect(result?.exception?.values?.[0]).toEqual({
+      value: `Cannot find module '${redacted}'`,
+      stacktrace: { frames: [{ filename: redacted, abs_path: redacted }] },
+    });
+  });
 });

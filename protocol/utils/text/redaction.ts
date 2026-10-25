@@ -415,14 +415,20 @@ export function reduceRequestTargetToPath(value: string): string {
  */
 const HOME_FOLDER_NAME_LETTER = String.raw`[^\s/\\:'"\x60<>|*?()\[\]{}]`;
 
+/** The apostrophe, parentheses, brackets and braces a folder name can hold. */
+const HOME_FOLDER_NAME_DELIMITER = String.raw`['()\[\]{}]`;
+
 /**
- * One space-free word of a name a separator or a closing delimiter ends. A
- * Windows name's apostrophe or parentheses (`O'Brien`, `Syn'thetic`,
- * `Name (Work)`, `a(b)`) stay inside it, but only between its letters or as a
- * whole `(...)` group, so no word ends on a quote: `'/home/a b' to '/home/c/x'`
- * holds two names, not one running from `a` to the second path's slash.
+ * One space-free word of a name a separator or a closing delimiter ends: its
+ * letters with any delimiters among them (`O'Brien`, `(Work`, `Account)`,
+ * `[Thetic]`, `a(b)`), so `C:\Users\Syn (Work Account)\...` is one name. A word
+ * holds a letter and ends on a delimiter only where a non-space character
+ * follows, or on `)`, `]` or `}`. So no word is a lone delimiter or ends on a
+ * quote before a space: `'/home/a b' to '/home/c/x'` and
+ * `(/home/a) and (/home/b/x)` hold two names, not one running from `a` to the
+ * second path's slash.
  */
-const HOME_FOLDER_NAME_WORD = String.raw`(?:\(${HOME_FOLDER_NAME_LETTER}+\)|${HOME_FOLDER_NAME_LETTER}+(?:['()]${HOME_FOLDER_NAME_LETTER}+)*\)?)`;
+const HOME_FOLDER_NAME_WORD = String.raw`${HOME_FOLDER_NAME_DELIMITER}*${HOME_FOLDER_NAME_LETTER}+(?:${HOME_FOLDER_NAME_DELIMITER}+${HOME_FOLDER_NAME_LETTER}+)*(?:${HOME_FOLDER_NAME_DELIMITER}+(?=\S)|[)\]}](?!\S))?`;
 
 /**
  * A name nothing closes (the path ends at it): also stops at the characters
@@ -496,7 +502,8 @@ const HOME_PATH_OPENER_LOOKBACK = 16;
  * root in prose (`under /Users/ and /home/`) is not read as a name.
  *
  * Linear in the input: each quantified run is followed by a part that cannot
- * take its characters.
+ * take its characters, except a word's last delimiters, which a failed match
+ * gives back once per word.
  */
 const HOME_FOLDER_NAME_PATTERN = new RegExp(
   String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\]|${HOME_PATH_CLOSER})|${HOME_FOLDER_NAME_BARE})`,

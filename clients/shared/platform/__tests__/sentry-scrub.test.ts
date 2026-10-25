@@ -298,6 +298,51 @@ describe("shared client Sentry scrub", () => {
       expect(JSON.stringify(event)).not.toContain("synthetic-user");
     });
 
+    it("redacts a home name with a space inside its parentheses in every stack-derived field", () => {
+      const path = "C:\\Users\\Syn (Work Account)\\.traycer\\cli\\main.js";
+      const event: ClientSentryEvent = {
+        exception: {
+          values: [
+            {
+              value: `Cannot find module '${path}'`,
+              stacktrace: {
+                frames: [
+                  {
+                    filename: path,
+                    abs_path: path,
+                    module:
+                      "C:\\Users\\Syn (Work Account)\\.traycer\\cli\\main",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        debug_meta: { images: [{ type: "sourcemap", code_file: path }] },
+      };
+      scrubSentryEventInPlace(event);
+      const redacted = "C:\\Users\\<redacted>\\.traycer\\cli\\main.js";
+      expect(event).toEqual({
+        exception: {
+          values: [
+            {
+              value: `Cannot find module '${redacted}'`,
+              stacktrace: {
+                frames: [
+                  {
+                    filename: redacted,
+                    abs_path: redacted,
+                    module: "C:\\Users\\<redacted>\\.traycer\\cli\\main",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        debug_meta: { images: [{ type: "sourcemap", code_file: redacted }] },
+      });
+    });
+
     it("redacts a home folder name that contains consecutive spaces", () => {
       const event: ClientSentryEvent = {
         breadcrumbs: [

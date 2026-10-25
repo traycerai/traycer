@@ -343,6 +343,35 @@ describe("redactHomeDirectoryNames", () => {
     ["'/Users/O'Brien", "'/Users/<redacted>"],
     ["C:\\Users\\Syn (Work) Two\\x", "C:\\Users\\<redacted>\\x"],
     ["C:\\Users\\a(b)\\x", "C:\\Users\\<redacted>\\x"],
+    // A name a separator ends keeps every bracket, brace and parenthesis,
+    // with the spaces inside them.
+    [
+      "C:\\Users\\Syn (Work Account)\\.traycer\\cli\\main.js",
+      "C:\\Users\\<redacted>\\.traycer\\cli\\main.js",
+    ],
+    ["/Users/Syn (Work Account)/x", "/Users/<redacted>/x"],
+    ["C:\\Users\\Syn [Thetic]\\x", "C:\\Users\\<redacted>\\x"],
+    ["/home/Syn [Thetic]/x", "/home/<redacted>/x"],
+    ["/home/Syn {Thetic}/x", "/home/<redacted>/x"],
+    ["C:\\Users\\Syn (Thetic\\x", "C:\\Users\\<redacted>\\x"],
+    ["/home/Syn (Thetic/x", "/home/<redacted>/x"],
+    ["C:\\Users\\Syn x)\\y", "C:\\Users\\<redacted>\\y"],
+    ["C:\\Users\\'Syn x\\y", "C:\\Users\\<redacted>\\y"],
+    ["/Users/(Syn) Thetic/x", "/Users/<redacted>/x"],
+    ["'C:\\Users\\Syn (Work Account)'", "'C:\\Users\\<redacted>'"],
+    ["(C:\\Users\\Syn (Work Account))", "(C:\\Users\\<redacted>)"],
+    [
+      '{"cwd":"C:\\\\Users\\\\Syn (Work Account)\\\\x"}',
+      '{"cwd":"C:\\\\Users\\\\<redacted>\\\\x"}',
+    ],
+    // Paths next to each other stay apart, whatever their brackets.
+    [
+      "copy '/home/syn (a)' to '/home/syn [b]/x'",
+      "copy '/home/<redacted>' to '/home/<redacted>/x'",
+    ],
+    ["[/home/a] [/home/b/x]", "[/home/<redacted>] [/home/<redacted>/x]"],
+    ["(/home/a) (/home/b c/x)", "(/home/<redacted>) (/home/<redacted>/x)"],
+    ["copy '/home/syn a' to 'x/y'", "copy '/home/<redacted>' to 'x/y'"],
     // A closer that pairs with no opener ends only the bare name; a route keeps its segment.
     ["at /Users/syn is gone)", "at /Users/<redacted> is gone)"],
     ["at /Users/syn is gone).", "at /Users/<redacted> is gone)."],
