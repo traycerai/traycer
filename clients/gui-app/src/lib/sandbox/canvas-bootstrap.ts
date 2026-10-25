@@ -731,7 +731,11 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       : target.scrollWidth - target.clientWidth;
     if (size <= 1) return null;
     const position = vertical ? target.scrollTop : target.scrollLeft;
-    return delta > 0 ? position < size - 1 : position > 1;
+    // scrollLeft runs 0..size in LTR but -size..0 in an RTL container;
+    // scrollTop is 0..size either way.
+    const max =
+      !vertical && getComputedStyle(target).direction === "rtl" ? 0 : size;
+    return delta > 0 ? position < max - 1 : position > max - size + 1;
   };
   // Whether native wheel scroll may act on this element's axis at all: an
   // inner element needs auto/scroll; the viewport scrolls with the root's
