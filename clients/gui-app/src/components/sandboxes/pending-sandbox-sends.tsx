@@ -31,6 +31,7 @@ import {
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { findDefaultModel } from "@/components/home/data/landing-options";
+import { chatForkTargetSupport } from "@/components/chat/chat-fork-target";
 import { resolveBase64ByHash } from "@/components/home/hooks/use-landing-composer-actions";
 import {
   useEpicCreateChatForHostClient,
@@ -63,6 +64,7 @@ import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-targe
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { HostRpcRegistry } from "@/lib/host";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   endPendingSandboxSend,
@@ -182,8 +184,8 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
     [surfaceKey],
   );
   // Starts the send's run, and takes up one a reload stopped, on the same
-  // key: never a second sandbox. A failure stays as it was: the person's
-  // action on the line decides what follows it.
+  // key: never a second sandbox. Creation and wake failures wait for a line
+  // action; the agent's readiness continues to be observed below.
   const phase = stage?.phase ?? null;
   const failed = stage !== null && stage.failure !== null;
   // Nothing is created or woken before the send's task exists. A send
@@ -243,7 +245,8 @@ function PendingSendDelivery(props: {
   const { send, stage } = props;
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const hostId =
-    stage.phase === "handoff" && stage.failure === null
+    stage.phase === "handoff" &&
+    (stage.failure === null || isAgentReadinessFailure(stage.failure))
       ? stage.createdHostId
       : null;
   const active = hostId !== null;
@@ -264,7 +267,7 @@ function PendingSendDelivery(props: {
   const refetchAgent = agent.refetch;
   const refetchSandboxes = sandboxRow.refetch;
   useEffect(() => {
-    if (readinessKind !== "waiting") return;
+    if (readinessKind === null || readinessKind === "ready") return;
     return startVisibleInterval({
       tick: () => {
         refetchAgent();
@@ -283,10 +286,21 @@ function PendingSendDelivery(props: {
   const rowFailed = sandboxRow.failed;
   useEffect(() => {
     if (hostId === null || readinessKind === null || rowFailed) return;
-    if (agentNotReady(surfaceKey, readinessKind, failureDetail)) return;
-    if (needsModel && defaultModel === null) return;
     const current = readStagedSandbox(surfaceKey);
-    if (current === null || current.phase !== "handoff") return;
+    if (
+      current === null ||
+      current.phase !== "handoff" ||
+      current.createdHostId !== hostId ||
+      (current.failure !== null && !isAgentReadinessFailure(current.failure))
+    ) {
+      return;
+    }
+    if (
+      agentNotReady(surfaceKey, current.failure, readinessKind, failureDetail)
+    ) {
+      return;
+    }
+    if (needsModel && defaultModel === null) return;
     const settings = {
       ...send.settings,
       model: defaultModel ?? send.settings.model,
@@ -429,7 +443,12 @@ function useWatchedSandboxRow(
   useEffect(() => {
     if (rowFailure === null) return;
     const current = readStagedSandbox(surfaceKey);
-    if (current === null || current.failure !== null) return;
+    if (
+      current === null ||
+      (current.failure !== null && !isAgentReadinessFailure(current.failure))
+    ) {
+      return;
+    }
     useStagedSandboxStore.getState().report(surfaceKey, {
       failure:
         rowFailure.kind === "failed"
@@ -446,19 +465,36 @@ function useWatchedSandboxRow(
  */
 function agentNotReady(
   surfaceKey: string,
+  failure: StagedSandbox["failure"],
   readinessKind: RequestedAgentReadiness["kind"],
   failureDetail: string | null,
 ): boolean {
-  if (readinessKind === "unusable") {
+  if (readinessKind === "unusable" && failure?.kind !== "no-provider") {
     useStagedSandboxStore
       .getState()
       .report(surfaceKey, { failure: { kind: "no-provider" } });
-  } else if (readinessKind === "setup-failed") {
+  } else if (
+    readinessKind === "setup-failed" &&
+    (failure?.kind !== "agent-setup-failed" ||
+      failure.detail !== (failureDetail ?? ""))
+  ) {
     useStagedSandboxStore.getState().report(surfaceKey, {
       failure: { kind: "agent-setup-failed", detail: failureDetail ?? "" },
     });
+  } else if (
+    (readinessKind === "ready" || readinessKind === "waiting") &&
+    isAgentReadinessFailure(failure)
+  ) {
+    useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
   }
   return readinessKind !== "ready";
+}
+
+/** The requested agent can become ready without withdrawing the send. */
+function isAgentReadinessFailure(failure: StagedSandbox["failure"]): boolean {
+  return (
+    failure?.kind === "no-provider" || failure?.kind === "agent-setup-failed"
+  );
 }
 
 /**
@@ -522,7 +558,7 @@ function prepareAndDeliverSend(input: {
     .finally(() => deliveriesPreparing.delete(send.id));
 }
 
-/** Sends whose images are on their way to the sandbox: delivered once. */
+/** Sends preparing images or awaiting a fork's create response. */
 const deliveriesPreparing = new Set<string>();
 
 /** The sandbox is up and the message did not reach it: Retry or another host. */
@@ -716,6 +752,23 @@ function deliverPendingFork(input: {
 }): void {
   const { send, request, stage, hostId, settings } = input;
   if (deliveriesPreparing.has(send.id)) return;
+  const support = chatForkTargetSupport(
+    readNegotiatedMethodVersion(hostId, "epic.createChat"),
+  );
+  if (support.kind === "refused") {
+    notSent(pendingSendSurfaceKey(send.id));
+    reportableErrorToast(
+      "Couldn't fork the agent.",
+      { description: support.detail },
+      {
+        title: "Could not fork agent",
+        message: null,
+        code: null,
+        source: "Sandbox fork",
+      },
+    );
+    return;
+  }
   deliveriesPreparing.add(send.id);
   const now = Date.now();
   const chatId = uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL);

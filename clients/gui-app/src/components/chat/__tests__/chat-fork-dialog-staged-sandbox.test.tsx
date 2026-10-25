@@ -22,10 +22,14 @@ import {
 } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ChatForkPublicationState } from "../chat-fork-target";
 
 const TAB_HOST_ID = "tab-host-id";
+const OLD_HOST_ID = "old-host-id";
 
 interface BlockedInput {
   readonly hostId: string | null;
@@ -565,6 +569,74 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
     expect(readStagedSandbox(pendingSendSurfaceKey(send.id))?.target).toEqual(
       NEW_SANDBOX,
+    );
+  });
+
+  it("uses the staged sandbox as the unknown destination despite v1.0 source and selected hosts, then restores the selected host refusal when cleared", () => {
+    dialogMocks.publication = { kind: "covered" };
+    dialogMocks.directoryHosts = [
+      directoryEntry(TAB_HOST_ID, "Tab host"),
+      directoryEntry(OLD_HOST_ID, "Old host"),
+    ];
+    dialogMocks.clientsByHostId.set(OLD_HOST_ID, buildHostClient(OLD_HOST_ID));
+    recordNegotiatedHostManifest(TAB_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 0 },
+    });
+    recordNegotiatedHostManifest(OLD_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 0 },
+    });
+    renderStaged(NEW_SANDBOX);
+    act(() => {
+      dialogMocks.selectHost?.(OLD_HOST_ID);
+    });
+    fillTitle();
+
+    expect(dialogMocks.publicationReads.some((read) => read.enabled)).toBe(
+      true,
+    );
+    expect(screen.queryByTestId("chat-fork-target-refused")).toBeNull();
+    expect(forkButton().disabled).toBe(false);
+
+    act(() => {
+      useStagedSandboxStore.getState().clear(FORK_SURFACE);
+    });
+
+    expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+    expect(
+      screen.getByTestId("chat-fork-target-refused").textContent,
+    ).toContain("can't receive a fork from another computer");
+    expect(forkButton().disabled).toBe(true);
+  });
+
+  it("keeps a known uncovered source boundary blocking a staged fork even when the selected host is v1.0", () => {
+    dialogMocks.publication = { kind: "boundaryUncovered" };
+    dialogMocks.directoryHosts = [
+      directoryEntry(TAB_HOST_ID, "Tab host"),
+      directoryEntry(OLD_HOST_ID, "Old host"),
+    ];
+    dialogMocks.clientsByHostId.set(OLD_HOST_ID, buildHostClient(OLD_HOST_ID));
+    recordNegotiatedHostManifest(TAB_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 0 },
+    });
+    recordNegotiatedHostManifest(OLD_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 0 },
+    });
+    renderStaged(NEW_SANDBOX);
+    act(() => {
+      dialogMocks.selectHost?.(OLD_HOST_ID);
+    });
+    fillTitle();
+
+    expect(dialogMocks.publicationReads.some((read) => read.enabled)).toBe(
+      true,
+    );
+    expect(
+      screen.getByTestId("chat-fork-publication-notice").textContent,
+    ).toContain("Still syncing this turn to the cloud");
+    expect(forkButton().disabled).toBe(true);
+    expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+      [],
     );
   });
 

@@ -413,12 +413,22 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       }),
     [createChatVersions, tabHostId],
   );
-  // Asked again for the SELECTED host rather than read off the map: the map
-  // exempts the source host (a same-host fork needs no contract), and a host
-  // picked before its first handshake is `unknown` here — permissive, and it
-  // resolves itself once its client answers anything at all.
+  // A stage replaces the selected host as the destination. A new sandbox's
+  // build is unknown until it has a host; the pending driver checks that host
+  // before dispatch. The source's publication gate still applies now.
+  let destinationHostId: string | null = selectedHostId;
+  if (forkStage !== null) {
+    destinationHostId =
+      forkStage.target.kind === "existing"
+        ? forkStage.target.hostId
+        : forkStage.createdHostId;
+  }
+  const destinationVersion =
+    destinationHostId === null
+      ? null
+      : (createChatVersions.get(destinationHostId) ?? null);
   const selectedHostSupport: ChatForkTargetSupport = isCrossHost
-    ? chatForkTargetSupport(createChatVersions.get(selectedHostId) ?? null)
+    ? chatForkTargetSupport(destinationVersion)
     : { kind: "supported" };
 
   // A staged sandbox is a remote target before it joins the directory. Its
@@ -459,7 +469,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // their precedence live in one place instead of at each render site.
   const targetVerdict: ChatForkTargetVerdict = chatForkTargetVerdict({
     isCrossHost,
-    version: createChatVersions.get(selectedHostId) ?? null,
+    version: destinationVersion,
     publication,
   });
   // Read from the CLASS resolver, not from the selection verdict: publication

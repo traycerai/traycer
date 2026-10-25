@@ -392,6 +392,11 @@ const RESUME_TARGET: StagedSandboxTarget = {
 
 const START_TARGET: StagedSandboxTarget = { ...RESUME_TARGET, verb: "start" };
 
+const TEAM_TARGET: StagedSandboxTarget = {
+  ...NEW_TARGET,
+  configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+};
+
 function answerHost(hostId: string, answers: HostAnswers): void {
   mocks.hostAnswers.set(hostId, answers);
   mocks.answerVersion += 1;
@@ -420,6 +425,30 @@ const CODEX_READY: HostAnswers = {
   providers: [
     providerRow("codex", { status: "installed" }),
     providerRow("claude-code", { status: "installed" }),
+  ],
+};
+
+const CODEX_UNAVAILABLE: HostAnswers = {
+  harnesses: [
+    harnessRow("codex", { available: false }),
+    harnessRow("claude", { available: true }),
+  ],
+  providers: [providerRow("codex", null), providerRow("claude-code", null)],
+};
+
+const CODEX_SETUP_FAILED: HostAnswers = {
+  harnesses: [
+    harnessRow("codex", { available: false }),
+    harnessRow("claude", { available: true }),
+  ],
+  providers: [
+    providerRow("codex", {
+      status: "error",
+      reason: "disk-full",
+      message: "ENOSPC",
+      retryAtMs: null,
+    }),
+    providerRow("claude-code", null),
   ],
 };
 
@@ -716,11 +745,46 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     });
   });
 
+  it("delivers the requested agent after its Personal provider is repaired, without a manual retry or a second sandbox", async () => {
+    seed(SEEDED);
+    answerHost(SANDBOX_HOST, CODEX_UNAVAILABLE);
+    mount();
+
+    const line = await screen.findByTestId("sandbox-refusal-line");
+    expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+      kind: "no-provider",
+    });
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Open Personal's Providers" }),
+    );
+
+    answerHost(SANDBOX_HOST, CODEX_READY);
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0].input.settings?.harnessId).toBe("codex");
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("delivers the requested agent after its failed setup is repaired", async () => {
+    seed(SEEDED);
+    answerHost(SANDBOX_HOST, CODEX_SETUP_FAILED);
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+        kind: "agent-setup-failed",
+      });
+    });
+    expect(createChatCalls()).toEqual([]);
+
+    answerHost(SANDBOX_HOST, CODEX_READY);
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0].input.settings?.harnessId).toBe("codex");
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
   describe("on a team's sandbox", () => {
-    const TEAM_TARGET: StagedSandboxTarget = {
-      ...NEW_TARGET,
-      configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
-    };
     const SIGNED_OUT: HostAnswers = {
       harnesses: [
         harnessRow("codex", { available: false, availabilityPending: false }),
@@ -919,6 +983,39 @@ describe("a send that survives a reload", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
     expect(createChatCalls()[0].clientHostId).toBe(SANDBOX_HOST);
     expect(clientRequestId).toBeDefined();
+  });
+
+  it("resumes a team's requested agent after rehydrating the provider refusal, without creating another sandbox or chat", async () => {
+    mocks.environments = [
+      {
+        environmentId: "env-acme",
+        ownerKind: "organization",
+        ownerId: "team-9",
+      },
+    ];
+    seed({ ...SEEDED, target: TEAM_TARGET });
+    answerHost(SANDBOX_HOST, CODEX_UNAVAILABLE);
+    mount();
+
+    const line = await screen.findByTestId("sandbox-refusal-line");
+    expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+      kind: "no-provider",
+    });
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Open Acme's Providers" }),
+    );
+
+    await reload();
+    expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+      kind: "no-provider",
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0].input.settings?.harnessId).toBe("codex");
+    expect(createChatCalls()).toHaveLength(1);
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
   it("names the same create key again when the create was never answered", async () => {
@@ -1174,6 +1271,26 @@ describe("a send opened in two windows", () => {
 });
 
 describe("a send whose sandbox cannot take it", () => {
+  it("keeps a sandbox lifecycle failure when the requested agent is ready", () => {
+    seed(SEEDED);
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: {
+        kind: "failed",
+        code: "PROVIDER_CREATE_FAILED",
+        step: "delivering",
+      },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+      kind: "failed",
+      code: "PROVIDER_CREATE_FAILED",
+      step: "delivering",
+    });
+    expect(createChatCalls()).toEqual([]);
+  });
+
   it("settles to the failure in place with Choose another host when the sandbox failed, and never delivers", async () => {
     seed({ ...SEEDED, phase: "creating", created: true });
     mocks.listSandboxes.mockResolvedValue(
@@ -1777,6 +1894,61 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
 });
 
 describe("a fork waiting on its sandbox", () => {
+  it("retains a fork when its actual sandbox host is v1.0 and dispatches it once only after explicit Retry on v1.1", async () => {
+    const request = {
+      kind: "fork" as const,
+      parentId: null,
+      title: "Sandbox fork",
+      forkSource: {
+        boundary: "assistantMessage" as const,
+        sourceChatId: "source-chat",
+        assistantMessageId: "assistant-message-1",
+        interviewBlockId: null,
+        carriedInterviews: "settled" as const,
+        sourceOwnerUserId: null,
+      },
+      tabId: "tab-1",
+    };
+    seed({ ...SEEDED, send: { request } });
+    recordNegotiatedHostManifest(SANDBOX_HOST, {
+      "epic.createChat": { major: 1, minor: 0 },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toEqual({ kind: "not-sent" });
+    });
+    expect(createChatCalls()).toEqual([]);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.request,
+    ).toEqual(request);
+
+    recordNegotiatedHostManifest(SANDBOX_HOST, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    expect(createChatCalls()).toEqual([]);
+    fireEvent.click(
+      within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0].clientHostId).toBe(SANDBOX_HOST);
+    expect(createChatCalls()[0].input).toMatchObject({
+      hostId: SANDBOX_HOST,
+      title: request.title,
+      forkSource: request.forkSource,
+    });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+    ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+    expect(createChatCalls()).toHaveLength(1);
+  });
+
   it("keeps its staged handoff after a checkpoint-publishing rejection and retries only after Retry", async () => {
     seed({
       ...SEEDED,
