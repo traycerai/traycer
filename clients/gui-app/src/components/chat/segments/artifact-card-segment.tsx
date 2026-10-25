@@ -111,9 +111,9 @@ function ArtifactDiffToggle(props: {
  *
  * Only `setNodeRef` + `listeners` are attached: the row wraps a real open
  * button, so spreading dnd-kit's default `attributes` (which set `role="button"`
- * + `tabIndex` on this div) would nest interactive/focusable elements, and the
- * root DnD system ships no keyboard sensor. The card stays keyboard-openable via
- * its inner buttons.
+ * + `tabIndex` on this div) would nest interactive/focusable elements - and
+ * without them the unfocusable row never activates the root KeyboardSensor.
+ * The card stays keyboard-openable via its inner buttons.
  */
 function ArtifactCardHeaderRow(props: {
   readonly sticky: boolean;
@@ -592,6 +592,11 @@ function FileArtifactCardShell(props: {
     isDragging,
     children,
   } = props;
+  // The KeyboardSensor's Enter/Space activator rides in the listeners; on a
+  // focusable open button it would start a drag where the key must open the
+  // artifact, so only the pointer activators are attached.
+  const pointerDragListeners = { ...dragListeners };
+  delete pointerDragListeners.onKeyDown;
   if (!canOpen)
     return (
       <div
@@ -613,7 +618,7 @@ function FileArtifactCardShell(props: {
         "w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
         isDragging ? "cursor-grabbing" : "cursor-pointer",
       )}
-      {...dragListeners}
+      {...pointerDragListeners}
     >
       {children}
     </button>

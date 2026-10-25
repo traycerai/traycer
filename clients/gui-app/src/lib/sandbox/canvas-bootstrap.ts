@@ -764,9 +764,16 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         el.parentElement ??
         (el === document.documentElement ? null : document.documentElement)
     ) {
-      const root = el === document.documentElement || el === document.body;
-      if (!wheelScrollAllowed(el, root, vertical ? "overflowY" : "overflowX"))
-        continue;
+      const axis = vertical ? ("overflowY" as const) : ("overflowX" as const);
+      // The body is the viewport's scroller only while the root propagates
+      // its overflow (root computed visible); under a hidden root a
+      // constrained body is an ordinary scroll container judged by its own
+      // box.
+      const root =
+        el === document.documentElement ||
+        (el === document.body &&
+          getComputedStyle(document.documentElement)[axis] === "visible");
+      if (!wheelScrollAllowed(el, root, axis)) continue;
       const room = scrollRoom(
         root ? (document.scrollingElement ?? el) : el,
         vertical,
