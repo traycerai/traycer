@@ -99,6 +99,7 @@ const SINGLETON_LABELS: Readonly<Partial<Record<string, string>>> = {
   agent_selection_guide: "Agent selection",
   browser_agent_access: "Browser agent access",
   managed_profile: "A profile",
+  sandbox_defaults: "Sandbox defaults",
 };
 
 /** The name a person knows an item by: a variable's own name, else the page's. */

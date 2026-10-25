@@ -84,6 +84,7 @@ function renderSheet(onUseShape: Mock) {
       open
       onOpenChange={() => undefined}
       configuration={{ kind: "personal" }}
+      defaults={null}
       initialShape={{
         os: "linux",
         cpus: 2,
@@ -107,6 +108,7 @@ describe("<SandboxShapeSheet />", () => {
         open
         onOpenChange={() => undefined}
         configuration={{ kind: "personal" }}
+        defaults={null}
         initialShape={{
           os: "linux",
           cpus: 2,
@@ -144,6 +146,38 @@ describe("<SandboxShapeSheet />", () => {
     expect(
       screen.getByRole("combobox", { name: "Size" }).textContent,
     ).toContain("2 vCPU · 4 GB · 20 GB");
+  });
+
+  it("opens on the configuration's defaults, shape and periods, when the person has no pick", () => {
+    catalogueInUse = catalogueWithShapes();
+    render(
+      <SandboxShapeSheet
+        open
+        onOpenChange={() => undefined}
+        configuration={{ kind: "personal" }}
+        defaults={{
+          os: "linux",
+          cpus: 4,
+          memoryMb: 8 * GIB,
+          diskMb: 40 * GIB,
+          idleMinutes: 2,
+          restingMinutes: 120,
+        }}
+        initialShape={null}
+        initialName=""
+        context={{
+          audience: "private",
+          reachHost: null,
+          unmovedComputer: null,
+        }}
+        onUseShape={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Size" }).textContent,
+    ).toContain("4 vCPU · 8 GB · 40 GB");
+    expect(screen.getByText(idleAndRestingLine(2, 120))).toBeDefined();
   });
 
   it("uses the listed shape that was picked, disk included", () => {

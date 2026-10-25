@@ -1,4 +1,5 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { isReportedItemKind } from "@/components/settings/environment/status-chip-page-kinds";
 
 /**
  * Where this computer's settings stand against Personal, as the Overview's
@@ -30,9 +31,10 @@ export function hostSettingsCardState(
       : { kind: "moved", acceptedAt: status.consent.acceptedAt };
   }
   if (setup.state === "awaiting_consent") return { kind: "awaiting" };
+  const items = status.items.filter((item) => isReportedItemKind(item.kind));
   return {
     kind: "moving",
-    applied: status.items.filter((item) => item.status === "applied").length,
-    total: status.items.length + status.pendingUploads.length,
+    applied: items.filter((item) => item.status === "applied").length,
+    total: items.length + status.pendingUploads.length,
   };
 }
