@@ -1,12 +1,14 @@
 /**
  * A bot channel's typing signal (Tracy Bots T60/T64), through the REAL
  * `BotChannelView`: its transcript, thread panel and replying strips read
- * what the bot is doing through the real `useBotActivity`, over real chat
- * session stores (one per chat id, driven only through the stream callbacks a
- * host would call), the real agent-activity, bot-tabs and open-thread stores.
- * The host-RPC hooks are scripted (the real protocol schemas do not load in
- * this suite's jsdom), and the virtualised message list is replaced, as in
- * the thread-panel suite.
+ * what the bot is doing through the real `useBotActivity`, which reads the
+ * `activity` the bot's `bot.subscribe` snapshot carries; the case moves it
+ * as the host's snapshot and `activity` frames would. The transcript's rows
+ * come from real chat session stores (one per chat id, driven only through
+ * the stream callbacks a host would call), with the real bot-tabs and
+ * open-thread stores. The host-RPC hooks are scripted (the real protocol
+ * schemas do not load in this suite's jsdom), and the virtualised message
+ * list is replaced, as in the thread-panel suite.
  */
 import type { ReactNode } from "react";
 import {
@@ -21,17 +23,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type {
-  StreamCloseReason,
-  StreamConnectionStatus,
-} from "@traycer-clients/shared/host-transport/i-stream-session";
-import type {
-  ChatActiveTurn,
-  ChatRunStatus,
-} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { commandActivityLabel } from "@traycer/protocol/host/agent/gui/activity-step-label";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotActivity,
+  BotRecord,
+  BotSessionActivity,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   AgentSender,
   Chat,
@@ -41,14 +41,15 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatLocateRowArgs } from "@/hooks/chats/use-chat-locate-row";
 import {
-  __resetAgentActivityStoreForTests,
-  __setAgentActivityStateForTests,
-} from "@/stores/agent-activity-store";
-import {
   useBotOpenThread,
   useBotOpenThreadStore,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
+import {
+  StubHostStreamClient,
+  StubSession,
+} from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -79,7 +80,7 @@ const mocks = vi.hoisted(() => ({
     }>,
   },
   bot: null as BotRecord | null,
-  subscription: null as object | null,
+  streamClient: null as StubHostStreamClient | null,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -123,9 +124,24 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: null,
   }),
 }));
-vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscriptionForHost: () => mocks.subscription,
-}));
+// The real shared `bot.subscribe` subscription, over a stub session the case
+// drives with the host's frames and the transport's status lines.
+vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/bots/use-bot-subscription")>();
+  return {
+    ...actual,
+    useBotSubscriptionForHost: (args: {
+      readonly hostId: string;
+      readonly botId: string;
+      readonly enabled: boolean;
+    }) =>
+      actual.useBotSubscriptionForClient({
+        ...args,
+        client: mocks.streamClient,
+      }),
+  };
+});
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
 }));
@@ -185,7 +201,6 @@ const THREAD_ID = "thread-1";
 const THREAD_SESSION_ID = "session-1";
 const POST_ID = "post-1";
 const USER_ID = "user-teammate";
-const TURN_ID = "turn-1";
 
 const POST_CONTENT: JsonContent = {
   type: "doc",
@@ -259,21 +274,6 @@ const BOT_REPLY = assistantRow("reply-1", null, [
   },
 ]);
 
-/** The trunk's running turn, with a command in flight on its assistant row. */
-const TRUNK_STEP_ROW = assistantRow("trunk-row-1", TURN_ID, [
-  {
-    type: "command",
-    blockId: "command-1",
-    status: "streaming",
-    timestamp: 2_100,
-    command: "Reading the CI log",
-    cwd: null,
-    exitCode: null,
-    backgroundTask: false,
-    stopped: false,
-  },
-]);
-
 function threadSummary(): BotThreadSummary {
   return {
     threadId: THREAD_ID,
@@ -294,37 +294,60 @@ function threadSummary(): BotThreadSummary {
   };
 }
 
-function runningTurn(): ChatActiveTurn {
-  return {
-    agentMode: "regular",
-    sameTurnSteeringSupported: false,
-    turnId: TURN_ID,
-    status: "running",
-    harnessId: "claude",
-    model: "claude-sonnet-4",
-    profileId: null,
-    userMessageId: POST_ID,
-    startedAt: 3,
-    updatedAt: 3,
-    reasoningEffort: null,
-    serviceTier: null,
-  };
-}
-
 interface SessionState {
   readonly messages: ReadonlyArray<Message>;
-  readonly runStatus: ChatRunStatus;
-  readonly activeTurn: ChatActiveTurn | null;
-  readonly turnInProgress: boolean;
 }
 
-const RUNNING: Pick<
-  SessionState,
-  "runStatus" | "activeTurn" | "turnInProgress"
-> = { runStatus: "running", activeTurn: runningTurn(), turnInProgress: true };
+const IDLE: { readonly runStatus: ChatRunStatus } = { runStatus: "idle" };
 
-const IDLE: Pick<SessionState, "runStatus" | "activeTurn" | "turnInProgress"> =
-  { runStatus: "idle", activeTurn: null, turnInProgress: false };
+/** A session's turn answering `requestId` (`null`: a turn for no post). */
+function replying(
+  requestId: string | null,
+  step: string | null,
+): BotSessionActivity {
+  return { state: "replying", startedAt: 3, step, requestId };
+}
+
+const IDLE_ACTIVITY: BotSessionActivity = {
+  state: "idle",
+  startedAt: null,
+  step: null,
+  requestId: null,
+};
+
+let botStream = new StubSession();
+
+/** The host's `bot.subscribe` snapshot, carrying `activity`. */
+function emitActivity(activity: BotActivity): void {
+  act(() => {
+    botStream.emit({
+      kind: "snapshot",
+      bot: botRecord(),
+      tasks: [],
+      openRequestCount: null,
+      conversationsRevision: null,
+      boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
+      activity,
+      hasBinaryPayload: false,
+    });
+  });
+}
+
+/** The bot stream's transport closing, to redial (`retryable`) or for good. */
+function closeBotStream(retryable: boolean): void {
+  act(() => {
+    botStream.status("closed", {
+      kind: "fatalError",
+      details: {
+        code: retryable ? "HOST_RESTARTING" : "BOT_NOT_FOUND",
+        reason: retryable ? "The host is restarting." : "The bot is gone.",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable,
+      },
+    });
+  });
+}
 
 function chatRecord(chatId: string, messages: ReadonlyArray<Message>): Chat {
   return {
@@ -401,9 +424,9 @@ function emitSnapshot(chatId: string, state: SessionState): void {
         chat: chatRecord(chatId, state.messages),
         access: { role: "owner", ownerUserId: USER_ID, canAct: true },
         queue: { status: "idle", items: [] },
-        runStatus: state.runStatus,
-        activeTurn: state.activeTurn,
-        turnInProgress: state.turnInProgress,
+        runStatus: IDLE.runStatus,
+        activeTurn: null,
+        turnInProgress: false,
         pendingApprovals: [],
         pendingInterviews: [],
         worktreeBinding: null,
@@ -420,49 +443,6 @@ function emitSnapshot(chatId: string, state: SessionState): void {
     });
   });
 }
-
-/** The host's live `turnStateChanged` line for a chat. */
-function emitTurnState(
-  chatId: string,
-  state: Pick<SessionState, "runStatus" | "activeTurn" | "turnInProgress">,
-): void {
-  const callbacks = session(chatId).callbacks();
-  act(() => {
-    callbacks.onTurnStateChanged({
-      kind: "turnStateChanged",
-      hasBinaryPayload: false,
-      epicId: BOT_ID,
-      chatId,
-      runStatus: state.runStatus,
-      activeTurn: state.activeTurn,
-      turnInProgress: state.turnInProgress,
-    });
-  });
-}
-
-/** A status line of the chat's stream, as its transport reports one. */
-function emitConnectionStatus(
-  chatId: string,
-  status: StreamConnectionStatus,
-  reason: StreamCloseReason | null,
-): void {
-  const callbacks = session(chatId).callbacks();
-  act(() => {
-    callbacks.onConnectionStatus(status, reason, null);
-  });
-}
-
-/** The host refusing the stream for good, which the transport does not redial. */
-const TERMINAL_CLOSE: StreamCloseReason = {
-  kind: "fatalError",
-  details: {
-    code: "CHAT_INVALID",
-    reason: "The chat can no longer be read.",
-    incompatibleMethods: null,
-    upgradeGuidance: null,
-    retryable: false,
-  },
-};
 
 /** Holds the open thread in its store, as the bot tab above the view does. */
 function ChannelHarness(props: { readonly directive: string }): ReactNode {
@@ -501,16 +481,15 @@ function mountChannel(threads: ReadonlyArray<BotThreadSummary>): void {
   );
 }
 
-/** The channel with the member's post waiting on a direct reply, and the trunk running. */
+/** The channel with the member's post waiting on a direct reply, and the trunk's turn answering it. */
 async function mountAwaitingDirectReply(
-  trunk: SessionState,
+  trunk: BotSessionActivity,
 ): Promise<HTMLElement> {
   emitSnapshot(CHANNEL_ID, {
     messages: [post({ direct: true, resolvedAt: null })],
-    ...IDLE,
   });
-  emitSnapshot(TRUNK_ID, trunk);
   mountChannel([]);
+  emitActivity({ trunk, threads: {} });
   return screen.findByTestId("bot-channel");
 }
 
@@ -549,19 +528,8 @@ beforeEach(() => {
       },
     ],
   };
-  mocks.subscription = {
-    snapshot: {
-      bot: botRecord(),
-      tasks: [],
-      openRequestCount: null,
-      conversationsRevision: null,
-      boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
-    },
-    error: null,
-    deleted: false,
-    isPending: false,
-    resubscribe: vi.fn(),
-  };
+  botStream = new StubSession();
+  mocks.streamClient = new StubHostStreamClient(botStream);
   useBotTabsStore
     .getState()
     .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
@@ -575,15 +543,13 @@ afterEach(() => {
   mocks.threadListData = { threads: [] };
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
-  __resetAgentActivityStoreForTests();
+  __resetBotSubscriptionsForTesting();
+  mocks.streamClient = null;
 });
 
 describe("<BotChannelView /> the channel's typing line", () => {
   it("reads 'Tracy is replying…' above the composer, outside the transcript, while a direct post waits on the running trunk", async () => {
-    const channel = await mountAwaitingDirectReply({
-      messages: [],
-      ...RUNNING,
-    });
+    const channel = await mountAwaitingDirectReply(replying("request-1", null));
 
     const strip = await screen.findByTestId("bot-channel-replying");
     expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
@@ -596,62 +562,72 @@ describe("<BotChannelView /> the channel's typing line", () => {
   });
 
   it("names the step the trunk's turn has in flight", async () => {
-    await mountAwaitingDirectReply({
-      messages: [TRUNK_STEP_ROW],
-      ...RUNNING,
-    });
+    const step = commandActivityLabel("Reading the CI log");
+    await mountAwaitingDirectReply(replying("request-1", step));
 
     const strip = await screen.findByTestId("bot-channel-replying");
-    expect(within(strip).getByText("Tracy: Reading the CI log")).toBeTruthy();
+    expect(within(strip).getByText(`Tracy: ${step}`)).toBeTruthy();
   });
 
   it("clears when the reply lands, though the trunk is still running", async () => {
-    await mountAwaitingDirectReply({ messages: [], ...RUNNING });
+    await mountAwaitingDirectReply(replying("request-1", null));
     await screen.findByTestId("bot-channel-replying");
 
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: true, resolvedAt: 2_000 }), BOT_REPLY],
-      ...IDLE,
     });
+    // The host's frame as the reply resolves the post: the turn runs on,
+    // answering no post.
+    emitActivity({ trunk: replying(null, null), threads: {} });
 
     await screen.findByText("CI is green.");
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
-    expect(session(TRUNK_ID).handle.store.getState().turnInProgress).toBe(true);
   });
 
   it("clears when the trunk's turn ends before the post is answered", async () => {
-    await mountAwaitingDirectReply({ messages: [], ...RUNNING });
+    await mountAwaitingDirectReply(replying("request-1", null));
     await screen.findByTestId("bot-channel-replying");
 
-    emitTurnState(TRUNK_ID, IDLE);
+    emitActivity({ trunk: IDLE_ACTIVITY, threads: {} });
 
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
   });
 
-  it("clears when the trunk's stream closes for good with its turn still counted as running, and reports no failure", async () => {
-    await mountAwaitingDirectReply({ messages: [], ...RUNNING });
+  it("clears when the trunk's session closes with its turn unfinished, and reports no failure", async () => {
+    await mountAwaitingDirectReply(replying("request-1", null));
     await screen.findByTestId("bot-channel-replying");
 
-    emitConnectionStatus(TRUNK_ID, "closed", TERMINAL_CLOSE);
+    // A session the host no longer holds has no entry.
+    emitActivity({ trunk: null, threads: {} });
 
     await waitFor(() => {
       expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
     });
-    // A closed stream keeps the host's last reading and no frame will clear
-    // it, and losing the stream proves nothing about the turn.
-    expect(session(TRUNK_ID).handle.store.getState().turnInProgress).toBe(true);
     expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
   });
 
-  it("keeps replying while the trunk's stream reconnects, as its turn may yet be running", async () => {
-    await mountAwaitingDirectReply({ messages: [], ...RUNNING });
+  it("clears when the bot's stream closes for good with the trunk still replying, and reports no failure", async () => {
+    await mountAwaitingDirectReply(replying("request-1", null));
     await screen.findByTestId("bot-channel-replying");
 
-    emitConnectionStatus(TRUNK_ID, "reconnecting", null);
+    closeBotStream(false);
+
+    // No frame will clear a closed stream's last reading.
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
+    });
+    expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+  });
+
+  it("keeps replying while the bot's stream reconnects, as the turn may yet be running", async () => {
+    await mountAwaitingDirectReply(replying("request-1", null));
+    await screen.findByTestId("bot-channel-replying");
+
+    closeBotStream(true);
 
     expect(screen.getByTestId("bot-channel-replying")).toBeTruthy();
   });
@@ -659,10 +635,9 @@ describe("<BotChannelView /> the channel's typing line", () => {
   it("stays out while the trunk runs with no direct post waiting", async () => {
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: false, resolvedAt: null })],
-      ...IDLE,
     });
-    emitSnapshot(TRUNK_ID, { messages: [], ...RUNNING });
     mountChannel([]);
+    emitActivity({ trunk: replying(null, null), threads: {} });
 
     await screen.findByText("Is CI green?");
     expect(screen.queryByTestId("bot-channel-replying")).toBeNull();
@@ -673,16 +648,14 @@ describe("<BotChannelView /> the channel's typing line", () => {
 describe("<BotChannelView /> a thread's typing line", () => {
   it("shows on the closed thread's line, and moves to the panel once the thread is open", async () => {
     const user = userEvent.setup();
-    __setAgentActivityStateForTests(
-      { [BOT_ID]: { working: [THREAD_SESSION_ID], turn: [THREAD_SESSION_ID] } },
-      "local",
-      null,
-    );
     emitSnapshot(CHANNEL_ID, {
       messages: [post({ direct: false, resolvedAt: null })],
-      ...IDLE,
     });
     mountChannel([threadSummary()]);
+    emitActivity({
+      trunk: null,
+      threads: { [THREAD_ID]: replying("request-1", null) },
+    });
 
     const line = await screen.findByTestId("bot-thread-line");
     expect(
@@ -693,18 +666,9 @@ describe("<BotChannelView /> a thread's typing line", () => {
 
     await user.click(line);
 
-    // The panel is open, and the thread's own session has not reported a
-    // running turn yet: its strip is not drawn, nor is the line's.
+    // One entry for the thread, whichever session runs it: the panel says it
+    // from the moment it opens, and the line no longer does.
     const panel = await screen.findByTestId("bot-thread-panel");
-    expect(within(panel).queryByTestId("bot-thread-replying-strip")).toBeNull();
-    expect(
-      within(screen.getByTestId("bot-thread-line")).queryByTestId(
-        "bot-thread-replying",
-      ),
-    ).toBeNull();
-
-    emitSnapshot(THREAD_SESSION_ID, { messages: [], ...RUNNING });
-
     const strip = await within(panel).findByTestId("bot-thread-replying-strip");
     expect(within(strip).getByText("Tracy is replying…")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-replying")).toBeNull();

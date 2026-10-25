@@ -282,6 +282,7 @@ function snapshot(): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     boundHost: { hostId: BOUND_HOST, epoch: 1, isThisHost: false },
+    activity: null,
   };
 }
 
