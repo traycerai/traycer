@@ -9,7 +9,6 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
-  type ReactNode,
 } from "react";
 import {
   Background,
@@ -148,12 +147,19 @@ function canvasToolAllowed(
     tool !== null && (tool !== "comment" || events?.commentsEnabled === true)
   );
 }
+// A fullscreen board keeps the armed tool for later but is a play surface
+// now: the drawing layer must not mount over it.
 function canvasDrawingEnabled(
   readOnly: boolean,
   tool: CanvasTool,
+  fullscreenPath: string | null,
 ): tool is Exclude<CanvasTool, "select" | "hand" | "comment"> {
   return (
-    !readOnly && tool !== "select" && tool !== "hand" && tool !== "comment"
+    !readOnly &&
+    fullscreenPath === null &&
+    tool !== "select" &&
+    tool !== "hand" &&
+    tool !== "comment"
   );
 }
 function canvasSelectionEnabled(readOnly: boolean, tool: CanvasTool): boolean {
@@ -273,14 +279,6 @@ function canvasInspectorOpen(
   return key !== null && key !== dismissedKey;
 }
 
-function renderCanvasPointPins(
-  frameEvents: CanvasFrameEvents | null,
-  page: string,
-  viewport: Viewport,
-): ReactNode {
-  return frameEvents?.renderCanvasPins?.(page, viewport) ?? null;
-}
-
 function canvasInteractionMode({
   readOnly,
   commenting,
@@ -306,10 +304,14 @@ function canvasInteractionMode({
 function canvasCommentSurfaces(
   events: CanvasFrameEvents | null,
   fullscreen: boolean,
+  page: string,
+  viewport: Viewport,
 ) {
   return {
     draft: events?.renderCommentDraft?.(),
     sidebar: fullscreen ? events?.renderCommentsSidebar?.() : null,
+    // Point pins live outside every board, so a fullscreen board shows none.
+    pointPins: fullscreen ? null : events?.renderCanvasPins?.(page, viewport),
   };
 }
 
@@ -425,6 +427,8 @@ export function CanvasArtifactEditor({
   const commentSurfaces = canvasCommentSurfaces(
     frameEvents,
     presentation.fullscreen,
+    page,
+    viewport,
   );
   const selectEnabled = canvasSelectionEnabled(readOnly, activeTool);
   const nodes = useMemo<CanvasFlowNode[]>(
@@ -1258,10 +1262,11 @@ export function CanvasArtifactEditor({
                     />
                   </ReactFlow>
                 </div>
-                {/* A fullscreen board keeps the armed tool for later but is a
-                    play surface now: the drawing layer must not intercept it. */}
-                {activeFullscreen === null &&
-                canvasDrawingEnabled(readOnly, activeTool) ? (
+                {canvasDrawingEnabled(
+                  readOnly,
+                  activeTool,
+                  activeFullscreen,
+                ) ? (
                   <CanvasDrawingLayer
                     key={activeTool}
                     tool={activeTool}
@@ -1278,7 +1283,7 @@ export function CanvasArtifactEditor({
                       page={page}
                       viewport={viewport}
                     />
-                    {renderCanvasPointPins(frameEvents, page, viewport)}
+                    {commentSurfaces.pointPins}
                   </>
                 )}
                 {activeFullscreen === null ? (

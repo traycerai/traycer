@@ -790,12 +790,18 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         event.defaultPrevented
       )
         return;
+      // Shift turns a one-axis vertical wheel into a horizontal gesture -
+      // natively here, and in the canvas outside the frame - so the scroll
+      // check and the forwarded pan use the same normalized axes.
+      const sideways = event.shiftKey && event.deltaX === 0;
+      const dx = sideways ? event.deltaY : event.deltaX;
+      const dy = sideways ? 0 : event.deltaY;
       const now = Date.now();
       if (wheelTarget === null || now - wheelAt > 250)
         wheelTarget = scrollableHere(
           event.target instanceof Element ? event.target : null,
-          event.deltaX,
-          event.deltaY,
+          dx,
+          dy,
         )
           ? "page"
           : "canvas";
@@ -803,10 +809,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       if (wheelTarget !== "canvas") return;
       event.preventDefault();
       const unit = [1, 16, innerHeight][event.deltaMode] ?? 1;
-      notify("traycer/canvas/pan", {
-        dx: event.deltaX * unit,
-        dy: event.deltaY * unit,
-      });
+      notify("traycer/canvas/pan", { dx: dx * unit, dy: dy * unit });
     },
     { passive: false },
   );
