@@ -38,7 +38,7 @@ export const GENERAL = defineSettingsSection("general", {
     search: { anchor: "general-voice-input" },
     label: "Voice input",
     description:
-      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves your machine.",
+      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves your computer.",
     availableWhen: isVoiceInputRowAvailable,
     keywords: ["dictation", "dictate", "speech", "microphone", "mic", "audio"],
   },
@@ -113,7 +113,7 @@ export const GENERAL = defineSettingsSection("general", {
     search: { anchor: "general-host-lifecycle" },
     label: "When you quit Traycer",
     description:
-      "Choose what happens to the host on this machine when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
+      "Choose what happens to the host on this computer when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
     availableWhen: isHostLifecycleRowAvailable,
     keywords: [
       "quit",

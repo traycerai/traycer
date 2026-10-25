@@ -135,7 +135,7 @@ describe("providerSignInUnavailableHint", () => {
       false,
       "sign-in",
     );
-    expect(hint).toContain("opens a browser on the machine running Traycer");
+    expect(hint).toContain("opens a browser on the computer running Traycer");
   });
 
   it("allows Claude code-paste sign-in on a remote host", () => {

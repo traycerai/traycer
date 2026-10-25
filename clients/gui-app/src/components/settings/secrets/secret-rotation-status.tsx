@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -27,7 +27,7 @@ export function SecretRotationStatus(props: {
   readonly secretId: string;
   readonly hostName: (hostId: string) => string;
 }): ReactNode {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId, resolved } = useAddressedEnvironment();
   const [moving, setMoving] = useState(true);
   const rotation = useHostQuery<
     HostRpcRegistry,
@@ -44,7 +44,7 @@ export function SecretRotationStatus(props: {
             method: "environment.secrets.rotation",
             version: { major: 1, minor: 1 },
           },
-    options: { enabled: true, poll: moving },
+    options: { enabled: resolved, poll: moving },
   });
   const current = rotation.data?.rotation;
   // Derived during render, not in an effect: a settled answer stops the poll

@@ -128,11 +128,21 @@ export type TranscriptListRow =
       readonly key: string;
       readonly ordinal: number;
       /**
-       * The skeleton's description of the row, or `null` when that ordinal is
-       * still a hole. `null` means "a row exists here and nothing about it has
-       * arrived yet" - never "no such row", which `rowCount` alone decides.
+       * The description of the row the placeholder DISPLAYS, or `null` when
+       * nothing describes that ordinal yet. `null` means "a row exists here and
+       * nothing about it has arrived yet" - never "no such row", which
+       * `rowCount` alone decides.
        */
       readonly entry: RowSkeletonEntry | null;
+      /**
+       * Where `entry` came from. `"index"` is the authoritative skeleton - or,
+       * with `entry: null`, a genuine hole. `"carried"` is
+       * {@link TranscriptWindow.carriedSkeleton}: the voided index's entry,
+       * at the ordinal it held THERE, standing in until the replacement index
+       * reaches it. Display only - it validates no placement and promises no
+       * hydration; anything asking about authority reads `window.skeleton`.
+       */
+      readonly provenance: "index" | "carried";
     };
 
 const UNPLACED_ROW_KEY_PREFIX = "unplaced-row:";
@@ -151,6 +161,11 @@ export function unplacedRowKey(ordinal: number): string {
  * row now sits at 400. A restore that treats it as an exact match therefore
  * lands on unrelated content and, because it believes it matched, never runs
  * the pending-hydration correction that would have noticed.
+ *
+ * Only an ordinal nothing can name takes one. A void does not rekey the rows
+ * the client can still name: a placeholder the carried skeleton describes is
+ * keyed by its real row id ({@link placeholderRowsFor}), which is safe to
+ * persist for the same reason any row id is.
  */
 export function isUnplacedRowKey(key: string): boolean {
   return key.startsWith(UNPLACED_ROW_KEY_PREFIX);
@@ -585,61 +600,163 @@ function liveBackingLookup(
   });
 }
 
+type SkeletonArray = TranscriptWindow["skeleton"];
+
+/** The two placeholder shapes a skeleton array's ordinals can take. */
+interface SkeletonPlaceholderRows {
+  /** Keyed by the authoritative entry's row id. */
+  readonly indexed: Map<number, TranscriptListRow>;
+  /** Keyed by {@link unplacedRowKey}: nothing may name the ordinal. */
+  readonly unplaced: Map<number, TranscriptListRow>;
+}
+
 /**
- * Placeholder rows already built, keyed by the skeleton they were built from.
+ * Placeholder rows already built, keyed by the array that describes them.
  *
- * This function reruns on every block delta - `transcriptWindow` is replaced
- * per token while a turn streams - and the `rowCount` loop below allocates a
- * row object for each of the (often thousands of) unhydrated ordinals every
- * time. That is work proportional to the WHOLE chat on the hottest path in the
- * app, in the structure introduced to make long chats cheap.
+ * This merge reruns on every block delta - `transcriptWindow` is replaced
+ * per token while a turn streams - and the `rowCount` loop allocates a row
+ * object for each of the (often thousands of) unhydrated ordinals every time
+ * unless they are reused. That is work proportional to the WHOLE chat on the
+ * hottest path in the app, in the structure introduced to make long chats
+ * cheap.
  *
- * A placeholder is a pure function of `(skeleton array, ordinal)`, and the
- * skeleton is safe to key on: `applySkeletonChunk` and `applyIndexChange` are
- * the only writers and both copy (`const skeleton = [...window.skeleton]`)
- * before mutating, so a given array identity never changes contents. Every
- * other window update spreads `{...window, spans}` and carries the same array
- * through - which is exactly the streaming case this exists for.
+ * A placeholder is a pure function of `(array, ordinal)`, and both arrays are
+ * safe to key on: `applySkeletonChunk` and `applyIndexChange` are the only
+ * writers of `skeleton` and both copy (`const skeleton = [...window.skeleton]`)
+ * before mutating, and `carriedSkeleton` only ever takes a skeleton array whole
+ * or `[]`. So a given identity never changes contents, and every other window
+ * update spreads the same arrays through - which is exactly the streaming
+ * case this exists for.
  *
- * A `WeakMap` so the cache dies with the skeleton it describes: it is scoped
- * per window rather than per chat, needs no invalidation, and cannot leak
- * across sessions.
+ * Two caches, not one keyed on the pair. A carried row reads nothing but the
+ * carried array, so keying it on the carry alone keeps its object across every
+ * replacement chunk that does not yet name it - and those chunks are the
+ * recovery LegendList is laying out. Keyed on the pair, each chunk would
+ * reallocate every carried row in the chat. Which row an ordinal SHOWS depends
+ * on the authoritative skeleton and on what this render draws, so that
+ * decision is re-made per render ({@link placeholderRowsFor}) and never cached.
+ *
+ * `WeakMap`s so each cache dies with the array it describes: scoped per
+ * window rather than per chat, no invalidation, no leak across sessions.
  *
  * Reuse also makes the row objects referentially STABLE across deltas, which
  * matters beyond allocation: the stable-row pass and the minimap projection
- * both scan this array, and an unchanged placeholder now compares equal by
+ * both scan this array, and an unchanged placeholder compares equal by
  * identity instead of by field.
  */
 const placeholderRowsBySkeleton = new WeakMap<
-  object,
+  SkeletonArray,
+  SkeletonPlaceholderRows
+>();
+const carriedPlaceholderRowsByCarry = new WeakMap<
+  SkeletonArray,
   Map<number, TranscriptListRow>
 >();
 
-const MAX_INVALIDATED_PLACEHOLDER_SETS = 16;
-const invalidatedPlaceholdersByRowCount = new Map<
-  number,
-  readonly TranscriptListRow[]
->();
-
-function invalidatedPlaceholderRows(
-  rowCount: number,
-): readonly TranscriptListRow[] {
-  const cached = invalidatedPlaceholdersByRowCount.get(rowCount);
-  if (cached !== undefined) return cached;
-  const rows = Array.from({ length: rowCount }, (_unused, ordinal) => ({
-    kind: "placeholder" as const,
-    key: unplacedRowKey(ordinal),
-    ordinal,
-    entry: null,
-  }));
-  invalidatedPlaceholdersByRowCount.set(rowCount, rows);
-  if (
-    invalidatedPlaceholdersByRowCount.size > MAX_INVALIDATED_PLACEHOLDER_SETS
-  ) {
-    const oldest = invalidatedPlaceholdersByRowCount.keys().next();
-    if (!oldest.done) invalidatedPlaceholdersByRowCount.delete(oldest.value);
+/**
+ * The placeholder for an ordinal no pass drew, for one render.
+ *
+ * In order, the first that applies:
+ *
+ * 1. The authoritative skeleton describes the ordinal: keyed by its row id.
+ * 2. The carried skeleton does, under an id the authoritative skeleton names
+ *    nowhere: keyed by that id, `provenance: "carried"`. A void therefore
+ *    leaves the list's keys where they were, so LegendList keeps the sizes it
+ *    measured under them and its position walk finds the prior rows intact.
+ * 3. Otherwise `unplacedRowKey(ordinal)` with no entry.
+ *
+ * `isDrawn` answers whether this render already draws a row id as a hydrated
+ * row anywhere - seated at an ordinal or appended after them. An entry for a
+ * drawn id yields to rule 3, because two rows under one key is the one thing
+ * the list cannot survive, and the hydrated row is the one carrying the
+ * identity. For a carried entry that is how its old seat yields once the row
+ * appears elsewhere; for an authoritative one it fires only in the
+ * invalidated merge, whose live tail keeps rows the skeleton names.
+ *
+ * An id claims only the ordinal {@link skeletonOrdinalByRowId} gives it in its
+ * own array, authoritative or carried; any other copy takes rule 3. A restream
+ * merges into the array it replaces, so a chunk that moves a row earlier
+ * leaves its old entry standing until the stream passes it, and a void
+ * mid-stream carries both copies.
+ *
+ * The id checks are O(1) per ordinal, so the `rowCount` loop stays the only
+ * whole-chat pass per render, and it allocates no row an earlier render built.
+ */
+function placeholderRowsFor(
+  window: TranscriptWindow,
+  isDrawn: (rowId: string) => boolean,
+): (ordinal: number) => TranscriptListRow {
+  let rows = placeholderRowsBySkeleton.get(window.skeleton);
+  if (rows === undefined) {
+    rows = { indexed: new Map(), unplaced: new Map() };
+    placeholderRowsBySkeleton.set(window.skeleton, rows);
   }
-  return rows;
+  let carriedRows = carriedPlaceholderRowsByCarry.get(window.carriedSkeleton);
+  if (carriedRows === undefined) {
+    carriedRows = new Map();
+    carriedPlaceholderRowsByCarry.set(window.carriedSkeleton, carriedRows);
+  }
+  const { indexed, unplaced } = rows;
+  const carried = carriedRows;
+  const skeletonOrdinals = skeletonOrdinalByRowId(window.skeleton);
+  const carriedOrdinals = skeletonOrdinalByRowId(window.carriedSkeleton);
+  return (ordinal) => {
+    const entry = window.skeleton[ordinal];
+    if (entry !== undefined) {
+      if (
+        skeletonOrdinals.get(entry.rowId) === ordinal &&
+        !isDrawn(entry.rowId)
+      ) {
+        let row = indexed.get(ordinal);
+        if (row === undefined) {
+          row = {
+            kind: "placeholder",
+            key: entry.rowId,
+            ordinal,
+            entry,
+            provenance: "index",
+          };
+          indexed.set(ordinal, row);
+        }
+        return row;
+      }
+    } else {
+      // Never consulted where authority describes the ordinal: the carry is
+      // a stand-in for an entry that has not arrived, not a second opinion.
+      const carriedEntry = window.carriedSkeleton[ordinal];
+      if (
+        carriedEntry !== undefined &&
+        carriedOrdinals.get(carriedEntry.rowId) === ordinal &&
+        !skeletonOrdinals.has(carriedEntry.rowId) &&
+        !isDrawn(carriedEntry.rowId)
+      ) {
+        let row = carried.get(ordinal);
+        if (row === undefined) {
+          row = {
+            kind: "placeholder",
+            key: carriedEntry.rowId,
+            ordinal,
+            entry: carriedEntry,
+            provenance: "carried",
+          };
+          carried.set(ordinal, row);
+        }
+        return row;
+      }
+    }
+    let row = unplaced.get(ordinal);
+    if (row === undefined) {
+      row = {
+        kind: "placeholder",
+        key: unplacedRowKey(ordinal),
+        ordinal,
+        entry: null,
+        provenance: "index",
+      };
+      unplaced.set(ordinal, row);
+    }
+    return row;
+  };
 }
 
 /**
@@ -877,13 +994,19 @@ function seatLiveRecords(input: {
  *
  * The index identities are void, but the frame that voided them still
  * authoritatively announced how many rows exist in the replacement space.
- * Keep the virtualized list mounted with identity-free placeholders so a
- * known nonempty chat can never flash the brand-new-chat empty state or lose
+ * Keep the virtualized list mounted with a placeholder per ordinal so a known
+ * nonempty chat can never flash the brand-new-chat empty state or lose
  * LegendList's measurements/scroll position during the resnapshot. Only
  * genuinely unplaced rendered records remain after the ordinal space. Bodies
- * already backed by a retained span are represented by the identity-free
- * placeholders until the replacement index lands; appending them too would
- * draw the same history twice on skeleton-loss paths.
+ * already backed by a retained span are represented by placeholders until
+ * the replacement index lands; appending them too would draw the same history
+ * twice on skeleton-loss paths.
+ *
+ * The void does not rekey a row the client can still name. A placeholder
+ * takes the replacement skeleton's id where a chunk has already arrived, and
+ * otherwise the CARRIED skeleton's - the voided index's entry at its old
+ * ordinal ({@link placeholderRowsFor}) - so every row keeps the key LegendList
+ * measured it under. Only an ordinal neither describes is keyed by position.
  *
  * The carried STALE bodies do better than a placeholder: they render at
  * their old ordinals, under their real row-id keys, so the void is invisible
@@ -920,29 +1043,26 @@ function invalidatedTranscriptListRows(
     if (staleSeatedRowIds.has(model.id)) return false;
     return !retainedSpanRowIds.has(model.id) && isLiveBacked(model);
   });
-  const placeholders = invalidatedPlaceholderRows(window.rowCount);
-  const ordinalRows =
-    staleByOrdinal.size === 0
-      ? placeholders
-      : placeholders.map((row, ordinal) => {
-          const model = staleByOrdinal.get(ordinal);
-          if (model === undefined) return row;
-          return {
-            kind: "hydrated" as const,
-            key: model.id,
-            ordinal,
-            model,
-          };
-        });
-  return [
-    ...ordinalRows,
-    ...unplacedRendered.map((model) => ({
-      kind: "hydrated" as const,
-      key: model.id,
-      ordinal: null,
-      model,
-    })),
-  ];
+  // Decided before the ordinal loop so a placeholder can yield its key to the
+  // hydrated copy - see `placeholderRowsFor`.
+  const tailRowIds = new Set(unplacedRendered.map((model) => model.id));
+  const placeholderAt = placeholderRowsFor(
+    window,
+    (rowId) => staleSeatedRowIds.has(rowId) || tailRowIds.has(rowId),
+  );
+  const rows: TranscriptListRow[] = [];
+  for (let ordinal = 0; ordinal < window.rowCount; ordinal += 1) {
+    const model = staleByOrdinal.get(ordinal);
+    rows.push(
+      model === undefined
+        ? placeholderAt(ordinal)
+        : { kind: "hydrated", key: model.id, ordinal, model },
+    );
+  }
+  for (const model of unplacedRendered) {
+    rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
+  }
+  return rows;
 }
 
 /**
@@ -1076,11 +1196,21 @@ export function transcriptListRows(input: {
     });
   }
 
-  let placeholders = placeholderRowsBySkeleton.get(window.skeleton);
-  if (placeholders === undefined) {
-    placeholders = new Map<number, TranscriptListRow>();
-    placeholderRowsBySkeleton.set(window.skeleton, placeholders);
-  }
+  // Decided before the ordinal loop, which reads it: a carried placeholder
+  // yields its key to a row this render draws after the ordinals.
+  const tail = unplacedRenderedRows({
+    window,
+    rendered,
+    isLiveBacked,
+    placedRowIds,
+    skeletonOrdinals,
+    heldPreSplitRows,
+  });
+  // Row objects are reused across deltas: see `placeholderRowsBySkeleton`.
+  const placeholderAt = placeholderRowsFor(
+    window,
+    (rowId) => placedRowIds.has(rowId) || tail.rowIds.has(rowId),
+  );
 
   const rows: TranscriptListRow[] = [];
   for (let ordinal = 0; ordinal < window.rowCount; ordinal += 1) {
@@ -1089,35 +1219,23 @@ export function transcriptListRows(input: {
       rows.push({ kind: "hydrated", key: model.id, ordinal, model });
       continue;
     }
+    // Before the placeholder is chosen, so a held split-turn unit wins over
+    // anything the carry still describes at its stale ordinals.
     if (suppressedOrdinals.has(ordinal)) continue;
-    // Reused across deltas: see `placeholderRowsBySkeleton`. Nothing here reads
-    // the spans or the rendered models, so a body arriving elsewhere in the
-    // chat cannot change this row.
-    const cached = placeholders.get(ordinal);
-    if (cached !== undefined) {
-      rows.push(cached);
-      continue;
-    }
-    const entry = window.skeleton[ordinal] ?? null;
-    const row: TranscriptListRow = {
-      kind: "placeholder",
-      key: entry === null ? unplacedRowKey(ordinal) : entry.rowId,
-      ordinal,
-      entry,
-    };
-    placeholders.set(ordinal, row);
-    rows.push(row);
+    rows.push(placeholderAt(ordinal));
   }
-  appendUnplacedRenderedRows({
-    window,
-    rendered,
-    isLiveBacked,
-    placedRowIds,
-    skeletonOrdinals,
-    heldPreSplitRows,
-    rows,
-  });
+  appendUnplacedRenderedRows(tail, rows);
   return rows;
+}
+
+/** What {@link unplacedRenderedRows} decided, for the merge after the loop. */
+interface UnplacedRenderedRows {
+  /** Held pre-split units by the unsplit turn's former ordinal. */
+  readonly heldByOrdinal: ReadonlyMap<number, readonly ChatMessageModel[]>;
+  /** The live tail, in rendered order. */
+  readonly unplaced: readonly ChatMessageModel[];
+  /** Every row id either of the above draws. */
+  readonly rowIds: ReadonlySet<string>;
 }
 
 /**
@@ -1144,20 +1262,24 @@ export function transcriptListRows(input: {
  * inserted at the unsplit turn's former ordinal even though the skeleton names
  * it: the individual ordinal it names is stale and was suppressed for exactly
  * that reason. Generic live-tail rows still follow the recovered unit.
+ *
+ * Decided apart from the merge ({@link appendUnplacedRenderedRows}) because
+ * the ordinal loop between them needs the answer, and nothing here reads what
+ * that loop writes. Proportional to `rendered`, not to the chat.
  */
-function appendUnplacedRenderedRows(input: {
+function unplacedRenderedRows(input: {
   readonly window: TranscriptWindow;
   readonly rendered: readonly ChatMessageModel[];
   readonly isLiveBacked: (model: ChatMessageModel) => boolean;
   readonly placedRowIds: ReadonlySet<string>;
   readonly skeletonOrdinals: ReadonlyMap<string, number>;
   readonly heldPreSplitRows: ReadonlyMap<string, number>;
-  readonly rows: TranscriptListRow[];
-}): void {
+}): UnplacedRenderedRows {
   const { window } = input;
   const isStaleBacked = staleBackingLookup(window);
   const heldByOrdinal = new Map<number, ChatMessageModel[]>();
   const unplaced: ChatMessageModel[] = [];
+  const rowIds = new Set<string>();
   for (const model of input.rendered) {
     if (input.placedRowIds.has(model.id)) continue;
     if (
@@ -1174,6 +1296,7 @@ function appendUnplacedRenderedRows(input: {
       // from the tail until replacement hydration arrives.
       if (!input.isLiveBacked(model)) continue;
     }
+    rowIds.add(model.id);
     const heldOrdinal = input.heldPreSplitRows.get(model.id);
     if (heldOrdinal !== undefined) {
       const unit = heldByOrdinal.get(heldOrdinal) ?? [];
@@ -1183,7 +1306,20 @@ function appendUnplacedRenderedRows(input: {
     }
     unplaced.push(model);
   }
-  const heldUnits = [...heldByOrdinal].sort(([left], [right]) => left - right);
+  return { heldByOrdinal, unplaced, rowIds };
+}
+
+/**
+ * Merge {@link unplacedRenderedRows}' answer into the ordinal rows: each held
+ * unit at its anchor, then the live tail after every ordinal.
+ */
+function appendUnplacedRenderedRows(
+  tail: UnplacedRenderedRows,
+  rows: TranscriptListRow[],
+): void {
+  const heldUnits = [...tail.heldByOrdinal].sort(
+    ([left], [right]) => left - right,
+  );
   if (heldUnits.length > 0) {
     const merged: TranscriptListRow[] = [];
     let heldIndex = 0;
@@ -1206,25 +1342,20 @@ function appendUnplacedRenderedRows(input: {
         heldIndex += 1;
       }
     }
-    for (const row of input.rows) {
+    for (const row of rows) {
       if (row.ordinal !== null) appendHeldThrough(row.ordinal);
       merged.push(row);
     }
     appendHeldThrough(Number.POSITIVE_INFINITY);
-    input.rows.length = merged.length;
+    rows.length = merged.length;
     let mergedIndex = 0;
     for (const row of merged) {
-      input.rows[mergedIndex] = row;
+      rows[mergedIndex] = row;
       mergedIndex += 1;
     }
   }
-  for (const model of unplaced) {
-    input.rows.push({
-      kind: "hydrated" as const,
-      key: model.id,
-      ordinal: null,
-      model,
-    });
+  for (const model of tail.unplaced) {
+    rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
   }
 }
 

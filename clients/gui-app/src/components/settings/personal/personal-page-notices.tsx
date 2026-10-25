@@ -17,6 +17,7 @@ import {
   reviewText,
   undoRefusalText,
 } from "@/components/settings/host-scope/host-access-model";
+import { HeldValueReview } from "@/components/settings/personal/held-value-review";
 import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -29,11 +30,13 @@ import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 
 /**
  * Under a Personal page's status line: its convergence notices ("LOG_LEVEL
  * from dev-box now applies everywhere.", with Undo and, on that host, "Keep
- * dev-box's value on dev-box") and its "needs you" rows, which open Secrets.
+ * dev-box's value on dev-box") and its "needs you" rows: a held value's opens
+ * the retrospective sheet, every other one Secrets.
  * Nothing when the page has neither.
  */
 export function PersonalPageNotices(): ReactNode {
@@ -56,7 +59,12 @@ export function PersonalPageNotices(): ReactNode {
         />
       ))}
       {value.review.map((entry) => (
-        <ReviewRow key={entry.entryId} entry={entry} />
+        <ReviewRow
+          key={entry.entryId}
+          entry={entry}
+          hostId={value.hostId}
+          hostName={value.hostName}
+        />
       ))}
     </ul>
   );
@@ -259,9 +267,32 @@ function useCurrentValue(
   );
 }
 
+/**
+ * A "needs you" row. A held key-shaped value's `Review` opens the
+ * retrospective sheet for that value; a held command's opens it for the host
+ * this page reads, where its Approve and Discard are; any other row's opens
+ * Secrets.
+ */
 function ReviewRow(props: {
   readonly entry: EnvironmentReviewEntry;
+  readonly hostId: string | null;
+  readonly hostName: string;
 }): ReactNode {
+  const openRetrospective = useRetrospectiveSheetStore(
+    (state) => state.openSheet,
+  );
+  const { hostId } = props;
+  if (props.entry.reason === "credential_like_value") {
+    return (
+      <li className={ROW_CLASS} data-testid="personal-review-row">
+        <span className="min-w-0 text-foreground">
+          {reviewText(props.entry)}
+          {" · "}
+          <HeldValueReview entry={props.entry} />
+        </span>
+      </li>
+    );
+  }
   return (
     <li className={ROW_CLASS} data-testid="personal-review-row">
       <span className="min-w-0 text-foreground">{reviewText(props.entry)}</span>
@@ -271,6 +302,10 @@ function ReviewRow(props: {
         variant="outline"
         data-testid="personal-review-link"
         onClick={() => {
+          if (props.entry.reason === "executable_entry" && hostId !== null) {
+            openRetrospective({ hostId, hostName: props.hostName });
+            return;
+          }
           navigateToSettingsSection("secrets");
         }}
       >

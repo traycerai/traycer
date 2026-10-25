@@ -39,6 +39,14 @@ import { redactEmail } from "@/lib/providers/redact-email";
 import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import {
+  usePersonalHostName,
+  usePersonalHostState,
+} from "@/components/settings/personal/personal-page-context";
+import {
+  deviceProfileKeyCustodyLine,
+  hostRunsPersonal,
+} from "@/lib/providers/provider-key-custody";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -226,6 +234,21 @@ function profileApiKeyFormState(
   return apiKey;
 }
 
+/** The host a key's custody line names, and whether it runs Personal. */
+function useKeyCustodyHost(): {
+  readonly hostName: string;
+  readonly runsPersonal: boolean;
+} {
+  const hostName = usePersonalHostName() ?? "this computer";
+  const hostState = usePersonalHostState();
+  return {
+    hostName,
+    runsPersonal: hostRunsPersonal(
+      hostState?.kind === "ready" ? hostState.status.principal : null,
+    ),
+  };
+}
+
 /**
  * Per-profile API-key paste form. Only mounted for a `supported: true` state -
  * see `profileApiKeyFormState`, which is the gate.
@@ -268,6 +291,7 @@ function ProfileApiKeyForm(props: {
   // A sandbox never takes a key; removing one sends nothing secret, so
   // Remove key stays.
   const credentialRefusal = useHostCredentialRefusal(null);
+  const { hostName, runsPersonal } = useKeyCustodyHost();
 
   const apiKey = props.apiKey;
   const providerLabel = PROVIDER_DISPLAY_NAMES[props.providerId];
@@ -360,23 +384,17 @@ function ProfileApiKeyForm(props: {
       </div>
       <CredentialRefusalNote refusal={credentialRefusal} />
       {/*
-        "Stored encrypted on this device" is the PROVIDER-level section's exact
-        claim, and it is reused verbatim because it describes the same
-        mechanism (`encryptSecret`, AES-256-GCM). Two different sentences about
-        one mechanism would be worse than either.
-
-        It deliberately stops there. This is encryption at rest against casual
-        disclosure - the key sits beside the ciphertext it opens - so do not
-        grow this into a claim about anyone who can already read the host's
-        config directory.
+        A profile's key is never forwarded to Personal: it stays on the host
+        that saved it, encrypted at rest (`encryptSecret`, AES-256-GCM, the key
+        beside the ciphertext it opens), so the line names that host and makes
+        no claim about anyone who can already read its config directory.
 
         No "falls back to <ENV_VAR>" clause, unlike the provider-level copy: a
         per-profile key has no env fallback, which is also why the profile's
         state carries no `source`.
       */}
       <p className="text-pretty text-ui-xs leading-relaxed text-muted-foreground">
-        Stored encrypted on this device and used only by this profile. The key
-        is never shown again after you save it.
+        {deviceProfileKeyCustodyLine(hostName, runsPersonal)}
       </p>
       {error === null ? null : (
         <p className="text-ui-xs text-destructive">{error.message}</p>

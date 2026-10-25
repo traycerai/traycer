@@ -5,7 +5,10 @@ import {
   consequencesShownSubject,
   defaultStageShape,
   priceClause,
+  configurationStageShape,
+  rememberedOrConfigurationStageShape,
   stagePrice,
+  stageSmallestShape,
   type ConsequencesInput,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import type {
@@ -94,7 +97,9 @@ describe("consequenceClauses", () => {
   it("adds the move clause when a computer's settings have not moved, naming it", () => {
     const clauses = consequenceClauses(input({ unmovedComputer: "MacBook" }));
     expect(kinds(clauses)).toEqual(["price", "move"]);
-    expect(clauses[1].text).toContain("MacBook");
+    expect(clauses[1].text).toBe(
+      "Starts with Personal's settings. MacBook's are not in Personal yet.",
+    );
   });
 
   it("keeps the spec's order when every clause applies", () => {
@@ -164,6 +169,7 @@ function catalogue(
         suspendFidelity: "memory",
         stoppedStorage: "snapshot",
         wakeClass: "resume",
+        shapes: null,
         dockerInGuest: true,
         creatable: true,
         notCreatableReason: null,
@@ -235,6 +241,139 @@ describe("defaultStageShape", () => {
       cpus: 2,
       memoryMb: 4096,
       region: "us-east",
+    });
+  });
+
+  it("stages the provider's default listed shape, not the bounds' 2 vCPU / 4 GB", () => {
+    const base = catalogue(null, "linux");
+    const [provider] = base.providers;
+    const listed = {
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            { cpus: 2, memoryMb: 4096, diskMb: 20480, default: false },
+            { cpus: 4, memoryMb: 8192, diskMb: 40960, default: true },
+          ],
+        },
+      ],
+    };
+    expect(defaultStageShape(listed)).toMatchObject({
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+    });
+  });
+});
+
+describe("listed shapes", () => {
+  const RATES: SandboxCataloguePricing = {
+    vcpuHourMillicredits: 10,
+    memoryGbHourMillicredits: 5,
+    diskGbHourMillicredits: 1,
+    multiplier: 1,
+  };
+  const LARGE = { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false };
+  const MIDDLE = { cpus: 2, memoryMb: 8192, diskMb: 20480, default: false };
+  const SMALLEST = { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true };
+  const STAGED = {
+    os: "linux",
+    region: "us-east",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: 20480,
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  } as const;
+
+  function listed(pricing: SandboxCataloguePricing | null): SandboxCatalogue {
+    const [provider] = catalogue(pricing, "linux").providers;
+    return {
+      providers: [{ ...provider, shapes: [LARGE, MIDDLE, SMALLEST] }],
+    };
+  }
+
+  // The bounds (3 vCPU, 6 GB, 30 GB) admit the unlisted size, so only the list rejects it.
+  it("keeps a remembered listed shape and drops an unlisted one inside the bounds", () => {
+    const remembered = { ...STAGED, cpus: 4, memoryMb: 8192, diskMb: 40960 };
+    expect(
+      rememberedOrConfigurationStageShape(listed(null), remembered, null),
+    ).toBe(remembered);
+    expect(
+      rememberedOrConfigurationStageShape(
+        listed(null),
+        { ...STAGED, cpus: 3, memoryMb: 6144, diskMb: 30720 },
+        null,
+      ),
+    ).toMatchObject({ cpus: 2, memoryMb: 4096, diskMb: 20480 });
+  });
+
+  it("falls back to the configuration's defaults, not the spec's, when the remembered shape is withdrawn", () => {
+    const defaults = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      idleMinutes: 2,
+      restingMinutes: 120,
+    } as const;
+    expect(
+      rememberedOrConfigurationStageShape(
+        listed(null),
+        { ...STAGED, cpus: 3, memoryMb: 6144, diskMb: 30720 },
+        defaults,
+      ),
+    ).toMatchObject({
+      cpus: 4,
+      memoryMb: 8192,
+      idleMinutes: 2,
+      destroyAfterRestingMinutes: 120,
+    });
+  });
+
+  it("stages the configuration's shape and periods while offered, the spec's shape under its periods once withdrawn", () => {
+    const defaults = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      idleMinutes: 2,
+      restingMinutes: null,
+    } as const;
+    expect(configurationStageShape(listed(null), defaults)).toMatchObject({
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      region: "us-east",
+      idleMinutes: 2,
+      destroyAfterRestingMinutes: null,
+    });
+    expect(
+      configurationStageShape(listed(null), {
+        ...defaults,
+        cpus: 3,
+        memoryMb: 6144,
+        diskMb: 30720,
+      }),
+    ).toMatchObject({ cpus: 2, memoryMb: 4096, idleMinutes: 2 });
+    expect(configurationStageShape(listed(null), null)).toEqual(
+      defaultStageShape(listed(null)),
+    );
+  });
+
+  it("prices the smallest listed shape from the region's rates, else its from price", () => {
+    // 2 × 10 + 4 × 5 + 20 × 1
+    expect(stageSmallestShape(listed(RATES), STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 60,
+    });
+    expect(
+      stageSmallestShape(listed(RATES), { ...STAGED, ...LARGE }),
+    ).toMatchObject({ isStaged: false });
+    expect(stageSmallestShape(listed(null), STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 80,
     });
   });
 });

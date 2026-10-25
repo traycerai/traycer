@@ -11,25 +11,41 @@ import {
 import {
   useConfigurationSource,
   useCanAdministerConfiguration,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { ConfigurationConflict } from "./configuration-conflict";
+import { ConfigurationReadFailed } from "./team-read-failed";
+import { usePickedTeamLabel, useConfigurationName } from "./team-pick-label";
 
-export function TeamPermissions(): ReactNode {
+/** A team's Permissions; `children` are the page's regions below the policy. */
+export function TeamPermissions(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const source = useConfigurationSource();
+  const teamName =
+    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
+    "this team";
   const query = useConfigurationPolicyQuery();
   const [conflict, setConflict] = useState(false);
   return (
     <SettingsPanelShell
       title="Permissions"
-      description="What agents running this team may do without asking."
+      description={
+        personal
+          ? "What your agents may do without asking, on every computer and sandbox running Personal."
+          : `What ${teamName}'s agents may do without asking, on every host running ${teamName}.`
+      }
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >
       {conflict ? <ConfigurationConflict changedBy={null} /> : null}
       {query.isPending ? <MutedAgentSpinner /> : null}
       {query.isError ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Couldn't read the approval policy.
-        </p>
+        <ConfigurationReadFailed
+          page="permissions"
+          onRetry={() => void query.refetch()}
+        />
       ) : null}
       {query.data === undefined ? null : (
         <TeamPolicyEditor
@@ -39,6 +55,7 @@ export function TeamPermissions(): ReactNode {
           onConflict={() => setConflict(true)}
         />
       )}
+      {props.children}
     </SettingsPanelShell>
   );
 }
@@ -48,6 +65,8 @@ function TeamPolicyEditor(props: {
   readonly revision: number | null;
   readonly onConflict: () => void;
 }): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const teamName = useConfigurationName();
   const source = useConfigurationSource();
   const canAdminister = useCanAdministerConfiguration();
   const members = useConfigurationAdminNames();
@@ -129,7 +148,11 @@ function TeamPolicyEditor(props: {
         open={confirm}
         onOpenChange={setConfirm}
         title="Reset the approval policy?"
-        description="This removes the team's custom rules."
+        description={
+          personal
+            ? "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal."
+            : `This removes ${teamName}'s custom rules and goes back to the default approval policy for every member's agents.`
+        }
         cascadeSummary={null}
         actionLabel="Reset to default"
         isPending={mutation.isPending}

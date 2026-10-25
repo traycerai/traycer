@@ -3074,8 +3074,8 @@ export class AuthService {
 
   /**
    * The floor under every sandbox call: a build that cannot reach the
-   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging)
-   * sends none of them, and each answers this failure instead.
+   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging
+   * mobile) sends none of them, and each answers this failure instead.
    */
   private sandboxControlRefusal(): SandboxControlFailure | null {
     const reason = this.sandboxControlUnavailableReason();

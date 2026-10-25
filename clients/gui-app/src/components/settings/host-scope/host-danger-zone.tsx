@@ -180,7 +180,7 @@ function RemoveFromAccountRow(props: {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Remove ${hostName} from this account?`}
-        description={`${hostName} stops appearing in your host list and stops reporting presence. Nothing on that machine changes - Traycer stays installed and no agents, history or credentials are deleted. It won't rejoin on its own, and signing in on that machine again won't bring it back: it has to be set up again there. Its host ID is kept, so setting it up again restores the same name and settings.`}
+        description={`${hostName} stops appearing in your host list and stops reporting presence. Nothing on that computer changes - Traycer stays installed and no agents, history or credentials are deleted. It won't rejoin on its own, and signing in on that computer again won't bring it back: it has to be set up again there. Its host ID is kept, so setting it up again restores the same name and settings.`}
         cascadeSummary={null}
         actionLabel="Remove from account"
         isPending={removeFromAccount.isPending}

@@ -9,6 +9,17 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
+// The computers holding a copy are covered by `secret-remove-preview-computers`;
+// here Remove's preview is read with none.
+vi.mock("@/components/settings/personal/use-personal-computers", () => ({
+  usePersonalComputers: () => ({
+    computers: [],
+    statuses: new Map(),
+    versions: new Map(),
+    participants: [],
+  }),
+}));
+
 import {
   cleanup,
   render,
@@ -36,6 +47,14 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
+
+/** The day and month a version is dated by, as the page formats them. */
+function dayMonth(at: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+  }).format(at);
+}
 
 function secretFixture(): EnvironmentSecret {
   return {
@@ -110,6 +129,11 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
   });
   const harness = mountTeamPage(poolSource(role), {
     "environment.list": () => ({ environments: [] }),
+    "environment.history": () => ({
+      readerScope: "full" as const,
+      entries: [],
+      hostStates: [],
+    }),
     "environment.secrets.list": () => ({
       secrets: host.secrets,
       removed: [],
@@ -141,6 +165,26 @@ function mountPersonalRowAtDestroy10(host: Host): TeamPageHarness {
   const harness = mountTeamPageNegotiating(
     { kind: "host" },
     {
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      }),
+      "environment.history": () => ({
+        readerScope: "full" as const,
+        entries: [],
+        hostStates: [],
+      }),
       "environment.secrets.list": () => ({
         secrets: host.secrets,
         removed: [],
@@ -195,7 +239,7 @@ afterEach(() => {
 });
 
 describe("Remove on a team secret", () => {
-  it("destroys the current version in the pool environment, then keeps the row as Access revoked", async () => {
+  it("destroys the current version in the pool environment, then keeps the row as Removing", async () => {
     const host = freshHost({});
     const harness = mountRow(host);
     const user = userEvent.setup();
@@ -203,7 +247,9 @@ describe("Remove on a team secret", () => {
     await user.click(await screen.findByTestId("secret-row-remove"));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     await waitFor(() => {
-      expect(dialog.textContent).toContain("Current version 2.");
+      expect(dialog.textContent).toContain(
+        `Added on ${dayMonth(AT - 1_000)}. Version 2.`,
+      );
     });
     // The host answers revoked and the next versions read carries the removal.
     host.removal = removal("revoked");
@@ -223,7 +269,9 @@ describe("Remove on a team secret", () => {
       version: { major: 1, minor: 1 },
     });
     const status = await screen.findByTestId("secret-removal-status");
-    expect(status.textContent).toContain("Access revoked");
+    expect(status.textContent).toBe(
+      "Removing · no longer usable · waiting for dev-box to delete its copy · Retry",
+    );
     expect(screen.getByTestId("secret-row")).toBeTruthy();
     expect(screen.queryByTestId("secret-row-remove")).toBeNull();
     expect(screen.queryByTestId("secret-row-verify")).toBeNull();
@@ -239,7 +287,9 @@ describe("Remove on a team secret", () => {
     await user.click(await screen.findByTestId("secret-row-remove"));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     await waitFor(() => {
-      expect(dialog.textContent).toContain("Current version 2.");
+      expect(dialog.textContent).toContain(
+        `Added on ${dayMonth(AT - 1_000)}. Version 2.`,
+      );
     });
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 
@@ -261,7 +311,9 @@ describe("Remove on a Personal host that negotiated destroy@1.0", () => {
     await user.click(await screen.findByTestId("secret-row-remove"));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     await waitFor(() => {
-      expect(dialog.textContent).toContain("Current version 2.");
+      expect(dialog.textContent).toContain(
+        `Added by you on ${dayMonth(AT - 1_000)}. Version 2.`,
+      );
     });
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 
@@ -271,13 +323,13 @@ describe("Remove on a Personal host that negotiated destroy@1.0", () => {
     expect(destroyCalls(harness)).toEqual([]);
   });
 
-  it("still destroys a replaced version", async () => {
+  it("sends nothing to destroy a replaced version on that host either, since the call names Personal's id", async () => {
     const harness = mountPersonalRowAtDestroy10(
       freshHost({ destroyAnswer: { outcome: "destroyed", destroyedAt: AT } }),
     );
     const user = userEvent.setup();
 
-    await user.click(await screen.findByTestId("secret-row-versions"));
+    await user.click(await screen.findByRole("button", { name: "Details" }));
     const [, replaced] = await screen.findAllByTestId("secret-version");
     await user.click(within(replaced).getByTestId("secret-version-destroy"));
     await user.click(
@@ -287,30 +339,26 @@ describe("Remove on a Personal host that negotiated destroy@1.0", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(destroyCalls(harness)).toHaveLength(1);
-    });
-    expect(destroyCalls(harness)[0]?.params).toEqual({
-      secretId: "sec-1",
-      versionId: "ver-1",
-      environmentId: null,
-    });
+    // The old host is refused before anything is sent, in the page's words.
+    expect(
+      (await within(replaced).findByTestId("secret-version-note")).textContent,
+    ).toBe("These secrets need an updated host.");
+    expect(destroyCalls(harness)).toEqual([]);
   });
 });
 
 describe("a secret with a removal", () => {
-  it.each([
-    ["revoked", "Access revoked"],
-    ["cleanup_requested", "Cleanup requested"],
-  ] as const)(
+  it.each(["revoked", "cleanup_requested"] as const)(
     "keeps a %s row, offers Retry, and retries the same current version",
-    async (outcome, label) => {
+    async (outcome) => {
       const host = freshHost({ removal: removal(outcome) });
       const harness = mountRow(host);
       const user = userEvent.setup();
 
       const status = await screen.findByTestId("secret-removal-status");
-      expect(status.textContent).toContain(label);
+      expect(status.textContent).toBe(
+        "Removing · no longer usable · waiting for dev-box to delete its copy · Retry",
+      );
       expect(screen.getByTestId("secret-row")).toBeTruthy();
 
       host.removal = removal("destroyed");
@@ -336,6 +384,45 @@ describe("a secret with a removal", () => {
     },
   );
 
+  it("counts the hosts still holding a copy", async () => {
+    const pending = removal("cleanup_requested");
+    mountRow(
+      freshHost({
+        removal: {
+          ...pending,
+          targets: [
+            ...pending.targets,
+            {
+              target: "host",
+              hostId: "host-b",
+              hostName: "laptop",
+              state: "requested",
+              at: AT,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      (await screen.findByTestId("secret-removal-status")).textContent,
+    ).toBe(
+      "Removing · no longer usable · waiting for 2 hosts to delete their copies · Retry",
+    );
+  });
+
+  it("drops the waiting clause when no host is pending, keeping Retry", async () => {
+    mountRow(
+      freshHost({
+        removal: { ...removal("revoked"), targets: [] },
+      }),
+    );
+
+    expect(
+      (await screen.findByTestId("secret-removal-status")).textContent,
+    ).toBe("Removing · no longer usable · Retry");
+  });
+
   it("removes the row once the removal is destroyed, though the list still names it", async () => {
     const harness = mountRow(freshHost({ removal: removal("destroyed") }));
 
@@ -352,6 +439,20 @@ describe("a secret with a removal", () => {
   });
 });
 
+describe("a team secret's row line", () => {
+  it("dates the current version without claiming who made it", async () => {
+    mountRow(freshHost({}));
+
+    const line = await screen.findByTestId("secret-row-line");
+    await waitFor(() => {
+      expect(line.textContent).toBe(
+        `STRIPE_KEY · Set · replaced ${dayMonth(AT)}`,
+      );
+    });
+    expect(line.textContent).not.toContain("by you");
+  });
+});
+
 describe("the Versions list", () => {
   it("never offers Destroy on the current version, only on a replaced one", async () => {
     const host = freshHost({
@@ -360,7 +461,7 @@ describe("the Versions list", () => {
     const harness = mountRow(host);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByTestId("secret-row-versions"));
+    await user.click(await screen.findByRole("button", { name: "Details" }));
     const rows = await screen.findAllByTestId("secret-version");
 
     const [current, replaced] = rows;
@@ -405,14 +506,13 @@ describe("the Versions list", () => {
 });
 
 describe("a viewer", () => {
-  it("reads the names and gets Details, with no row, no write verb and no write call", async () => {
+  it("reads the names, with no row, no write verb and no write call", async () => {
     const host = freshHost({});
     const harness = mountRowAs(host, "viewer");
 
     expect(await screen.findByText("STRIPE_KEY")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(screen.queryByTestId("secret-row")).toBeNull();
-    for (const verb of ["Remove", "Retry", "Verify", "Replace value"]) {
+    for (const verb of ["Remove", "Retry", "Verify", "Replace", "Details"]) {
       expect(screen.queryByRole("button", { name: verb })).toBeNull();
     }
     for (const method of [

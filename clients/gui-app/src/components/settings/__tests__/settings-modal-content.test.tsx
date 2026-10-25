@@ -16,6 +16,18 @@ vi.mock("@/components/settings/panels/usage-settings-panel", () => ({
   UsageSettingsPanel: () => <div data-testid="settings-panel-probe" />,
 }));
 
+// The Personal pages' frame reads the host runtime and has its own suite.
+vi.mock("@/components/settings/personal/personal-page-frame", () => ({
+  PersonalPageFrame: (props: { readonly children: React.ReactNode }) =>
+    props.children,
+}));
+vi.mock("@/components/settings/panels/agents-settings-panel", () => ({
+  AgentsSettingsPanel: () => <div data-testid="agents-page-probe" />,
+}));
+vi.mock("@/components/settings/panels/permissions-settings-panel", () => ({
+  PermissionsSettingsPanel: () => <div data-testid="permissions-page-probe" />,
+}));
+
 import { SettingsModalContent } from "@/components/settings/settings-modal-content";
 
 describe("<SettingsModalContent />", () => {
@@ -33,5 +45,17 @@ describe("<SettingsModalContent />", () => {
         .getByTestId("settings-panel-probe")
         .closest("[data-settings-panel-pane]"),
     ).not.toBeNull();
+  });
+
+  it("opens the Agents page for a modal opened on the retired Agent definitions", () => {
+    render(<SettingsModalContent section="agent-definitions" />);
+
+    expect(screen.getByTestId("agents-page-probe")).toBeTruthy();
+  });
+
+  it("opens the Permissions page for a modal opened on the retired Browser agent access", () => {
+    render(<SettingsModalContent section="browser-agent-access" />);
+
+    expect(screen.getByTestId("permissions-page-probe")).toBeTruthy();
   });
 });

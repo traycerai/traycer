@@ -322,12 +322,12 @@ describe("toastFromHostError", () => {
     toastFromHostError(
       makeError(
         "E_HOST_STORAGE_FULL",
-        "The host machine is out of disk space.",
+        "The host computer is out of disk space.",
       ),
       "Couldn't create epic.",
     );
     expect(toast.error).toHaveBeenCalledWith(
-      "The host machine is out of disk space. Free some space on it, then try again.",
+      "The host computer is out of disk space. Free some space on it, then try again.",
     );
   });
 
@@ -340,7 +340,7 @@ describe("toastFromHostError", () => {
       "Couldn't create agent.",
     );
     expect(toast.error).toHaveBeenCalledWith(
-      "The host machine is out of disk space. Free some space on it, then try again.",
+      "The host computer is out of disk space. Free some space on it, then try again.",
     );
   });
 

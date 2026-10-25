@@ -5,10 +5,17 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
+  formatPlatform,
   isUnenrolledSandboxOption,
   type HostScopeOption,
   type HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
+import { formatSandboxTime } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  COMPUTER_ACTIVE,
+  computerOfflineLine,
+  computerSubLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import type {
   FleetUpdateView,
   FleetUpdateViewKind,
@@ -217,6 +224,70 @@ export function hostOptionStatusWord(
 }
 
 /**
+ * A computer's sub-line in the composer and in-task pickers: the machine's
+ * name under a `This computer` title, its OS, and whether it answers
+ * (`windows-test-machine · Windows · Active`, `Linux · Active`). `pickable`
+ * is the row's own {@link isHostOptionSelectable}, so the offline line
+ * promises a wait only on a row that can be picked.
+ */
+export function composerComputerSubLine(
+  host: HostScopeOption,
+  pickable: boolean,
+): string {
+  return computerSubLine([
+    host.isLocalMachine ? host.name : null,
+    formatPlatform(host.platform),
+    composerComputerStatus(host, pickable),
+  ]);
+}
+
+/**
+ * The status part of {@link composerComputerSubLine}, from the same health
+ * the status word reads. A blind read and a window-wide offline say nothing,
+ * as the status word does not.
+ */
+function composerComputerStatus(
+  host: HostScopeOption,
+  pickable: boolean,
+): string | null {
+  if (host.settingUp) return "Setting up";
+  switch (host.health.state) {
+    case "online":
+    case "reported-reachable":
+      return COMPUTER_ACTIVE;
+    case "offline":
+      return computerOfflineLine(
+        lastSeenLabel(host.item?.status.lastSeenAt ?? null),
+        pickable,
+      );
+    case "unknown":
+    case "viewer-offline":
+      return null;
+    case "restarting":
+    case "update-required":
+    case "removed":
+    case "stopped":
+    case "not-installed": {
+      const word = STATUS_WORD[host.health.state];
+      return word === null
+        ? null
+        : word.charAt(0).toUpperCase() + word.slice(1);
+    }
+  }
+}
+
+/** `Tue 09:12`: when an offline computer was last seen. */
+function lastSeenLabel(lastSeenAt: string | null): string | null {
+  if (lastSeenAt === null) return null;
+  const at = Date.parse(lastSeenAt);
+  if (Number.isNaN(at)) return null;
+  const weekday = new Date(at).toLocaleDateString(undefined, {
+    weekday: "short",
+  });
+  return `${weekday} ${formatSandboxTime(at)}`;
+}
+
+/**
  * Whether a sandbox's lifecycle word gives way to its host health: the
  * sandbox is `awake` (so its lifecycle explains no unreachability) and its
  * health has a word of its own (offline, restarting, update required...).
@@ -395,7 +466,7 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
  * icon they cannot see.
  */
 export function hostOptionKindLabel(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "This machine";
+  if (host.isLocalMachine) return "This computer";
   if (host.sandbox !== null) return "Sandbox";
   if (host.entry?.kind === "remote") return "Remote host";
   if (host.entry?.kind === "mock") return "Mock host";

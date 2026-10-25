@@ -1,10 +1,10 @@
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
-import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
@@ -18,11 +18,21 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
+  PERSONAL_SECRETS_READ_FAILED,
   SECRETS_ADD_LABEL,
   SECRETS_EMPTY_TEXT,
   SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
+
+/** Why the list is not shown: an old host by name, Personal's in one line. */
+function readFailureText(error: Error, personal: boolean): string {
+  if (error instanceof HostMethodVersionUnsatisfiedError) {
+    return SECRETS_NEED_UPDATED_HOST;
+  }
+  return personal ? PERSONAL_SECRETS_READ_FAILED : error.message;
+}
 
 /**
  * Settings ▸ Personal ▸ Secrets on a host that serves `environment.secrets.*`:
@@ -41,6 +51,7 @@ export function SecretsPage(props: {
   const list = useEnvironmentSecretsQuery(props.client);
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();
+  const configurationKey = useConfigurationKey();
 
   const reread = (): void => {
     for (const method of SECRET_READS) {
@@ -52,10 +63,11 @@ export function SecretsPage(props: {
     }
   };
 
-  const secrets = list.data?.secrets ?? null;
+  const pick = useEnvironmentPick();
+  // A failed read shows only its line: never the empty state or stale rows.
+  const secrets = list.isError ? null : (list.data?.secrets ?? null);
   return (
     <section className="flex flex-col gap-3" data-testid="secrets-page">
-      <SecretsHeaderDetails client={props.client} hostId={props.hostId} />
       {source.kind === "host" ? (
         <HeldItemsLine client={props.client} hostId={props.hostId} />
       ) : null}
@@ -66,9 +78,7 @@ export function SecretsPage(props: {
           data-testid="secrets-page-error"
         >
           <span className="min-w-0 max-w-[72ch]">
-            {list.error instanceof HostMethodVersionUnsatisfiedError
-              ? SECRETS_NEED_UPDATED_HOST
-              : list.error.message}
+            {readFailureText(list.error, pick.kind === "personal")}
           </span>
           <Button
             type="button"
@@ -120,7 +130,11 @@ export function SecretsPage(props: {
       )}
       {canEdit ? (
         <AddSecretDialog
+          // Keyed by configuration: a half-filled form stays with the
+          // configuration it was started in.
+          key={configurationKey}
           open={adding}
+          prefill={null}
           client={props.client}
           onOpenChange={setAdding}
         />

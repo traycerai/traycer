@@ -3,7 +3,7 @@ import { cohortFromPlanes } from "@/components/settings/move/cohort-rows";
 
 /**
  * The verb at the end of a Local row: `Move to Personal` opens the move
- * sheet, `finish moving` the computer's Overview, where the stopped upload
+ * sheet, `Finish moving` the computer's Overview, where the stopped upload
  * has its Retry.
  */
 export type LocalRowVerb = "move_to_personal" | "finish_moving";
@@ -18,7 +18,8 @@ export type LocalRowVerb = "move_to_personal" | "finish_moving";
  *   is this window's own.
  *
  * `null` leaves the decision to the picker's own rule (a Local row while
- * setup awaits consent, `not moved · …` or `partly moved · finish moving`).
+ * setup awaits consent, `its own settings, not in Personal yet · …` or
+ * `partly in Personal · Finish moving`).
  */
 export type LocalRowCohort =
   | { readonly kind: "none" }

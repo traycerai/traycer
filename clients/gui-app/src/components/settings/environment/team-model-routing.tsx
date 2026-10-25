@@ -52,7 +52,9 @@ import {
 import {
   useCanEditConfiguration,
   useConfigurationSource,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
+import { ConfigurationReadFailed, TeamReadFailed } from "./team-read-failed";
 
 type TeamRoutingSnapshot = {
   readonly policy: FallbackPolicy;
@@ -65,6 +67,7 @@ type TeamRoutingSnapshot = {
 };
 
 export function TeamModelRouting(): ReactNode {
+  const personal = useConfigurationIsPersonal();
   const query = useConfigurationModelRoutingQuery();
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   let editor: ReactNode = null;
@@ -81,15 +84,20 @@ export function TeamModelRouting(): ReactNode {
   return (
     <SettingsPanelShell
       title="Model routing"
-      description="How agents recover when an account or model cannot continue."
+      description={
+        personal
+          ? "Applies to your agents on every computer and sandbox running Personal."
+          : "How agents recover when an account or model cannot continue."
+      }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationWriteFeedback issue={issue} />
       {query.isPending ? <MutedAgentSpinner /> : null}
       {query.isError ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Couldn't read model routing.
-        </p>
+        <ConfigurationReadFailed
+          page="model routing"
+          onRetry={() => void query.refetch()}
+        />
       ) : null}
       {editor}
     </SettingsPanelShell>
@@ -150,9 +158,10 @@ function TeamRoutingDefaults(props: {
     );
   } else if (!query.isPending) {
     state = (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        Couldn't read this host's default model tiers.
-      </p>
+      <TeamReadFailed
+        message="Couldn't read this host's default model tiers."
+        onRetry={() => void query.refetch()}
+      />
     );
   }
   return (

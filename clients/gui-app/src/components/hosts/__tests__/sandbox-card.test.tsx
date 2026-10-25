@@ -396,6 +396,7 @@ describe("<SandboxCard /> per state", () => {
           suspendFidelity: "memory",
           stoppedStorage: "snapshot",
           wakeClass: "resume",
+          shapes: null,
           dockerInGuest: true,
           creatable: true,
           notCreatableReason: null,
@@ -431,6 +432,7 @@ describe("<SandboxCard /> per state", () => {
         diskDefaultMb: 10240,
       },
       stoppedStorage: "disk",
+      shapes: null,
       dockerInGuest: false,
       creatable: true,
       notCreatableReason: null,
@@ -540,6 +542,7 @@ function resolvedSandbox(input: {
     localService: undefined,
     hasLiveSession: () => false,
     localHostSettingUp: false,
+    localHostTerminalRunNote: null,
     sandboxes: [
       sandboxSummaryFixture({
         id: "sbx_1",
@@ -832,7 +835,7 @@ describe("<SandboxCard /> Automations row", () => {
       "Running. Automations aren't billed.",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
-      "Released after a day with no shell",
+      "Stops after 30 min idle · files kept · the next shell starts it",
     );
   });
 

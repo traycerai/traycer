@@ -48,7 +48,8 @@ import {
 // another account's task, under the same code, but it is not SAID to be
 // another account's: nothing confirmed that. Its refusal and log lines say the
 // owner could not be confirmed (`reason: "unconfirmed"`), and only a principal
-// resolved to another SID is "owned by another user" (`other-owner`).
+// resolved to another SID, or a task hidden from the caller, is "owned by
+// another user" (`other-owner`).
 //
 // No account identifier leaves this module above DEBUG, and none at all is
 // logged: not the task's principal, not the caller's SID, not a user name.
@@ -88,6 +89,13 @@ export interface WindowsTaskOwnershipDeps {
    * SID through the OS, or `null` when it resolves to nothing.
    */
   readonly resolveAccountSid: (account: string) => Promise<string | null>;
+  /**
+   * Whether the task's definition file exists in Task Scheduler's store and
+   * this account may not open it: the task is hidden from this account, so
+   * the definition read answers "absent" or fails for a task that is there.
+   * Asked only when that read found no XML; a local file open, no spawn.
+   */
+  readonly taskHiddenFromCaller: (taskName: string) => Promise<boolean>;
 }
 
 /**
@@ -224,6 +232,17 @@ export async function readWindowsTaskOwnership(
   deps: WindowsTaskOwnershipDeps,
 ): Promise<WindowsTaskOwnership> {
   const query = await deps.queryTaskXml(taskName);
+  // Task Scheduler hides a task, and the folder it lives in, from an account
+  // that may not read it: a non-admin's read of another account's task
+  // answers that the task (or its path) does not exist, or that access is
+  // denied. Task Scheduler lets a task's own principal read it, so a task
+  // that is there and hidden from this account is another account's.
+  if (query.kind !== "xml" && (await deps.taskHiddenFromCaller(taskName))) {
+    return notOwned(
+      "other-owner",
+      "the task is hidden from this account: its stored definition exists and this account may not open it",
+    );
+  }
   if (query.kind === "absent") return { kind: "absent" };
   if (query.kind === "failed") {
     return notOwned(

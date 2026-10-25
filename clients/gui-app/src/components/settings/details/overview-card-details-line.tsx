@@ -31,6 +31,7 @@ export function OverviewCardDetailsLine(
         key: props.hostId,
       }}
       title="Settings"
+      controls={null}
     />
   );
 }

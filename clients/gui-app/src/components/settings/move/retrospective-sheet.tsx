@@ -10,7 +10,7 @@ import {
   RETROSPECTIVE_APPLIED_ON,
   RETROSPECTIVE_DISCLOSURE,
   RETROSPECTIVE_GOT_IT,
-  RETROSPECTIVE_HELD_HOOK,
+  RETROSPECTIVE_HELD_COMMANDS,
   RETROSPECTIVE_HELD_NOT_IN_USE,
   RETROSPECTIVE_MOVE_TO_PERSONAL,
   RETROSPECTIVE_RECORD_LINE,
@@ -18,7 +18,7 @@ import {
   RETROSPECTIVE_SHARED_IN_USE,
   RETROSPECTIVE_STILL_ON_THIS_COMPUTER,
   RETROSPECTIVE_STOP_SHARING,
-  HELD_HOOK_CHOICES,
+  HELD_COMMAND_CHOICES,
   HELD_VALUE_CHOICES,
   NO_MOVE_SHEET_ACCEPTANCE,
   retrospectiveEvidenceLine,
@@ -27,6 +27,8 @@ import {
   type HeldChoiceAction,
   type ReviewEvidence,
 } from "@/components/settings/move/retrospective-copy";
+import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,7 +68,7 @@ export interface SharedInUseItem {
 export interface HeldRow {
   readonly heldId: string;
   readonly name: string;
-  readonly kind: "value" | "hook";
+  readonly kind: "value" | "command";
   readonly detail: string;
 }
 
@@ -86,12 +88,21 @@ export function RetrospectiveSheet(props: {
   readonly held: readonly HeldRow[];
   readonly stillLocal: readonly StillLocalRow[];
   readonly heldPendingId: string | null;
+  /** A held-row choice the configuration refused, said under the rows. */
+  readonly heldIssue: ConfigurationWriteIssue;
+  /** Where the inventory's read is while it is read or once it fails. */
+  readonly inventoryRead: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
   readonly onMoveToPersonal: () => void;
-  readonly onStopSharing: () => void;
+  /**
+   * `Stop using Personal on this computer`; `null` hides it, once the
+   * computer has stopped (or its planes cannot say it still shares), leaving
+   * `Got it` alone.
+   */
+  readonly onStopSharing: (() => void) | null;
 }): ReactNode {
   const { open, inventoryReady, onShown } = props;
   const shownForOpen = useRef(false);
@@ -106,7 +117,7 @@ export function RetrospectiveSheet(props: {
   }, [open, inventoryReady, onShown]);
 
   const valueHeld = props.held.filter((row) => row.kind === "value");
-  const hookHeld = props.held.filter((row) => row.kind === "hook");
+  const commandHeld = props.held.filter((row) => row.kind === "command");
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -131,13 +142,17 @@ export function RetrospectiveSheet(props: {
           >
             {NO_MOVE_SHEET_ACCEPTANCE}
           </p>
+          {props.inventoryRead}
           <dl className="flex flex-col gap-3">
             {props.sharedInUse.length > 0 ? (
               <InventoryRow
                 term={RETROSPECTIVE_SHARED_IN_USE}
                 testId="retrospective-shared-in-use"
               >
-                <SharedInUseList items={props.sharedInUse} />
+                <SharedInUseList
+                  items={props.sharedInUse}
+                  onClose={() => props.onOpenChange(false)}
+                />
               </InventoryRow>
             ) : null}
             {props.roomShared !== null ? (
@@ -169,14 +184,14 @@ export function RetrospectiveSheet(props: {
                 />
               </InventoryRow>
             ) : null}
-            {hookHeld.length > 0 ? (
+            {commandHeld.length > 0 ? (
               <InventoryRow
-                term={RETROSPECTIVE_HELD_HOOK}
-                testId="retrospective-held-hooks"
+                term={RETROSPECTIVE_HELD_COMMANDS}
+                testId="retrospective-held-commands"
               >
                 <HeldList
-                  rows={hookHeld}
-                  actions={HELD_HOOK_CHOICES}
+                  rows={commandHeld}
+                  actions={HELD_COMMAND_CHOICES}
                   pendingId={props.heldPendingId}
                   onHeldApply={props.onHeldApply}
                 />
@@ -206,20 +221,23 @@ export function RetrospectiveSheet(props: {
               </InventoryRow>
             ) : null}
           </dl>
+          <ConfigurationWriteFeedback issue={props.heldIssue} />
           <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
             {RETROSPECTIVE_DISCLOSURE}
           </p>
         </div>
         <DialogFooter>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="retrospective-stop-sharing"
-            onClick={props.onStopSharing}
-          >
-            {RETROSPECTIVE_STOP_SHARING}
-          </Button>
+          {props.onStopSharing === null ? null : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="retrospective-stop-sharing"
+              onClick={props.onStopSharing}
+            >
+              {RETROSPECTIVE_STOP_SHARING}
+            </Button>
+          )}
           <Button
             type="button"
             size="sm"
@@ -255,20 +273,29 @@ function InventoryRow(props: {
 
 function SharedInUseList(props: {
   readonly items: readonly SharedInUseItem[];
+  readonly onClose: () => void;
 }): ReactNode {
   return (
     <span>
       {props.items.map((item, index) => (
         <span key={item.id}>
           {index > 0 ? " · " : null}
-          <SharedInUseLink item={item} />
+          <SharedInUseLink item={item} onClose={props.onClose} />
         </span>
       ))}
     </span>
   );
 }
 
-function SharedInUseLink(props: { readonly item: SharedInUseItem }): ReactNode {
+/**
+ * A link to the page an item lives on. The sheet is mounted app-wide and
+ * outlives navigation, so the link closes it first: the page it opens is
+ * otherwise left under the sheet.
+ */
+function SharedInUseLink(props: {
+  readonly item: SharedInUseItem;
+  readonly onClose: () => void;
+}): ReactNode {
   const names = props.item.names.join(" · ");
   return (
     <TooltipWrapper
@@ -283,6 +310,7 @@ function SharedInUseLink(props: { readonly item: SharedInUseItem }): ReactNode {
         size="inline-xs"
         data-testid={`retrospective-link-${props.item.id}`}
         onClick={() => {
+          props.onClose();
           navigateToSettingsSection(props.item.page);
         }}
       >

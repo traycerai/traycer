@@ -502,7 +502,7 @@ describe("describeCliFloorRemedy", () => {
         },
       ]);
       expect(result.sentence).toBe(
-        "Run the copied commands on build-host from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.",
+        "Run the copied commands on build-host from a PowerShell window outside Traycer on that computer (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.",
       );
     }
 
@@ -923,7 +923,7 @@ describe("describeCliFloorRemedy", () => {
         // E09: removing the PowerShell/outside wording would lose the shell
         // guidance appended to the Desktop floor sentence.
         expect(result.sentence).toContain(
-          "PowerShell window outside Traycer on that machine",
+          "PowerShell window outside Traycer on that computer",
         );
       } else {
         // E06: bypassing the Windows no-path gate would guess PATH for an

@@ -9,7 +9,7 @@ function row(configurationKey: string): HostSwitcherNewRow {
     configurationKey,
     label: `New ${configurationKey} sandbox`,
     subLine: "2 vCPU · 4 GB",
-    configurationName: configurationKey,
+    configuration: { kind: "team", teamName: configurationKey },
     disabled: false,
   };
 }

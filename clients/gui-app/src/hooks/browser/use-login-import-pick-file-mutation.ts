@@ -25,7 +25,7 @@ export function useLoginImportPickFile(
     mutationKey: browserMutationKeys.pickLoginImportFile(),
     mutationFn: async () => {
       if (browserView === null) {
-        throw new Error("This machine has no browser bridge.");
+        throw new Error("This computer has no browser bridge.");
       }
       return browserView.pickLoginImportFile();
     },

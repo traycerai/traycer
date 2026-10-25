@@ -95,6 +95,16 @@ describe("settings search", () => {
     expect(searchSettings("   ", DESKTOP)).toEqual([]);
   });
 
+  it("describes the Variables and shells page by what Personal shares", () => {
+    const shell = searchSettings("Variables and shells", DESKTOP).find(
+      (result) =>
+        result.entry.section === "shell" && result.entry.anchor === null,
+    );
+    expect(shell?.entry.description).toBe(
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+    );
+  });
+
   it("finds a row by its exact name", () => {
     expect(labelsFor("panel animations", DESKTOP)[0]).toBe("Panel animations");
   });
@@ -114,7 +124,7 @@ describe("settings search", () => {
       "general#general-prevent-sleep",
     );
     expect(labelsFor("dictation", DESKTOP)).toContain("Voice input");
-    expect(labelsFor("proxy", DESKTOP)).toContain("Variables and shells");
+    expect(labelsFor("proxy", DESKTOP)).toContain("Variables & shells");
   });
 
   it("reaches Start a task and the download card on Getting started", () => {
@@ -220,13 +230,11 @@ describe("settings search", () => {
 
     for (const [query, section, label] of [
       ["Model routing", "fallback", "Model routing"],
-      ["Variables and shells", "shell", "Variables and shells"],
-      ["Agent selection", "agents", "Agent selection"],
-      ["Browser agent access", "browser-agent-access", "Browser agent access"],
+      ["Variables & shells", "shell", "Variables & shells"],
+      ["Agents", "agents", "Agents"],
       ["Secrets", "secrets", "Secrets"],
       ["MCP servers", "mcp-servers", "MCP servers"],
       ["Skills", "skills", "Skills"],
-      ["Agent definitions", "agent-definitions", "Agent definitions"],
       ["Providers", "providers", "Providers"],
       ["Permissions", "permissions", "Permissions"],
       ["Sandboxes", "sandboxes", "Sandboxes"],
@@ -243,18 +251,16 @@ describe("settings search", () => {
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
-  it("opens the Browser agent access and Secrets pages on their own words", () => {
+  it("opens Browser agent access on Permissions, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
-      "browser-agent-access#<top>",
+      "permissions#<top>",
     );
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
 
-  it("opens MCP servers and Agent definitions on their own words", () => {
+  it("opens MCP servers on its own words, and Agent definitions on Agents", () => {
     expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
-    expect(landingFor("agent definitions", DESKTOP)).toBe(
-      "agent-definitions#<top>",
-    );
+    expect(landingFor("agent definitions", DESKTOP)).toBe("agents#<top>");
   });
 
   it("no longer offers Machine setup as a page of its own", () => {

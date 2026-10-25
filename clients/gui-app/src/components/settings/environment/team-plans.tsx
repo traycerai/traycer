@@ -15,6 +15,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
   useCanAdministerConfiguration,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { PlansCard, type ConfigurationPlan } from "./plans-card";
@@ -22,6 +23,7 @@ import { ProviderRowDetails } from "@/components/settings/details/provider-row-d
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
@@ -32,6 +34,7 @@ export function TeamPlans(props: {
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const canAdminister = useCanAdministerConfiguration();
+  const personal = useConfigurationIsPersonal();
   const query = useConfigurationPlansQuery();
   const [target, setTarget] = useState<{
     readonly plan: ConfigurationPlan;
@@ -57,9 +60,14 @@ export function TeamPlans(props: {
   if (query.isPending) return <MutedAgentSpinner />;
   if (query.isError)
     return (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        Couldn't read this team's plans.
-      </p>
+      <TeamReadFailed
+        message={
+          personal
+            ? "Couldn't read your plans."
+            : `Couldn't read ${name}'s plans.`
+        }
+        onRetry={() => void query.refetch()}
+      />
     );
   return (
     <>

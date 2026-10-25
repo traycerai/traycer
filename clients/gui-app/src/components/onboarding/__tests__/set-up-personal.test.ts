@@ -100,7 +100,7 @@ describe("the steps", () => {
         "agents",
         "agents",
         "Choose how agents are picked for each task.",
-        "Open Agent selection",
+        "Open Agents",
       ],
     ]);
   });

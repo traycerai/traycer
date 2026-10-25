@@ -46,7 +46,7 @@ describe("chatForkTargetSupport", () => {
       kind: "refused",
       word: CHAT_FORK_NEEDS_UPDATE_WORD,
       detail:
-        "This host's build can't receive a fork from another machine. Update it and try again.",
+        "This host's build can't receive a fork from another computer. Update it and try again.",
     });
   });
 

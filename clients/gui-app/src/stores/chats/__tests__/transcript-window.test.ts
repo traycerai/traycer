@@ -980,6 +980,154 @@ describe("idempotent voiding", () => {
   });
 });
 
+describe("the carried skeleton", () => {
+  function reindexed(
+    window: TranscriptWindow,
+    input: { readonly epoch: number; readonly rowCount: number },
+  ): TranscriptWindow {
+    return applyIndexChange(window, {
+      activeTurnId: null,
+      epoch: input.epoch,
+      rowCount: input.rowCount,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+  }
+
+  function rebuildSnapshot(
+    window: TranscriptWindow,
+    input: { readonly epoch: number; readonly rowCount: number },
+  ): TranscriptWindow {
+    return applyWindowedSnapshot(
+      window,
+      {
+        epoch: input.epoch,
+        rowCount: input.rowCount,
+        indexRevision: null,
+        tail: { fromOrdinal: input.rowCount, messages: [], events: [] },
+      },
+      null,
+      null,
+    );
+  }
+
+  it("a void carries the outgoing skeleton and empties the authoritative one", () => {
+    const held = windowWithSkeleton(4);
+    const voided = reindexed(held, { epoch: 2, rowCount: 5 });
+
+    expect(voided.carriedSkeleton).toBe(held.skeleton);
+    expect(voided.skeleton).toEqual([]);
+    expect(voided.invalidated).toBe(true);
+  });
+
+  it("a second void over an empty skeleton keeps the first carry", () => {
+    const held = windowWithSkeleton(4);
+    const first = reindexed(held, { epoch: 2, rowCount: 5 });
+    const second = reindexed(first, { epoch: 3, rowCount: 6 });
+
+    expect(second).not.toBe(first);
+    expect(second.carriedSkeleton).toBe(held.skeleton);
+  });
+
+  it("a second void after a partial replacement carries the partial skeleton", () => {
+    const voided = reindexed(windowWithSkeleton(4), { epoch: 2, rowCount: 5 });
+    const partial = applySkeletonChunk(voided, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("row-new-0", 0), skeletonEntry("row-new-1", 1)],
+      isFinal: false,
+    });
+    const second = reindexed(partial, { epoch: 3, rowCount: 5 });
+
+    expect(second.carriedSkeleton).toBe(partial.skeleton);
+    expect(second.carriedSkeleton.map((entry) => entry?.rowId)).toEqual([
+      "row-new-0",
+      "row-new-1",
+    ]);
+  });
+
+  it("a zero-row void clears the carry", () => {
+    const voided = reindexed(windowWithSkeleton(4), { epoch: 2, rowCount: 5 });
+    const zeroed = reindexed(voided, { epoch: 2, rowCount: 0 });
+
+    expect(zeroed.carriedSkeleton).toEqual([]);
+  });
+
+  it("the snapshot that clears invalidated leaves the carry in place", () => {
+    const voided = reindexed(windowWithSkeleton(4), { epoch: 2, rowCount: 5 });
+    const snapshotted = rebuildSnapshot(voided, { epoch: 2, rowCount: 5 });
+
+    expect(snapshotted.invalidated).toBe(false);
+    expect(snapshotted.carriedSkeleton).toBe(voided.carriedSkeleton);
+  });
+
+  it("the chunk that completes the skeleton retires the carry", () => {
+    const voided = reindexed(windowWithSkeleton(4), { epoch: 2, rowCount: 5 });
+    const snapshotted = rebuildSnapshot(voided, { epoch: 2, rowCount: 5 });
+    const streaming = applySkeletonChunk(snapshotted, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 3),
+      isFinal: false,
+    });
+    expect(streaming.carriedSkeleton).toBe(voided.carriedSkeleton);
+
+    const complete = applySkeletonChunk(streaming, {
+      epoch: 2,
+      fromOrdinal: 3,
+      entries: skeletonEntries(3, 2),
+      isFinal: true,
+    });
+    expect(complete.skeletonComplete).toBe(true);
+    expect(complete.carriedSkeleton).toEqual([]);
+  });
+
+  it("an index change that completes the skeleton retires the carry", () => {
+    const voided = reindexed(windowWithSkeleton(4), { epoch: 2, rowCount: 5 });
+    const snapshotted = rebuildSnapshot(voided, { epoch: 2, rowCount: 5 });
+    const streaming = applySkeletonChunk(snapshotted, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 4),
+      isFinal: false,
+    });
+    expect(streaming.carriedSkeleton).toBe(voided.carriedSkeleton);
+
+    const complete = applyIndexChange(streaming, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 5,
+      indexRevision: 2,
+      changes: [{ type: "appended", entries: skeletonEntries(4, 1) }],
+    });
+    expect(complete.skeletonComplete).toBe(true);
+    expect(complete.carriedSkeleton).toEqual([]);
+  });
+
+  it("a new-epoch snapshot ahead of its reindexed carries the skeleton through both", () => {
+    // The host's frames for one epoch bump can land in either order. The
+    // rebase empties the skeleton itself, so the reindexed behind it voids an
+    // empty skeleton and must keep what the rebase carried.
+    const held = windowWithSkeleton(4);
+    const rebased = rebuildSnapshot(held, { epoch: 2, rowCount: 5 });
+    expect(rebased.skeleton).toEqual([]);
+    expect(rebased.carriedSkeleton).toBe(held.skeleton);
+
+    const voided = reindexed(rebased, { epoch: 2, rowCount: 5 });
+    expect(voided).not.toBe(rebased);
+    expect(voided.carriedSkeleton).toBe(held.skeleton);
+  });
+
+  it("a rebase behind a reindexed keeps the carry the void wrote", () => {
+    const held = windowWithSkeleton(4);
+    const voided = reindexed(held, { epoch: 2, rowCount: 5 });
+    const rebased = rebuildSnapshot(voided, { epoch: 3, rowCount: 5 });
+
+    expect(rebased.skeleton).toEqual([]);
+    expect(rebased.carriedSkeleton).toBe(held.skeleton);
+  });
+});
+
 describe("isActiveTurnStreamingEcho", () => {
   const turnId = "T";
   const rowId = assistantRowId(turnId);

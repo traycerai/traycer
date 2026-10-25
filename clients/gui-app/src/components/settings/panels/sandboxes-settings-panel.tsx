@@ -45,8 +45,6 @@ import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-r
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
 import {
-  SANDBOX_DEFAULT_IDLE_MINUTES,
-  SANDBOX_DEFAULT_RESTING_MINUTES,
   SANDBOX_KIND_FILTER_LABEL,
   SANDBOX_PUBLIC_STATE_LABEL,
   SANDBOX_ROW_FILTER_NONE,
@@ -61,7 +59,6 @@ import {
   sandboxKeptByLabel,
   sandboxListHeader,
   sandboxPaidByLabel,
-  sandboxPeriodLabel,
   sandboxPublicState,
   sandboxRowKind,
   sandboxRowMatches,
@@ -78,26 +75,20 @@ import {
   type SandboxStateFilter,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import {
-  KEPT_UNTIL_YOU_DESTROY_IT,
-  SANDBOXES_CANT_BE_CREATED,
   SANDBOX_LIST_FAILED,
-  sandboxShapeLabel,
-  shortPriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
-  rememberedOrDefaultStageShape,
-  stagePrice,
+  configurationStageShape,
   stageProviderFor,
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
-import {
-  rememberedSandboxShape,
-  useSandboxShapeMemoryStore,
-} from "@/stores/composer/sandbox-shape-memory-store";
+import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
+import { useConfigurationSandboxDefaults } from "@/hooks/sandboxes/use-sandbox-defaults";
+import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-defaults-section";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -164,7 +155,12 @@ export function SandboxesSettingsPanel(): ReactNode {
         </div>
       }
     >
-      <SandboxDefaultsSection configuration={configuration} />
+      <SandboxDefaultsSection
+        // A configuration's form and save outcome are its own: two can share a
+        // revision, so the form's own key does not tell them apart.
+        key={`defaults:${configurationKey(configuration)}`}
+        configuration={configuration}
+      />
       <SandboxListSection
         // A configuration's filter and search are its own.
         key={configurationKey(configuration)}
@@ -205,37 +201,7 @@ function configurationForPick(
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
-/**
- * A New row's shape as the catalogue offers it, with its class's wake string
- * and its price (`from` unless it is the region's smallest, the one shape the
- * catalogue prices), or `null` before the catalogue answers. A catalogue that
- * offers no shape says sandboxes can't be created.
- */
-function defaultShapeLine(
-  catalogue: SandboxCatalogue | null,
-  shape: StageShape | null,
-): string | null {
-  if (catalogue === null) return null;
-  if (shape === null) return SANDBOXES_CANT_BE_CREATED;
-  const provider = stageProviderFor(catalogue, shape.os);
-  const price = stagePrice(catalogue, shape);
-  const priceLabel =
-    price === null ? null : shortPriceLabel(price.awakeMcPerHour);
-  return [
-    `${shape.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(shape.cpus, shape.memoryMb)}`,
-    price === null || price.exact ? priceLabel : `from ${priceLabel}`,
-    provider === null ? null : wakeString(provider.suspendFidelity),
-  ]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
-}
-
-/**
- * The defaults a New row of this configuration offers: the default shape, a
- * 30-minute idle period and a 7-day resting period. Shown, not edited here:
- * a team's shared, editable defaults are a later change, and the gear on a
- * New row changes one sandbox only.
- */
+/** The id a configuration's remembered picks and defaults are kept under. */
 function configurationMemoryKey(
   configuration: SandboxPageConfiguration,
 ): string {
@@ -243,9 +209,9 @@ function configurationMemoryKey(
 }
 
 /**
- * A configuration's New row shape: the person's own pick behind its gear,
- * remembered under the host their composer follows, else the spec's
- * default; `null` before the catalogue answers.
+ * The shape a configuration's New row stages when nobody opens its gear: the
+ * configuration's defaults, else the spec's; `null` before the catalogue
+ * answers. The person's remembered gear pick seeds only their gear.
  */
 function useConfigurationStageShape(configuration: SandboxPageConfiguration): {
   readonly catalogue: SandboxCatalogue | null;
@@ -254,74 +220,17 @@ function useConfigurationStageShape(configuration: SandboxPageConfiguration): {
 } {
   const catalogue = useSandboxCatalogue(true).data ?? null;
   const memoryHostId = useEffectiveHostId();
-  const remembered = useSandboxShapeMemoryStore((s) =>
-    rememberedSandboxShape(
-      s.byHost,
-      memoryHostId,
-      configurationMemoryKey(configuration),
-    ),
+  const { read } = useConfigurationSandboxDefaults(
+    configurationMemoryKey(configuration),
   );
+  const defaults =
+    read !== null && read.kind === "ready" ? read.value.defaults : null;
   return {
     catalogue,
     memoryHostId,
     shape:
-      catalogue === null
-        ? null
-        : rememberedOrDefaultStageShape(catalogue, remembered),
+      catalogue === null ? null : configurationStageShape(catalogue, defaults),
   };
-}
-
-function SandboxDefaultsSection(props: {
-  readonly configuration: SandboxPageConfiguration;
-}): ReactNode {
-  const { configuration } = props;
-  const { catalogue, shape: stageShape } =
-    useConfigurationStageShape(configuration);
-  const shape = defaultShapeLine(catalogue, stageShape);
-  const idleMinutes =
-    stageShape === null ? SANDBOX_DEFAULT_IDLE_MINUTES : stageShape.idleMinutes;
-  const restingMinutes =
-    stageShape === null
-      ? SANDBOX_DEFAULT_RESTING_MINUTES
-      : stageShape.destroyAfterRestingMinutes;
-  return (
-    <section
-      aria-label="Defaults for new sandboxes"
-      className="flex flex-col gap-3 border-b border-border/60 px-5 py-4"
-      data-testid="sandboxes-defaults"
-    >
-      <div className="min-w-0 space-y-1">
-        <h2 className="text-ui font-medium">
-          {configuration.kind === "team"
-            ? `${configuration.teamName}'s defaults for new sandboxes`
-            : "Your defaults for new sandboxes"}
-        </h2>
-        <p className="text-ui-xs text-muted-foreground">
-          {configuration.kind === "team"
-            ? `Shared by ${configuration.teamName} · not a spending limit. The gear on a New row changes one sandbox only. Sandboxes you already have are kept until you set a period.`
-            : "What a New Personal sandbox row offers. The gear on the row changes one sandbox only. Sandboxes you already have are kept until you set a period."}
-        </p>
-      </div>
-      <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-ui-sm sm:grid-cols-[auto_1fr]">
-        <dt className="text-muted-foreground">Shape</dt>
-        <dd data-testid="sandboxes-defaults-shape">{shape ?? "…"}</dd>
-        <dt className="text-muted-foreground">
-          Suspend when idle for (at least 2 minutes)
-        </dt>
-        <dd data-testid="sandboxes-defaults-idle">
-          {sandboxPeriodLabel(idleMinutes)}
-        </dd>
-        <dt className="text-muted-foreground">
-          Destroy after resting for (empty: never)
-        </dt>
-        <dd data-testid="sandboxes-defaults-resting">
-          {restingMinutes === null
-            ? KEPT_UNTIL_YOU_DESTROY_IT
-            : sandboxPeriodLabel(restingMinutes)}
-        </dd>
-      </dl>
-    </section>
-  );
 }
 
 // ── The list ────────────────────────────────────────────────────────────────
@@ -612,7 +521,7 @@ function SandboxListGate(props: {
 
 /**
  * `New task`: the landing composer with this configuration's New sandbox row
- * staged in its remembered or default shape. Nothing is created until the
+ * staged in the configuration's default shape. Nothing is created until the
  * send.
  */
 function SandboxesEmpty(props: {

@@ -4,6 +4,16 @@ const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
+// The computers holding a copy are covered by `secret-remove-preview-computers`;
+// a team page names none.
+vi.mock("@/components/settings/personal/use-personal-computers", () => ({
+  usePersonalComputers: () => ({
+    computers: [],
+    statuses: new Map(),
+    versions: new Map(),
+    participants: [],
+  }),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),

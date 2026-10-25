@@ -23,6 +23,7 @@ export function EnvironmentNotificationExtra(props: {
     <SettingsDetailsButton
       subject={detailsSubject(props.detail)}
       title={detailsTitle(props.detail)}
+      controls={null}
     />
   );
   if (props.detail.kind === "team_role_changed") {

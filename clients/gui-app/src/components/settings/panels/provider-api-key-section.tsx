@@ -13,6 +13,19 @@ import { CredentialRefusalNote } from "@/components/providers/credential-refusal
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { useOpenLink } from "@/lib/links/open-link";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
+import {
+  usePersonalHostName,
+  usePersonalHostState,
+} from "@/components/settings/personal/personal-page-context";
+import {
+  deviceKeyCustodyLine,
+  hostRunsPersonal,
+  providerKeyIsPersonalSecret,
+  type ProviderKeyPrincipal,
+} from "@/lib/providers/provider-key-custody";
+import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
+import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
+import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -72,6 +85,12 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   commandcode: null,
 };
 
+/** The configuration this page's host runs; `null` outside Personal (a Local row) or before it answers. */
+function usePageHostPrincipal(): ProviderKeyPrincipal {
+  const hostState = usePersonalHostState();
+  return hostState?.kind === "ready" ? hostState.status.principal : null;
+}
+
 function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {
   if (!apiKey.configured) return "Not set";
   return apiKey.source === "stored" ? "Key set" : "From a shell variable";
@@ -103,6 +122,12 @@ export function ProviderApiKeySection({
   // A sandbox never takes a key: the field is disabled and the save is never
   // sent. Clearing a stored key sends nothing secret, so it stays.
   const credentialRefusal = useHostCredentialRefusal(null);
+  const principal = usePageHostPrincipal();
+  const personalSecret = providerKeyIsPersonalSecret(
+    state.providerId,
+    principal,
+  );
+  const hostName = usePersonalHostName() ?? "this computer";
 
   if (!state.apiKey.supported) return null;
 
@@ -196,11 +221,29 @@ export function ProviderApiKeySection({
         ) : null}
       </div>
       <CredentialRefusalNote refusal={credentialRefusal} />
-      <p className="text-ui-xs text-muted-foreground">
-        {state.apiKey.source === "env"
-          ? `Using ${envNamePlaceholder(providerId)} from your shell. Save a key here to override it.`
-          : `Stored encrypted on this device. Falls back to ${envNamePlaceholder(providerId)} from your shell when unset.`}
-      </p>
+      {state.apiKey.source === "env" ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {`Using ${envNamePlaceholder(providerId)} from your shell. Save a key here to override it.`}
+        </p>
+      ) : null}
+      {personalSecret ? (
+        <>
+          <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+            {SECRET_CUSTODY_SENTENCE}
+          </p>
+          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+        </>
+      ) : null}
+      {!personalSecret ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {deviceKeyCustodyLine(
+            hostName,
+            PROVIDER_DISPLAY_NAMES[providerId],
+            envNamePlaceholder(providerId),
+            hostRunsPersonal(principal),
+          )}
+        </p>
+      ) : null}
     </div>
   );
 }

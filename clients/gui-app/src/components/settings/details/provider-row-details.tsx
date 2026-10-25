@@ -15,6 +15,7 @@ export function ProviderRowDetails(props: {
     <SettingsDetailsButton
       subject={{ environmentId, kind: props.kind, key: props.itemKey }}
       title={props.title}
+      controls={null}
     />
   );
 }

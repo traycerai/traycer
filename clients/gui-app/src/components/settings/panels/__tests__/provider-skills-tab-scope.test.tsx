@@ -12,6 +12,10 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ConfigurationSourceContext,
+  type ConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 import {
   nativeScopeFolderActionMocks,
@@ -55,6 +59,18 @@ const skillMocks = vi.hoisted(() => ({
 // The bare host binding below has no directory to answer the sandbox refusal.
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
+}));
+
+// The cloud configuration's name comes from the environment list.
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: {
+      environments: [
+        { environmentId: "env-a", ownerKind: "organization", label: "Acme" },
+        { environmentId: "env-personal", ownerKind: "user", label: "Me" },
+      ],
+    },
+  }),
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -451,4 +467,62 @@ describe("<ProviderSkillsTab /> scope (F5)", () => {
     );
     expect(dialog.textContent).not.toMatch(/Skills location/i);
   });
+});
+
+describe("<ProviderSkillsTab /> global-only caption", () => {
+  beforeEach(() => {
+    skillMocks.skills = [FIND_SKILLS];
+    skillMocks.listCalls = [];
+    skillMocks.listScopes = ["global"];
+    skillMocks.removeScopes = [];
+    skillMocks.createScopes = [];
+    skillMocks.importScopes = [];
+    resetNativeScopeTestMocks();
+    seedWorkspace();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const cloud = (
+    configuration: "personal" | "team",
+    environmentId: string,
+  ): ConfigurationSource => ({
+    kind: "pool",
+    configuration,
+    environmentId,
+    roomId: "room-a",
+    providerHandle: null,
+    effectiveRole: "owner",
+  });
+
+  it.each([
+    [
+      "Personal",
+      cloud("personal", "env-personal"),
+      "Which of Personal's skills Codex uses, on every computer and sandbox running Personal.",
+    ],
+    [
+      "a team",
+      cloud("team", "env-a"),
+      "Which of Acme's skills Codex uses, on every host running Acme.",
+    ],
+    [
+      "the host",
+      { kind: "host" } satisfies ConfigurationSource,
+      "Applies to every workspace on this host.",
+    ],
+  ])(
+    "names where a global skill applies under %s",
+    (_name, source, caption) => {
+      render(
+        <ConfigurationSourceContext.Provider value={source}>
+          <ProviderSkillsTab state={skillsState()} />
+        </ConfigurationSourceContext.Provider>,
+      );
+
+      expect(screen.getByText(caption)).toBeDefined();
+    },
+  );
 });

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
@@ -10,10 +11,12 @@ import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
 import {
   useCanEditConfiguration,
+  useConfigurationIsPersonal,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import { useHostClient } from "@/lib/host";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 
 /**
@@ -35,19 +38,24 @@ export function SecretsSettingsPanel(): ReactNode {
 }
 
 function TeamSecretsSettingsPanel(): ReactNode {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
+  const personal = useConfigurationIsPersonal();
+  const name = useConfigurationName();
   const canEdit = useCanEditConfiguration();
   const scope = useTeamViewingHost();
   return (
-    <SettingsPanelShell
-      title={SECRETS.page.label}
-      description={SECRETS.page.description}
+    <SecretsListPanelShell
+      client={client}
+      description={
+        personal
+          ? SECRETS.page.description
+          : `Values and logins ${name}'s agents use, on its sandboxes without being seen.`
+      }
       headerAction={
         canEdit ? undefined : (
           <span className="text-ui-xs text-muted-foreground">Read-only</span>
         )
       }
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <SecretsPage
         client={client}
@@ -57,6 +65,33 @@ function TeamSecretsSettingsPanel(): ReactNode {
             ?.hostLabel ?? "a host"
         }
       />
+    </SecretsListPanelShell>
+  );
+}
+
+/**
+ * The shell over the secrets list. No subtitle while the list is empty: the
+ * empty state says the same sentence.
+ */
+function SecretsListPanelShell(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly description: string;
+  readonly headerAction: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const list = useEnvironmentSecretsQuery(props.client);
+  return (
+    <SettingsPanelShell
+      title={SECRETS.page.label}
+      description={
+        !list.isError && list.data?.secrets.length === 0
+          ? undefined
+          : props.description
+      }
+      headerAction={props.headerAction}
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      {props.children}
     </SettingsPanelShell>
   );
 }
@@ -70,20 +105,27 @@ function HostSecretsSettingsPanel(): ReactNode {
   const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
   const principal = status.data?.principal ?? null;
   const teamName = principal?.kind === "team" ? principal.teamName : null;
+  if (teamName === null && supported === true && scope.client !== null) {
+    return (
+      <SecretsListPanelShell
+        client={scope.client}
+        description={SECRETS.page.description}
+        headerAction={undefined}
+      >
+        <SecretsPage
+          client={scope.client}
+          hostId={scope.hostId}
+          hostName={(hostId) =>
+            scope.hosts.find((host) => host.hostId === hostId)?.name ??
+            "a sandbox"
+          }
+        />
+      </SecretsListPanelShell>
+    );
+  }
   let body: ReactNode = null;
   if (teamName !== null) body = <TeamSecretsView teamName={teamName} />;
-  else if (supported === true && scope.client !== null) {
-    body = (
-      <SecretsPage
-        client={scope.client}
-        hostId={scope.hostId}
-        hostName={(hostId) =>
-          scope.hosts.find((host) => host.hostId === hostId)?.name ??
-          "a sandbox"
-        }
-      />
-    );
-  } else if (supported === false) {
+  else if (supported === false) {
     body = (
       <p
         className="text-ui-sm text-muted-foreground"

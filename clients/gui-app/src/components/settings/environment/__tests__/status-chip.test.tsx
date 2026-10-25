@@ -82,6 +82,7 @@ function renderChipWith(
   render(
     <ConfigurationStatusChip
       hosts={hosts}
+      emptyText="Nothing runs this yet"
       savingOffline={options.savingOffline}
       local={options.local}
       onDetails={onDetails}
@@ -162,9 +163,9 @@ describe("the six chip texts", () => {
     expect(chipText()).toBe("2 not applied on dev-box");
   });
 
-  it("says No hosts yet for a configuration with no host", () => {
+  it("reads the caller's empty text for a configuration with no host", () => {
     renderChip([]);
-    expect(chipText()).toBe("No hosts yet");
+    expect(chipText()).toBe("Nothing runs this yet");
   });
 
   it("asks to update a host that negotiates below 1.1 and opens that host's Overview", async () => {
@@ -390,6 +391,23 @@ describe("the detail rows of a pool source", () => {
     expect(chipText()).toBe("✓ On dev-box");
   });
 
+  it("does not count a configuration's sandbox defaults a host has not applied", () => {
+    renderChip(
+      pool([
+        reportWith("dev-box", [
+          appliedItem("variable:FOO"),
+          {
+            itemKey: "sandbox_defaults:sandbox",
+            state: "not_applied",
+            reason: "unsupported_kind",
+            at: STEP_AT,
+          },
+        ]),
+      ]),
+    );
+    expect(chipText()).toBe("✓ On dev-box");
+  });
+
   it("footers the last report and opens Details", async () => {
     const { onDetails } = openProblems();
     await userEvent.click(screen.getByRole("button"));
@@ -510,6 +528,30 @@ describe("the detail rows of the host source", () => {
       hostId: "host-a",
     });
   });
+
+  it.each(["unsupported", "pending"] as const)(
+    "reads applied for a host whose sandbox defaults are %s",
+    (status) => {
+      renderChip([
+        hostChip({
+          items: [
+            itemStatusFixture({
+              kind: "variable",
+              key: "FOO",
+              status: "applied",
+            }),
+            itemStatusFixture({
+              kind: "sandbox_defaults",
+              key: "sandbox",
+              status,
+              minimumHostVersion: status === "unsupported" ? "1.9.0" : null,
+            }),
+          ],
+        }),
+      ]);
+      expect(chipText()).toBe("✓ On dev-box");
+    },
+  );
 
   it("reads applying while the host has not reached the desired revision", () => {
     renderChip([hostChip({ desiredRevision: 3, appliedRevision: 2 })]);

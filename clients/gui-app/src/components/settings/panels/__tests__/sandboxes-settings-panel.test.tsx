@@ -13,8 +13,23 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
+import type {
+  EnvironmentConfigurationItem,
+  EnvironmentConfigurationItemWriteResponse,
+} from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import {
+  configurationItem,
+  mountTeamPage,
+  poolSource,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import type { ReactElement } from "react";
 import type {
   SandboxCatalogue,
   SandboxSummary,
@@ -53,6 +68,7 @@ const CATALOGUE: SandboxCatalogue = {
       suspendFidelity: "memory",
       stoppedStorage: "snapshot",
       wakeClass: "resume",
+      shapes: null,
       dockerInGuest: true,
       creatable: true,
       notCreatableReason: null,
@@ -68,12 +84,38 @@ const CATALOGUE: SandboxCatalogue = {
   ],
 };
 
+/** The provider lists two shapes, so a team can default to the larger. */
+const LISTED_CATALOGUE: SandboxCatalogue = {
+  providers: CATALOGUE.providers.map((provider) => ({
+    ...provider,
+    shapes: [
+      { cpus: 2, memoryMb: 4096, diskMb: 20_480, default: true },
+      { cpus: 4, memoryMb: 8192, diskMb: 40_960, default: false },
+    ],
+  })),
+};
+
 const mocks = vi.hoisted(() => ({
   sandboxes: [] as readonly SandboxSummary[],
   /** `false` while the list query has not answered. */
   listed: true,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
   catalogue: null as SandboxCatalogue | null,
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostClient: () => requireTeamHostClient(),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
 }));
 
 /** The router's commit boundary: every navigation the page asks for. */
@@ -172,6 +214,7 @@ vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
 }));
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
+import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
@@ -227,9 +270,99 @@ function row(id: string, overrides: Partial<SandboxSummary>): SandboxSummary {
   });
 }
 
+const PERSONAL_ENV = "env-personal";
+const TEAM_ENV = "env-acme";
+
+function descriptor(
+  environmentId: string,
+  ownerKind: "user" | "organization",
+  ownerId: string,
+  effectiveRole: "owner" | "admin" | "editor" | "viewer",
+): EnvironmentDescriptorV11 {
+  return {
+    environmentId,
+    ownerKind,
+    ownerId,
+    roomId: `room-${environmentId}`,
+    label: ownerId,
+    effectiveRole,
+    kind: ownerKind === "user" ? "personal" : "team",
+    hostCount: 0,
+    providerHandle: `handle-${environmentId}`,
+  };
+}
+
+/** What the host answers for the account's environments, item rows and rosters. */
+const host = {
+  environments: [] as EnvironmentDescriptorV11[],
+  items: {} as Record<string, EnvironmentConfigurationItem[]>,
+  members: [] as Array<{
+    readonly userId: string;
+    readonly displayName: string | null;
+    readonly effectiveRole: "admin" | "editor" | "viewer";
+    readonly inviteState: "accepted" | "pending";
+  }>,
+  put: null as
+    | null
+    | (() =>
+        | EnvironmentConfigurationItemWriteResponse
+        | Promise<EnvironmentConfigurationItemWriteResponse>),
+};
+let harness: TeamPageHarness | null = null;
+
+const SANDBOX_DEFAULTS_VALUE = {
+  os: "linux",
+  cpus: 4,
+  memoryMb: 8192,
+  diskMb: 40_960,
+  idleMinutes: 45,
+  restingMinutes: null,
+};
+
+function defaultsItem(
+  value: EnvironmentConfigurationItem["value"],
+  revision: number,
+): EnvironmentConfigurationItem {
+  return configurationItem({
+    kind: "sandbox_defaults",
+    key: "sandbox",
+    value,
+    revision,
+  });
+}
+
+function hostPage(): TeamPageHarness {
+  harness = mountTeamPage(poolSource("owner"), {
+    "environment.list": () => ({ environments: host.environments }),
+    "environment.configuration.items": (params) => ({
+      items: host.items[params.environmentId] ?? [],
+    }),
+    "environment.members": () => ({
+      members: host.members.map((member) => ({
+        ...member,
+        avatarUrl: null,
+        linkedPlan: false,
+        invitedAddress: null,
+        email: null,
+      })),
+      nextCursor: null,
+      legacyRoleNoticeSeenAt: null,
+      legacyMembers: [],
+    }),
+    "environment.configuration.items.put": () =>
+      host.put === null ? { outcome: "saved", revision: 1 } : host.put(),
+  });
+  return harness;
+}
+
+function renderUi(ui: ReactElement) {
+  const page = harness ?? hostPage();
+  return render(ui, { wrapper: page.Wrapper });
+}
+
 function renderPanel(sandboxes: readonly SandboxSummary[]): void {
   mocks.sandboxes = sandboxes;
-  render(<SandboxesSettingsPanel />);
+  renderUi(<SandboxesSettingsPanel />);
 }
 
 function rowOf(id: string): HTMLElement {
@@ -252,6 +385,11 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.listed = true;
     mocks.configurations = [{ kind: "personal" }];
     mocks.catalogue = null;
+    host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "owner")];
+    host.items = {};
+    host.members = [];
+    host.put = null;
+    harness = null;
     useSandboxesPageStore.setState({
       requestedConfiguration: null,
       revealSandboxId: null,
@@ -274,50 +412,350 @@ describe("<SandboxesSettingsPanel />", () => {
     );
   });
 
-  it("says sandboxes can't be created once the catalogue answers with no shape", () => {
+  it("says sandboxes can't be created once the catalogue answers with no shape", async () => {
     mocks.catalogue = { providers: [] };
+    host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "viewer")];
     renderPanel([]);
-    expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
-      SANDBOXES_CANT_BE_CREATED,
-    );
-  });
-
-  it("shows the person's remembered pick in the defaults, else the spec's", () => {
-    mocks.catalogue = CATALOGUE;
-    renderPanel([]);
-    expect(
-      screen.getByTestId("sandboxes-defaults-shape").textContent,
-    ).toContain("2 vCPU");
-    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
-      sandboxPeriodLabel(30),
-    );
-    expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
-      sandboxPeriodLabel(7 * 24 * 60),
-    );
-    cleanup();
-
-    useSandboxShapeMemoryStore.getState().remember("laptop", "personal", {
-      os: "linux",
-      cpus: 4,
-      memoryMb: 8192,
-      diskMb: null,
-      region: "us-east",
-      idleMinutes: 45,
-      destroyAfterRestingMinutes: null,
+    await waitFor(() => {
+      expect(screen.getByTestId("sandboxes-defaults-shape").textContent).toBe(
+        SANDBOXES_CANT_BE_CREATED,
+      );
     });
-    renderPanel([]);
-
-    expect(
-      screen.getByTestId("sandboxes-defaults-shape").textContent,
-    ).toContain("4 vCPU");
-    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
-      sandboxPeriodLabel(45),
-    );
-    expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
-      KEPT_UNTIL_YOU_DESTROY_IT,
-    );
   });
-  afterEach(() => cleanup());
+
+  describe("the defaults card", () => {
+    const TEAM = {
+      kind: "team",
+      teamId: "team-1",
+      teamName: "Acme",
+      environmentId: TEAM_ENV,
+    } as const;
+
+    function viewTeamAs(
+      role: "owner" | "admin" | "editor" | "viewer",
+      remembered: { cpus: number; memoryMb: number; idleMinutes: number },
+    ): void {
+      mocks.catalogue = LISTED_CATALOGUE;
+      mocks.configurations = [{ kind: "personal" }, TEAM];
+      host.environments = [
+        descriptor(PERSONAL_ENV, "user", "u1", "owner"),
+        descriptor(TEAM_ENV, "organization", "team-1", role),
+      ];
+      host.items = { [TEAM_ENV]: [defaultsItem(SANDBOX_DEFAULTS_VALUE, 3)] };
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: TEAM_ENV },
+      });
+      useSandboxShapeMemoryStore.getState().remember("laptop", "team-1", {
+        os: "linux",
+        cpus: remembered.cpus,
+        memoryMb: remembered.memoryMb,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: remembered.idleMinutes,
+        destroyAfterRestingMinutes: 120,
+      });
+    }
+
+    it("shows every member the team's item, whatever each remembered from their own gear", async () => {
+      const seen: string[] = [];
+      for (const remembered of [
+        { cpus: 8, memoryMb: 16_384, idleMinutes: 90 },
+        { cpus: 1, memoryMb: 1024, idleMinutes: 5 },
+      ]) {
+        resetTeamPageHarness();
+        harness = null;
+        viewTeamAs("viewer", remembered);
+        renderPanel([]);
+        await waitFor(() => {
+          expect(
+            screen.getByTestId("sandboxes-defaults-shape").textContent,
+          ).toContain("4 vCPU");
+        });
+        seen.push(
+          [
+            "sandboxes-defaults-shape",
+            "sandboxes-defaults-idle",
+            "sandboxes-defaults-resting",
+          ]
+            .map((id) => screen.getByTestId(id).textContent)
+            .join("|"),
+        );
+        cleanup();
+      }
+
+      expect(seen[0]).toBe(seen[1]);
+      expect(seen[0]).toContain(sandboxPeriodLabel(45));
+      expect(seen[0]).toContain(KEPT_UNTIL_YOU_DESTROY_IT);
+    });
+
+    it("shows the spec's defaults when the configuration has no item", async () => {
+      mocks.catalogue = CATALOGUE;
+      host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "viewer")];
+      useSandboxShapeMemoryStore.getState().remember("laptop", "personal", {
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8192,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 45,
+        destroyAfterRestingMinutes: null,
+      });
+      renderPanel([]);
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("sandboxes-defaults-shape").textContent,
+        ).toContain("2 vCPU");
+      });
+      expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+        sandboxPeriodLabel(30),
+      );
+      expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+        sandboxPeriodLabel(7 * 24 * 60),
+      );
+    });
+
+    it("introduces Personal's defaults as what each new Personal sandbox starts with", async () => {
+      mocks.catalogue = CATALOGUE;
+      host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "viewer")];
+      renderPanel([]);
+
+      const heading = await screen.findByRole("heading", {
+        name: "Your defaults for new sandboxes",
+      });
+      expect(heading.nextElementSibling?.textContent).toBe(
+        "Each new Personal sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+      );
+    });
+
+    it("introduces a team's defaults as what each new team sandbox starts with", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      renderPanel([]);
+
+      const heading = await screen.findByRole("heading", {
+        name: "Acme's defaults for new sandboxes",
+      });
+      expect(heading.nextElementSibling?.textContent).toBe(
+        "Shared by Acme · editors can change them · not a spending limit. Each new Acme sandbox starts with these. Sandboxes you already have aren't destroyed after resting until you change their Idle settings.",
+      );
+    });
+
+    it("gives a viewer the item read-only, naming who can change it", async () => {
+      viewTeamAs("viewer", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      host.members = [
+        {
+          userId: "u-1",
+          displayName: "Ada",
+          effectiveRole: "admin",
+          inviteState: "accepted",
+        },
+        {
+          userId: "u-2",
+          displayName: "Bo",
+          effectiveRole: "editor",
+          inviteState: "accepted",
+        },
+        {
+          userId: "u-3",
+          displayName: "Cy",
+          effectiveRole: "viewer",
+          inviteState: "accepted",
+        },
+        {
+          userId: "u-4",
+          displayName: "Di",
+          effectiveRole: "editor",
+          inviteState: "pending",
+        },
+      ];
+      renderPanel([]);
+
+      expect(await screen.findByText("Ada, Bo can change them")).toBeTruthy();
+      expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Save defaults" }),
+      ).toBeNull();
+    });
+
+    it("gives an editor the form on the item's values, saving it at the read revision", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      expect(idle).toHaveProperty("value", "45");
+      expect(
+        screen.getByTestId("sandboxes-defaults-shape-select").textContent,
+      ).toContain("4 vCPU");
+      fireEvent.change(idle, { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+      await waitFor(() => {
+        expect(
+          harness?.paramsOf("environment.configuration.items.put"),
+        ).toEqual([
+          {
+            environmentId: TEAM_ENV,
+            kind: "sandbox_defaults",
+            key: "sandbox",
+            os: null,
+            value: { ...SANDBOX_DEFAULTS_VALUE, idleMinutes: 2 },
+            revision: 3,
+          },
+        ]);
+      });
+    });
+
+    it("keeps the save's label and shows the working dots while it is in flight", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      let finish: (
+        response: EnvironmentConfigurationItemWriteResponse,
+      ) => void = () => undefined;
+      host.put = () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        });
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      fireEvent.change(idle, { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+      const saving = await screen.findByTestId("sandboxes-defaults-saving");
+      const save = screen.getByTestId("sandboxes-defaults-save");
+      expect(save.contains(saving)).toBe(true);
+      expect(screen.getByRole("button", { name: "Save defaults" })).toBe(save);
+      expect(save).toHaveProperty("disabled", true);
+
+      act(() => {
+        finish({ outcome: "saved", revision: 4 });
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId("sandboxes-defaults-saving")).toBeNull();
+      });
+    });
+
+    it("refuses an idle period under 2 minutes without writing", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      fireEvent.change(idle, { target: { value: "1" } });
+
+      expect(
+        screen.getByTestId("sandboxes-defaults-problem").textContent,
+      ).toContain("at least 2 minutes");
+      expect(
+        screen.getByRole("button", { name: "Save defaults" }),
+      ).toHaveProperty("disabled", true);
+    });
+
+    it("says another member changed the defaults when the save conflicts, after the reread", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      host.put = () => {
+        host.items[TEAM_ENV] = [
+          defaultsItem({ ...SANDBOX_DEFAULTS_VALUE, idleMinutes: 10 }, 4),
+        ];
+        return {
+          outcome: "conflict",
+          current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+        };
+      };
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      fireEvent.change(idle, { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+      expect(await screen.findByText(/Changed by Grace/)).toBeTruthy();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("sandboxes-defaults-idle-input"),
+        ).toHaveProperty("value", "10");
+      });
+      expect(screen.getByText(/Changed by Grace/)).toBeTruthy();
+    });
+
+    it("reopens the form on the configuration switched to, and saves to it, at the same revision", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      const personal = {
+        ...SANDBOX_DEFAULTS_VALUE,
+        idleMinutes: 90,
+        restingMinutes: 60,
+      };
+      host.items[PERSONAL_ENV] = [defaultsItem(personal, 3)];
+      mocks.sandboxes = [];
+      // A composer keeps every configuration's defaults read, so a switch
+      // finds the other one's already answered.
+      function ComposerDefaultsReader(): null {
+        useSandboxDefaultsLookup(true);
+        return null;
+      }
+      renderUi(
+        <>
+          <SandboxesSettingsPanel />
+          <ComposerDefaultsReader />
+        </>,
+      );
+
+      expect(
+        await screen.findByTestId("sandboxes-defaults-idle-input"),
+      ).toHaveProperty("value", "45");
+      act(() => {
+        useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("sandboxes-defaults-idle-input"),
+        ).toHaveProperty("value", "90");
+      });
+      fireEvent.change(screen.getByTestId("sandboxes-defaults-idle-input"), {
+        target: { value: "91" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+      await waitFor(() => {
+        expect(
+          harness?.paramsOf("environment.configuration.items.put"),
+        ).toEqual([
+          {
+            environmentId: PERSONAL_ENV,
+            kind: "sandbox_defaults",
+            key: "sandbox",
+            os: null,
+            value: { ...personal, idleMinutes: 91 },
+            revision: 3,
+          },
+        ]);
+      });
+    });
+
+    it("keeps a configuration's save outcome to that configuration", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      host.put = () => ({
+        outcome: "conflict",
+        current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+      });
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      fireEvent.change(idle, { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+      expect(await screen.findByText(/Changed by Grace/)).toBeTruthy();
+      act(() => {
+        useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+      });
+
+      expect(
+        await screen.findByText("Your defaults for new sandboxes"),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Changed by Grace/)).toBeNull();
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    resetTeamPageHarness();
+  });
 
   it("renders one row per state with its badge and primary action", () => {
     renderPanel([
@@ -422,7 +860,7 @@ describe("<SandboxesSettingsPanel />", () => {
       </>
     );
     mocks.sandboxes = [row("box-a", { burst: false })];
-    const { rerender } = render(page);
+    const { rerender } = renderUi(page);
 
     act(() => open("box-a"));
     expect(scrolled).toEqual(["box-a"]);
@@ -458,7 +896,7 @@ describe("<SandboxesSettingsPanel />", () => {
       open = useOpenSandboxesPage();
       return null;
     }
-    const { rerender } = render(
+    const { rerender } = renderUi(
       <>
         <Opener />
         <SandboxesSettingsPanel />
@@ -550,6 +988,44 @@ describe("<SandboxesSettingsPanel />", () => {
       kind: "new",
       configuration: { kind: "personal" },
       shape: { os: "linux", cpus: 2, memoryMb: 4096, region: "us-east" },
+    });
+    useStagedSandboxStore.setState({ bySurface: {} });
+  });
+  it("stages the configuration's item, periods included, from New task when the person picked nothing", async () => {
+    useStagedSandboxStore.setState({ bySurface: {} });
+    mocks.catalogue = LISTED_CATALOGUE;
+    host.items = {
+      [PERSONAL_ENV]: [
+        defaultsItem({ ...SANDBOX_DEFAULTS_VALUE, idleMinutes: 2 }, 1),
+      ],
+    };
+    useSandboxShapeMemoryStore.getState().remember("laptop", "personal", {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: "us-east",
+      idleMinutes: 90,
+      destroyAfterRestingMinutes: 60,
+    });
+    await withSettingsTabSelected();
+    renderPanel([]);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("sandboxes-defaults-idle-input"),
+      ).toHaveProperty("value", "2");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+
+    expect(readStagedSandbox("landing:window-test")?.target).toMatchObject({
+      kind: "new",
+      shape: {
+        cpus: 4,
+        memoryMb: 8192,
+        idleMinutes: 2,
+        destroyAfterRestingMinutes: null,
+      },
     });
     useStagedSandboxStore.setState({ bySurface: {} });
   });

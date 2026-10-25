@@ -43,13 +43,13 @@ describe("hostMachineNoun", () => {
     expect(hostMachineNoun()).toBe("PC");
   });
 
-  it("returns machine on Linux (neither Mac nor Windows)", async () => {
+  it("returns computer on Linux (neither Mac nor Windows)", async () => {
     const platform = await import("@/lib/keybindings/platform");
     vi.mocked(platform.isMac).mockReturnValue(false);
     vi.mocked(platform.isWindows).mockReturnValue(false);
     const { hostMachineNoun } = await import("@/lib/host/host-lifecycle-copy");
 
-    expect(hostMachineNoun()).toBe("machine");
+    expect(hostMachineNoun()).toBe("computer");
   });
 });
 

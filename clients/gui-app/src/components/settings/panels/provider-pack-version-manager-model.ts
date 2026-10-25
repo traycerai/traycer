@@ -85,7 +85,7 @@ export function versionDownloadEligibility(
       if (version.installState.reason === "condemned") {
         return {
           allowed: false,
-          reason: "Install failed permanently on this machine",
+          reason: "Install failed permanently on this computer",
         };
       }
       // quarantined / corrupt / unverified — still may re-fetch once cleared.
@@ -326,7 +326,7 @@ export function unusableReasonLabel(
 ): string {
   switch (reason) {
     case "condemned":
-      return "Install failed permanently on this machine";
+      return "Install failed permanently on this computer";
     case "quarantined":
       return "Quarantined after a failed verification";
     case "corrupt":
@@ -352,7 +352,7 @@ export function installErrorReasonLabel(
     case "unknown":
       return "Install failed";
     case "unrepairable":
-      return "This install cannot be repaired on this machine";
+      return "This install cannot be repaired on this computer";
     case "trust-unavailable":
       return "Trust is unavailable on this host";
     case "local-storage-mismatch":
@@ -483,7 +483,7 @@ export function installPackVersionRefusalMessage(
 ): string {
   switch (code) {
     case "condemned":
-      return "Install failed permanently on this machine";
+      return "Install failed permanently on this computer";
     case "unfetchable":
       return "This version is not in the current channel — reconnect or refresh to download it";
     case "invalid-version":
@@ -649,7 +649,7 @@ function nonRetryableErrorDownloadReason(
     case "local-storage-mismatch":
       return "Local storage does not match — cannot re-download";
     case "unrepairable":
-      return "This install cannot be repaired on this machine";
+      return "This install cannot be repaired on this computer";
     default:
       return "This error cannot be retried from the version manager";
   }
@@ -724,13 +724,13 @@ export function managedInstallFailureMessage(
     case "verification":
       return `${build} failed its signature check and was discarded. Traycer will not run bytes it cannot verify.`;
     case "live-owner-stalled":
-      return `Another Traycer host on this machine was installing ${build} and stalled. Retrying takes the download over.`;
+      return `Another Traycer host on this computer was installing ${build} and stalled. Retrying takes the download over.`;
     case "trust-unavailable":
       return `Traycer cannot verify downloads on this host, so ${build} was not installed. Retrying will not help until the registry's signing keys load.`;
     case "local-storage-mismatch":
-      return `The stored copy of ${build} does not match what Traycer expects, and it cannot be re-downloaded on this machine.`;
+      return `The stored copy of ${build} does not match what Traycer expects, and it cannot be re-downloaded on this computer.`;
     case "unrepairable":
-      return `${build} cannot be installed on this machine, and retrying will not change that.`;
+      return `${build} cannot be installed on this computer, and retrying will not change that.`;
     case "unknown":
       return `Traycer could not install ${build}.`;
   }

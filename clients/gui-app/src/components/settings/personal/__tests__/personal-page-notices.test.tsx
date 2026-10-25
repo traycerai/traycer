@@ -49,6 +49,7 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -56,7 +57,10 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentReviewEntryV12,
+  EnvironmentStatusResponse,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
@@ -70,6 +74,7 @@ import {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { provider } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -85,7 +90,9 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 afterEach(() => {
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostMock.binding = null;
@@ -182,6 +189,14 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
         },
       }
     : null;
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: {
+      kind: "local",
+      hostId: options.windowHostId,
+      hostName: ACCESS_HOST_NAME,
+    },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({
       hostId: options.windowHostId,
@@ -210,6 +225,21 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
       </ScopedHostRuntime>
     </QueryClientProvider>,
   );
+}
+
+/** A held entry as an `environment.review@1.2` host sends it. */
+function heldCommandEntry(
+  overrides: Partial<EnvironmentReviewEntryV12>,
+): EnvironmentReviewEntryV12 {
+  return {
+    ...reviewEntryFixture({}),
+    command: null,
+    event: null,
+    description: null,
+    harness: null,
+    value: null,
+    ...overrides,
+  };
 }
 
 function hostWith(
@@ -634,7 +664,7 @@ describe("Keep this host's value", () => {
 });
 
 describe("a Personal page's 'needs you' rows", () => {
-  it("says why each held value waits, with a way to review it in Secrets", async () => {
+  it("says why each value waits, and sends a held key-shaped value to its retrospective sheet, a held command to the host's, and the rest to Secrets", async () => {
     const host = hostWith(
       {},
       {
@@ -644,10 +674,12 @@ describe("a Personal page's 'needs you' rows", () => {
             key: "DATABASE_URL",
             reason: "credential_like_value",
           }),
-          reviewEntryFixture({
+          heldCommandEntry({
             entryId: "entry-2",
-            key: "SHELL_INIT",
+            kind: "shell",
+            key: "shell",
             reason: "executable_entry",
+            command: "zsh -l",
           }),
           reviewEntryFixture({
             entryId: "entry-3",
@@ -666,10 +698,10 @@ describe("a Personal page's 'needs you' rows", () => {
 
     const rows = await screen.findAllByTestId("personal-review-row");
     expect(rows.map((row) => row.textContent)).toEqual([
+      "DATABASE_URL looks like a key and is on hold until you choose · Review",
       expect.stringContaining(
-        "DATABASE_URL is waiting for you: looks like a secret.",
+        "shell (shell) is what terminals and agents start in: zsh -l and is on hold until you choose",
       ),
-      expect.stringContaining("SHELL_INIT is waiting for you: runs a command."),
       expect.stringContaining(
         "LOG_LEVEL is waiting for you: was changed without your confirmation.",
       ),
@@ -679,9 +711,51 @@ describe("a Personal page's 'needs you' rows", () => {
       expect(within(row).getByRole("button", { name: "Review" })).toBeTruthy();
     }
 
-    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
+    // Any other reason's Review opens Secrets.
+    fireEvent.click(within(rows[2]).getByRole("button", { name: "Review" }));
     expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+
+    // A held command's opens the host's retrospective sheet.
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Review" }));
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(useRetrospectiveSheetStore.getState()).toMatchObject({
+      open: true,
+      target: { hostId: ACCESS_HOST_ID, hostName: ACCESS_HOST_NAME },
+    });
+
+    // The held value's opens its own retrospective sheet.
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
+    const sheet = await screen.findByTestId("retrospective-sheet");
+    expect(
+      within(sheet).getByTestId("retrospective-held-entry-1"),
+    ).toBeTruthy();
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("words a held variable from a host that sends none by what it changes", async () => {
+    const host = hostWith(
+      {},
+      {
+        review: [
+          heldCommandEntry({
+            entryId: "entry-1",
+            kind: "variable",
+            key: "SHELL_INIT",
+            reason: "executable_entry",
+          }),
+        ],
+      },
+    );
+    renderPage(host, SHELL_PAGE);
+
+    const rows = await screen.findAllByTestId("personal-review-row");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining(
+        "SHELL_INIT (variable) changes how programs start and is on hold until you choose",
+      ),
+    ]);
   });
 
   it("shows only the rows of this page's kinds", async () => {

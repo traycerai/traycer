@@ -34,6 +34,7 @@ export function TeamRows(props: TeamRowsProps): ReactNode {
             value={environmentPickValue(pick)}
             label={team.label}
             badge={null}
+            badgeTooltip={null}
             subtitle={
               configurationRoleOf(team) === "viewer"
                 ? "team · read-only"
