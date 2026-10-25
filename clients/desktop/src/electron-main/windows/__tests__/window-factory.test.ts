@@ -15,6 +15,14 @@ const electronState = vi.hoisted(() => ({
   // Captures the LATEST listener registered per channel, so a test can drive
   // it directly (e.g. `console-message`) without wiring a real BrowserWindow.
   webContentsListeners: new Map<string, (...args: unknown[]) => void>(),
+  // EVERY listener registered, in order: the map above keeps only the latest
+  // per channel, and several modules listen on `render-process-gone`.
+  webContentsListenerLog: [] as Array<{
+    readonly channel: string;
+    readonly listener: (...args: unknown[]) => void;
+  }>,
+  // The webContents' background-throttling state; Electron's default is on.
+  throttlingAllowed: true,
 }));
 
 const perfTelemetryState = vi.hoisted(() => ({
@@ -65,9 +73,14 @@ vi.mock("electron", () => ({
     readonly webContents = {
       setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn(),
+      getBackgroundThrottling: (): boolean => electronState.throttlingAllowed,
+      setBackgroundThrottling: (allowed: boolean) => {
+        electronState.throttlingAllowed = allowed;
+      },
       on: (channel: string, listener: (...args: unknown[]) => void) => {
         electronState.webContentsOnChannels.push(channel);
         electronState.webContentsListeners.set(channel, listener);
+        electronState.webContentsListenerLog.push({ channel, listener });
       },
     };
 
@@ -196,6 +209,8 @@ describe("loadMainWindow", () => {
     electronState.browserWindows = [];
     electronState.webContentsOnChannels = [];
     electronState.webContentsListeners.clear();
+    electronState.webContentsListenerLog = [];
+    electronState.throttlingAllowed = true;
     perfTelemetryState.events = [];
     Object.defineProperty(process, "resourcesPath", {
       configurable: true,
@@ -410,7 +425,7 @@ describe("loadMainWindow", () => {
     ]);
   });
 
-  it("keeps compositing and timers running while the window is occluded", () => {
+  it("creates the window background-throttled and wires the reset to a committed navigation, a failed main-frame load and a renderer crash", () => {
     createMainWindowForTest({
       preloadPath: "/preload.js",
       windowId: "window-a",
@@ -419,13 +434,33 @@ describe("loadMainWindow", () => {
       placement: createFirstLaunchWindowPlacement(),
     });
 
+    // Throttled by default: a covered, minimised or hidden window must be
+    // allowed to stop rendering (traycer#2355).
     expect(electronState.browserWindowOptions).toEqual([
       expect.objectContaining({
         webPreferences: expect.objectContaining({
-          backgroundThrottling: false,
+          backgroundThrottling: true,
         }),
       }),
     ]);
+
+    // A demand a document made (throttling off) must not outlive that
+    // document, whichever way it ends.
+    // `did-fail-load` carries (event, code, description, url, isMainFrame);
+    // the factory's own logging listener on it reads the first four too.
+    for (const channel of [
+      "did-navigate",
+      "did-fail-load",
+      "render-process-gone",
+    ]) {
+      electronState.throttlingAllowed = false;
+      for (const entry of electronState.webContentsListenerLog) {
+        if (entry.channel === channel) {
+          entry.listener({}, -105, "ERR_NAME_NOT_RESOLVED", "app://x", true);
+        }
+      }
+      expect(electronState.throttlingAllowed, channel).toBe(true);
+    }
   });
 
   it("keeps DevTools enabled for the shipped staging policy", () => {

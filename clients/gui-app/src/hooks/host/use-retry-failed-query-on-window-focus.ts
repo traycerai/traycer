@@ -6,11 +6,9 @@ import { useEffect, useEffectEvent } from "react";
  * retries: without this the hint promises a retry nothing performs.
  *
  * The window's own `focus` event, not TanStack's focus manager: that one
- * follows `visibilitychange`, which the desktop shell never fires (every
- * window runs with `backgroundThrottling: false`, so `visibilityState` stays
- * `"visible"`), and which no browser fires when focus moves between two
- * visible windows. `refetchOnWindowFocus` alone therefore retries nothing on a
- * plain return to the app.
+ * follows `visibilitychange`, which no browser or desktop window fires when
+ * focus moves between two visible windows. `refetchOnWindowFocus` alone
+ * therefore retries nothing on a plain return to the app.
  *
  * A settled query is left alone, so this adds no request on the success path.
  * Pass the query's own `isEnabled` as `enabled`: a manual refetch ignores the

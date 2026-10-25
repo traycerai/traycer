@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetStatusAnimationClockForTests } from "@/lib/animation/status-animation-clock";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
@@ -155,5 +156,64 @@ describe("AgentSpinningDots", () => {
       vi.advanceTimersByTime(80);
     });
     expect(node.textContent).not.toBe("⠋");
+  });
+
+  it("holds its glyph with no ticks in an unselected tab body, and resumes on the shared clock's current frame when selected", () => {
+    function Pair(props: { readonly lateSelected: boolean }) {
+      return (
+        <>
+          <AgentSpinningDots
+            className={undefined}
+            testId="always"
+            variant="dots"
+          />
+          <TabBodySelectedContext.Provider value={props.lateSelected}>
+            <AgentSpinningDots
+              className={undefined}
+              testId="late"
+              variant="dots"
+            />
+          </TabBodySelectedContext.Provider>
+        </>
+      );
+    }
+    const { rerender } = render(<Pair lateSelected={false} />);
+    const always = screen.getByTestId("always");
+    const late = screen.getByTestId("late");
+    expect(late.textContent).toBe("⠋");
+
+    // The selected spinner keeps the shared clock moving: 240 ms is three
+    // 80 ms frames in.
+    act(() => {
+      vi.advanceTimersByTime(240);
+    });
+    expect(always.textContent).toBe("⠸");
+    expect(late.textContent).toBe("⠋");
+
+    rerender(<Pair lateSelected />);
+    // Resumes in phase at once, not from its first frame.
+    expect(late.textContent).toBe("⠸");
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    expect(late.textContent).toBe(always.textContent);
+    expect(late.textContent).toBe("⠼");
+  });
+
+  it("takes no timer at all when its only spinner sits in an unselected tab body", () => {
+    render(
+      <TabBodySelectedContext.Provider value={false}>
+        <AgentSpinningDots
+          className={undefined}
+          testId="spinner"
+          variant="dots"
+        />
+      </TabBodySelectedContext.Provider>,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(240);
+    });
+    expect(screen.getByTestId("spinner").textContent).toBe("⠋");
   });
 });

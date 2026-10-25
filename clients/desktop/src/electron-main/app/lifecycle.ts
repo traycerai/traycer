@@ -16,8 +16,32 @@ export function configureV8CodeCache(): void {
 }
 
 /**
- * Trim Chromium features the app never uses. Reduces RSS and CPU for
- * subsystems that would otherwise sit idle. Must be called before
+ * The two Chromium throttles that slow a HIDDEN page's timers beyond the
+ * plain one-second alignment, switched off so a covered or minimised window
+ * stops rendering but keeps its timer cadence.
+ *
+ * GUI windows are background-throttled (`windows/background-rendering.ts`).
+ * Left on, these two would make that unsafe for the transport: a stream pings
+ * every 25 s and drops its socket 60 s after the last pong, and after five
+ * minutes hidden the first wakes a chained timer once a minute, while the
+ * second caps a hidden page's timer CPU at 1%. Either can push a ping past
+ * the cutoff and close a healthy socket.
+ *
+ * - `IntensiveWakeUpThrottling`: the once-a-minute wake-up.
+ * - `AllowAggressiveThrottlingWithWebSocket`: with it off, a page holding a
+ *   WebSocket (every GUI window does) is exempt from the CPU budget. Electron
+ *   carries a patch that keeps this feature switchable for that reason.
+ */
+export const BACKGROUND_TIMER_THROTTLES = [
+  "IntensiveWakeUpThrottling",
+  "AllowAggressiveThrottlingWithWebSocket",
+] as const;
+
+/**
+ * Chromium features switched off before start: the ones the app never uses
+ * (less RSS and CPU for subsystems that would otherwise sit idle) and
+ * {@link BACKGROUND_TIMER_THROTTLES}. One switch, because a second
+ * `disable-features` would replace the first. Must be called before
  * `app.whenReady()` - command-line switches are read at Chromium init.
  */
 export function trimUnusedChromiumFeatures(): void {
@@ -30,6 +54,7 @@ export function trimUnusedChromiumFeatures(): void {
       "OptimizationGuideModelDownloading",
       "InterestFeedContentSuggestions",
       "AutofillServerCommunication",
+      ...BACKGROUND_TIMER_THROTTLES,
     ].join(","),
   );
   // Cap Chromium's HTTP/code disk cache. Without a cap it grows to a

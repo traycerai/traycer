@@ -262,7 +262,7 @@ describe("Shimmer", () => {
     expect(wrapped).toBeGreaterThan(late);
   });
 
-  it("re-reads the ref on each tick, so swapping 'as' keeps ticking the new host element", () => {
+  it("moves the animation to the new host element when 'as' swaps, in phase with the shared clock", () => {
     const { rerender } = render(
       <Shimmer as="p" duration={1}>
         Loading
@@ -271,6 +271,8 @@ describe("Shimmer", () => {
     act(() => {
       vi.advanceTimersByTime(80);
     });
+    const sweptPosition = screen.getByText("Loading").style.backgroundPosition;
+    expect(parseFloat(sweptPosition)).toBeLessThan(100);
 
     rerender(
       <Shimmer as="span" duration={1}>
@@ -279,16 +281,17 @@ describe("Shimmer", () => {
     );
     const node = screen.getByText("Loading");
     expect(node.tagName).toBe("SPAN");
-    // The new host element mounts at the parked rest position, not
-    // wherever the old <p> had swept to.
-    expect(node.style.backgroundPosition).toBe("100% center");
+    // The new host element is written at the shared clock's current phase, so
+    // the sweep continues where the old <p> had it instead of restarting.
+    expect(node.style.backgroundPosition).toBe(sweptPosition);
 
     act(() => {
       vi.advanceTimersByTime(80);
     });
-    // The next tick wrote onto the NEW element, proving the clock re-read
-    // `ref.current` instead of holding the stale <p>.
-    expect(parseFloat(node.style.backgroundPosition)).toBeLessThan(100);
+    // The next tick wrote onto the NEW element.
+    expect(parseFloat(node.style.backgroundPosition)).toBeLessThan(
+      parseFloat(sweptPosition),
+    );
   });
 });
 
