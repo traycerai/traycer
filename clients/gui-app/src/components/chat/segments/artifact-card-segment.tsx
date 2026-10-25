@@ -570,33 +570,52 @@ const OBJECT_KIND_HOVER_CLASSES: Readonly<Record<ObjectCardKind, string>> = {
 };
 
 // A file artifact keeps the simpler visual treatment, but opening it from
-// the transcript card works the same as for the object kinds.
+// the transcript card and dragging it to the canvas work the same as for
+// the object kinds.
 function FileArtifactCardShell(props: {
   readonly findUnitId: string | undefined;
   readonly canOpen: boolean;
   readonly openTitle: string;
   readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
+  readonly dragRef: (element: HTMLElement | null) => void;
+  readonly dragListeners: DraggableSyntheticListeners;
+  readonly isDragging: boolean;
   readonly children: ReactNode;
 }) {
-  if (!props.canOpen)
+  const {
+    findUnitId,
+    canOpen,
+    openTitle,
+    onOpen,
+    dragRef,
+    dragListeners,
+    isDragging,
+    children,
+  } = props;
+  if (!canOpen)
     return (
       <div
-        data-chat-find-unit={props.findUnitId}
+        data-chat-find-unit={findUnitId}
         className="w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm opacity-60"
       >
-        {props.children}
+        {children}
       </div>
     );
   return (
     <button
       type="button"
-      data-chat-find-unit={props.findUnitId}
-      onClick={props.onOpen}
-      onAuxClick={onMiddleClick(props.onOpen)}
-      aria-label={`Open ${props.openTitle}`}
-      className="w-full cursor-pointer rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+      ref={dragRef}
+      data-chat-find-unit={findUnitId}
+      onClick={onOpen}
+      onAuxClick={onMiddleClick(onOpen)}
+      aria-label={`Open ${openTitle}`}
+      className={cn(
+        "w-full rounded-md border border-border/60 px-2.5 py-2 text-left text-ui-sm hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        isDragging ? "cursor-grabbing" : "cursor-pointer",
+      )}
+      {...dragListeners}
     >
-      {props.children}
+      {children}
     </button>
   );
 }
@@ -655,6 +674,9 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
         canOpen={canOpen}
         openTitle={openTitle}
         onOpen={openArtifact}
+        dragRef={dragRef}
+        dragListeners={dragListeners}
+        isDragging={isDragging}
       >
         <ObjectArtifactCardLabel {...props} title={title} />
       </FileArtifactCardShell>

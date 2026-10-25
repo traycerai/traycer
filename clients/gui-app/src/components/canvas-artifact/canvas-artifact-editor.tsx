@@ -650,12 +650,22 @@ export function CanvasArtifactEditor({
     (path: string): void => {
       clearNodeSelection();
       frameEvents?.onBoardSelect?.(null);
+      // Switching play stops the outgoing board like its stop button would:
+      // clearing its navigation entry remounts its own source.
+      const outgoing = playingBoard;
+      if (outgoing !== null && outgoing !== path)
+        setNavigation((entries) => {
+          if (entries[outgoing] === undefined) return entries;
+          const next = { ...entries };
+          delete next[outgoing];
+          return next;
+        });
       setPlayingBoard(path);
       setCommenting(false);
       setSpaceHeld(false);
       rememberBoard(path);
     },
-    [clearNodeSelection, frameEvents, rememberBoard],
+    [clearNodeSelection, frameEvents, playingBoard, rememberBoard],
   );
   // Fullscreen is orthogonal to in-place play: it is its own play surface and
   // leaving it changes nothing on the canvas.
@@ -1248,7 +1258,10 @@ export function CanvasArtifactEditor({
                     />
                   </ReactFlow>
                 </div>
-                {canvasDrawingEnabled(readOnly, activeTool) ? (
+                {/* A fullscreen board keeps the armed tool for later but is a
+                    play surface now: the drawing layer must not intercept it. */}
+                {activeFullscreen === null &&
+                canvasDrawingEnabled(readOnly, activeTool) ? (
                   <CanvasDrawingLayer
                     key={activeTool}
                     tool={activeTool}

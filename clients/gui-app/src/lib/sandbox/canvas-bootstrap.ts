@@ -733,6 +733,26 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     const position = vertical ? target.scrollTop : target.scrollLeft;
     return delta > 0 ? position < size - 1 : position > 1;
   };
+  // Whether native wheel scroll may act on this element's axis at all: an
+  // inner element needs auto/scroll; the viewport scrolls with the root's
+  // overflow - or the body's, when the root leaves it visible - and
+  // hidden/clip there turns it off however much the content overflows.
+  const wheelScrollAllowed = (
+    el: Element,
+    root: boolean,
+    axis: "overflowY" | "overflowX",
+  ): boolean => {
+    if (!root) {
+      const overflow = getComputedStyle(el)[axis];
+      return overflow === "auto" || overflow === "scroll";
+    }
+    const rootOverflow = getComputedStyle(document.documentElement)[axis];
+    const effective =
+      rootOverflow === "visible"
+        ? getComputedStyle(document.body)[axis]
+        : rootOverflow;
+    return effective !== "hidden" && effective !== "clip";
+  };
   const scrollableHere = (start: Element | null, dx: number, dy: number) => {
     const vertical = Math.abs(dy) >= Math.abs(dx);
     const delta = vertical ? dy : dx;
@@ -745,11 +765,8 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         (el === document.documentElement ? null : document.documentElement)
     ) {
       const root = el === document.documentElement || el === document.body;
-      if (!root) {
-        const overflow =
-          getComputedStyle(el)[vertical ? "overflowY" : "overflowX"];
-        if (overflow !== "auto" && overflow !== "scroll") continue;
-      }
+      if (!wheelScrollAllowed(el, root, vertical ? "overflowY" : "overflowX"))
+        continue;
       const room = scrollRoom(
         root ? (document.scrollingElement ?? el) : el,
         vertical,
