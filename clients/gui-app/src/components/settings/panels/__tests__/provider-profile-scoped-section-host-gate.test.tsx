@@ -410,7 +410,11 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         name: "OpenCode profile: OpenCode's own login on Studio",
       }),
     ).toBeDefined();
-    expect(screen.getByText("works on this computer only")).toBeDefined();
+    expect(
+      screen.getByText(
+        "OpenCode's own login on Studio · works on this computer only",
+      ),
+    ).toBeDefined();
     expect(screen.queryByText("Terminal")).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();

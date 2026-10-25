@@ -288,7 +288,7 @@ function McpServerSecretFields(props: {
     const field = form.variable.trim();
     return (
       <>
-        <Label htmlFor="mcp-server-variable">Environment variable name</Label>
+        <Label htmlFor="mcp-server-variable">Variable name</Label>
         <Input
           id="mcp-server-variable"
           value={form.variable}
