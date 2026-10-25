@@ -5,6 +5,7 @@ import {
   INVITE_LABEL,
   inviteDialogLead,
   inviteEmailLabel,
+  INVITE_FAILED,
   inviteForbiddenRefusal,
   inviteRoleLabel,
   inviteRoleLine,
@@ -54,10 +55,11 @@ function refusalMessage(
   teamName: string,
   outcome: Extract<
     MembersInviteOutcome,
-    { outcome: "forbidden" } | { outcome: "seat_limit" }
+    { outcome: "forbidden" } | { outcome: "seat_limit" } | { outcome: "failed" }
   >,
 ): string {
   if (outcome.outcome === "seat_limit") return seatLimitRefusal(teamName);
+  if (outcome.outcome === "failed") return INVITE_FAILED;
   return inviteForbiddenRefusal();
 }
 

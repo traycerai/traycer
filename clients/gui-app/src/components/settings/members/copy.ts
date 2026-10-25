@@ -447,6 +447,12 @@ export function inviteForbiddenRefusal(): string {
   return "An admin invites people.";
 }
 
+export const SET_ROLE_FORBIDDEN_REFUSAL = "An admin changes roles.";
+export const REMOVE_FORBIDDEN_REFUSAL = "An admin removes people.";
+export const INVITE_FAILED = "Couldn't send that invitation.";
+export const SET_ROLE_FAILED = "Couldn't change that role.";
+export const REMOVE_FAILED = "Couldn't remove that member.";
+
 export function inviteDialogLead(teamName: string): string {
   return `Invite someone to ${teamName}.`;
 }

@@ -13,6 +13,10 @@ import { RevokeInviteDialog } from "@/components/settings/members/revoke-invite-
 import {
   INVITE_LABEL,
   LAST_ADMIN_REFUSAL,
+  REMOVE_FAILED,
+  REMOVE_FORBIDDEN_REFUSAL,
+  SET_ROLE_FAILED,
+  SET_ROLE_FORBIDDEN_REFUSAL,
   LEGACY_NOTICE_READ_FAILED,
   MANAGE_SEATS_LABEL,
   MEMBERS_NEED_UPDATED_HOST,
@@ -84,7 +88,8 @@ function refusalFromRemove(
 ): string | null {
   if (outcome.outcome === "last_admin") return LAST_ADMIN_REFUSAL;
   if (outcome.outcome === "plan_required") return planRequiredRefusal(teamName);
-  if (outcome.outcome === "forbidden") return LAST_ADMIN_REFUSAL;
+  if (outcome.outcome === "forbidden") return REMOVE_FORBIDDEN_REFUSAL;
+  if (outcome.outcome === "failed") return REMOVE_FAILED;
   return null;
 }
 
@@ -94,7 +99,8 @@ function refusalFromSetRole(
 ): string | null {
   if (outcome.outcome === "last_admin") return LAST_ADMIN_REFUSAL;
   if (outcome.outcome === "plan_required") return planRequiredRefusal(teamName);
-  if (outcome.outcome === "forbidden") return LAST_ADMIN_REFUSAL;
+  if (outcome.outcome === "forbidden") return SET_ROLE_FORBIDDEN_REFUSAL;
+  if (outcome.outcome === "failed") return SET_ROLE_FAILED;
   return null;
 }
 

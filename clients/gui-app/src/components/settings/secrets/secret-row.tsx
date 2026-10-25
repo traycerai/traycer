@@ -375,36 +375,36 @@ export function SecretRow(props: {
           revoked={revoked}
           hasVersion={secret.currentVersionId !== null}
           removing={actions.remove.isPending}
+          // Verify, Versions, Undo and Destroy need no environment id: only
+          // the diagnostics wait for it.
           details={
-            environmentId === null ? null : (
-              <SettingsDetailsButton
-                subject={{
-                  environmentId,
-                  kind: "secret",
-                  key: secret.secretId,
-                }}
-                title={secret.name}
-                controls={
-                  <SecretDetailsControls
-                    secret={secret}
-                    client={props.client}
-                    hostId={props.hostId}
-                    hostName={props.hostName}
-                    onChanged={props.onChanged}
-                    revoked={revoked}
-                    verifying={actions.verify.isPending}
-                    verifyLine={line}
-                    onVerify={() =>
-                      actions.verify.mutate({
-                        target: "secret",
-                        secretId: secret.secretId,
-                        environmentId: actions.environmentId,
-                      })
-                    }
-                  />
-                }
-              />
-            )
+            <SettingsDetailsButton
+              subject={
+                environmentId === null
+                  ? null
+                  : { environmentId, kind: "secret", key: secret.secretId }
+              }
+              title={secret.name}
+              controls={
+                <SecretDetailsControls
+                  secret={secret}
+                  client={props.client}
+                  hostId={props.hostId}
+                  hostName={props.hostName}
+                  onChanged={props.onChanged}
+                  revoked={revoked}
+                  verifying={actions.verify.isPending}
+                  verifyLine={line}
+                  onVerify={() =>
+                    actions.verify.mutate({
+                      target: "secret",
+                      secretId: secret.secretId,
+                      environmentId: actions.environmentId,
+                    })
+                  }
+                />
+              }
+            />
           }
           onReplace={() => setReplacing(true)}
           onRemove={() => {

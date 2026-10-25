@@ -889,3 +889,119 @@ describe("MembersPage pending removal", () => {
     ).toBeTruthy();
   });
 });
+
+describe("MembersPage refused writes", () => {
+  const LAST_ADMIN_LINE = "Promote another admin first.";
+
+  async function openRemoveDialog(): Promise<HTMLElement> {
+    await screen.findByText("Priya · u-priya@acme.test");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    await screen.findByTestId("members-remove-preview-table");
+    await userEvent.click(screen.getByTestId("members-remove-confirm"));
+    return screen.getByTestId("members-remove-preview");
+  }
+
+  it("says an admin removes people when the host answers a removal forbidden, and keeps the dialog open", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members.removePreview": () => PREVIEW,
+        "environment.members.remove": () => ({ outcome: "forbidden" }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const dialog = await openRemoveDialog();
+
+    expect(
+      (await within(dialog).findByTestId("members-remove-refusal")).textContent,
+    ).toBe("An admin removes people.");
+    expect(screen.getByTestId("members-remove-preview")).toBeTruthy();
+  });
+
+  it("says an admin changes roles when the host answers a role change forbidden", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members.setRole": () => ({ outcome: "forbidden" }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Role for Priya" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Viewer" }),
+    );
+
+    expect((await screen.findByTestId("members-banner")).textContent).toBe(
+      "An admin changes roles.",
+    );
+    expect(harness.paramsOf("environment.members.setRole")).toEqual([
+      { environmentId: "env-a", userId: "u-priya", role: "viewer" },
+    ]);
+  });
+
+  it("says the removal failed, not that the last admin must be promoted, when the request is rejected", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members.removePreview": () => PREVIEW,
+        "environment.members.remove": () => {
+          throw new Error("host unavailable");
+        },
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const dialog = await openRemoveDialog();
+
+    const refusal = await within(dialog).findByTestId("members-remove-refusal");
+    expect(refusal.textContent).toBe("Couldn't remove that member.");
+    expect(refusal.textContent).not.toBe(LAST_ADMIN_LINE);
+    expect(screen.getByTestId("members-remove-preview")).toBeTruthy();
+  });
+
+  it("says the invitation could not be sent, not that an admin invites people, when the request is rejected", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA]),
+        "environment.members.seats": () => ({ seats: null }),
+        "environment.members.invite": () => {
+          throw new Error("host unavailable");
+        },
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await openInvite();
+    await userEvent.type(
+      await screen.findByTestId("members-invite-email"),
+      "new@acme.test",
+    );
+    await userEvent.click(screen.getByTestId("members-invite-submit"));
+
+    expect(
+      (await screen.findByTestId("members-invite-refusal")).textContent,
+    ).toBe("Couldn't send that invitation.");
+  });
+});

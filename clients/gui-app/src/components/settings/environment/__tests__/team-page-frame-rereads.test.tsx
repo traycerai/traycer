@@ -1,13 +1,18 @@
 import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import { useConfigurationMcpServersQuery } from "@/hooks/environment/team/use-mcp-servers";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { negotiateMethods } from "./mcp-skills-test-support";
 import {
   configurationItem,
   mountTeamPage,
@@ -34,6 +39,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
@@ -60,26 +66,51 @@ const server = (revision: number): EnvironmentConfigurationItem =>
     revision,
   });
 
+/** A page child that only reads Personal's servers, as the MCP servers page does. */
+function PersonalMcpServerReader(): ReactNode {
+  useConfigurationMcpServersQuery();
+  return null;
+}
+
+const personal: EnvironmentDescriptorV11 = {
+  environmentId: "env-personal",
+  ownerKind: "user",
+  ownerId: "user-me",
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner",
+  kind: "personal",
+  hostCount: 1,
+  providerHandle: null,
+};
+
 /** The app's `refetchOnWindowFocus: false`, which the bare test client lacks. */
 function mountTeamFrame(
   handlers: Parameters<typeof mountTeamPage>[1],
 ): TeamPageHarness {
+  return mountFrame(
+    { kind: "team", environmentId: "env-a" },
+    handlers,
+    <TeamMcpServers />,
+  );
+}
+
+function mountFrame(
+  pick: EnvironmentPick,
+  handlers: Parameters<typeof mountTeamPage>[1],
+  page: ReactNode,
+): TeamPageHarness {
   act(() => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "team", environmentId: "env-a" },
-    });
+    useSettingsEnvironmentPickStore.setState({ pick });
   });
   const harness = mountTeamPage({ kind: "host" }, handlers);
   harness.queryClient.setDefaultOptions({
     queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
     mutations: { retry: false },
   });
-  render(
-    <PersonalPageFrame section="mcp-servers">
-      <TeamMcpServers />
-    </PersonalPageFrame>,
-    { wrapper: harness.Wrapper },
-  );
+  render(<PersonalPageFrame section="mcp-servers">{page}</PersonalPageFrame>, {
+    wrapper: harness.Wrapper,
+  });
   return harness;
 }
 
@@ -159,6 +190,36 @@ describe("a team page under PersonalPageFrame", () => {
       expect(
         harness.paramsOf("environment.configuration.items").length,
       ).toBeGreaterThan(before);
+    });
+  });
+
+  it("rereads Personal's MCP servers when the window regains focus, on a page the cloud always serves", async () => {
+    negotiateMethods({
+      "environment.configuration.mcpServers.list": { major: 1, minor: 0 },
+    });
+    const harness = mountFrame(
+      { kind: "personal" },
+      {
+        "environment.list": () => ({ environments: [personal, acme] }),
+        "environment.host.list": () => ({ hosts: [] }),
+        "environment.configuration.mcpServers.list": () => ({ servers: [] }),
+      },
+      <PersonalMcpServerReader />,
+    );
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list"),
+      ).toEqual([{ environmentId: "env-personal" }]);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list"),
+      ).toHaveLength(2);
     });
   });
 });

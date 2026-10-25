@@ -305,8 +305,9 @@ function CloudPageFrame(props: {
 /**
  * Cloud-read pages never read the window host's Personal notices or values.
  * Their configuration is reread when a save on the page loses to a newer
- * change, and a team's when the window regains focus: no status here reports
- * a team's revision.
+ * change, and when the window regains focus: no status reports a team's
+ * revision, nor Personal's when the window's host does not run it. Where it
+ * does, the host's revision rereads Personal too.
  */
 function TeamPageFrame(props: {
   readonly section: SettingsSectionId;
@@ -317,9 +318,7 @@ function TeamPageFrame(props: {
   const source = useConfigurationSource();
   const environmentId = source.kind === "pool" ? source.environmentId : null;
   useRereadOnStaleWrite(null, environmentId);
-  useRereadConfigurationOnFocus(
-    props.pick.kind === "team" ? environmentId : null,
-  );
+  useRereadConfigurationOnFocus(environmentId);
   return (
     <PersonalPageContext.Provider
       value={{

@@ -115,27 +115,69 @@ function DetailsSession(props: {
   );
 }
 
-/** The common entry point, also used by notification and sandbox surfaces. */
+/**
+ * The subject's own actions alone, while the subject is not known (its
+ * environment not yet, or not, looked up): an action never waits on a lookup
+ * only the diagnostics need.
+ */
+function DetailsControlsSession(props: {
+  readonly title: string;
+  readonly controls: ReactNode;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  return (
+    <DetailsDrawer
+      entry={null}
+      title={props.title}
+      open
+      onOpenChange={props.onOpenChange}
+      loading={false}
+      error={null}
+      exportPending={false}
+      recoveryPending={false}
+      onExport={() => {}}
+      onRetry={() => {}}
+      onRecover={() => {}}
+      onSubjectSelect={() => {}}
+      controls={props.controls}
+      onBack={null}
+    />
+  );
+}
+
+/**
+ * The common entry point, also used by notification and sandbox surfaces.
+ * `subject` null shows only `controls`, and the diagnostics once it is known.
+ */
 export function SettingsDetailsDialog(props: {
-  readonly subject: DetailsSubject;
+  readonly subject: DetailsSubject | null;
   readonly title: string;
   /** The subject's own actions, shown under its status; `null` for none. */
   readonly controls: ReactNode;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  return props.open ? (
+  if (!props.open) return null;
+  if (props.subject === null)
+    return (
+      <DetailsControlsSession
+        title={props.title}
+        controls={props.controls}
+        onOpenChange={props.onOpenChange}
+      />
+    );
+  return (
     <DetailsSession
       subject={props.subject}
       title={props.title}
       controls={props.controls}
       onOpenChange={props.onOpenChange}
     />
-  ) : null;
+  );
 }
 
 export function SettingsDetailsButton(props: {
-  readonly subject: DetailsSubject;
+  readonly subject: DetailsSubject | null;
   readonly title: string;
   readonly controls: ReactNode;
 }): ReactNode {

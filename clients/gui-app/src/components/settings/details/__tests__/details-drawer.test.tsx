@@ -265,12 +265,41 @@ describe("the subject's own controls", () => {
     });
     openWithControls(harness, <p data-testid="own-controls">Verify here</p>);
 
-    const controls = await screen.findByTestId("own-controls");
-    const repair = screen.getByRole("button", { name: "Repair on dev-box" });
+    // The controls show before the status is read; they sit under it once it is.
+    const repair = await screen.findByRole("button", {
+      name: "Repair on dev-box",
+    });
+    const controls = screen.getByTestId("own-controls");
     expect(
       repair.compareDocumentPosition(controls) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("shows them beside the failure line when the details cannot be read", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({}),
+      "environment.secrets.list": () => ({ removed: [], secrets: [] }),
+    });
+    render(
+      <SettingsDetailsDialog
+        subject={{
+          environmentId: "env-a",
+          kind: "secret",
+          key: "sec-unknown",
+        }}
+        title="Gone"
+        controls={<p data-testid="own-controls">Verify here</p>}
+        open
+        onOpenChange={() => undefined}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't load details.Retry",
+    );
+    expect(screen.getByTestId("own-controls")).toBeTruthy();
   });
 
   it("shows nothing extra when the subject has none", async () => {

@@ -6,10 +6,11 @@ import {
 } from "@/hooks/environment/environment-host-list-key";
 
 /**
- * Re-reads a team configuration's reads when the window gains focus. A team
- * is often not run on this computer, so no host status reports its new
- * revision, and its reads never poll: a change made by another person or in
- * the dashboard reaches an open page only this way. The window's own `focus`
+ * Re-reads a cloud configuration's reads when the window gains focus. A team,
+ * or Personal on a window whose host does not run it, has no host status
+ * reporting its new revision, and its reads never poll: a change made by
+ * another person, another computer or the dashboard reaches an open page
+ * only this way. The window's own `focus`
  * event, not TanStack's focus manager, which never fires in the desktop shell
  * (see `useRetryFailedQueryOnWindowFocus`). `null` listens to nothing.
  */

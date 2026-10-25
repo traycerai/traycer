@@ -76,6 +76,8 @@ interface SecretsHostState {
   versions: SecretVersion[];
   /** The list read rejects with this. */
   listError: Error | null;
+  /** `environment.list` rejects with this. */
+  environmentsError: Error | null;
   verifyAnswer: SecretVerifyResult;
   createAnswer: EnvironmentSecretsCreateResponse;
   /** The create rejects with this. */
@@ -125,6 +127,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       },
     ],
     listError: null,
+    environmentsError: null,
     verifyAnswer: { evidence: "probe_accepted" },
     createAnswer: {
       outcome: "created",
@@ -140,21 +143,24 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: PERSONAL_ENV,
-            ownerKind: "user" as const,
-            ownerId: "user-me",
-            roomId: "room-personal",
-            label: "Personal",
-            effectiveRole: "owner" as const,
-            kind: "personal" as const,
-            hostCount: 1,
-            providerHandle: null,
-          },
-        ],
-      }),
+      "environment.list": () => {
+        if (state.environmentsError !== null) throw state.environmentsError;
+        return {
+          environments: [
+            {
+              environmentId: PERSONAL_ENV,
+              ownerKind: "user" as const,
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner" as const,
+              kind: "personal" as const,
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        };
+      },
       "environment.secrets.versions": () => ({
         versions: [...state.versions],
         removal: null,
@@ -453,6 +459,34 @@ describe("a row's Verify", () => {
     expect((await screen.findByTestId("secret-verify-line")).textContent).toBe(
       "Reached the destination. The key is checked the first time an agent uses it.",
     );
+  });
+});
+
+describe("a row's Details on a Local pick", () => {
+  it("keeps Verify and the versions when the environment list cannot be read", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: "dev-box" },
+    });
+    const host = buildSecretsHost({
+      secrets: [secretFixture({ secretId: "sec-1" })],
+      environmentsError: new Error("environment list unavailable"),
+    });
+    renderPage(host);
+
+    const row = await screen.findByTestId("secret-row");
+    fireEvent.click(
+      await within(row).findByRole("button", { name: "Details" }),
+    );
+    const controls = await screen.findByTestId("secret-details-controls");
+    expect(await within(controls).findByTestId("secret-versions")).toBeTruthy();
+    fireEvent.click(within(controls).getByTestId("secret-row-verify"));
+
+    expect((await screen.findByTestId("secret-verify-line")).textContent).toBe(
+      "Reached the destination. The key is checked the first time an agent uses it.",
+    );
+    expect(host.verifyRequests).toEqual([
+      { target: "secret", secretId: "sec-1", environmentId: null },
+    ]);
   });
 });
 
