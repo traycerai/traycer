@@ -35,7 +35,10 @@ export function useBoundedRead(query: {
   useEffect(() => {
     if (!waiting) return undefined;
     const timer = setTimeout(() => setExpiredAttempt(attempt), READ_BOUND_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      setExpiredAttempt(null);
+    };
   }, [waiting, attempt]);
   const expired = waiting && expiredAttempt === attempt;
   const retry = useCallback(() => {

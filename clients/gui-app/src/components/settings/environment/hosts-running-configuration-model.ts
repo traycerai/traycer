@@ -41,6 +41,8 @@ export interface HostsRunningConfiguration {
   readonly state: "loading" | "ready" | "failed";
   readonly collisions: readonly HostNameCollision[];
   readonly retry: () => void;
+  /** Refreshes without cancelling an answer already on its way. */
+  readonly reread: () => void;
 }
 
 /** A host this window can see firsthand: the account's or the directory's row. */

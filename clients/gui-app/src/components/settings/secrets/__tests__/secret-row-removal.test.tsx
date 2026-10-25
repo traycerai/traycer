@@ -19,6 +19,7 @@ vi.mock(
       state: "ready",
       collisions: [],
       retry: () => undefined,
+      reread: () => undefined,
     }),
   }),
 );
@@ -568,6 +569,13 @@ describe("a removed secret the list has moved to removed", () => {
       );
     });
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
+  });
+
+  it("shows the empty state to a viewer who cannot see a pending removal row", async () => {
+    mountRowAs(removedHost(removal("cleanup_requested")), "viewer");
+
+    expect(await screen.findByTestId("secrets-empty")).toBeTruthy();
+    expect(screen.queryByTestId("removed-secret-row")).toBeNull();
   });
 
   it("counts the hosts still holding a copy", async () => {

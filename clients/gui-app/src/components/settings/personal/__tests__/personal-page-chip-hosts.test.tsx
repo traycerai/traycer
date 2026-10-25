@@ -214,6 +214,58 @@ describe("the Personal page chip's hosts", () => {
     expect(chipText()).toBe("");
   });
 
+  it("keeps a slow host-list reread in flight across the next pending tick", async () => {
+    windowHostOnly();
+    const pending = listed("dev", "dev-box", [
+      {
+        itemKey: "mcp_server:docs",
+        state: "received",
+        reason: null,
+        at: 1,
+      },
+    ]);
+    let reads = 0;
+    let finishSlowRead = (_response: {
+      hosts: EnvironmentHostRecordV12[];
+    }): void => {
+      throw new Error("the pending host-list reread did not start");
+    };
+    mountChip(() => {
+      reads += 1;
+      if (reads === 1) return { hosts: [pending] };
+      return new Promise((resolve) => {
+        finishSlowRead = resolve;
+      });
+    });
+
+    await settle(1_000);
+    expect(chipText()).toBe("Applying on dev-box…");
+    await settle(5_000);
+    expect(reads).toBe(2);
+    await settle(5_000);
+    expect(reads).toBe(2);
+
+    await act(async () => {
+      finishSlowRead({
+        hosts: [
+          listed("dev", "dev-box", [
+            {
+              itemKey: "mcp_server:docs",
+              state: "applied",
+              reason: null,
+              at: 2,
+            },
+          ]),
+        ],
+      });
+      await Promise.resolve();
+    });
+    await settle(1);
+
+    expect(reads).toBe(2);
+    expect(chipText()).toBe("✓ On dev-box and MacBook Pro");
+  });
+
   it("says a host hasn't confirmed once it has read Applying for 30 seconds", async () => {
     windowHostOnly();
     mountChip(() => ({
@@ -236,5 +288,69 @@ describe("the Personal page chip's hosts", () => {
       screen.getByRole("button", { name: "dev-box hasn't confirmed" }),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Details" })).toBeDefined();
+  });
+
+  it("waits another 30 seconds when the same host starts applying again", async () => {
+    windowHostOnly();
+    let applied: EnvironmentHostRecordV12["applied"] = [
+      {
+        itemKey: "mcp_server:docs",
+        state: "received",
+        reason: null,
+        at: 1,
+      },
+    ];
+    let reads = 0;
+    const harness = mountChip(() => {
+      reads += 1;
+      return { hosts: [listed("dev", "dev-box", applied)] };
+    });
+    const reread = async (): Promise<void> => {
+      const before = reads;
+      await act(async () => {
+        await harness.queryClient.refetchQueries({
+          predicate: (query) =>
+            query.queryKey.includes("environment.host.list"),
+        });
+      });
+      await settle(1);
+      expect(reads).toBe(before + 1);
+    };
+
+    await settle(1_000);
+    await settle(30_000);
+    expect(
+      screen.getByRole("button", { name: "dev-box hasn't confirmed" }),
+    ).toBeDefined();
+
+    applied = [
+      {
+        itemKey: "mcp_server:docs",
+        state: "applied",
+        reason: null,
+        at: 2,
+      },
+    ];
+    await reread();
+    expect(chipText()).toBe("✓ On dev-box and MacBook Pro");
+
+    applied = [
+      {
+        itemKey: "mcp_server:docs",
+        state: "received",
+        reason: null,
+        at: 3,
+      },
+    ];
+    await reread();
+    expect(chipText()).toBe("Applying on dev-box…");
+    await settle(29_998);
+    expect(
+      screen.queryByRole("button", { name: "dev-box hasn't confirmed" }),
+    ).toBeNull();
+    await settle(1);
+    expect(
+      screen.getByRole("button", { name: "dev-box hasn't confirmed" }),
+    ).toBeDefined();
   });
 });

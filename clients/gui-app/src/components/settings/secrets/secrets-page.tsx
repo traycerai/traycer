@@ -80,10 +80,9 @@ function readFailureText(
 }
 
 /**
- * Settings ▸ Personal ▸ Secrets on a host that serves `environment.secrets.*`:
- * the person's secrets, read through the window's own host, with Add a secret
- * and each row's Verify. No value is ever read back; a refusal (no session on
- * this computer among them) shows the host's own words.
+ * The configuration's secrets, read through the serving tier, with Add a
+ * secret and each row's Verify for editors. No value is ever read back;
+ * refusals stay beside the action that caused them.
  */
 export function SecretsPage(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -143,7 +142,9 @@ export function SecretsPage(props: {
           </Button>
         </div>
       ) : null}
-      {secrets !== null && secrets.length === 0 && removing.length === 0 ? (
+      {secrets !== null &&
+      secrets.length === 0 &&
+      (!canEdit || removing.length === 0) ? (
         <p
           className="max-w-[72ch] text-ui-sm text-muted-foreground"
           data-testid="secrets-empty"

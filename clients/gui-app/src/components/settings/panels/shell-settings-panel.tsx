@@ -544,6 +544,12 @@ function ShellSettingsPanelBody(props: {
   });
   const onUseEverywhere = (key: string, value: string): void => {
     if (envPending || clearOwnValue.isPending) return;
+    if (
+      credentialRefusal !== null &&
+      (isCredentialShapedEnvName(key) || urlCarriesCredentials(value))
+    ) {
+      return;
+    }
     beginEnvSave();
     controller.setEnv(
       { key, value },

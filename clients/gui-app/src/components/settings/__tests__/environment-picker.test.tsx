@@ -171,6 +171,7 @@ function runningOn(
     state: "ready",
     collisions: [],
     retry: () => undefined,
+    reread: () => undefined,
     ...overrides,
   };
 }
@@ -423,6 +424,7 @@ describe("<EnvironmentPicker />", () => {
         { hostName: "windows-test-machine", hostIds: ["other", "mac"] },
       ],
       retry: () => undefined,
+      reread: () => undefined,
     };
     renderPicker("mac");
     openMenu();
@@ -444,6 +446,7 @@ describe("<EnvironmentPicker />", () => {
         { hostName: "windows-test-machine", hostIds: ["other", "third"] },
       ],
       retry: () => undefined,
+      reread: () => undefined,
     };
     renderPicker("mac");
     openMenu();

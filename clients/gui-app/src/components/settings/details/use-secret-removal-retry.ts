@@ -27,6 +27,9 @@ export function useSecretRemovalRetry(
   hostId: string | null,
 ): DetailsItemRetry {
   const queryClient = useQueryClient();
+  // One mutation keeps the fresh version read and its destroy in sequence,
+  // with a shared pending/refusal state. The client is required, both calls
+  // enforce their version floor, and success invalidates the captured host.
   const retry = useMutation({
     mutationKey: settingsDetailsMutationKeys.secretRemovalRetry(),
     mutationFn: async (subject: DetailsSubject): Promise<void> => {

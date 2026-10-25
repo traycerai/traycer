@@ -243,7 +243,7 @@ const SUMMARY_WORDS: Readonly<
 function summaryGroup(entry: MovesSectionRow): string {
   if (entry.treatment === "secret") return "secret";
   const { kind, key } = entry.row;
-  if (entry.treatment === "variable") return kind;
+  if (entry.treatment === "variable" && kind !== "env_override") return kind;
   // A secret the plan moves as itself is a provider's key.
   if (kind === "secret") return "api_key";
   if (kind === "env_override")

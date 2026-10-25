@@ -60,7 +60,10 @@ function useUnconfirmedHosts(
   useEffect(() => {
     if (applying.length === 0) return undefined;
     const timer = setTimeout(() => setExpired(applying), APPLYING_BOUND_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      setExpired(null);
+    };
   }, [applying]);
   return useMemo(
     () =>
@@ -139,15 +142,15 @@ function useRereadWhilePending(
   const pending = running.hosts.some(
     (host) => reported(host) && poolReportPending(cloudReport(host), kinds),
   );
-  const { retry } = running;
+  const { reread } = running;
   useEffect(() => {
     if (!pending) return;
     return startVisibleInterval({
-      tick: retry,
+      tick: reread,
       intervalMs: REPORTS_PENDING_REFRESH_MS,
       fireOnShow: true,
     });
-  }, [pending, retry]);
+  }, [pending, reread]);
 }
 
 /**

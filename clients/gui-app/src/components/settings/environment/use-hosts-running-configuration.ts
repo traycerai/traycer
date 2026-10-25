@@ -64,6 +64,9 @@ export function useHostsRunningConfiguration(
   const retry = useCallback(() => {
     void refetch();
   }, [refetch]);
+  const reread = useCallback(() => {
+    void refetch({ cancelRefetch: false });
+  }, [refetch]);
   const localHostIds = new Set(
     computers.computers
       .filter(
@@ -107,6 +110,7 @@ export function useHostsRunningConfiguration(
     collisions: model.collisions,
     state,
     retry,
+    reread,
   };
 }
 

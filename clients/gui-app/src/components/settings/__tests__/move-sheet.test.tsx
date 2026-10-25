@@ -133,6 +133,7 @@ function mountReaching(
     state: "ready",
     collisions: [],
     retry: runningPersonalMock.retry,
+    reread: () => undefined,
   });
 }
 
@@ -372,7 +373,13 @@ describe("<MoveSheet />", () => {
   it("names nobody and holds Move to Personal while the computers running Personal are unread", async () => {
     mountWithRunning(
       { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
-      { hosts: [], state: "loading", collisions: [], retry: () => undefined },
+      {
+        hosts: [],
+        state: "loading",
+        collisions: [],
+        retry: () => undefined,
+        reread: () => undefined,
+      },
     );
     await settle();
 
@@ -388,7 +395,13 @@ describe("<MoveSheet />", () => {
     const retry = vi.fn<() => void>();
     mountWithRunning(
       { plans: [FIRST_PLAN], acceptAnswers: [ACCEPTED] },
-      { hosts: [], state: "failed", collisions: [], retry },
+      {
+        hosts: [],
+        state: "failed",
+        collisions: [],
+        retry,
+        reread: () => undefined,
+      },
     );
     await settle();
 
@@ -810,6 +823,9 @@ describe("<MoveSheet />", () => {
       screen.getByRole("button", { name: "Leave as a variable" }),
     );
     expect(text()).toBe("ANTHROPIC_AUTH_TOKEN (Claude Code), as a variable");
+    expect(screen.getByTestId("move-sheet-moves-summary").textContent).toBe(
+      "1 Claude Code env setting",
+    );
   });
 
   it("moves a key row left on this computer only from Moves to Stays", async () => {

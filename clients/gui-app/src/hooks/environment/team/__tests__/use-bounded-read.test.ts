@@ -76,6 +76,36 @@ describe("useBoundedRead", () => {
     expect(result.current).toMatchObject({ pending: false, failed: false });
   });
 
+  it("waits a fresh bound when a read becomes pending again after a late answer", () => {
+    let query: Query = {
+      isPending: true,
+      isError: false,
+      refetch: () => Promise.resolve(),
+    };
+    const { result, rerender } = renderHook(() => useBoundedRead(query));
+
+    act(() => {
+      vi.advanceTimersByTime(READ_BOUND_MS);
+    });
+    expect(result.current.failed).toBe(true);
+
+    query = { ...query, isPending: false };
+    rerender();
+    expect(result.current).toMatchObject({ pending: false, failed: false });
+
+    query = { ...query, isPending: true };
+    rerender();
+    expect(result.current).toMatchObject({ pending: true, failed: false });
+    act(() => {
+      vi.advanceTimersByTime(READ_BOUND_MS - 1);
+    });
+    expect(result.current.pending).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toMatchObject({ pending: false, failed: true });
+  });
+
   it("reports a failed read at once, without waiting", () => {
     const { result } = renderHook(() =>
       useBoundedRead({
