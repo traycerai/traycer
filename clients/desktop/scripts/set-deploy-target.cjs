@@ -115,7 +115,12 @@ function writeStagingIapKey() {
     process.exit(2);
   }
   fs.mkdirSync(path.dirname(iapKeyPath), { recursive: true });
-  fs.writeFileSync(iapKeyPath, raw, { mode: 0o600 });
+  // World-readable on purpose: electron-builder keeps this mode in the copy
+  // it packages, and a deb or rpm installs that copy as root, so 0600 would
+  // leave the app's own user unable to read it and every staging sandbox call
+  // refused. File mode is not what keeps the key; packaging it only into a
+  // staging build is.
+  fs.writeFileSync(iapKeyPath, raw, { mode: 0o644 });
 }
 
 // The stamp file is what `release-target-electron-builder.cjs` and the

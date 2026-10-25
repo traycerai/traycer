@@ -301,7 +301,7 @@ describe("set-deploy-target IAP service-account key", () => {
     `--target-input=${fixture.targetInputPath}`,
   ];
 
-  it("stamps the audience and writes the key, owner-only, for a staging target behind IAP", () => {
+  it("stamps the audience and writes the key, readable by the installed app's user, for a staging target behind IAP", () => {
     const fixture = createFixture("desktop");
     withIapAudience(fixture);
 
@@ -316,7 +316,7 @@ describe("set-deploy-target IAP service-account key", () => {
       `iapAudience: "${IAP_AUDIENCE}"`,
     );
     expect(readFileSync(iapKeyPath(fixture), "utf8")).toBe(IAP_KEY_FIXTURE);
-    expect(statSync(iapKeyPath(fixture)).mode & 0o777).toBe(0o600);
+    expect(statSync(iapKeyPath(fixture)).mode & 0o777).toBe(0o644);
   });
 
   it("exits 2 without echoing the key when it is absent or not a service-account key", () => {
