@@ -466,7 +466,7 @@ function RailCommentsSidebar(): ReactNode {
   return (
     <aside
       aria-label="Comments sidebar"
-      style={{ width: 340, flexShrink: 0, overflow: "auto" }}
+      style={{ width: "min(340px, 30vw)", flexShrink: 0, overflow: "auto" }}
     >
       <CommentSidebarPanel epicId={EPIC_ID} activeArtifactId={ARTIFACT_ID} />
     </aside>
