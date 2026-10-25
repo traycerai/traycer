@@ -39,16 +39,29 @@ async function requestInvitations<T>(
         signal: abort.signal,
       },
     );
+    const accepting = environmentId !== null;
     if (response.status === 401 || response.status === 403) {
-      throw new Error("Sign in again to review team invitations.");
+      throw new Error(
+        accepting
+          ? "Sign in again to accept this invitation."
+          : "Sign in again to review team invitations.",
+      );
     }
     if (!response.ok) {
-      throw new Error("Couldn't reach team invitations. Try again.");
+      throw new Error(
+        accepting
+          ? "Couldn't accept this invitation. Try again."
+          : "Couldn't reach team invitations. Try again.",
+      );
     }
     const body: unknown = await response.json().catch(() => null);
     const parsed = schema.safeParse(body);
     if (!parsed.success) {
-      throw new Error("Couldn't read team invitations. Try again.");
+      throw new Error(
+        accepting
+          ? "Couldn't confirm this invitation. Check your teams and try again."
+          : "Couldn't read team invitations. Try again.",
+      );
     }
     return parsed.data;
   } finally {
