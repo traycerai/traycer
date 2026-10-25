@@ -185,6 +185,7 @@ import {
 import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
+import { opencodeLineHeldSchema } from "@traycer/protocol/common/opencode-line";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -6259,13 +6260,22 @@ const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
   }),
 );
 
-// The live windowed snapshot reopens harness ids in the queue and tail.
-// The record head, active turn and fallback tuples keep the closed enum:
-// they are what a peer drives (`open-harness-wire.ts`).
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot shipped at `chat.subscribe@1.37`: harness ids reopened
+// in the queue and tail. The record head, active turn and fallback tuples keep
+// the closed enum: they are what a peer drives (`open-harness-wire.ts`).
+const openChatWindowedSnapshotSchemaPreLineHeld = lazySchema(() =>
   chatWindowedSnapshotSchema.extend({
     queue: openChatQueueStateSchema,
     tail: openChatTranscriptWindowSchema,
+  }),
+);
+
+// The live windowed snapshot (`chat.subscribe@1.38`): `1.37`'s with
+// `opencodeLineHeld`, present while the chat stays on its recorded OpenCode
+// line although the saved selection names the other one, and absent otherwise.
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreLineHeld.extend({
+    opencodeLineHeld: opencodeLineHeldSchema.optional(),
   }),
 );
 export type OpenChatWindowedSnapshot = z.infer<
@@ -6322,8 +6332,20 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135 =
     }),
   );
 
-// The live snapshot carries the not-applied outcome flag.
+// The snapshot shipped at `chat.subscribe@1.37`: the not-applied outcome flag,
+// no `opencodeLineHeld`.
 const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137 =
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchemaPreLineHeld,
+    }),
+  );
+
+// The live snapshot carries `opencodeLineHeld`.
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138 =
   lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
@@ -7117,8 +7139,25 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
   ]),
 );
 
+/** Frozen 1.37: the not-applied outcome flag, no `opencodeLineHeld`. */
+const chatSubscribeServerFrameSchemaV137 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV137,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV137,
+  ]),
+);
+
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.37`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.38`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7128,7 +7167,7 @@ const chatSubscribeServerFrameSchemaV135 = lazySchema(() =>
  */
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV137,
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV138,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
@@ -8240,6 +8279,20 @@ export const chatSubscribeV137 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 37 } as const,
   openRequestSchema: chatSubscribeV136.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV137,
   clientFrameSchema: chatSubscribeV136.clientFrameSchema,
+});
+
+/**
+ * 1.38 adds `opencodeLineHeld` to the snapshot: why a chat stays on its
+ * recorded OpenCode line although the saved selection names the other one.
+ * Optional, and stripped by name below `1.38`, where absent reads as "not
+ * held", which is also all an older host can say.
+ */
+export const chatSubscribeV138 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 38 } as const,
+  openRequestSchema: chatSubscribeV137.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeV137.clientFrameSchema,
 });

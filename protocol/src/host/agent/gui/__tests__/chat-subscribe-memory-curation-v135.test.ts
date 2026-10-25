@@ -5,6 +5,7 @@ import {
   chatSubscribeV135,
   chatSubscribeV136,
   chatSubscribeV137,
+  chatSubscribeV138,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
@@ -106,14 +107,17 @@ const SURFACES = [
 ] as const;
 
 describe("chat.subscribe@1.35 registration", () => {
-  it("binds chatSubscribeV135 above the frozen 1.34, under the 1.37 head", () => {
-    expect(line.latestMinor).toBe(37);
+  it("binds chatSubscribeV135 above the frozen 1.34, under the 1.38 head", () => {
+    expect(line.latestMinor).toBe(38);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
     expect(line.versions[34].contract).toBe(chatSubscribeV134);
     expect(chatSubscribeV135.schemaVersion).toEqual({ major: 1, minor: 35 });
-    expect(chatSubscribeV137.serverFrameSchema).toBe(
+    expect(chatSubscribeV137.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV138.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV135.serverFrameSchema).not.toBe(

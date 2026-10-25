@@ -393,6 +393,7 @@ import {
   chatSubscribeV135,
   chatSubscribeV136,
   chatSubscribeV137,
+  chatSubscribeV138,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -4155,15 +4156,40 @@ export const providersSetSelectionUpgradeV21ToV22 = defineUpgradePath<
 });
 
 /**
+ * `providers.setSelection@2.3` has 2.2's request and response. Its meaning is
+ * the minor: a selection naming a Managed line, saved by a caller on 2.3, moves
+ * the caller's existing OpenCode-family chats to that line from their next
+ * message. The same selection saved below 2.3 keeps its earlier meaning, which
+ * is new chats only. The host reads the caller's minor from the connection
+ * manifest, so the request needs no field for it.
+ */
+export const providersSetSelectionV23 = defineRpcContract({
+  method: "providers.setSelection",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: providersSetSelectionV22.requestSchema,
+  responseSchema: providersSetSelectionV22.responseSchema,
+});
+
+export const providersSetSelectionUpgradeV22ToV23 = defineUpgradePath<
+  typeof providersSetSelectionV22,
+  typeof providersSetSelectionV23
+>({
+  from: { major: 2, minor: 2 },
+  to: { major: 2, minor: 3 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
  * The cross-major downgrade from the head to the 1.0 line. The 1.0 request is
  * strict at the top level only; its selection arm is a plain object, so the
  * parse strips `line` rather than refusing it.
  */
-export const providersSetSelectionDowngradeV22ToV10 = defineDowngradePath<
-  typeof providersSetSelectionV22,
+export const providersSetSelectionDowngradeV23ToV10 = defineDowngradePath<
+  typeof providersSetSelectionV23,
   typeof providersSetSelectionV10
 >({
-  from: { major: 2, minor: 2 },
+  from: { major: 2, minor: 3 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) =>
     downgradeProviderRequestForV10(
@@ -12137,7 +12163,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: providersSetSelectionV20,
@@ -12151,9 +12177,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersSetSelectionV22,
           upgradeFromPreviousVersion: providersSetSelectionUpgradeV21ToV22,
         },
+        3: {
+          contract: providersSetSelectionV23,
+          upgradeFromPreviousVersion: providersSetSelectionUpgradeV22ToV23,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersSetSelectionDowngradeV22ToV10,
+        1: providersSetSelectionDowngradeV23ToV10,
       },
     },
   },
@@ -15171,7 +15201,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 37,
+      latestMinor: 38,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15374,6 +15404,8 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // OpenCode rows, whose plain Managed selection defaults to line 2.
         36: { contract: chatSubscribeV136 },
         37: { contract: chatSubscribeV137 },
+        // @1.38 adds `opencodeLineHeld` to the snapshot.
+        38: { contract: chatSubscribeV138 },
       },
     },
   },
