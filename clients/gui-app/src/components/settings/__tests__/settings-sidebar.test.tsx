@@ -331,14 +331,9 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(ids).not.toContain("service");
   });
 
-  it("labels the agent-selection section for selection, not the Task's Agents", () => {
-    const ids = SETTINGS_SECTIONS.map((section) => section.id);
-    const labels = SETTINGS_SECTIONS.map((section) => section.label);
-    // The id stays `agents` (compatibility identifier + `/settings/agents`
-    // route); only the product copy moves.
-    expect(ids).toContain("agents");
-    expect(labels).toContain("Agent selection");
-    expect(labels).not.toContain("Agents");
+  it("labels the agents section Agents; the id stays the compatibility identifier", () => {
+    const section = SETTINGS_SECTIONS.find(({ id }) => id === "agents");
+    expect(section?.label).toBe("Agents");
   });
 
   it("labels application sounds apart from host notification events", () => {
@@ -724,9 +719,9 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["mcp-servers", "personal"],
   ["skills", "personal"],
   ["permissions", "personal"],
+  ["agents", "personal"],
   ["fallback", "personal"],
   ["shell", "personal"],
-  ["agents", "personal"],
   ["browser-agent-access", "personal"],
   ["secrets", "personal"],
   ["sandboxes", "personal"],
@@ -854,9 +849,17 @@ describe("<SettingsSidebar /> scope groups", () => {
     const expected = new Map<string, Array<string>>();
     for (const [id, group] of EXPECTED_SECTION_GROUPS) {
       if (id === "delete-account") continue;
-      // Machine setup is retired from navigation; Members is a team's page,
-      // and the default pick is Personal.
-      if (id === "machine-setup" || id === "members") continue;
+      // Machine setup, Agent definitions and Browser agent access are retired
+      // from navigation; Members is a team's page, and the default pick is
+      // Personal.
+      if (
+        id === "machine-setup" ||
+        id === "agent-definitions" ||
+        id === "browser-agent-access" ||
+        id === "members"
+      ) {
+        continue;
+      }
       const heading = GROUP_HEADING_BY_ID[group];
       expected.set(heading, [...(expected.get(heading) ?? []), id]);
     }
@@ -912,9 +915,7 @@ describe("<SettingsSidebar /> scope groups", () => {
       "fallback",
       "shell",
       "agents",
-      "browser-agent-access",
       "secrets",
-      "agent-definitions",
       "devices",
       "usage",
       "credits",
@@ -965,18 +966,53 @@ describe("<SettingsSidebar /> Environment pick", () => {
   const present = (id: string): boolean =>
     screen.queryByTestId(`settings-sidebar-item-${id}`) !== null;
 
-  it("lists Permissions right after Skills and Sandboxes, with no Members, under Personal", async () => {
-    await renderRail();
-
-    const ids = Array.from(
+  /** The Environment group's rows by label, in rail order. */
+  function environmentRows(): string[] {
+    const heading = Array.from(document.querySelectorAll("h2")).find(
+      (node) => node.textContent === "Environment",
+    );
+    const next = Array.from(document.querySelectorAll("h2")).find(
+      (node) => node.textContent === "Account",
+    );
+    if (heading === undefined || next === undefined) {
+      throw new Error("the Environment group did not render");
+    }
+    return Array.from(
       document.querySelectorAll<HTMLElement>(
         "[data-testid^='settings-sidebar-item-']",
       ),
-    ).map((node) => node.dataset.testid?.replace("settings-sidebar-item-", ""));
-    expect(ids.indexOf("permissions")).toBe(ids.indexOf("skills") + 1);
-    expect(present("sandboxes")).toBe(true);
-    expect(present("members")).toBe(false);
+    )
+      .filter(
+        (row) =>
+          (heading.compareDocumentPosition(row) &
+            Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0 &&
+          (next.compareDocumentPosition(row) &
+            Node.DOCUMENT_POSITION_PRECEDING) !==
+            0,
+      )
+      .map((row) => row.textContent);
+  }
+
+  const PERSONAL_ROWS = [
+    "Providers",
+    "MCP servers",
+    "Skills",
+    "Permissions",
+    "Agents",
+    "Model routing",
+    "Variables & shells",
+    "Secrets",
+    "Sandboxes",
+  ];
+
+  it("lists Personal's Environment rows exactly, with no retired page and no Members", async () => {
+    await renderRail();
+
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
     expect(present("machine-setup")).toBe(false);
+    expect(present("agent-definitions")).toBe(false);
+    expect(present("browser-agent-access")).toBe(false);
     expect(present("credits")).toBe(true);
   });
 
@@ -987,12 +1023,14 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    for (const id of ["mcp-servers", "skills", "sandboxes", "members"]) {
-      expect(present(id), id).toBe(false);
-    }
-    for (const id of ["providers", "permissions", "secrets", "agents"]) {
-      expect(present(id), id).toBe(true);
-    }
+    expect(environmentRows()).toEqual([
+      "Providers",
+      "Permissions",
+      "Agents",
+      "Model routing",
+      "Variables & shells",
+      "Secrets",
+    ]);
   });
 
   it("shows Members when a team is picked", async () => {
@@ -1002,7 +1040,6 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    expect(present("members")).toBe(true);
-    expect(present("mcp-servers")).toBe(true);
+    expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
   });
 });

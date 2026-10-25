@@ -12,7 +12,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-ids";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
@@ -62,7 +61,7 @@ export function useTeamPlanLinkStartMutation(
   HostRpcError,
   TeamPlanLinkStart
 > {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   return useHostMutation<
     HostRpcRegistry,
     "providers.link",
@@ -94,7 +93,7 @@ export function useTeamPlanLinkCompleteMutation(
   string,
   { readonly hostId: string | null }
 > {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -133,7 +132,7 @@ export function useTeamPlanLinkPollQuery(
   linkId: string | null,
   intervalMs: number,
 ): UseQueryResult<LinkCompleteResponse, HostRpcError> {
-  const client = usePoolTierHostClient(useHostClient());
+  const client = useHostClient();
   const queryClient = useQueryClient();
   const poll = useHostQuery({
     client,

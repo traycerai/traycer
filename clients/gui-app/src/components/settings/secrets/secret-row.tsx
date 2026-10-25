@@ -22,40 +22,34 @@ import { useDetailsEnvironmentId } from "@/components/settings/details/use-detai
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  secretKindLabel,
-  secretProtocolLabel,
-} from "@/lib/sandboxes/secret-intake-copy";
-import {
   secretVerifyLine,
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
   SECRET_PENDING_REVIEW_LABEL,
-  SECRET_READABLE_WHERE,
   SECRET_RECOVERY_FALLBACK,
   SECRET_RECOVERY_STEPS,
   SECRET_RECOVERY_TITLE,
   SECRET_RESTART_LINE,
   SECRET_REVOKED_LABEL,
   SECRETS_NEED_UPDATED_HOST,
+  secretAddedClause,
   secretRemovePreview,
+  secretUsedByLine,
+  secretRowDetail,
+  secretValueOrigin,
 } from "@/lib/sandboxes/secrets-page-copy";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
+import { useSecretMcpServerNames } from "@/hooks/environment/team/use-mcp-servers";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { cn } from "@/lib/utils";
 
 const VERIFY_TONE: Readonly<Record<SecretVerifyLine["tone"], string>> = {
   success: "text-success-foreground",
   warning: "text-warning-foreground",
 };
-
-/** What a row says about its secret: kind, protocol and where it goes. */
-function secretSummary(secret: EnvironmentSecret): string {
-  const parts = [secretKindLabel(secret.kind)];
-  if (secret.protocol !== null)
-    parts.push(secretProtocolLabel(secret.protocol));
-  if (secret.destinations.length > 0)
-    parts.push(secret.destinations.join(", "));
-  return parts.join(" · ");
-}
 
 function Spinner(props: { readonly busy: boolean }): ReactNode {
   return props.busy ? (
@@ -129,12 +123,20 @@ function removeBlockedReason(
 function SecretRowIdentity(props: {
   readonly secret: EnvironmentSecret;
   readonly revoked: boolean;
+  readonly origin: string | null;
 }): ReactNode {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <span className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-ui-sm text-foreground">
-          {props.secret.name}
+        <span
+          className="min-w-0 text-ui-sm text-muted-foreground"
+          data-testid="secret-row-line"
+        >
+          <span className="font-mono text-foreground">{props.secret.name}</span>
+          {` · ${secretRowDetail({
+            destinations: props.secret.destinations,
+            origin: props.origin,
+          })}`}
         </span>
         {props.revoked ? (
           <Badge variant="outline">{SECRET_REVOKED_LABEL}</Badge>
@@ -143,9 +145,6 @@ function SecretRowIdentity(props: {
           <Badge variant="outline">{SECRET_PENDING_REVIEW_LABEL}</Badge>
         ) : null}
       </span>
-      <span className="min-w-0 text-ui-xs text-muted-foreground">
-        {secretSummary(props.secret)}
-      </span>
     </div>
   );
 }
@@ -153,30 +152,13 @@ function SecretRowIdentity(props: {
 function SecretRowControls(props: {
   readonly revoked: boolean;
   readonly hasVersion: boolean;
-  readonly verifying: boolean;
   readonly removing: boolean;
-  readonly showVersions: boolean;
   readonly details: ReactNode;
-  readonly onVerify: () => void;
   readonly onReplace: () => void;
-  readonly onVersions: () => void;
   readonly onRemove: () => void;
 }): ReactNode {
   return (
     <div className="flex shrink-0 flex-wrap gap-1">
-      {props.revoked ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={props.verifying}
-          onClick={props.onVerify}
-          data-testid="secret-row-verify"
-        >
-          Verify
-          <Spinner busy={props.verifying} />
-        </Button>
-      )}
       {props.revoked || !props.hasVersion ? null : (
         <Button
           type="button"
@@ -185,19 +167,9 @@ function SecretRowControls(props: {
           onClick={props.onReplace}
           data-testid="secret-row-replace"
         >
-          Replace value
+          Replace
         </Button>
       )}
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        aria-expanded={props.showVersions}
-        onClick={props.onVersions}
-        data-testid="secret-row-versions"
-      >
-        Versions
-      </Button>
       {props.revoked ? null : (
         <Button
           type="button"
@@ -215,56 +187,123 @@ function SecretRowControls(props: {
   );
 }
 
-function SecretRowHistory(props: {
-  readonly secret: EnvironmentSecret;
+/** A replacement's progress, on the row until it settles. */
+function SecretRowReplacement(props: {
+  readonly secretId: string;
   readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string | null;
   readonly hostName: (hostId: string) => string;
-  readonly onChanged: () => void;
   readonly replacements: number;
-  readonly showVersions: boolean;
 }): ReactNode {
+  if (props.replacements === 0) return null;
   return (
     <>
-      {props.replacements > 0 || props.showVersions ? (
-        <SecretRotationStatus
-          key={props.replacements}
-          client={props.client}
-          secretId={props.secret.secretId}
-          hostName={props.hostName}
-        />
-      ) : null}
-      {props.replacements > 0 ? (
-        <p
-          className="max-w-[72ch] text-ui-xs text-muted-foreground"
-          data-testid="secret-restart-line"
-        >
-          {SECRET_RESTART_LINE}
-        </p>
-      ) : null}
-      {props.showVersions ? (
-        <div className="flex flex-col gap-3 pl-3">
-          <SecretVersionsList
-            secret={props.secret}
-            client={props.client}
-            hostId={props.hostId}
-            onChanged={props.onChanged}
-          />
-          <RecoveryOrder />
-        </div>
-      ) : null}
+      <SecretRotationStatus
+        key={props.replacements}
+        client={props.client}
+        secretId={props.secretId}
+        hostName={props.hostName}
+      />
+      <p
+        className="max-w-[72ch] text-ui-xs text-muted-foreground"
+        data-testid="secret-restart-line"
+      >
+        {SECRET_RESTART_LINE}
+      </p>
     </>
   );
 }
 
 /**
- * One secret on Settings ▸ Personal ▸ Secrets: its name, what it is and
- * where it goes, where its value is readable, Verify, Replace value with the
- * replacement's progress, Remove's confirmation, and its versions with the
- * recovery order. No value is ever here. Verify and the versions act on the
- * secret by id, so they work for every kind, those already stored included.
- * A held secret's pending-review badge stays; P5 adds its verbs.
+ * What a secret's Details holds besides its status: Verify, the current
+ * rotation, the versions with Undo and Destroy, and the recovery order.
  */
+function SecretDetailsControls(props: {
+  readonly secret: EnvironmentSecret;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+  readonly hostName: (hostId: string) => string;
+  readonly onChanged: () => void;
+  readonly revoked: boolean;
+  readonly verifying: boolean;
+  readonly verifyLine: SecretVerifyLine | null;
+  readonly onVerify: () => void;
+}): ReactNode {
+  return (
+    <div
+      className="flex flex-col gap-3 py-3"
+      data-testid="secret-details-controls"
+    >
+      {props.revoked ? null : (
+        <div className="flex flex-col items-start gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={props.verifying}
+            onClick={props.onVerify}
+            data-testid="secret-row-verify"
+          >
+            Verify
+            <Spinner busy={props.verifying} />
+          </Button>
+          {props.verifyLine === null ? null : (
+            <p
+              role="status"
+              className={cn(
+                "max-w-[72ch] text-ui-xs",
+                VERIFY_TONE[props.verifyLine.tone],
+              )}
+              data-testid="secret-verify-line"
+            >
+              {props.verifyLine.text}
+            </p>
+          )}
+        </div>
+      )}
+      <SecretRotationStatus
+        client={props.client}
+        secretId={props.secret.secretId}
+        hostName={props.hostName}
+      />
+      <SecretVersionsList
+        secret={props.secret}
+        client={props.client}
+        hostId={props.hostId}
+        onChanged={props.onChanged}
+      />
+      <RecoveryOrder />
+    </div>
+  );
+}
+
+/**
+ * One secret on Settings ▸ Personal ▸ Secrets: "STRIPE_KEY · Set · sent to
+ * api.stripe.com · added by you 24 Oct" with Replace, Remove and Details.
+ * Details holds Verify, the versions and the recovery order; a replacement's
+ * progress stays on the row. No value is ever here. Verify and the versions
+ * act on the secret by id, so they work for every kind, those already stored
+ * included. A held secret's pending-review badge stays.
+ */
+type SecretVersionsAnswer = ResponseOfMethod<
+  HostRpcRegistry,
+  "environment.secrets.versions"
+>;
+type SecretVersion = SecretVersionsAnswer["versions"][number];
+
+/** What a row reads from its secret's versions, before they have answered too. */
+function secretRowVersions(answer: SecretVersionsAnswer | undefined): {
+  readonly current: SecretVersion | undefined;
+  readonly first: SecretVersion | undefined;
+  readonly removal: SecretVersionsAnswer["removal"] | null;
+} {
+  const versions = answer?.versions ?? [];
+  return {
+    current: versions.find((version) => version.current),
+    first: versions.find((version) => version.ordinal === 1),
+    removal: answer?.removal ?? null,
+  };
+}
+
 export function SecretRow(props: {
   readonly secret: EnvironmentSecret;
   readonly client: HostClient<HostRpcRegistry>;
@@ -279,15 +318,21 @@ export function SecretRow(props: {
   // Each accepted replacement remounts the status, so it reads the new
   // rotation from the start and re-reads it until it settles.
   const [replacements, setReplacements] = useState(0);
-  const [showVersions, setShowVersions] = useState(false);
   const actions = useSecretRowActions(props);
   const environmentId = useDetailsEnvironmentId(props.client);
-  const removal = actions.versions.data?.removal ?? null;
+  const source = useConfigurationSource();
+  // Personal's values, and a computer's own, are all the person's; a team's
+  // author is not on the wire.
+  const byYou = source.kind === "host" || source.configuration === "personal";
+  // The computers running Personal hold a copy of Personal's; a team's
+  // computers and every sandbox use the value without one.
+  const onPersonal = useEnvironmentPick().kind === "personal";
+  const holders = usePersonalComputers(onPersonal).participants;
+  const usedBy = secretUsedByLine(
+    useSecretMcpServerNames(secret.secretId, removing),
+  );
+  const { current, first, removal } = secretRowVersions(actions.versions.data);
   const revoked = secret.revoked || removal !== null;
-  const versionLabel =
-    actions.currentVersion === undefined
-      ? "unknown"
-      : String(actions.currentVersion.ordinal);
   const line = verifyFeedback(
     actions.verify.data,
     actions.verify.error,
@@ -319,13 +364,17 @@ export function SecretRow(props: {
       data-secret-name={secret.name}
     >
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <SecretRowIdentity secret={secret} revoked={revoked} />
+        <SecretRowIdentity
+          secret={secret}
+          revoked={revoked}
+          origin={
+            current === undefined ? null : secretValueOrigin(current, byYou)
+          }
+        />
         <SecretRowControls
           revoked={revoked}
           hasVersion={secret.currentVersionId !== null}
-          verifying={actions.verify.isPending}
           removing={actions.remove.isPending}
-          showVersions={showVersions}
           details={
             environmentId === null ? null : (
               <SettingsDetailsButton
@@ -335,29 +384,35 @@ export function SecretRow(props: {
                   key: secret.secretId,
                 }}
                 title={secret.name}
+                controls={
+                  <SecretDetailsControls
+                    secret={secret}
+                    client={props.client}
+                    hostId={props.hostId}
+                    hostName={props.hostName}
+                    onChanged={props.onChanged}
+                    revoked={revoked}
+                    verifying={actions.verify.isPending}
+                    verifyLine={line}
+                    onVerify={() =>
+                      actions.verify.mutate({
+                        target: "secret",
+                        secretId: secret.secretId,
+                        environmentId: actions.environmentId,
+                      })
+                    }
+                  />
+                }
               />
             )
           }
-          onVerify={() =>
-            actions.verify.mutate({
-              target: "secret",
-              secretId: secret.secretId,
-              environmentId: actions.environmentId,
-            })
-          }
           onReplace={() => setReplacing(true)}
-          onVersions={() => setShowVersions((open) => !open)}
           onRemove={() => {
             actions.remove.reset();
             setRemoving(true);
           }}
         />
       </div>
-      {revoked ? null : (
-        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-          {SECRET_READABLE_WHERE}
-        </p>
-      )}
       {removal === null ? null : (
         <SecretRemovalStatus
           removal={removal}
@@ -374,23 +429,11 @@ export function SecretRow(props: {
           {removeError}
         </p>
       )}
-      {line === null ? null : (
-        <p
-          role="status"
-          className={cn("max-w-[72ch] text-ui-xs", VERIFY_TONE[line.tone])}
-          data-testid="secret-verify-line"
-        >
-          {line.text}
-        </p>
-      )}
-      <SecretRowHistory
-        secret={secret}
+      <SecretRowReplacement
+        secretId={secret.secretId}
         client={props.client}
-        hostId={props.hostId}
         hostName={props.hostName}
-        onChanged={props.onChanged}
         replacements={replacements}
-        showVersions={showVersions}
       />
       <ReplaceSecretValueDialog
         open={replacing}
@@ -403,11 +446,35 @@ export function SecretRow(props: {
         open={removing}
         onOpenChange={setRemoving}
         title={`Remove ${secret.name}?`}
-        description={secretRemovePreview({
-          origin: "unknown",
-          version: versionLabel,
-          hosts: "unknown",
-        })}
+        description={
+          <>
+            {usedBy === null ? null : (
+              <span className="block" data-testid="secret-remove-used-by">
+                {usedBy.before}
+                <Button
+                  type="button"
+                  variant="link"
+                  size="inline-xs"
+                  onClick={() => {
+                    setRemoving(false);
+                    navigateToSettingsSection("mcp-servers");
+                  }}
+                >
+                  {usedBy.link}
+                </Button>
+                {usedBy.after}
+              </span>
+            )}
+            {secretRemovePreview({
+              added:
+                first === undefined
+                  ? null
+                  : secretAddedClause(first.createdAt, byYou),
+              version: current === undefined ? null : current.ordinal,
+              computers: holders.map((host) => host.name),
+            })}
+          </>
+        }
         cascadeSummary={null}
         actionLabel="Remove"
         isPending={actions.remove.isPending}

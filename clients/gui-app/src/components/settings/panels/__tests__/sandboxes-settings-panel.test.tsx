@@ -343,6 +343,7 @@ function hostPage(): TeamPageHarness {
         avatarUrl: null,
         linkedPlan: false,
         invitedAddress: null,
+        email: null,
       })),
       nextCursor: null,
       legacyRoleNoticeSeenAt: null,

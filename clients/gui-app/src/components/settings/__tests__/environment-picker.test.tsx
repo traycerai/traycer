@@ -5,7 +5,9 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import {
@@ -134,9 +136,7 @@ describe("<EnvironmentPicker />", () => {
     const row = screen.getByTestId("environment-picker-local-old");
     expect(row.textContent).toContain("Old laptop");
     expect(row.textContent).toContain("Local");
-    expect(row.textContent).toContain(
-      "not moved · Personal's settings are not on it",
-    );
+    expect(row.textContent).toContain("its own settings, not in Personal yet");
     expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
       "Personalyour settings · on MacBook Pro, dev-box",
     );
@@ -148,6 +148,49 @@ describe("<EnvironmentPicker />", () => {
     });
   });
 
+  it("draws the Move to Personal verb after the row's subtitle, still its own menu item", () => {
+    answer("mac", running, V11);
+    answer("old", awaiting, V11);
+    renderPicker("mac");
+    openMenu();
+
+    const verb = screen.getByRole("menuitem", { name: "Move to Personal" });
+    expect(verb).toBe(screen.getByTestId("environment-picker-move-old"));
+    expect(verb.textContent).toBe("· Move to Personal");
+    expect(verb.querySelector("[aria-hidden]")?.textContent).toContain("·");
+  });
+
+  it("explains the Local badge on hover, in its row", async () => {
+    answer("mac", running, V11);
+    answer("old", awaiting, V11);
+    renderPicker("mac");
+    openMenu();
+
+    const badge = within(
+      screen.getByTestId("environment-picker-local-old"),
+    ).getByText("Local");
+    await userEvent.hover(badge);
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Settings on this computer only",
+    );
+  });
+
+  it("explains the Local badge on the trigger when the pick is Local", async () => {
+    answer("old", awaiting, V11);
+    renderPicker("old");
+
+    await userEvent.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Local",
+      ),
+    );
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Settings on this computer only",
+    );
+  });
+
   it("draws a host whose consent is recorded as partly moved, and finish moving opens its Overview", () => {
     answer("old", partlyMoved, V11);
     renderPicker("mac");
@@ -155,7 +198,7 @@ describe("<EnvironmentPicker />", () => {
 
     expect(
       screen.getByTestId("environment-picker-local-old").textContent,
-    ).toContain("partly moved");
+    ).toContain("partly in Personal");
     expect(screen.queryByTestId("environment-picker-move-old")).toBeNull();
 
     fireEvent.click(screen.getByTestId("environment-picker-finish-old"));
@@ -258,7 +301,7 @@ describe("<EnvironmentPicker />", () => {
 
     expect(
       screen.getByTestId("environment-picker-local-mac").textContent,
-    ).toContain("not moved · Personal's settings are not on it");
+    ).toContain("its own settings, not in Personal yet");
     expect(screen.queryByTestId("environment-picker-local-dev")).toBeNull();
     fireEvent.click(screen.getByTestId("environment-picker-move-mac"));
     expect(useMoveSheetStore.getState().target).toEqual({

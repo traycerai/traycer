@@ -17,6 +17,7 @@ import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dia
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   mountTeamPage,
+  personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -78,6 +79,17 @@ const environmentList = {
       kind: "team" as const,
       hostCount: 1,
       providerHandle: "handle-a",
+    },
+    {
+      environmentId: "env-personal",
+      ownerKind: "user" as const,
+      ownerId: "user-me",
+      roomId: "room-personal",
+      label: "Me",
+      effectiveRole: "owner" as const,
+      kind: "personal" as const,
+      hostCount: 1,
+      providerHandle: null,
     },
   ],
 };
@@ -200,6 +212,38 @@ describe("TeamPlans", () => {
     });
   });
 
+  it.each([
+    ["a team", poolSource("admin"), "Couldn't read Acme's plans."],
+    ["Personal", personalPoolSource(), "Couldn't read your plans."],
+  ])(
+    "names %s when the plans cannot be read, and Retry reads again",
+    async (_name, source, line) => {
+      const harness = mountTeamPage(source, {
+        "environment.plans.list": () => {
+          throw new Error("host unavailable");
+        },
+        "environment.list": () => environmentList,
+      });
+      render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const failure = await screen.findByText(line);
+      const reads = harness.paramsOf("environment.plans.list").length;
+      await userEvent.click(
+        within(failure.closest("p") ?? failure).getByRole("button", {
+          name: "Retry",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.plans.list").length,
+        ).toBeGreaterThan(reads);
+      });
+    },
+  );
+
   it("opens the link dialog on this team's environment", async () => {
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.plans.list": () => plans,
@@ -288,6 +332,40 @@ describe("TeamGuide", () => {
       { environmentId: "env-a" },
     ]);
   });
+
+  it.each([
+    [
+      "a team",
+      poolSource("editor"),
+      "This replaces Acme's selection guide with the default for every member. Changes anyone made to it are lost.",
+    ],
+    [
+      "Personal",
+      personalPoolSource(),
+      "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost.",
+    ],
+  ])(
+    "confirms a guide reset for %s in that configuration's words",
+    async (_name, source, sentence) => {
+      const harness = mountTeamPage(
+        source,
+        guideHandlers({ text: "Prefer sonnet", revision: "rev-1" }, {}),
+      );
+      render(<TeamGuide />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(await screen.findByTestId("team-guide-revert"));
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByText("Reset to default instructions?"),
+      ).toBeTruthy();
+      await waitFor(() => {
+        expect(within(dialog).getByText(sentence)).toBeTruthy();
+      });
+      expect(
+        within(dialog).getByRole("button", { name: "Reset to default" }),
+      ).toBeTruthy();
+    },
+  );
 
   it("gives a viewer the guide text with no editor verbs", async () => {
     const harness = mountTeamPage(

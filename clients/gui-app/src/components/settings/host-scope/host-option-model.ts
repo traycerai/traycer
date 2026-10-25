@@ -395,7 +395,7 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
  * icon they cannot see.
  */
 export function hostOptionKindLabel(host: HostScopeOption): string {
-  if (host.isLocalMachine) return "This machine";
+  if (host.isLocalMachine) return "This computer";
   if (host.sandbox !== null) return "Sandbox";
   if (host.entry?.kind === "remote") return "Remote host";
   if (host.entry?.kind === "mock") return "Mock host";

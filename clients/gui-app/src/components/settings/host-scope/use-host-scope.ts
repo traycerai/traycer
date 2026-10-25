@@ -130,8 +130,9 @@ export function useHostScope(): HostScope {
  * Account pages follow the person, so they read through the window's own
  * host, `useHostScopeFor`'s answer to a `null` selection. Environment pages
  * read through the host the Environment dropdown names: a Local row's
- * computer, and the window's own host for Personal (and for a team, whose
- * pages P1 reads through the pool).
+ * computer, and the window's own host for Personal when that host runs it.
+ * A team, and Personal on a window whose host does not run it, read the
+ * cloud instead (`PersonalPageFrame`).
  */
 const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,

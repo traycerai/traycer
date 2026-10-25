@@ -1,8 +1,16 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EnvOverrideEditor } from "../env-override-editor";
+import { EnvOverrideEditor, type KeyRefusalFor } from "../env-override-editor";
 
 const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
+const NOT_ON_HOLD: ReadonlyMap<string, ReactNode> = new Map();
 
 type EnvCommit = (oldKey: string, newKey: string, value: string | null) => void;
 type EnvDelete = (key: string) => void;
@@ -26,6 +34,8 @@ function renderEditor(input: {
       disabled={false}
       credentialRefusal={input.credentialRefusal}
       rowNotes={NO_ROW_NOTES}
+      onHold={NOT_ON_HOLD}
+      keyRefusal={null}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel="No environment variables."
@@ -49,7 +59,7 @@ describe("EnvOverrideEditor", () => {
 
     expect(screen.queryByLabelText("New variable name")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
 
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: "OPENAI_API_KEY" },
@@ -77,7 +87,7 @@ describe("EnvOverrideEditor", () => {
       onDelete,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: "ANTHROPIC_API_KEY" },
     });
@@ -161,7 +171,7 @@ describe("EnvOverrideEditor", () => {
       onDelete,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: "COPILOT_HOME" },
     });
@@ -200,7 +210,7 @@ describe("EnvOverrideEditor", () => {
         onCommit,
         onDelete: vi.fn<EnvDelete>(),
       });
-      fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
       fireEvent.change(screen.getByLabelText("New variable name"), {
         target: { value: "REPO_URL" },
       });
@@ -246,6 +256,8 @@ describe("EnvOverrideEditor", () => {
           disabled={false}
           credentialRefusal={refusal}
           rowNotes={NO_ROW_NOTES}
+          onHold={NOT_ON_HOLD}
+          keyRefusal={null}
           staleRefusal={null}
           namePlaceholder="NODE_ENV"
           emptyLabel="No environment variables."
@@ -352,6 +364,8 @@ describe("EnvOverrideEditor credential-shaped names", () => {
         disabled={false}
         credentialRefusal={input.refusal}
         rowNotes={NO_ROW_NOTES}
+        onHold={NOT_ON_HOLD}
+        keyRefusal={null}
         staleRefusal={null}
         namePlaceholder="NODE_ENV"
         emptyLabel="No environment variables."
@@ -362,7 +376,7 @@ describe("EnvOverrideEditor credential-shaped names", () => {
   }
 
   function addRow(name: string, value: string): void {
-    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: name },
     });
@@ -453,5 +467,434 @@ describe("EnvOverrideEditor credential-shaped names", () => {
     fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
     fireEvent.blur(name);
     expect(renamed).toHaveBeenCalledWith("EDITOR", "GITHUB_TOKEN", "vim");
+  });
+});
+
+describe("EnvOverrideEditor rows on hold", () => {
+  const HELD_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
+
+  it("shows a held row as its name, on hold and a Review control, never its value or an input", () => {
+    const onReview = vi.fn();
+    render(
+      <EnvOverrideEditor
+        overrides={[
+          { key: "API_TOKEN", value: HELD_VALUE },
+          { key: "LOG_LEVEL", value: "debug" },
+        ]}
+        disabled={false}
+        credentialRefusal={null}
+        rowNotes={NO_ROW_NOTES}
+        onHold={
+          new Map<string, ReactNode>([
+            [
+              "API_TOKEN",
+              <button key="r" type="button" onClick={onReview}>
+                Review
+              </button>,
+            ],
+          ])
+        }
+        keyRefusal={null}
+        staleRefusal={null}
+        namePlaceholder="NODE_ENV"
+        emptyLabel="No environment variables."
+        onCommit={vi.fn<EnvCommit>()}
+        onDelete={vi.fn<EnvDelete>()}
+      />,
+    );
+
+    const held = screen.getByTestId("env-held-row");
+    expect(held.textContent).toBe(
+      "API_TOKEN · on hold until you choose · Review",
+    );
+    expect(document.body.textContent).not.toContain(HELD_VALUE);
+    expect(screen.queryByLabelText("Value for API_TOKEN")).toBeNull();
+    expect(screen.queryByLabelText("Name for API_TOKEN")).toBeNull();
+
+    // Its neighbour is an ordinary editable row.
+    expect(screen.getByLabelText("Value for LOG_LEVEL")).toBeTruthy();
+    expect(screen.getAllByTestId("env-held-row")).toHaveLength(1);
+
+    fireEvent.click(within(held).getByRole("button", { name: "Review" }));
+    expect(onReview).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("EnvOverrideEditor refusing a value that looks like a key", () => {
+  const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
+  const REFUSAL = "This looks like a key. Add it as a secret.";
+
+  function renderRefusing(input: {
+    readonly overrides: readonly {
+      readonly key: string;
+      readonly value: string | null;
+    }[];
+    readonly onKeyShaped: ((name: string, value: string) => void) | null;
+    readonly onCommit: EnvCommit;
+  }) {
+    const { onKeyShaped } = input;
+    return renderWithRefusal({
+      overrides: input.overrides,
+      keyRefusal:
+        onKeyShaped === null
+          ? null
+          : () => ({
+              before: "This looks like a key. ",
+              link: "Add it as a secret.",
+              after: "",
+              clearsValue: false,
+              onLink: onKeyShaped,
+            }),
+      onCommit: input.onCommit,
+    });
+  }
+
+  function renderWithRefusal(input: {
+    readonly overrides: readonly {
+      readonly key: string;
+      readonly value: string | null;
+    }[];
+    readonly keyRefusal: KeyRefusalFor;
+    readonly onCommit: EnvCommit;
+  }) {
+    return render(
+      <EnvOverrideEditor
+        overrides={input.overrides}
+        disabled={false}
+        credentialRefusal={null}
+        rowNotes={NO_ROW_NOTES}
+        onHold={NOT_ON_HOLD}
+        keyRefusal={input.keyRefusal}
+        staleRefusal={null}
+        namePlaceholder="NODE_ENV"
+        emptyLabel="No environment variables."
+        onCommit={input.onCommit}
+        onDelete={vi.fn<EnvDelete>()}
+      />,
+    );
+  }
+
+  function stageAdd(name: string, value: string): void {
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: name },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+  }
+
+  it("refuses a staged key-shaped value, stores nothing, and hands the name and value to Add a secret", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const onKeyShaped = vi.fn<(name: string, value: string) => void>();
+    renderRefusing({ overrides: [], onKeyShaped, onCommit });
+
+    stageAdd("NOTES", API_KEY_VALUE);
+
+    expect(screen.getByTestId("env-key-refusal").textContent).toBe(REFUSAL);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onKeyShaped).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add it as a secret." }),
+    );
+
+    expect(onKeyShaped).toHaveBeenCalledWith("NOTES", API_KEY_VALUE);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
+  });
+
+  it("clears the refusal once the staged value is edited, and then commits a plain value", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderRefusing({
+      overrides: [],
+      onKeyShaped: vi.fn<(name: string, value: string) => void>(),
+      onCommit,
+    });
+    stageAdd("NOTES", API_KEY_VALUE);
+    expect(screen.getByTestId("env-key-refusal")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "plain" },
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    expect(onCommit).toHaveBeenCalledWith("", "NOTES", "plain");
+  });
+
+  it("refuses a row edited into a key on blur, then reverts it to the stored value when handed to Add a secret", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const onKeyShaped = vi.fn<(name: string, value: string) => void>();
+    renderRefusing({
+      overrides: [{ key: "EDITOR", value: "vim" }],
+      onKeyShaped,
+      onCommit,
+    });
+
+    const field = screen.getByLabelText("Value for EDITOR");
+    fireEvent.change(field, { target: { value: API_KEY_VALUE } });
+    fireEvent.blur(field);
+
+    expect(screen.getByTestId("env-key-refusal").textContent).toBe(REFUSAL);
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add it as a secret." }),
+    );
+
+    expect(onKeyShaped).toHaveBeenCalledWith("EDITOR", API_KEY_VALUE);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.getByLabelText("Value for EDITOR")).toBe(
+      screen.getByDisplayValue("vim"),
+    );
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("stores nothing when a row holding a key-shaped draft unmounts", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const view = renderRefusing({
+      overrides: [{ key: "EDITOR", value: "vim" }],
+      onKeyShaped: vi.fn<(name: string, value: string) => void>(),
+      onCommit,
+    });
+
+    fireEvent.change(screen.getByLabelText("Value for EDITOR"), {
+      target: { value: API_KEY_VALUE },
+    });
+    view.unmount();
+
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("stores the same value as before where no handler is set", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    renderRefusing({ overrides: [], onKeyShaped: null, onCommit });
+
+    stageAdd("NOTES", API_KEY_VALUE);
+
+    expect(onCommit).toHaveBeenCalledWith("", "NOTES", API_KEY_VALUE);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+  });
+
+  describe("a refusal that clears the value instead of carrying it", () => {
+    const OWN_KEY = "ANTHROPIC_API_KEY";
+    const ownKey =
+      (onLink: (name: string, value: string) => void): KeyRefusalFor =>
+      (name) =>
+        name === OWN_KEY
+          ? {
+              before: "This is Claude's key. Set it on ",
+              link: "Claude's Account tab",
+              after: ".",
+              clearsValue: true,
+              onLink,
+            }
+          : {
+              before: "This looks like a key. ",
+              link: "Add it as a secret.",
+              after: "",
+              clearsValue: false,
+              onLink,
+            };
+
+    it("clears a staged value on refusal, names the line by the name typed, and stores nothing", () => {
+      const onCommit = vi.fn<EnvCommit>();
+      const onLink = vi.fn<(name: string, value: string) => void>();
+      renderWithRefusal({
+        overrides: [],
+        keyRefusal: ownKey(onLink),
+        onCommit,
+      });
+
+      stageAdd(OWN_KEY, API_KEY_VALUE);
+
+      expect(screen.getByTestId("env-key-refusal").textContent).toBe(
+        "This is Claude's key. Set it on Claude's Account tab.",
+      );
+      expect(screen.getByLabelText("New variable value")).toBe(
+        screen.getByDisplayValue(""),
+      );
+      expect(document.body.textContent).not.toContain(API_KEY_VALUE);
+      expect(onCommit).not.toHaveBeenCalled();
+      // Applying again does not store the cleared field.
+      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("hands the link the name and the value that was typed, then closes the add row", () => {
+      const onLink = vi.fn<(name: string, value: string) => void>();
+      renderWithRefusal({
+        overrides: [],
+        keyRefusal: ownKey(onLink),
+        onCommit: vi.fn<EnvCommit>(),
+      });
+      stageAdd(OWN_KEY, API_KEY_VALUE);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Claude's Account tab" }),
+      );
+
+      expect(onLink).toHaveBeenCalledTimes(1);
+      expect(screen.queryByLabelText("New variable name")).toBeNull();
+    });
+
+    it("clears an edited row on blur, stores nothing on unmount, and a plain edit lifts the refusal", () => {
+      const onCommit = vi.fn<EnvCommit>();
+      const view = renderWithRefusal({
+        overrides: [{ key: OWN_KEY, value: "" }],
+        keyRefusal: ownKey(vi.fn<(name: string, value: string) => void>()),
+        onCommit,
+      });
+
+      const field = screen.getByLabelText(`Value for ${OWN_KEY}`);
+      fireEvent.change(field, { target: { value: API_KEY_VALUE } });
+      fireEvent.blur(field);
+
+      expect(screen.getByTestId("env-key-refusal")).toBeTruthy();
+      expect(screen.queryByDisplayValue(API_KEY_VALUE)).toBeNull();
+      view.unmount();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+
+    it("keeps the typed value in the field for a name that is not the provider's own key", () => {
+      const onLink = vi.fn<(name: string, value: string) => void>();
+      renderWithRefusal({
+        overrides: [],
+        keyRefusal: ownKey(onLink),
+        onCommit: vi.fn<EnvCommit>(),
+      });
+
+      stageAdd("NOTES", API_KEY_VALUE);
+
+      expect(screen.getByTestId("env-key-refusal").textContent).toBe(
+        "This looks like a key. Add it as a secret.",
+      );
+      expect(screen.getByDisplayValue(API_KEY_VALUE)).toBeTruthy();
+    });
+  });
+});
+
+describe("EnvOverrideEditor saved values that look like a key", () => {
+  const SAVED_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
+  const NAME = "ANTHROPIC_API_KEY";
+  const onLinkMock = vi.fn<(name: string, value: string) => void>();
+  const refusal: KeyRefusalFor = () => ({
+    before: "This looks like a key. ",
+    link: "Add it as a secret.",
+    after: "",
+    clearsValue: false,
+    onLink: onLinkMock,
+  });
+
+  function renderSaved(input: {
+    readonly keyRefusal: KeyRefusalFor;
+    readonly onCommit: EnvCommit;
+    readonly onDelete: EnvDelete;
+  }) {
+    render(
+      <EnvOverrideEditor
+        overrides={[
+          { key: NAME, value: SAVED_VALUE },
+          { key: "NODE_ENV", value: "production" },
+        ]}
+        disabled={false}
+        credentialRefusal={null}
+        rowNotes={new Map([[NAME, "Only on this computer."]])}
+        onHold={NOT_ON_HOLD}
+        keyRefusal={input.keyRefusal}
+        staleRefusal={null}
+        namePlaceholder="NODE_ENV"
+        emptyLabel="No environment variables."
+        renderDetails={(key) =>
+          key === NAME ? <span data-testid="row-details">Details</span> : null
+        }
+        onCommit={input.onCommit}
+        onDelete={input.onDelete}
+      />,
+    );
+  }
+
+  it("masks the row: name as text, dots, no input carrying the value, and the note and details kept", () => {
+    renderSaved({
+      keyRefusal: refusal,
+      onCommit: vi.fn<EnvCommit>(),
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    const row = screen.getByTestId("env-masked-row");
+    expect(row.textContent).toContain(NAME);
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
+    );
+    expect(within(row).getByLabelText(`${NAME} is hidden`)).toBeTruthy();
+    expect(within(row).queryAllByRole("textbox")).toHaveLength(0);
+    expect(screen.queryByLabelText(`Value for ${NAME}`)).toBeNull();
+    expect(screen.queryByLabelText(`Name for ${NAME}`)).toBeNull();
+    expect(screen.queryByDisplayValue(SAVED_VALUE)).toBeNull();
+    expect(document.body.textContent).not.toContain(SAVED_VALUE);
+    expect(within(row).getByTestId("env-row-note").textContent).toBe(
+      "Only on this computer.",
+    );
+    expect(within(row).getByTestId("row-details")).toBeTruthy();
+  });
+
+  it("shows the refusal line under the row, and its link hands over the saved name and value, changing nothing", () => {
+    const onCommit = vi.fn<EnvCommit>();
+    const onDelete = vi.fn<EnvDelete>();
+    onLinkMock.mockReset();
+    renderSaved({ keyRefusal: refusal, onCommit, onDelete });
+
+    const line = within(screen.getByTestId("env-masked-row")).getByTestId(
+      "env-key-refusal",
+    );
+    expect(line.textContent).toBe("This looks like a key. Add it as a secret.");
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Add it as a secret." }),
+    );
+
+    expect(onLinkMock).toHaveBeenCalledTimes(1);
+    expect(onLinkMock).toHaveBeenCalledWith(NAME, SAVED_VALUE);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("masks it with no refusal line where nothing refuses a key", () => {
+    renderSaved({
+      keyRefusal: null,
+      onCommit: vi.fn<EnvCommit>(),
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    expect(screen.getByTestId("env-masked-row")).toBeTruthy();
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByDisplayValue(SAVED_VALUE)).toBeNull();
+  });
+
+  it("removes the masked row by its key", () => {
+    const onDelete = vi.fn<EnvDelete>();
+    renderSaved({
+      keyRefusal: refusal,
+      onCommit: vi.fn<EnvCommit>(),
+      onDelete,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${NAME}` }));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith(NAME);
+  });
+
+  it("keeps an ordinary saved value as an editable field beside it", () => {
+    renderSaved({
+      keyRefusal: refusal,
+      onCommit: vi.fn<EnvCommit>(),
+      onDelete: vi.fn<EnvDelete>(),
+    });
+
+    const field = screen.getByLabelText<HTMLInputElement>("Value for NODE_ENV");
+    expect(field.value).toBe("production");
+    expect(screen.getAllByTestId("env-masked-row")).toHaveLength(1);
   });
 });

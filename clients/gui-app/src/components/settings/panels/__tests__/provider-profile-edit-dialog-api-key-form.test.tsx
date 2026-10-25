@@ -330,6 +330,17 @@ describe("<ProfileEditDialog /> API-key affordances by `configured`", () => {
     expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
   });
 
+  it("says the profile's key stays on the one computer that saved it, naming no Personal off a Personal page", () => {
+    renderDialog(profileWithApiKey({ supported: true, configured: false }));
+
+    expect(
+      screen.getByText(
+        "Stored encrypted on this computer only and used only by this profile.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/running Personal/)).toBeNull();
+  });
+
   // FALSIFICATION: collapse the label ternary -
   // `const saveLabel = apiKey.configured ? "Replace key" : "Add key";`
   //   -> `const saveLabel = "Add key";`

@@ -1,6 +1,9 @@
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { stillLocalFromPlanes } from "@/components/settings/move/cohort-rows";
+import {
+  stillLocalFromPlanes,
+  type EnvironmentPlanes,
+} from "@/components/settings/move/cohort-rows";
 import { heldRowsFromReview } from "@/components/settings/move/held-from-review";
 import { HeldSecretBindingDialog } from "@/components/settings/move/held-secret-binding-dialog";
 import {
@@ -13,9 +16,13 @@ import { reviewEvidence } from "@/components/settings/move/review-v11";
 import {
   RetrospectiveSheet,
   type HeldRow,
+  type StillLocalRow,
 } from "@/components/settings/move/retrospective-sheet";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
-import { planesFromStatus } from "@/components/settings/move/status-planes";
+import {
+  planesFromStatus,
+  planesOfferStopSharing,
+} from "@/components/settings/move/status-planes";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentReviewHeldApplyMutation } from "@/hooks/environment/use-environment-review-held-apply-mutation";
@@ -71,7 +78,7 @@ export function RetrospectiveSession(props: {
   const entries = review.data?.entries ?? [];
   const held = props.held ?? heldRowsFromReview(entries);
   const planes = status.data === null ? null : planesFromStatus(status.data);
-  const stillLocal = planes === null ? [] : stillLocalFromPlanes(planes);
+  const { stillLocal, offerStop } = planeFacts(planes);
   const statusItems = status.data?.items ?? [];
   const sharedInUse = sharedInUseFromItems(statusItems);
   const roomShared = roomSharedLine(planes, statusItems);
@@ -116,7 +123,7 @@ export function RetrospectiveSession(props: {
               hostName: props.hostName,
             });
         }}
-        onStopSharing={() => setStopOpen(true)}
+        onStopSharing={offerStop ? () => setStopOpen(true) : null}
       />
       <StopSharingSession
         client={props.stopClient}
@@ -141,6 +148,22 @@ export function RetrospectiveSession(props: {
       />
     </>
   );
+}
+
+/**
+ * What the planes say on the sheet: the settings still on this computer, and
+ * whether it can still stop using Personal (a computer that stopped has
+ * nothing left to stop). Nothing of either before the planes are read.
+ */
+function planeFacts(planes: EnvironmentPlanes | null): {
+  readonly stillLocal: readonly StillLocalRow[];
+  readonly offerStop: boolean;
+} {
+  if (planes === null) return { stillLocal: [], offerStop: false };
+  return {
+    stillLocal: stillLocalFromPlanes(planes),
+    offerStop: planesOfferStopSharing(planes),
+  };
 }
 
 /**

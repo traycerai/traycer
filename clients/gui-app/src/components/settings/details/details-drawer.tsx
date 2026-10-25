@@ -131,6 +131,8 @@ export function DetailsDrawer(props: {
   readonly onRecover: (recovery: DetailsRecovery) => void;
   readonly onSubjectSelect: (subject: DetailsSubject, title: string) => void;
   readonly onBack: (() => void) | null;
+  /** The subject's own actions, under its status; `null` for none. */
+  readonly controls: ReactNode;
 }): ReactNode {
   const status = props.entry?.status();
   const history = props.entry?.history();
@@ -166,12 +168,15 @@ export function DetailsDrawer(props: {
             />
           ) : null}
           {props.error === null ? null : (
-            <div role="alert" className="flex flex-col items-start gap-2">
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1"
+            >
               <p className="text-warning-foreground">{props.error}</p>
               <Button
                 type="button"
-                size="sm"
-                variant="outline"
+                size="inline"
+                variant="link"
                 onClick={props.onRetry}
               >
                 Retry
@@ -194,6 +199,7 @@ export function DetailsDrawer(props: {
                   pending={props.recoveryPending}
                   onSubjectSelect={props.onSubjectSelect}
                 />
+                {props.controls}
               </TabsContent>
               {hasHistory ? (
                 <TabsContent value="history">

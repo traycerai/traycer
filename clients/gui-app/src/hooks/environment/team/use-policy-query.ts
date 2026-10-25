@@ -6,7 +6,6 @@ import { configurationPolicyValueSchema } from "./configuration-item-values";
 import { useQueryClient } from "@tanstack/react-query";
 import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -30,19 +29,16 @@ export function useConfigurationPolicyQuery() {
 
 export function useConfigurationPolicyMutation() {
   const queries = useQueryClient();
-  return useHostScopedMutationForClient(
-    usePoolTierHostClient(useHostClient()),
-    {
-      method: "environment.configuration.policy.put",
-      mutationKey: environmentMutationKeys.configurationPolicyPut(),
-      errorMessage: "Couldn't save the approval policy.",
-      invalidateMethods: ["environment.configuration.items"],
-      prepareRequest: (request) => {
-        cloudVerdictPreflight("environment.configuration.policy.put")();
-        return Promise.resolve(request);
-      },
-      onSuccess: (_result, request) =>
-        invalidateEnvironmentHostReports(queries, request.environmentId),
+  return useHostScopedMutationForClient(useHostClient(), {
+    method: "environment.configuration.policy.put",
+    mutationKey: environmentMutationKeys.configurationPolicyPut(),
+    errorMessage: "Couldn't save the approval policy.",
+    invalidateMethods: ["environment.configuration.items"],
+    prepareRequest: (request) => {
+      cloudVerdictPreflight("environment.configuration.policy.put")();
+      return Promise.resolve(request);
     },
-  );
+    onSuccess: (_result, request) =>
+      invalidateEnvironmentHostReports(queries, request.environmentId),
+  });
 }

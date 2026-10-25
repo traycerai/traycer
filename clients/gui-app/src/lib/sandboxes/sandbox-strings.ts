@@ -81,8 +81,8 @@ export function moreConfigurationsLabel(count: number): string {
   return `${count} more`;
 }
 
-/** The sub-line of a computer whose settings have not moved. */
-export const LOCAL_SUB_LINE = "Local · runs its own settings, not Personal's";
+/** The sub-line of a computer whose settings are not in Personal yet. */
+export const LOCAL_SUB_LINE = "Local · its own settings, not in Personal yet";
 
 /** The search found nothing of the viewer's. */
 export function noHostMatchesLine(term: string): string {
@@ -181,9 +181,9 @@ export function sharedUseClause(): string {
   return SHARED_USE_CLAUSE;
 }
 
-/** The move clause: `computer` still holds settings that have not moved. */
+/** The move clause: `computer` still holds settings not in Personal yet. */
 export function moveClause(computer: string): string {
-  return `Starts with Personal's settings. ${computer}'s haven't moved yet.`;
+  return `Starts with Personal's settings. ${computer}'s are not in Personal yet.`;
 }
 export const MOVE_THEM_FIRST = "Move them first";
 

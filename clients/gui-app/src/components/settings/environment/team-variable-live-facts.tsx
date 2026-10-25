@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamVariableLiveFacts(): ReactNode {
   const source = useConfigurationSource();
@@ -30,9 +31,7 @@ export function TeamVariableLiveFacts(): ReactNode {
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-ui-sm font-medium">
-          {scope.viewingHost?.hostLabel ?? "Live values"}
-        </h2>
+        <h2 className="text-ui-sm font-medium">Live values</h2>
         <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
       </div>
       {scope.client === null ? (
@@ -50,9 +49,13 @@ export function TeamVariableLiveFacts(): ReactNode {
       ) : (
         <>
           {shell.isError || variables.isError ? (
-            <p role="status" className="text-ui-sm text-muted-foreground">
-              Couldn't read this host's values.
-            </p>
+            <TeamReadFailed
+              message="Couldn't read this host's values."
+              onRetry={() => {
+                if (shell.isError) void shell.refetch();
+                if (variables.isError) void variables.refetch();
+              }}
+            />
           ) : null}
           {shell.data === undefined ? null : (
             <p className="text-ui-sm">

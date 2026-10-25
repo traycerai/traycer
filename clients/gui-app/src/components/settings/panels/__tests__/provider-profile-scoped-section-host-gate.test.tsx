@@ -1,8 +1,16 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  NO_NOTICES,
+  NO_OVERRIDES,
+  NO_REVIEW,
+  PersonalPageContext,
+} from "@/components/settings/personal/personal-page-context";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 
 // Same rationale as the sibling scoped-section suites: the dialog this section
@@ -74,6 +82,15 @@ function ambientProfile(): ProviderCliState["profiles"][number] {
   };
 }
 
+function managedProfile(): ProviderCliState["profiles"][number] {
+  return {
+    ...ambientProfile(),
+    profileId: "managed-1",
+    kind: "managed",
+    label: "Work",
+  };
+}
+
 // `opencode` is not in the rate-limit-capable provider set, so the embedded
 // usage card and refresh button take their no-query branch - no additional
 // host-query mocking needed for this section-level test.
@@ -107,13 +124,14 @@ function opencodeState(overrides: Partial<ProviderCliState>): ProviderCliState {
     managedInstallState: null,
     versionVisibility: null,
     advisory: null,
-    profiles: [ambientProfile()],
+    profiles: [managedProfile()],
     ...overrides,
   };
 }
 
 function renderSection(
   overrides: Partial<Parameters<typeof ProviderProfileScopedSection>[0]>,
+  hostName: string | null,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -121,28 +139,49 @@ function renderSection(
       mutations: { retry: false },
     },
   });
+  const section = (
+    <ProviderProfileScopedSection
+      state={opencodeState({})}
+      hostId="host-1"
+      isSelectedHostLocal
+      canAddProfile
+      credentialRefusal={null}
+      onOpenCliSettings={() => undefined}
+      startInReauth={false}
+      failedAttempt={null}
+      onAddProfile={() => undefined}
+      onDismissFailedAttempt={() => undefined}
+      selectedProfileId={null}
+      onSelectedProfileIdChange={() => undefined}
+      profileEnablementAvailable={false}
+      profileEnablementPending={() => false}
+      onSetProfileEnabled={() => undefined}
+      {...overrides}
+    />
+  );
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <ProviderProfileScopedSection
-          state={opencodeState({})}
-          hostId="host-1"
-          isSelectedHostLocal
-          canAddProfile
-          credentialRefusal={null}
-          onOpenCliSettings={() => undefined}
-          startInReauth={false}
-          failedAttempt={null}
-          onAddProfile={() => undefined}
-          onDismissFailedAttempt={() => undefined}
-          selectedProfileId={null}
-          onSelectedProfileIdChange={() => undefined}
-          profileEnablementAvailable={false}
-          profileStatusRefreshAvailable={false}
-          profileEnablementPending={() => false}
-          onSetProfileEnabled={() => undefined}
-          {...overrides}
-        />
+        {hostName === null ? (
+          section
+        ) : (
+          <PersonalPageContext.Provider
+            value={{
+              section: "providers",
+              pick: PERSONAL_PICK,
+              state: { kind: "unknown" },
+              line: null,
+              hostName,
+              localOverrides: NO_OVERRIDES,
+              hostId: "host-1",
+              client: null,
+              notices: NO_NOTICES,
+              review: NO_REVIEW,
+            }}
+          >
+            {section}
+          </PersonalPageContext.Provider>
+        )}
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -160,10 +199,11 @@ function renderSection(
 describe("<ProviderProfileScopedSection /> host gate", () => {
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
-  it("disables Manage profile with the disabled reason, and holds the refresh button and usage card inert, while the provider is off", () => {
-    renderSection({ state: opencodeState({ enabled: false }) });
+  it("disables Manage profile with the disabled reason while the provider is off", () => {
+    renderSection({ state: opencodeState({ enabled: false }) }, null);
 
     const manageButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Manage profile",
@@ -172,18 +212,10 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(tooltipTextNear(manageButton)).toBe(
       "OpenCode is turned off. Turn it on to sign in or manage its profiles.",
     );
-
-    // Wrapped, not merely styled: `inert` removes the refresh button and the
-    // usage card from the accessibility tree and from pointer/focus
-    // interaction, which `pointer-events-none` classes alone do not do.
-    const refreshButton = screen.getByRole("button", {
-      name: /^Refresh profile statuses/,
-    });
-    expect(refreshButton.closest("[inert]")).not.toBeNull();
   });
 
   it("keeps Manage profile enabled with no tooltip while the provider is on", () => {
-    renderSection({ state: opencodeState({ enabled: true }) });
+    renderSection({ state: opencodeState({ enabled: true }) }, null);
 
     const manageButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Manage profile",
@@ -192,41 +224,42 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(tooltipTextNear(manageButton)).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
     );
-    expect(
-      screen
-        .getByRole("button", { name: /^Refresh profile statuses/ })
-        .closest("[inert]"),
-    ).toBeNull();
   });
 
   it("disables Retry alongside Add profile when canAddProfile is false", () => {
-    renderSection({
-      canAddProfile: false,
-      failedAttempt: {
-        providerId: "opencode",
-        message: "did not finish",
+    renderSection(
+      {
+        canAddProfile: false,
+        failedAttempt: {
+          providerId: "opencode",
+          message: "did not finish",
+        },
       },
-    });
+      null,
+    );
 
     const retryButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Retry",
     });
     expect(retryButton.disabled).toBe(true);
     const addProfileButton = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Add profile",
+      name: "Add a profile",
     });
     expect(addProfileButton.disabled).toBe(true);
   });
 
   it("shows the CLI & Args link when sign-in is blocked by a missing CLI, not by the provider being off", () => {
-    renderSection({
-      canAddProfile: false,
-      state: opencodeState({
-        enabled: true,
-        loginCapability: OAUTH_CAP,
-        candidates: [],
-      }),
-    });
+    renderSection(
+      {
+        canAddProfile: false,
+        state: opencodeState({
+          enabled: true,
+          loginCapability: OAUTH_CAP,
+          candidates: [],
+        }),
+      },
+      null,
+    );
 
     expect(screen.getByRole("button", { name: "CLI & Args" })).toBeDefined();
     expect(
@@ -237,31 +270,34 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
   });
 
   it("shows the CLI & Args link when the host resolved no CLI although an unselected one is available", () => {
-    renderSection({
-      canAddProfile: false,
-      state: opencodeState({
-        enabled: true,
-        loginCapability: OAUTH_CAP,
-        selected: { kind: "custom", path: "/gone/opencode" },
-        candidates: [
-          {
-            kind: "custom",
-            path: "/gone/opencode",
-            version: null,
-            available: false,
-            versionPending: false,
-          },
-          {
-            kind: "custom",
-            path: "/other/opencode",
-            version: "1.0.0",
-            available: true,
-            versionPending: false,
-          },
-        ],
-        cliBinaryResolved: false,
-      }),
-    });
+    renderSection(
+      {
+        canAddProfile: false,
+        state: opencodeState({
+          enabled: true,
+          loginCapability: OAUTH_CAP,
+          selected: { kind: "custom", path: "/gone/opencode" },
+          candidates: [
+            {
+              kind: "custom",
+              path: "/gone/opencode",
+              version: null,
+              available: false,
+              versionPending: false,
+            },
+            {
+              kind: "custom",
+              path: "/other/opencode",
+              version: "1.0.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          cliBinaryResolved: false,
+        }),
+      },
+      null,
+    );
 
     expect(screen.getByRole("button", { name: "CLI & Args" })).toBeDefined();
     expect(
@@ -273,14 +309,17 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
   });
 
   it("does not show the CLI & Args link when sign-in is blocked because the provider is off", () => {
-    renderSection({
-      canAddProfile: false,
-      state: opencodeState({
-        enabled: false,
-        loginCapability: OAUTH_CAP,
-        candidates: [],
-      }),
-    });
+    renderSection(
+      {
+        canAddProfile: false,
+        state: opencodeState({
+          enabled: false,
+          loginCapability: OAUTH_CAP,
+          candidates: [],
+        }),
+      },
+      null,
+    );
 
     // The reason is still shown - just without a link to a tab that does not
     // fix "the provider is off" (that is the header switch's job).
@@ -292,10 +331,16 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
   });
 
-  it("keeps the Profiles header and the Sync profiles entry when a syncable provider has no profiles, so saved rules stay manageable", () => {
-    renderSection({
-      state: opencodeState({ providerId: "claude-code", profiles: [] }),
+  it("keeps the Profiles header and the Sync profiles entry when a syncable provider has no profiles on a Local row, so saved rules stay manageable", () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-1", hostName: "Studio" },
     });
+    renderSection(
+      {
+        state: opencodeState({ providerId: "claude-code", profiles: [] }),
+      },
+      null,
+    );
 
     expect(screen.getByText("Profiles")).toBeDefined();
     expect(screen.getByRole("button", { name: /Sync profiles/ })).toBeDefined();
@@ -303,31 +348,34 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
   });
 
-  it("holds Sign in and Add profile with the credential refusal as the reason, and offers no CLI & Args link, when the host takes no credentials", () => {
+  it("holds Sign in and Add a profile with the credential refusal as the reason, and offers no CLI & Args link, when the host takes no credentials", () => {
     const REFUSAL = "Sandboxes don't take sign-ins";
-    const profile = ambientProfile();
-    renderSection({
-      canAddProfile: false,
-      credentialRefusal: REFUSAL,
-      // A missing CLI would otherwise be the reason, with a link to fix it:
-      // on a sandbox no CLI setup helps, so the refusal must win.
-      state: opencodeState({
-        enabled: true,
-        loginCapability: OAUTH_CAP,
-        candidates: [],
-        profiles: [
-          {
-            ...profile,
-            auth: {
-              status: "unauthenticated",
-              badgeText: null,
-              label: null,
-              detail: null,
+    const profile = managedProfile();
+    renderSection(
+      {
+        canAddProfile: false,
+        credentialRefusal: REFUSAL,
+        // A missing CLI would otherwise be the reason, with a link to fix it:
+        // on a sandbox no CLI setup helps, so the refusal must win.
+        state: opencodeState({
+          enabled: true,
+          loginCapability: OAUTH_CAP,
+          candidates: [],
+          profiles: [
+            {
+              ...profile,
+              auth: {
+                status: "unauthenticated",
+                badgeText: null,
+                label: null,
+                detail: null,
+              },
             },
-          },
-        ],
-      }),
-    });
+          ],
+        }),
+      },
+      null,
+    );
 
     const signIn = screen.getByRole<HTMLButtonElement>("button", {
       name: "Sign in",
@@ -335,7 +383,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(signIn.disabled).toBe(true);
     expect(tooltipTextNear(signIn)).toBe(REFUSAL);
     expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Add profile" })
+      screen.getByRole<HTMLButtonElement>("button", { name: "Add a profile" })
         .disabled,
     ).toBe(true);
     expect(screen.getByText(REFUSAL)).toBeDefined();
@@ -345,5 +393,55 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         exact: false,
       }),
     ).toBeNull();
+  });
+
+  it("names the terminal login after its host, with no Terminal badge and no manage or re-auth button, and its one verb starts a new sign-in", () => {
+    const onAddProfile = vi.fn();
+    renderSection(
+      {
+        onAddProfile,
+        state: opencodeState({ profiles: [ambientProfile()] }),
+      },
+      "Studio",
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "OpenCode profile: OpenCode's own login on Studio",
+      }),
+    ).toBeDefined();
+    expect(screen.getByText("works on this computer only")).toBeDefined();
+    expect(screen.queryByText("Terminal")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByText("Email unavailable")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Refresh/ })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in to use everywhere" }),
+    );
+    expect(onAddProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to this computer when the page names no host, and holds the sign-in verb with the credential refusal", () => {
+    renderSection(
+      {
+        canAddProfile: false,
+        credentialRefusal: "Sandboxes don't take sign-ins",
+        state: opencodeState({ profiles: [ambientProfile()] }),
+      },
+      null,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "OpenCode profile: OpenCode's own login on this computer",
+      }),
+    ).toBeDefined();
+    const verb = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sign in to use everywhere",
+    });
+    expect(verb.disabled).toBe(true);
+    expect(tooltipTextNear(verb)).toBe("Sandboxes don't take sign-ins");
   });
 });

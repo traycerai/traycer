@@ -24,7 +24,7 @@ describe("RoleGrant", () => {
   it("opens with the viewer prefix and the common text", () => {
     render(<RoleGrant role={VIEWER} teamName="Acme" noticeText={NOTICE} />);
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
-      "Read-only environment settings.",
+      "You can see Acme's settings but not change them.",
     );
     expect(screen.getByTestId("role-grant-common").textContent).toContain(
       "Every member can interrupt or permanently delete any Acme sandbox",

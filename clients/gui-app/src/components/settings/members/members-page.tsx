@@ -138,7 +138,8 @@ function membersReadState(
 /**
  * Settings ▸ Members for a team pick. Reads `environment.members@1.1` and
  * writes through invite / setRole / remove / noticeSeen; the view's dialogs
- * read removePreview for the member they name.
+ * read removePreview for the member they name, and the invite sheet reads
+ * seats when the host serves it.
  */
 export function MembersPage(props: MembersPageProps): ReactNode {
   const client = useOptionalHostClient();
@@ -160,6 +161,8 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       : membersPresent;
   const listSupported =
     useHostMethodSupport(hostId, "environment.list") === true;
+  const seatsSupported =
+    useHostMethodSupport(hostId, "environment.members.seats") === true;
   const teamLabel = usePickedTeamLabel(props.environmentId);
   const team = useTeamEnvironmentDescriptor(
     client,
@@ -262,6 +265,7 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       invitePending={writes.inviteMutation.isPending}
       setRolePending={writes.setRoleMutation.isPending}
       removePending={writes.removeMutation.isPending}
+      seatsSupported={seatsSupported}
       hostLabel={hostLabel}
       onNoticeSeen={onNoticeSeen}
     />

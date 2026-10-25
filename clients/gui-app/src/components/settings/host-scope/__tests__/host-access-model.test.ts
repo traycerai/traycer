@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
+  EnvironmentReviewEntryV12,
   EnvironmentStatusResponse,
   EnvironmentWriteOutcome,
   LocalOverride,
@@ -45,6 +46,21 @@ function notice(overrides: Partial<EnvironmentNotice>): EnvironmentNotice {
     from: { kind: "host", hostId: "host-a", hostLabel: "dev-box" },
     writtenAt: 1,
     undoAvailable: true,
+    ...overrides,
+  };
+}
+
+/** A review entry as an `environment.review@1.2` host sends it. */
+function reviewEntryV12(
+  overrides: Partial<EnvironmentReviewEntryV12>,
+): EnvironmentReviewEntryV12 {
+  return {
+    ...reviewEntry({}),
+    command: null,
+    event: null,
+    description: null,
+    harness: null,
+    value: null,
     ...overrides,
   };
 }
@@ -593,9 +609,12 @@ describe("reviewText", () => {
   const cases: ReadonlyArray<[reason: string, text: string]> = [
     [
       "credential_like_value",
-      "DATABASE_URL is waiting for you: looks like a secret.",
+      "DATABASE_URL looks like a key and is on hold until you choose",
     ],
-    ["executable_entry", "DATABASE_URL is waiting for you: runs a command."],
+    [
+      "executable_entry",
+      "DATABASE_URL (variable) changes how programs start and is on hold until you choose",
+    ],
     [
       "needs_grant",
       "DATABASE_URL is waiting for you: was changed without your confirmation.",
@@ -606,19 +625,69 @@ describe("reviewText", () => {
     expect(reviewText(reviewEntry({ reason }))).toBe(text);
   });
 
-  it("labels a singleton by its page", () => {
+  it("names a held MCP server's command and says it waits for a choice", () => {
     expect(
       reviewText(
-        reviewEntry({
-          kind: "shell",
-          key: "shell",
+        reviewEntryV12({
+          kind: "mcp_server",
+          key: "env-e2e-memory",
           reason: "executable_entry",
+          command: "npx -y @mcp/memory",
         }),
       ),
-    ).toBe("The shell is waiting for you: runs a command.");
+    ).toBe(
+      "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on hold until you choose",
+    );
   });
 
-  it("names an MCP server by its own name", () => {
+  it("names a held hook's command and event", () => {
+    expect(
+      reviewText(
+        reviewEntryV12({
+          kind: "hook",
+          key: "notify",
+          reason: "executable_entry",
+          command: "notify.sh",
+          event: "stop",
+        }),
+      ),
+    ).toBe(
+      "notify (hook) runs notify.sh on stop and is on hold until you choose",
+    );
+  });
+
+  it("words a held environment setting by the program it changes", () => {
+    expect(
+      reviewText(
+        reviewEntryV12({
+          kind: "env_override",
+          key: "claude:NODE_OPTIONS",
+          reason: "executable_entry",
+          harness: "claude",
+          value: "--inspect",
+        }),
+      ),
+    ).toBe(
+      "NODE_OPTIONS (variable) changes how Claude Code starts: NODE_OPTIONS=--inspect and is on hold until you choose",
+    );
+  });
+
+  it("words a held setup script by when a sandbox runs it", () => {
+    expect(
+      reviewText(
+        reviewEntryV12({
+          kind: "setup_script",
+          key: "setup",
+          reason: "executable_entry",
+          command: "brew bundle",
+        }),
+      ),
+    ).toBe(
+      "setup (setup script) runs brew bundle when a sandbox first gets it or it changes and is on hold until you choose",
+    );
+  });
+
+  it("names the kind alone for a held command from a host that does not send it", () => {
     expect(
       reviewText(
         reviewEntry({
@@ -627,6 +696,6 @@ describe("reviewText", () => {
           reason: "executable_entry",
         }),
       ),
-    ).toBe("linear is waiting for you: runs a command.");
+    ).toBe("linear (MCP server) is on hold until you choose");
   });
 });

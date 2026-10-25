@@ -71,6 +71,12 @@ export const DESKTOP_SECRET_KINDS = [
 ] as const satisfies readonly SandboxSecretFormKind[];
 export type DesktopSecretKind = (typeof DESKTOP_SECRET_KINDS)[number];
 
+/** The kinds Add a secret offers; a provider's key is set on its Account tab. */
+export const ADD_SECRET_KINDS = [
+  "api_key",
+  "database",
+] as const satisfies readonly DesktopSecretKind[];
+
 export function isDesktopSecretKind(
   kind: SandboxSecretFormKind,
 ): kind is DesktopSecretKind {
@@ -116,15 +122,15 @@ export function secretProtocolLabel(protocol: string): string {
 }
 
 export const SECRET_MODE_LABEL: Readonly<Record<SandboxSecretMode, string>> = {
-  brokered: "Brokered",
-  exposed: "Exposed",
+  brokered: "Agents use it without seeing it (recommended)",
+  exposed: "Agents can read it",
 };
 
-/** What each mode means on a sandbox, in the one line the dialog states it in. */
+/** The warning under the mode that hands agents the value; the other needs none. */
 export const SECRET_MODE_CONSEQUENCE: Readonly<
-  Record<SandboxSecretMode, string>
+  Record<SandboxSecretMode, string | null>
 > = {
-  brokered: "On a sandbox, agents can use it and never read it.",
+  brokered: null,
   exposed:
     "On a sandbox, any process can read it, and revoking it does not stop a copy already made.",
 };

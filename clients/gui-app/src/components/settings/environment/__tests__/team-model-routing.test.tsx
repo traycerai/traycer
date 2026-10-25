@@ -14,6 +14,7 @@ import { TeamModelRouting } from "@/components/settings/environment/team-model-r
 import {
   configurationItem,
   mountTeamPage,
+  personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -118,6 +119,52 @@ describe("TeamModelRouting", () => {
       environmentId: "env-a",
     });
     expect(harness.paramsOf("providers.fallbackPolicy.get")).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "a team",
+      poolSource("viewer"),
+      "How agents recover when an account or model cannot continue.",
+    ],
+    [
+      "Personal",
+      personalPoolSource(),
+      "Applies to your agents on every computer and sandbox running Personal.",
+    ],
+  ])("describes routing for %s", async (_name, source, subtitle) => {
+    const harness = mountTeamPage(source, {
+      "environment.configuration.items": () => ({ items: [routing(true, 9)] }),
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "admin" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+          {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Me",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      }),
+    });
+    render(<TeamModelRouting />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText(subtitle)).toBeTruthy();
   });
 
   it("gives a viewer the policy with no routing mutation verbs", async () => {

@@ -9,6 +9,13 @@ import {
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { heldReviewEntries } from "@/components/settings/move/held-from-review";
+import {
+  useThisComputer,
+  type ThisComputer,
+} from "@/components/settings/move/this-computer";
+import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 
 export function FirstTaskImportBridge() {
   useEffect(() => {
@@ -70,8 +77,81 @@ export function FirstTaskChatGuide(props: {
   );
 }
 
+/**
+ * The Start toast. While anything an earlier version shared from this
+ * computer is on hold it reads `An earlier version shared this computer's
+ * settings · Review` and opens the retrospective sheet, instead of the setup
+ * reminder; it retires by itself once nothing is on hold.
+ */
 function GettingStartedToast() {
+  const computer = useThisComputer();
   const completedAt = useOnboardingStore((state) => state.completedAt);
+  const held = useHeldOnThisComputer(computer, completedAt !== null);
+  // Neither toast until the review answers, so the reminder never shows for
+  // a moment before the held toast replaces it.
+  if (held === "pending") return null;
+  if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
+  return <SetupReminderToast completedAt={completedAt} />;
+}
+
+/**
+ * Whether anything this computer's earlier upload held waits on a choice:
+ * `pending` while its review is still being read, `clear` with no local host,
+ * a host without the method, a failed read, or nothing held.
+ */
+function useHeldOnThisComputer(
+  computer: ThisComputer,
+  enabled: boolean,
+): "held" | "clear" | "pending" {
+  const review = useEnvironmentReviewRead(
+    computer.client,
+    computer.hostId,
+    enabled,
+  );
+  if (!enabled || computer.hostId === null) return "clear";
+  if (review.supported === false || review.isError) return "clear";
+  if (review.data === null) return "pending";
+  return heldReviewEntries(review.data.entries).length > 0 ? "held" : "clear";
+}
+
+const HELD_TOAST_ID = "traycer-held-on-this-computer";
+
+function HeldOnThisComputerToast(props: { readonly computer: ThisComputer }) {
+  const dismissed = useRetrospectiveSheetStore(
+    (state) => state.heldToastDismissed,
+  );
+  const dismiss = useRetrospectiveSheetStore((state) => state.dismissHeldToast);
+  const openSheet = useRetrospectiveSheetStore((state) => state.openSheet);
+  const { hostId, hostName } = props.computer;
+  useEffect(() => {
+    if (dismissed || hostId === null) return;
+    let mounted = true;
+    toast("An earlier version shared this computer's settings", {
+      id: HELD_TOAST_ID,
+      description: <span className="text-pretty">Review</span>,
+      duration: Infinity,
+      closeButton: true,
+      onDismiss: () => {
+        if (mounted) dismiss();
+      },
+      action: {
+        label: "Open",
+        onClick: () => {
+          dismiss();
+          openSheet({ hostId, hostName });
+        },
+      },
+    });
+    return () => {
+      mounted = false;
+      toast.dismiss(HELD_TOAST_ID);
+    };
+  }, [dismissed, hostId, hostName, dismiss, openSheet]);
+  return null;
+}
+
+function SetupReminderToast(props: { readonly completedAt: number | null }) {
+  const { completedAt } = props;
   const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
   const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
   // Availability, not just completion: a guide this build cannot offer would

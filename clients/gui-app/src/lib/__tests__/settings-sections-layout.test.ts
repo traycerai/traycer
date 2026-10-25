@@ -61,18 +61,17 @@ describe("Layout section placement and digit reassignment", () => {
     const devicesIndex = sections.findIndex(
       (section) => section.id === "devices",
     );
-    // Eleven Environment pages after Providers (Machine setup is retired from
-    // navigation) and the two dev-only proof pages sit ahead of Sessions.
-    expect(devicesIndex).toBe(23);
+    // Nine Environment pages after Providers (Machine setup, Agent definitions
+    // and Browser agent access are retired from navigation) and the two
+    // dev-only proof pages sit ahead of Sessions.
+    expect(devicesIndex).toBe(21);
     for (const id of [
       "mcp-servers",
       "skills",
       "fallback",
       "shell",
       "agents",
-      "browser-agent-access",
       "secrets",
-      "agent-definitions",
       "devices",
       "usage",
       "credits",
@@ -89,7 +88,7 @@ describe("Layout section placement and digit reassignment", () => {
     }
   });
 
-  it("lists the Environment pages in their order, Permissions after Skills and Machine setup retired", () => {
+  it("lists the Environment pages in their order, with the retired pages gone", () => {
     setMobileApp(false);
     const environment = visibleSettingsSections().filter(
       (section) => section.group === "personal",
@@ -99,14 +98,12 @@ describe("Layout section placement and digit reassignment", () => {
       "MCP servers",
       "Skills",
       "Permissions",
+      "Agents",
       "Model routing",
-      "Variables and shells",
-      "Agent selection",
-      "Browser agent access",
+      "Variables & shells",
       "Secrets",
       "Sandboxes",
       "Members",
-      "Agent definitions",
     ]);
   });
 
@@ -131,11 +128,11 @@ describe("Layout section placement and digit reassignment", () => {
     ).toBe("personal");
   });
 
-  it("pushes host (Overview) to index 28, past the single-digit leader limit", () => {
+  it("pushes host (Overview) to index 26, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(28);
+    expect(hostIndex).toBe(26);
     expect(hostIndex).toBeGreaterThan(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
     expect(hostIndex).toBeGreaterThanOrEqual(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
   });

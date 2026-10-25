@@ -12,11 +12,13 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
 import {
   useCanEditConfiguration,
   useConfigurationSource,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { ConfigurationConflict } from "./configuration-conflict";
-import { usePickedTeamLabel } from "./team-pick-label";
+import { usePickedTeamLabel, useConfigurationName } from "./team-pick-label";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import { ConfigurationReadFailed } from "./team-read-failed";
 
 export function TeamGuide(): ReactNode {
   const source = useConfigurationSource();
@@ -40,9 +42,10 @@ export function TeamGuide(): ReactNode {
     );
   else if (query.isError)
     body = (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        Couldn't read the guide.
-      </p>
+      <ConfigurationReadFailed
+        page="selection guide"
+        onRetry={() => void query.refetch()}
+      />
     );
   else if (query.data !== undefined && query.data.outcome !== "not_served") {
     body = canEdit ? (
@@ -78,6 +81,8 @@ function TeamGuideEditor(props: {
   readonly revision: string;
   readonly onConflict: () => void;
 }): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const teamName = useConfigurationName();
   const source = useConfigurationSource();
   const { set, reset } = useConfigurationGuideMutations();
   const [value, setValue] = useState(props.text);
@@ -127,10 +132,14 @@ function TeamGuideEditor(props: {
       <ConfirmDestructiveDialog
         open={confirm}
         onOpenChange={setConfirm}
-        title="Revert to default instructions?"
-        description="This replaces the team's guide. Your custom instructions will be lost."
+        title="Reset to default instructions?"
+        description={
+          personal
+            ? "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost."
+            : `This replaces ${teamName}'s selection guide with the default for every member. Changes anyone made to it are lost.`
+        }
         cascadeSummary={null}
-        actionLabel="Revert to default"
+        actionLabel="Reset to default"
         isPending={reset.isPending}
         blockedReason={null}
         onConfirm={() => {

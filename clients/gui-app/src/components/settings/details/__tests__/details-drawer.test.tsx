@@ -23,6 +23,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 }));
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -104,6 +105,7 @@ function openDrawer(
     <SettingsDetailsDialog
       subject={{ environmentId: "env-a", ...subject }}
       title={title}
+      controls={null}
       open
       onOpenChange={() => undefined}
     />,
@@ -240,7 +242,70 @@ describe("the drawer's reader scopes", () => {
   });
 });
 
+describe("the subject's own controls", () => {
+  function openWithControls(
+    harness: TeamPageHarness,
+    controls: ReactNode,
+  ): void {
+    render(
+      <SettingsDetailsDialog
+        subject={{ environmentId: "env-a", kind: "variable", key: "FOO" }}
+        title="FOO"
+        controls={controls}
+        open
+        onOpenChange={() => undefined}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+  }
+
+  it("shows them under the status, in the Status tab", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [brokenHost] }),
+    });
+    openWithControls(harness, <p data-testid="own-controls">Verify here</p>);
+
+    const controls = await screen.findByTestId("own-controls");
+    const repair = screen.getByRole("button", { name: "Repair on dev-box" });
+    expect(
+      repair.compareDocumentPosition(controls) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("shows nothing extra when the subject has none", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [brokenHost] }),
+    });
+    openWithControls(harness, null);
+
+    await screen.findByRole("button", { name: "Repair on dev-box" });
+    expect(screen.queryByTestId("own-controls")).toBeNull();
+  });
+});
+
 describe("Export diagnostics", () => {
+  it("keeps an export failure's own message, not the details-load line", async () => {
+    let reads = 0;
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () => {
+        reads += 1;
+        if (reads > 1) throw new Error("Couldn't reach the history.");
+        return history({ hostStates: [LEAKY_HOST] });
+      },
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
+    await user.click(
+      await screen.findByRole("tab", { name: "Export diagnostics" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't reach the history.");
+    expect(alert.textContent).not.toContain("Couldn't load details.");
+  });
+
   it("saves a sanitized export from a fresh, re-authorized read", async () => {
     let scope: EnvironmentHistoryResponse["readerScope"] = "full";
     const harness = mountTeamPage(poolSource("admin"), {
@@ -496,15 +561,22 @@ describe("the Secrets header's Details", () => {
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([]);
   });
 
-  it("explains a secret that is gone from both lists", async () => {
+  it("reads a details failure as one line with a Retry link, and re-reads on Retry", async () => {
     const harness = mountTeamPage(poolSource("viewer"), {
       "environment.history": () => history({}),
       "environment.secrets.list": () => secretsList,
     });
+    const user = userEvent.setup();
     openDrawer(harness, { kind: "secret", key: "sec-unknown" }, "Gone");
 
-    expect(
-      await screen.findByText("This secret is no longer available."),
-    ).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Couldn't load details.Retry");
+    const reads = harness.paramsOf("environment.secrets.list").length;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.secrets.list").length,
+      ).toBeGreaterThan(reads);
+    });
   });
 });

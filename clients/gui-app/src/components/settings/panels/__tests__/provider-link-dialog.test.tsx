@@ -7,6 +7,14 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   return { ...actual, useHostClient: () => clientMock.current };
 });
 
+// Personal's id is read from `environment.list` under the signed-in viewer.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
 // What a link asks the app to open. The call is awaited with `.catch`, so it
 // answers a promise.
 const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
@@ -14,6 +22,7 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -38,9 +47,17 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { OpenLink } from "@/lib/links/open-link";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 
+const listMock = vi.hoisted(() => vi.fn<() => void>());
+// While set, `environment.list` does not answer until it resolves.
+const listGate = vi.hoisted((): { current: Promise<void> | null } => ({
+  current: null,
+}));
+
 const HOST_ID = "host-link";
+const PERSONAL_ENV_ID = "env-personal";
 const HOST_NAME = "Studio";
 const PROFILE_ID = "5f0c9b3e-7a41-4d0e-9c53-0b1f6e2a8d44";
 const LINK_ID = "link-1";
@@ -124,12 +141,33 @@ function personalPage(children: ReactNode): ReactNode {
 
 beforeEach(() => {
   linkMock.link.mockReset();
+  listMock.mockReset();
+  listGate.current = null;
   linkMock.complete.mockReset();
   openLinkMock.mockReset();
   openLinkMock.mockResolvedValue(undefined);
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
+      "environment.list": async () => {
+        listMock();
+        await listGate.current;
+        return {
+          environments: [
+            {
+              environmentId: PERSONAL_ENV_ID,
+              ownerKind: "user" as const,
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner" as const,
+              kind: "personal" as const,
+              hostCount: 0,
+              providerHandle: null,
+            },
+          ],
+        };
+      },
       "providers.link": linkMock.link,
       "providers.linkComplete": linkMock.complete,
     },
@@ -142,11 +180,41 @@ afterEach(() => {
   vi.useRealTimers();
   clientMock.current = null;
   useProviderLinkDialogStore.setState({ target: null });
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-function openDialog(providerId: string, profileId: string | null): void {
+/**
+ * Renders and waits for Personal's id to arrive: a link started before it
+ * has would name the host's own.
+ */
+async function renderDialog(children: ReactNode): Promise<void> {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      {children}
+    </QueryClientProvider>,
+  );
+  if (vi.isFakeTimers()) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    return;
+  }
+  if (useSettingsEnvironmentPickStore.getState().pick?.kind !== "local") {
+    await waitFor(() => {
+      expect(listMock).toHaveBeenCalled();
+    });
+  }
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+async function openDialog(
+  providerId: string,
+  profileId: string | null,
+): Promise<void> {
   useProviderLinkDialogStore.getState().open({ providerId, profileId });
-  render(personalPage(<ProviderLinkDialog />));
+  await renderDialog(personalPage(<ProviderLinkDialog />));
 }
 
 function dialogState(): string | null {
@@ -163,7 +231,7 @@ async function clickAndSettle(element: HTMLElement): Promise<void> {
 /** Opens the dialog and walks it to the sign-in state. */
 async function reachSignIn(profileId: string | null): Promise<void> {
   linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
-  openDialog("claude-code", profileId);
+  await openDialog("claude-code", profileId);
   fireEvent.click(screen.getByTestId("provider-link-continue"));
   await screen.findByTestId("provider-link-code");
 }
@@ -178,7 +246,7 @@ function pasteAndLink(code: string): void {
 describe("the intro", () => {
   it("shows the plan sentence and starts the link for the profile on Continue", async () => {
     linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
-    openDialog("claude-code", PROFILE_ID);
+    await openDialog("claude-code", PROFILE_ID);
 
     expect(dialogState()).toBe("intro");
     expect(
@@ -195,20 +263,20 @@ describe("the intro", () => {
     expect(linkMock.link).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
   });
 
   it("starts a new profile's link with a null profile id", async () => {
     linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
-    openDialog("claude-code", null);
+    await openDialog("claude-code", null);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await screen.findByTestId("provider-link-sign-in");
 
     expect(linkMock.link).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
   });
 });
@@ -241,7 +309,7 @@ describe("a sign-in URL with a pasted code", () => {
     expect(linkMock.complete).toHaveBeenCalledWith({
       linkId: LINK_ID,
       code: "abc#def",
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
     expect(linked.textContent).toBe("Linked as a@x.test.");
   });
@@ -314,7 +382,7 @@ describe("a mismatch", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
   });
 
@@ -331,7 +399,7 @@ describe("a mismatch", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: null,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
 
     linkMock.complete.mockResolvedValueOnce(
@@ -350,7 +418,7 @@ describe("a mismatch", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: null,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
   });
 });
@@ -359,7 +427,7 @@ describe("a device code", () => {
   async function reachDevice(): Promise<void> {
     vi.useFakeTimers();
     linkMock.link.mockResolvedValueOnce(DEVICE_RESPONSE);
-    openDialog("codex", PROFILE_ID);
+    await openDialog("codex", PROFILE_ID);
     await clickAndSettle(screen.getByRole("button", { name: "Continue" }));
   }
 
@@ -392,7 +460,7 @@ describe("a device code", () => {
     expect(linkMock.complete).toHaveBeenLastCalledWith({
       linkId: LINK_ID,
       code: null,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
     expect(dialogState()).toBe("device");
 
@@ -455,7 +523,7 @@ describe("a device code", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "codex",
       profileId: PROFILE_ID,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
     expect(dialogState()).toBe("device");
   });
@@ -477,7 +545,7 @@ describe("a local handoff", () => {
   it("shows Linking…, polls every 2 s, then Linked", async () => {
     vi.useFakeTimers();
     linkMock.link.mockResolvedValueOnce(HANDOFF_RESPONSE);
-    openDialog("claude-code", PROFILE_ID);
+    await openDialog("claude-code", PROFILE_ID);
     await clickAndSettle(screen.getByRole("button", { name: "Continue" }));
 
     expect(screen.getByTestId("provider-link-linking").textContent).toBe(
@@ -496,7 +564,7 @@ describe("a local handoff", () => {
     expect(linkMock.complete).toHaveBeenLastCalledWith({
       linkId: LINK_ID,
       code: null,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
     expect(dialogState()).toBe("linking");
 
@@ -529,7 +597,7 @@ describe("an expired sign-in", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
   });
 });
@@ -539,7 +607,7 @@ describe("a refused start", () => {
     linkMock.link.mockRejectedValueOnce(
       rpcError("PROVIDER_LINK_NOT_OFFERED", "internal-detail-xyz"),
     );
-    openDialog("claude-code", PROFILE_ID);
+    await openDialog("claude-code", PROFILE_ID);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     const line = await screen.findByTestId("provider-link-not-offered");
@@ -557,7 +625,7 @@ describe("a refused start", () => {
     useProviderLinkDialogStore
       .getState()
       .open({ providerId: "claude-code", profileId: PROFILE_ID });
-    render(<ProviderLinkDialog />);
+    await renderDialog(<ProviderLinkDialog />);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     const line = await screen.findByTestId("provider-link-not-offered");
@@ -568,7 +636,7 @@ describe("a refused start", () => {
     linkMock.link.mockRejectedValueOnce(
       rpcError("PROVIDER_LINK_UNAVAILABLE", "internal-detail-xyz"),
     );
-    openDialog("claude-code", PROFILE_ID);
+    await openDialog("claude-code", PROFILE_ID);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     const line = await screen.findByTestId("provider-link-unavailable");
@@ -582,7 +650,7 @@ describe("a refused start", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
-      environmentId: null,
+      environmentId: PERSONAL_ENV_ID,
     });
   });
 
@@ -590,7 +658,7 @@ describe("a refused start", () => {
     linkMock.link.mockRejectedValueOnce(
       rpcError("RPC_ERROR", "the keychain is locked"),
     );
-    openDialog("claude-code", PROFILE_ID);
+    await openDialog("claude-code", PROFILE_ID);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     const line = await screen.findByTestId("provider-link-failed");
@@ -613,7 +681,7 @@ describe("a refused start", () => {
 
 describe("a provider the dialog does not know", () => {
   it("says the profile is on this host only and never calls the host", async () => {
-    openDialog("nope", PROFILE_ID);
+    await openDialog("nope", PROFILE_ID);
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     const line = await screen.findByTestId("provider-link-not-offered");
@@ -623,8 +691,8 @@ describe("a provider the dialog does not know", () => {
 });
 
 describe("closing", () => {
-  it("clears the store target on Cancel", () => {
-    openDialog("claude-code", PROFILE_ID);
+  it("clears the store target on Cancel", async () => {
+    await openDialog("claude-code", PROFILE_ID);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
@@ -651,5 +719,75 @@ describe("closing", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const box = await screen.findByTestId("provider-link-code");
     expect(box instanceof HTMLInputElement ? box.value : null).toBe("");
+  });
+});
+
+describe("the environment a link names", () => {
+  it("names Personal's own id on the Personal pick, for the start and for the code", async () => {
+    await reachSignIn(PROFILE_ID);
+    linkMock.complete.mockResolvedValueOnce(
+      answer({ state: "linked", account: "a@x.test" }),
+    );
+    pasteAndLink("abc#def");
+    await screen.findByTestId("provider-link-linked");
+
+    expect(linkMock.link.mock.calls[0]?.[0].environmentId).toBe(
+      PERSONAL_ENV_ID,
+    );
+    expect(linkMock.complete.mock.calls[0]?.[0].environmentId).toBe(
+      PERSONAL_ENV_ID,
+    );
+  });
+
+  it("names the host's own (null) on a Local pick, for the start and for the code", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+    });
+    await reachSignIn(PROFILE_ID);
+    linkMock.complete.mockResolvedValueOnce(
+      answer({ state: "linked", account: "a@x.test" }),
+    );
+    pasteAndLink("abc#def");
+    await screen.findByTestId("provider-link-linked");
+
+    expect(linkMock.link.mock.calls[0]?.[0].environmentId).toBeNull();
+    expect(linkMock.complete.mock.calls[0]?.[0].environmentId).toBeNull();
+  });
+
+  it("holds Continue until Personal's id has arrived, then sends it", async () => {
+    let release: () => void = () => undefined;
+    listGate.current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
+    useProviderLinkDialogStore
+      .getState()
+      .open({ providerId: "claude-code", profileId: PROFILE_ID });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        {personalPage(<ProviderLinkDialog />)}
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(listMock).toHaveBeenCalled();
+    });
+
+    const continueButton = screen.getByTestId("provider-link-continue");
+    expect(continueButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(continueButton);
+    expect(linkMock.link).not.toHaveBeenCalled();
+
+    release();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("provider-link-continue").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    fireEvent.click(screen.getByTestId("provider-link-continue"));
+    await screen.findByTestId("provider-link-code");
+
+    expect(linkMock.link.mock.calls[0]?.[0].environmentId).toBe(
+      PERSONAL_ENV_ID,
+    );
   });
 });

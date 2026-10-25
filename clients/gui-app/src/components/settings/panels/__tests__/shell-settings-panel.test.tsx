@@ -26,7 +26,12 @@ const hostBindingMock = vi.hoisted(
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostBinding: () => hostBindingMock.current };
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingMock.current,
+    // Add a secret, which a key-shaped value is refused for, reads the client.
+    useHostClient: () => hostBindingMock.current?.hostClient,
+  };
 });
 
 // What `useHostCredentialRefusal` answers for the scoped host: `null` is a
@@ -1214,7 +1219,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     value: string,
   ): Promise<void> {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
     fireEvent.change(screen.getByPlaceholderText(placeholder), {
       target: { value: name },
@@ -1289,7 +1294,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     renderShellPanelOverRpc({ cli: envCli() });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
 
     expect(screen.getByPlaceholderText("NODE_ENV")).toBeTruthy();
@@ -1306,7 +1311,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
     expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText("OPENAI_API_KEY"), {
@@ -1356,7 +1361,7 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
 
   async function addVariable(name: string, value: string): Promise<void> {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: name },

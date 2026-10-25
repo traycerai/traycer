@@ -3,7 +3,7 @@
 // `HostClient` over an in-memory messenger (`buildEnvironmentClient`), so a
 // save and a retry travel the request path the app uses and only the host is
 // faked.
-const hostIdMock = vi.hoisted((): { readonly id: string } => ({
+const hostIdMock = vi.hoisted((): { id: string } => ({
   id: "host-a",
 }));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -43,6 +43,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -78,6 +79,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   hostMock.client = null;
   hostMock.binding = null;
+  hostIdMock.id = "host-a";
 });
 
 interface Rig {
@@ -378,6 +380,68 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "macOS" })).toBeNull();
+  });
+});
+
+describe("<MachineSetupSettingsPanel /> moving between computers", () => {
+  it("shows the other computer's script, not a draft, when its OS and revision match", async () => {
+    // Same OS, same revision, different text: only the host tells them apart.
+    const onA: SetupScript = { os: "macos", text: "brew on A", revision: 4 };
+    const onB: SetupScript = { os: "macos", text: "brew on B", revision: 4 };
+    const handlersFor = (
+      script: SetupScript,
+    ): MockHandlerMap<HostRpcRegistry> => ({
+      "environment.status": () => environmentStatusFixture({}),
+      "environment.setup.get": () => Promise.resolve({ scripts: [script] }),
+      "environment.setup.attempts": () => Promise.resolve({ attempts: [] }),
+    });
+    const a = buildEnvironmentClient({
+      hostId: "host-a",
+      handlers: handlersFor(onA),
+    });
+    const b = buildEnvironmentClient({
+      hostId: "host-b",
+      handlers: handlersFor(onB),
+    });
+    recordNegotiatedHostMethods("host-a", ALL_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_METHODS);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    // A fresh element each time: React skips re-rendering an identical one.
+    const page = (): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        <MachineSetupSettingsPanel />
+      </QueryClientProvider>
+    );
+    hostIdMock.id = "host-a";
+    hostMock.client = a.client;
+    const view = render(page());
+    await waitFor(() => {
+      expect(scriptField("macOS").value).toBe("brew on A");
+    });
+    fireEvent.change(scriptField("macOS"), {
+      target: { value: "a draft nobody saved" },
+    });
+
+    hostIdMock.id = "host-b";
+    hostMock.client = b.client;
+    view.rerender(page());
+    await waitFor(() => {
+      expect(scriptField("macOS").value).toBe("brew on B");
+    });
+
+    // Back to A, whose read is cached: no pending read unmounts the editor,
+    // so only its key can drop the draft.
+    hostIdMock.id = "host-a";
+    hostMock.client = a.client;
+    view.rerender(page());
+    await waitFor(() => {
+      expect(scriptField("macOS").value).toBe("brew on A");
+    });
   });
 });
 

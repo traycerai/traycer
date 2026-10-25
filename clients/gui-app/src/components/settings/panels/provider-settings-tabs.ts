@@ -155,13 +155,9 @@ export function providerTabInputs(
  * outside this set `profiles` is empty BY RULE rather than by chance
  * (`resolveProfileWireEntries` returns `[]` without consulting the registry),
  * so the array cannot stand in for the rule: an unseeded claude-code is empty
- * too, and a label that reads the count would announce the wrong tab until the
- * first profile appears and then change under the user.
+ * too.
  *
- * Adding a profile-capable provider means updating BOTH sides. The cost of
- * missing it is a tab that under-promises until someone notices, not a broken
- * surface - which is why the label mirrors the rule rather than inventing a
- * second source of truth for it.
+ * Adding a profile-capable provider means updating BOTH sides.
  *
  * Exported for the Fallback section, whose "switch to another profile" step is
  * inert for a user with no second account anywhere - and which must decide
@@ -180,32 +176,12 @@ export function providerSupportsManagedProfiles(
 }
 
 /**
- * The tab's label for THIS provider.
- *
- * Only `usage` varies. The tab holds managed profiles and usage limits, and for
- * every provider but two it holds only the second - so a fixed
- * "Profiles & Limits" promised a section that is not there, on ~10 of 12
- * providers. The short form is the panel's own words for what remains: the
- * section inside is headed "Usage limits".
- *
- * The tab ID is untouched - it is the wire enum, and this is presentation.
- */
-export function providerTabLabel(
-  tab: ProviderTabKey,
-  labels: Readonly<Record<ProviderTabKey, string>>,
-  providerId: ProviderId,
-): string {
-  if (tab !== "usage" || providerSupportsManagedProfiles(providerId)) {
-    return labels[tab];
-  }
-  return "Usage limits";
-}
-
-/**
- * Which page the provider rail and tabs are drawn for. MCP servers and Skills
- * are Personal pages of their own: the same rail and
- * the same tab bodies, narrowed to that one tab, while Providers keeps every
- * other tab. The `supportedTabs` wire is unchanged; the narrowing is here.
+ * Which page the provider rail and tabs are drawn for. Providers keeps every
+ * tab, MCP and Skills included: on Personal or a team they switch the
+ * configuration's servers and skills for one provider, on a Local row they
+ * hold that computer's own lists. A host-read MCP servers or Skills page (an
+ * older pick that still reaches one) is the same rail narrowed to that one
+ * tab. The `supportedTabs` wire is unchanged; the narrowing is here.
  */
 export type ProvidersPanelView = "providers" | "mcp-servers" | "skills";
 
@@ -221,9 +197,7 @@ export function tabsForView(
   tabs: readonly ProviderTabKey[],
   view: ProvidersPanelView,
 ): readonly ProviderTabKey[] {
-  if (view === "providers") {
-    return tabs.filter((tab) => tab !== "mcp" && tab !== "skills");
-  }
+  if (view === "providers") return tabs;
   const only = VIEW_TAB[view];
   return tabs.filter((tab) => tab === only);
 }

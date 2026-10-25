@@ -293,6 +293,16 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: KeyRound,
     group: "personal",
   },
+  // Two tabs over room files: the selection guide agents read to pick a
+  // harness, model and effort, and the agent definitions a harness can start.
+  // The section `id` (and its `/settings/agents` route) is an internal
+  // identifier on the compatibility boundary and stays put.
+  {
+    id: "agents",
+    label: "Agents",
+    icon: Bot,
+    group: "personal",
+  },
   // "Model routing" and not "Route automatically" - the section is the whole
   // subject, and "Route automatically" is the master toggle INSIDE it, so using
   // the same words for both would make the rail row read as a switch.
@@ -306,24 +316,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // every agent starts with, so the label names both.
   {
     id: "shell",
-    label: "Variables and shells",
+    label: "Variables & shells",
     icon: TerminalSquare,
     group: "personal",
   },
-  // "Agent selection", not "Agents": this section configures HOW a coding agent
-  // and model get chosen when spawning child agents. It does not manage the
-  // Agents that live in a Task, and the old label collided with that surface.
-  // The section `id` (and its `/settings/agents` route) is an internal
-  // identifier on the compatibility boundary and stays put.
-  {
-    id: "agents",
-    label: "Agent selection",
-    icon: Bot,
-    group: "personal",
-  },
-  // Whether agents may drive the in-app browser. Its own page rather than a
-  // row on Browser: Browser is this app's own browsing, which stays with the
-  // window, while this follows the person.
+  // Whether agents may drive the in-app browser. Not offered in navigation
+  // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is a region of Permissions,
+  // and its route redirects there.
   {
     id: "browser-agent-access",
     label: "Browser agent access",
@@ -355,8 +354,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Users,
     group: "personal",
   },
-  // The agent definition files every host gets ("Agent definitions", never
-  // "Agents": that word is the agents running in a task).
+  // The agent definition files every host gets. Not offered in navigation
+  // (`RETIRED_SETTINGS_SECTION_IDS`): they are the Agents page's Definitions
+  // tab, and the route redirects there.
   {
     id: "agent-definitions",
     label: "Agent definitions",
@@ -517,10 +517,24 @@ export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * Sections no build offers in navigation any more, the way dev-only ones are
  * withheld from production: they stay in `SETTINGS_SECTIONS` so a remembered
  * path or a deep link still resolves, and they have no search collection.
- * Machine setup left the Environment group with the redesign.
+ * Machine setup left the Environment group with the redesign; Agent
+ * definitions became the Agents page's Definitions tab and Browser agent
+ * access a region of Permissions.
  */
 export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
-  new Set(["machine-setup"]);
+  new Set(["machine-setup", "agent-definitions", "browser-agent-access"]);
+
+/**
+ * The page that now holds a retired section, where one does: a remembered
+ * section or a link that names it opens that page, as its route redirects
+ * there.
+ */
+export const RETIRED_SECTION_REPLACEMENTS: Readonly<
+  Partial<Record<SettingsSectionId, SettingsSectionId>>
+> = {
+  "agent-definitions": "agents",
+  "browser-agent-access": "permissions",
+};
 
 /**
  * Both offered lists, resolved once at module load.

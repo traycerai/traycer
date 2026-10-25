@@ -404,6 +404,45 @@ export type EnvironmentReviewResponseV11 = z.infer<
 >;
 
 /**
+ * `environment.review@1.2`: each entry names what a held executable does, the
+ * facts its line on the retrospective sheet reads. All null on a held value
+ * and on any row the host cannot describe; a `@1.1` answer upgrades with all
+ * null.
+ *
+ * - `command`: what it runs, as configured: an MCP server's or hook's command
+ *   line, arguments included and env values left out; a shell's path and
+ *   arguments; a setup script's lines.
+ * - `event`: when it runs: a hook's trigger, or a setup script's.
+ * - `description`: a skill's one-line description, as the skill states it.
+ * - `harness`: the harness id an agent definition is for, or the program an
+ *   env setting changes (its key's `<harness>:` prefix).
+ * - `value`: a launch-sensitive variable's or env setting's value as
+ *   configured. A value that looks like a credential is never here: that row
+ *   is a held value.
+ */
+export const environmentReviewEntrySchemaV12 = lazySchema(() =>
+  environmentReviewEntrySchema.extend({
+    command: z.string().min(1).max(8192).nullable().default(null),
+    event: z.string().min(1).max(256).nullable().default(null),
+    description: z.string().min(1).max(1024).nullable().default(null),
+    harness: z.string().min(1).max(64).nullable().default(null),
+    value: z.string().min(1).max(8192).nullable().default(null),
+  }),
+);
+export type EnvironmentReviewEntryV12 = z.infer<
+  typeof environmentReviewEntrySchemaV12
+>;
+
+export const environmentReviewResponseSchemaV12 = lazySchema(() =>
+  environmentReviewResponseSchemaV11.extend({
+    entries: z.array(environmentReviewEntrySchemaV12),
+  }),
+);
+export type EnvironmentReviewResponseV12 = z.infer<
+  typeof environmentReviewResponseSchemaV12
+>;
+
+/**
  * `environment.review.heldApply@1.0`: the retrospective sheet's choice for one
  * held entry (`EnvironmentReviewEntry.entryId`). `secret`, `variable` and
  * `stays` answer a held credential-like value; `approve` a held hook;

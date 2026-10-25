@@ -146,7 +146,7 @@ describe("CreditsSettingsPanel", () => {
     setMobileApp(false);
   });
 
-  it("renders the empty sentence and Add credits at a zero balance", () => {
+  it("shows $0.00 left, the hourly line and Add credits at a zero balance, with the subtitle once", () => {
     mocks.data = userWith(
       userSubscription({
         totalPlanCredits: 0,
@@ -160,16 +160,48 @@ describe("CreditsSettingsPanel", () => {
 
     render(<CreditsSettingsPanel />);
 
-    expect(screen.getByTestId("credits-empty")).toBeTruthy();
-    expect(
-      screen.getAllByText("Credits pay for sandboxes while they are awake.")
-        .length,
-    ).toBeGreaterThan(0);
+    expect(screen.getByTestId("credits-remaining").textContent).toBe(
+      "$0.00 left",
+    );
+    expect(screen.getAllByText("Credits pay for your sandboxes.")).toHaveLength(
+      1,
+    );
     expect(screen.getByRole("button", { name: /Add credits/ })).toBeTruthy();
     expect(screen.getByTestId("credits-hourly-price").textContent).toBe(
       "$0.12 an hour while awake",
     );
-    expect(screen.queryByTestId("credits-remaining")).toBeNull();
+  });
+
+  it("counts credits, not dollars, in the installed app, with no Add credits", () => {
+    setMobileApp(true);
+    mocks.data = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 30,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-remaining").textContent).toMatch(
+      /^[\d,.]+ credits left$/,
+    );
+    expect(screen.queryByRole("button", { name: /Add credits/ })).toBeNull();
+  });
+
+  it("says the read failed, with Retry and the report link", () => {
+    mocks.isError = true;
+
+    render(<CreditsSettingsPanel />);
+
+    const failure = screen.getByTestId("credits-error");
+    expect(failure.textContent).toContain("Couldn't read your credits.");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load your credits/)).toBeNull();
   });
 
   it("renders the remaining balance at a positive credit amount", () => {
@@ -187,7 +219,9 @@ describe("CreditsSettingsPanel", () => {
     render(<CreditsSettingsPanel />);
 
     expect(screen.getByTestId("credits-ready")).toBeTruthy();
-    expect(screen.getByTestId("credits-remaining").textContent).toBe("$70.00");
+    expect(screen.getByTestId("credits-remaining").textContent).toBe(
+      "$70.00 left",
+    );
     expect(screen.getByTestId("credits-hourly-price").textContent).toBe(
       "$0.12 an hour while awake",
     );

@@ -10,7 +10,7 @@ import {
   RETROSPECTIVE_APPLIED_ON,
   RETROSPECTIVE_DISCLOSURE,
   RETROSPECTIVE_GOT_IT,
-  RETROSPECTIVE_HELD_HOOK,
+  RETROSPECTIVE_HELD_COMMANDS,
   RETROSPECTIVE_HELD_NOT_IN_USE,
   RETROSPECTIVE_MOVE_TO_PERSONAL,
   RETROSPECTIVE_RECORD_LINE,
@@ -18,7 +18,7 @@ import {
   RETROSPECTIVE_SHARED_IN_USE,
   RETROSPECTIVE_STILL_ON_THIS_COMPUTER,
   RETROSPECTIVE_STOP_SHARING,
-  HELD_HOOK_CHOICES,
+  HELD_COMMAND_CHOICES,
   HELD_VALUE_CHOICES,
   NO_MOVE_SHEET_ACCEPTANCE,
   retrospectiveEvidenceLine,
@@ -66,7 +66,7 @@ export interface SharedInUseItem {
 export interface HeldRow {
   readonly heldId: string;
   readonly name: string;
-  readonly kind: "value" | "hook";
+  readonly kind: "value" | "command";
   readonly detail: string;
 }
 
@@ -91,7 +91,12 @@ export function RetrospectiveSheet(props: {
   readonly onAcknowledged: () => void;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
   readonly onMoveToPersonal: () => void;
-  readonly onStopSharing: () => void;
+  /**
+   * `Stop using Personal on this computer`; `null` hides it, once the
+   * computer has stopped (or its planes cannot say it still shares), leaving
+   * `Got it` alone.
+   */
+  readonly onStopSharing: (() => void) | null;
 }): ReactNode {
   const { open, inventoryReady, onShown } = props;
   const shownForOpen = useRef(false);
@@ -106,7 +111,7 @@ export function RetrospectiveSheet(props: {
   }, [open, inventoryReady, onShown]);
 
   const valueHeld = props.held.filter((row) => row.kind === "value");
-  const hookHeld = props.held.filter((row) => row.kind === "hook");
+  const commandHeld = props.held.filter((row) => row.kind === "command");
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -169,14 +174,14 @@ export function RetrospectiveSheet(props: {
                 />
               </InventoryRow>
             ) : null}
-            {hookHeld.length > 0 ? (
+            {commandHeld.length > 0 ? (
               <InventoryRow
-                term={RETROSPECTIVE_HELD_HOOK}
-                testId="retrospective-held-hooks"
+                term={RETROSPECTIVE_HELD_COMMANDS}
+                testId="retrospective-held-commands"
               >
                 <HeldList
-                  rows={hookHeld}
-                  actions={HELD_HOOK_CHOICES}
+                  rows={commandHeld}
+                  actions={HELD_COMMAND_CHOICES}
                   pendingId={props.heldPendingId}
                   onHeldApply={props.onHeldApply}
                 />
@@ -211,15 +216,17 @@ export function RetrospectiveSheet(props: {
           </p>
         </div>
         <DialogFooter>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="retrospective-stop-sharing"
-            onClick={props.onStopSharing}
-          >
-            {RETROSPECTIVE_STOP_SHARING}
-          </Button>
+          {props.onStopSharing === null ? null : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="retrospective-stop-sharing"
+              onClick={props.onStopSharing}
+            >
+              {RETROSPECTIVE_STOP_SHARING}
+            </Button>
+          )}
           <Button
             type="button"
             size="sm"

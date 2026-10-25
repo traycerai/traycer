@@ -42,7 +42,6 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { MoveSheet } from "@/components/settings/move-sheet";
 import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
@@ -178,7 +177,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           race its open state, and unmounting it while a search runs would tear
           down a dialog that is open. */}
       <AddHostDialog />
-      <MoveSheet />
     </aside>
   );
 }

@@ -6,8 +6,10 @@
  *
  * `environment.configuration.items` / `.items.put` / `.items.delete` - the
  * item rows, compare-and-set per address on each row's own revision.
- * `environment.configuration.mcpServers.put` - an MCP server with its
- * credential. `environment.configuration.skills.upload` - a skill folder.
+ * `environment.configuration.mcpServers.list` / `.put` / `.delete` - the
+ * environment's MCP server declarations, a server with its credential.
+ * `environment.configuration.skills.upload` / `.list` / `.remove` /
+ * `.setProviders` - the environment's skills, on the host that serves it.
  * `environment.configuration.policy.put` - the approval policy.
  * `environment.configuration.guide.get` / `.set` / `.reset` - the agent
  * selection guide. `environment.plans.list` / `.unlinkPreview` / `.unlink` -
@@ -20,7 +22,10 @@
  * back. Optional capabilities with `degrade: { kind: "unsupported" }`.
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   environmentItemKindSchema,
@@ -280,6 +285,337 @@ export const environmentConfigurationSkillsUploadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentConfigurationSkillUploadRequestSchema,
   responseSchema: environmentConfigurationSkillUploadResponseSchema,
+});
+
+// ── mcpServers.list / put@1.1 / delete ──────────────────────────────────────
+
+/**
+ * Known `reason` codes of a refused MCP server write, beside authn's own:
+ * `name_taken` (another server of the environment has this name),
+ * `stdio_credential` (a `stdio` server carries a credential other than
+ * `none` or `unchanged`: the broker cannot bind one), `secret_not_bindable`
+ * (a picked secret is of another environment, not brokered, not live, has no
+ * header swap, is another server's own credential, or is not sent to the
+ * server's address), `secret_destination_mismatch` (an edit moves the url off
+ * the picked secret's address without a new credential).
+ */
+export const ENVIRONMENT_MCP_SERVER_REFUSAL_REASONS = [
+  "name_taken",
+  "stdio_credential",
+  "secret_not_bindable",
+  "secret_destination_mismatch",
+] as const;
+
+/**
+ * A server's credential, never its value: `secret` names the broker secret
+ * holding it (both null while authn still holds it in the row; custom
+ * headers win over a PAT, as the applier reads them), `oauth` a sign-in the
+ * row keeps sealed. `owned` is a secret added with this server, deleted with
+ * it; a picked one is only unbound and stays on Secrets.
+ */
+export const environmentMcpServerCredentialStateSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["none", "secret", "oauth"]),
+    secretId: z.string().min(1).nullable(),
+    secretName: z.string().min(1).nullable(),
+    owned: z.boolean(),
+  }),
+);
+
+/**
+ * The server's `mcp_server` item: the row hosts apply. `offFor` holds the
+ * harness ids the server is switched off for, `toolToggles` each harness's
+ * tools.
+ */
+export const environmentMcpServerItemStateSchema = lazySchema(() =>
+  z.object({
+    key: itemKeySchema,
+    revision: itemRevisionSchema,
+    toolToggles: z.record(z.string(), z.record(z.string(), z.boolean())),
+    offFor: z.array(z.string().min(1).max(64)),
+  }),
+);
+
+/**
+ * One server as the environment holds it: authn's declaration and its item.
+ * `item` null is a server with no `mcp_server` item, which reaches no host.
+ */
+export const environmentMcpServerDeclarationSchema = lazySchema(() =>
+  z.object({
+    serverId: z.string().min(1),
+    name: z.string().min(1).max(128),
+    transport: z.enum(["http", "stdio"]),
+    url: z.string().nullable(),
+    command: z.string().nullable(),
+    args: z.array(z.string()),
+    env: z.array(z.string()),
+    credential: environmentMcpServerCredentialStateSchema,
+    item: environmentMcpServerItemStateSchema.nullable(),
+  }),
+);
+export type EnvironmentMcpServerDeclaration = z.infer<
+  typeof environmentMcpServerDeclarationSchema
+>;
+
+/** `environment.configuration.mcpServers.list@1.0`: the environment's servers, oldest first. */
+export const environmentConfigurationMcpServersListRequestSchema = lazySchema(
+  () => z.object({ environmentId: environmentIdSchema }),
+);
+export const environmentConfigurationMcpServersListResponseSchema = lazySchema(
+  () => z.object({ servers: z.array(environmentMcpServerDeclarationSchema) }),
+);
+export type EnvironmentConfigurationMcpServersListResponse = z.infer<
+  typeof environmentConfigurationMcpServersListResponseSchema
+>;
+
+export const environmentConfigurationMcpServersListV10 = defineRpcContract({
+  method: "environment.configuration.mcpServers.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationMcpServersListRequestSchema,
+  responseSchema: environmentConfigurationMcpServersListResponseSchema,
+});
+
+/**
+ * An MCP server's credential on a `put@1.1`: the 1.0 kinds, plus `secret`,
+ * an existing broker secret of the environment bound as the server's PAT
+ * without a copy.
+ */
+export const environmentMcpServerCredentialSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("unchanged") }),
+    z.object({ kind: z.literal("none") }),
+    z.object({ kind: z.literal("pat"), pat: z.string().min(1).max(4096) }),
+    z.object({
+      kind: z.literal("headers"),
+      headers: z.record(z.string().min(1).max(256), z.string().max(8192)),
+    }),
+    z.object({ kind: z.literal("secret"), secretId: z.string().min(1) }),
+  ]),
+);
+export type EnvironmentMcpServerCredentialV11 = z.infer<
+  typeof environmentMcpServerCredentialSchemaV11
+>;
+
+/**
+ * `environment.configuration.mcpServers.put@1.1`: the 1.0 body with the
+ * `secret` credential and `offFor`, the harness ids the server is off for
+ * (`[]`: every provider). The host keeps the server's `mcp_server` item with
+ * it: a create puts one under the server's name (a name already taken
+ * refuses the create, `name_taken`, and leaves no server behind), an update
+ * puts the new toggles and `offFor` at the item's revision, a rename moves
+ * the item to the new name.
+ */
+export const environmentConfigurationMcpServerPutRequestSchemaV11 = lazySchema(
+  () =>
+    z.object({
+      environmentId: environmentIdSchema,
+      serverId: z.string().min(1).nullable(),
+      name: z.string().min(1).max(128),
+      transport: z.enum(["http", "stdio"]),
+      url: z.string().min(1).max(2048).nullable(),
+      command: z.string().min(1).max(1024).nullable(),
+      args: z.array(z.string().max(4096)).max(64),
+      env: z.array(z.string().min(1).max(128)).max(64),
+      toolToggles: z.record(
+        z.string().min(1).max(64),
+        z.record(z.string().min(1).max(256), z.boolean()),
+      ),
+      offFor: z.array(z.string().min(1).max(64)).max(64),
+      credential: environmentMcpServerCredentialSchemaV11,
+    }),
+);
+export type EnvironmentConfigurationMcpServerPutRequestV11 = z.infer<
+  typeof environmentConfigurationMcpServerPutRequestSchemaV11
+>;
+
+/** A put@1.1 answer: the write answer and the server's id once `saved`. */
+export const environmentConfigurationMcpServerPutResponseSchemaV11 = lazySchema(
+  () =>
+    z.object({
+      outcome: z.enum(["saved", "forbidden", "refused"]),
+      reason: z.string().min(1).max(64).nullable(),
+      serverId: z.string().min(1).nullable(),
+    }),
+);
+export type EnvironmentConfigurationMcpServerPutResponseV11 = z.infer<
+  typeof environmentConfigurationMcpServerPutResponseSchemaV11
+>;
+
+export const environmentConfigurationMcpServersPutV11 = defineRpcContract({
+  method: "environment.configuration.mcpServers.put",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentConfigurationMcpServerPutRequestSchemaV11,
+  responseSchema: environmentConfigurationMcpServerPutResponseSchemaV11,
+});
+
+/**
+ * A 1.0 request is every provider's (`offFor: []`); a 1.0 host names no id
+ * and writes no item, and a request sent to one never carries `secret`.
+ */
+export const environmentConfigurationMcpServersPutUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof environmentConfigurationMcpServersPutV10,
+    typeof environmentConfigurationMcpServersPutV11
+  >({
+    from: environmentConfigurationMcpServersPutV10.schemaVersion,
+    to: environmentConfigurationMcpServersPutV11.schemaVersion,
+    upgradeRequest: (request) => ({ ...request, offFor: [] }),
+    upgradeResponse: (response) => ({ ...response, serverId: null }),
+  });
+
+/**
+ * `environment.configuration.mcpServers.delete@1.0`: removes the server's
+ * `mcp_server` item (so every host takes it out of its providers), then the
+ * server and its credential.
+ */
+export const environmentConfigurationMcpServerDeleteRequestSchema = lazySchema(
+  () =>
+    z.object({
+      environmentId: environmentIdSchema,
+      serverId: z.string().min(1),
+    }),
+);
+
+export const environmentConfigurationMcpServersDeleteV10 = defineRpcContract({
+  method: "environment.configuration.mcpServers.delete",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationMcpServerDeleteRequestSchema,
+  responseSchema: environmentConfigurationWriteResponseSchema,
+});
+
+/**
+ * `environment.configuration.mcpServers.setEnabled@1.0`: switches a server on
+ * or off for every host. Off keeps its tool toggles on the server and takes
+ * its `mcp_server` item away; on puts the item back with them, on for every
+ * provider.
+ */
+export const environmentConfigurationMcpServerSetEnabledRequestSchema =
+  lazySchema(() =>
+    z.object({
+      environmentId: environmentIdSchema,
+      serverId: z.string().min(1),
+      enabled: z.boolean(),
+    }),
+  );
+
+export const environmentConfigurationMcpServersSetEnabledV10 =
+  defineRpcContract({
+    method: "environment.configuration.mcpServers.setEnabled",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: environmentConfigurationMcpServerSetEnabledRequestSchema,
+    responseSchema: environmentConfigurationWriteResponseSchema,
+  });
+
+// ── skills.list / remove / setProviders ─────────────────────────────────────
+
+/** Why a served skill write was refused. */
+const environmentSkillRefusalSchema = lazySchema(() =>
+  z.enum(["not_ready", "not_found", "invalid_name"]).nullable(),
+);
+
+/**
+ * One skill in the environment's skills: its folder name, its description,
+ * where it came from (`bundled`: Traycer seeded it; `room`: written or added
+ * in Settings), whether a person changed a bundled one, and the provider ids
+ * (the Providers rail's) it is switched off for.
+ */
+export const environmentSkillSchema = lazySchema(() =>
+  z.object({
+    name: z.string().min(1).max(128),
+    description: z.string().nullable(),
+    origin: z.enum(["bundled", "room"]),
+    edited: z.boolean(),
+    offFor: z.array(z.string().min(1).max(64)),
+  }),
+);
+export type EnvironmentSkill = z.infer<typeof environmentSkillSchema>;
+
+/**
+ * `environment.configuration.skills.list@1.0`: the skills of the environment
+ * the asked host serves, with the revision of the switches (null while none
+ * was written), or `not_served` with none on any other host.
+ */
+export const environmentConfigurationSkillsListRequestSchema = lazySchema(() =>
+  z.object({ environmentId: environmentIdSchema }),
+);
+export const environmentConfigurationSkillsListResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("listed"),
+      revision: z.string().min(1).nullable(),
+      skills: z.array(environmentSkillSchema),
+    }),
+    z.object({ outcome: z.literal("not_served") }),
+  ]),
+);
+export type EnvironmentConfigurationSkillsListResponse = z.infer<
+  typeof environmentConfigurationSkillsListResponseSchema
+>;
+
+export const environmentConfigurationSkillsListV10 = defineRpcContract({
+  method: "environment.configuration.skills.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillsListRequestSchema,
+  responseSchema: environmentConfigurationSkillsListResponseSchema,
+});
+
+/** `environment.configuration.skills.remove@1.0`: one skill out of the environment, on its serving host. */
+export const environmentConfigurationSkillRemoveRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    name: z.string().min(1).max(128),
+  }),
+);
+export const environmentConfigurationSkillRemoveResponseSchema = lazySchema(
+  () =>
+    z.object({
+      outcome: z.enum(["removed", "not_served", "forbidden", "refused"]),
+      reason: environmentSkillRefusalSchema,
+    }),
+);
+export type EnvironmentConfigurationSkillRemoveResponse = z.infer<
+  typeof environmentConfigurationSkillRemoveResponseSchema
+>;
+
+export const environmentConfigurationSkillsRemoveV10 = defineRpcContract({
+  method: "environment.configuration.skills.remove",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillRemoveRequestSchema,
+  responseSchema: environmentConfigurationSkillRemoveResponseSchema,
+});
+
+/**
+ * `environment.configuration.skills.setProviders@1.0`: the provider ids one
+ * skill is switched off for, replacing the list, against the switches'
+ * revision the editor read (null: none written yet), on its serving host.
+ * `stale` answers the current revision: the editor lists again.
+ */
+export const environmentConfigurationSkillSetProvidersRequestSchema =
+  lazySchema(() =>
+    z.object({
+      environmentId: environmentIdSchema,
+      name: z.string().min(1).max(128),
+      offFor: z.array(z.string().min(1).max(64)).max(64),
+      revision: z.string().min(1).nullable(),
+    }),
+  );
+export const environmentConfigurationSkillSetProvidersResponseSchema =
+  lazySchema(() =>
+    z.object({
+      outcome: z.enum(["saved", "stale", "not_served", "forbidden", "refused"]),
+      revision: z.string().min(1).nullable(),
+      reason: environmentSkillRefusalSchema,
+    }),
+  );
+export type EnvironmentConfigurationSkillSetProvidersResponse = z.infer<
+  typeof environmentConfigurationSkillSetProvidersResponseSchema
+>;
+
+export const environmentConfigurationSkillsSetProvidersV10 = defineRpcContract({
+  method: "environment.configuration.skills.setProviders",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationSkillSetProvidersRequestSchema,
+  responseSchema: environmentConfigurationSkillSetProvidersResponseSchema,
 });
 
 /** authn's cap on a team policy document, in bytes. */

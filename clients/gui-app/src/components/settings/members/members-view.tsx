@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentMembersRemovePreviewResponse } from "@traycer/protocol/host/environment/contracts";
 import { DemotionPreviewDialog } from "@/components/settings/members/demotion-preview";
 import { InviteDialog } from "@/components/settings/members/invite-dialog";
+import { InviteSeatLine } from "@/components/settings/members/invite-seat-line";
 import { LegacyRoleNotice } from "@/components/settings/members/legacy-notice";
 import { MembersList } from "@/components/settings/members/members-list";
 import { RemovePreviewDialog } from "@/components/settings/members/remove-preview";
@@ -12,6 +13,7 @@ import { RevokeInviteDialog } from "@/components/settings/members/revoke-invite-
 import {
   INVITE_LABEL,
   LAST_ADMIN_REFUSAL,
+  LEGACY_NOTICE_READ_FAILED,
   MANAGE_SEATS_LABEL,
   MEMBERS_NEED_UPDATED_HOST,
   RETRY_LABEL,
@@ -20,6 +22,7 @@ import {
   addPlanOnDashboardLabel,
   demotionWhatKeepsWorking,
   memberDisplayName,
+  memberFirstName,
   membersHeaderLine,
   membersReadFailed,
   planRequiredRefusal,
@@ -96,12 +99,14 @@ function refusalFromSetRole(
 }
 
 /**
- * The members read while it is not ready: loading, the failure with Retry, or
- * a host that does not serve it, which only an update fixes.
+ * The members read while it is not ready: loading, the failure on one line
+ * with Retry, or a host that does not serve it, which only an update fixes.
+ * An admin's failure names the one-time notice the same read carries.
  */
 function MembersReadFallback(props: {
   readonly membersRead: MembersReadState;
   readonly teamName: string;
+  readonly viewerIsAdmin: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
   if (props.membersRead === "loading") {
@@ -127,18 +132,23 @@ function MembersReadFallback(props: {
   }
   if (props.membersRead === "failed") {
     return (
-      <div
-        className="flex flex-wrap items-center gap-2"
+      <p
+        className="flex max-w-[72ch] flex-wrap items-baseline gap-x-1 text-ui-sm text-destructive"
         role="status"
         data-testid="members-read-failed"
       >
-        <p className="max-w-[72ch] text-ui-sm text-destructive">
-          {membersReadFailed(props.teamName)}
-        </p>
-        <Button type="button" variant="outline" onClick={props.onRetry}>
+        {props.viewerIsAdmin
+          ? LEGACY_NOTICE_READ_FAILED
+          : membersReadFailed(props.teamName)}
+        <Button
+          type="button"
+          variant="link"
+          size="inline"
+          onClick={props.onRetry}
+        >
           {RETRY_LABEL}
         </Button>
-      </div>
+      </p>
     );
   }
   return null;
@@ -224,8 +234,11 @@ export function MembersView(props: {
   readonly invitePending: boolean;
   readonly setRolePending: boolean;
   readonly removePending: boolean;
+  /** Whether the host serves `environment.members.seats`, the invite's seat read. */
+  readonly seatsSupported: boolean;
   /** The name a host id shows as, null when this window does not know it. */
   readonly hostLabel: (hostId: string) => string | null;
+  /** The admin dismissed the legacy-role notice; nothing else calls it. */
   readonly onNoticeSeen: () => void;
 }): ReactNode {
   const {
@@ -246,6 +259,7 @@ export function MembersView(props: {
     invitePending,
     setRolePending,
     removePending,
+    seatsSupported,
     hostLabel,
     onNoticeSeen,
   } = props;
@@ -293,13 +307,18 @@ export function MembersView(props: {
   );
 
   const membersReady = membersRead === "ready";
+  // Dismissed here: hidden at once, before the read that carries the seen
+  // time comes back. Keyed by team so another team's notice still shows.
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const showNotice =
-    membersReady && viewerIsAdmin && legacyRoleNoticeSeenAt === null;
-
-  useEffect(() => {
-    if (!showNotice) return;
+    membersReady &&
+    viewerIsAdmin &&
+    legacyRoleNoticeSeenAt === null &&
+    dismissedFor !== environmentId;
+  const dismissNotice = (): void => {
+    setDismissedFor(environmentId);
     onNoticeSeen();
-  }, [showNotice, onNoticeSeen]);
+  };
 
   const listMembers = viewerIsAdmin
     ? members
@@ -410,11 +429,13 @@ export function MembersView(props: {
           teamName={teamName}
           names={legacyMembers}
           details={rowDetails(noticeSubject)}
+          onDismiss={dismissNotice}
         />
       ) : null}
       <MembersReadFallback
         membersRead={membersRead}
         teamName={teamName}
+        viewerIsAdmin={viewerIsAdmin}
         onRetry={onRetryMembers}
       />
       {membersReady ? (
@@ -431,18 +452,28 @@ export function MembersView(props: {
           rowDetails={rowDetails}
           onRoleChange={openRoleChange}
           onRemove={openRemove}
+          onRetry={onRetryMembers}
         />
       ) : null}
       <InviteDialog
         open={inviteOpen}
         teamName={teamName}
         busy={invitePending}
+        seatLine={
+          <InviteSeatLine
+            client={client}
+            environmentId={environmentId}
+            teamName={teamName}
+            supported={seatsSupported}
+          />
+        }
         onOpenChange={setInviteOpen}
         onInvite={onInvite}
       />
       <RemovePreviewDialog
         open={removing !== null}
         memberName={targetName(removing)}
+        confirmName={removing === null ? "" : memberFirstName(removing)}
         teamName={teamName}
         preview={removePreview}
         busy={removePending}

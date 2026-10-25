@@ -171,12 +171,12 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
 });
 
 describe("hostOptionKindLabel — unchanged, and deliberately route-side", () => {
-  it("names this machine", () => {
+  it("names this computer", () => {
     expect(
       hostOptionKindLabel(
         hostScopeOptionFixture({ hostId: "host-a", isLocalMachine: true }),
       ),
-    ).toBe("This machine");
+    ).toBe("This computer");
   });
 
   it("falls back to Host when no directory entry says otherwise", () => {

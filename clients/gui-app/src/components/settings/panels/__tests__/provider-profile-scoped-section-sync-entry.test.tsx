@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { ProfileSyncEntryButton as ProfileSyncEntryButtonType } from "@/components/settings/panels/profile-sync/profile-sync-entry-button";
 
 // The section's boundary with the sync entry: what it hands the button.
@@ -134,7 +135,6 @@ function renderSection(
           selectedProfileId={selectedProfileId}
           onSelectedProfileIdChange={() => undefined}
           profileEnablementAvailable={false}
-          profileStatusRefreshAvailable={false}
           profileEnablementPending={() => false}
           onSetProfileEnabled={() => undefined}
         />
@@ -146,8 +146,14 @@ function renderSection(
 describe("<ProviderProfileScopedSection /> sync entry boundary", () => {
   beforeEach(() => {
     entry.props = [];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-1", hostName: "Studio" },
+    });
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
+  });
 
   it("hands the sync entry the host and provider when profiles exist", () => {
     renderSection(state([profile("first"), profile("second")]), "second");
@@ -165,5 +171,17 @@ describe("<ProviderProfileScopedSection /> sync entry boundary", () => {
     // The empty copy is true whatever the host negotiated.
     expect(screen.getByText("No profiles on this device.")).toBeTruthy();
     expect(screen.queryByText(/automatic sync rules/)).toBeNull();
+  });
+
+  it("offers no sync entry on Personal, which already carries every profile to its computers", () => {
+    useSettingsEnvironmentPickStore.setState({ pick: null });
+    renderSection(state([profile("first"), profile("second")]), "second");
+    expect(entry.props).toEqual([]);
+    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
+
+    cleanup();
+    renderSection(state([]), null);
+    expect(entry.props).toEqual([]);
+    expect(screen.queryByText("No profiles on this device.")).toBeNull();
   });
 });

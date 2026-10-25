@@ -73,6 +73,22 @@ function chipText(): string {
 }
 
 describe("the team page chip", () => {
+  it("says No hosts yet while the team has no host", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(
+      <div data-testid="page-chip">
+        <PageChip section="shell" pick={PICK} />
+      </div>,
+      { wrapper: harness.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(chipText()).toBe("No hosts yet");
+    });
+  });
+
   it("rereads the host reports while an item is still applying and stops once it settles", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let state: EnvironmentHostItemApply["state"] = "received";

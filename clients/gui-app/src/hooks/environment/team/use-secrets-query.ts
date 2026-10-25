@@ -1,5 +1,5 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
@@ -12,7 +12,7 @@ import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 export function useEnvironmentSecretsQuery(
   client: HostClient<HostRpcRegistry>,
 ) {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId, resolved } = useAddressedEnvironment();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -34,7 +34,9 @@ export function useEnvironmentSecretsQuery(
             version: { major: 1, minor: 1 },
           },
     options: {
-      enabled: environmentId === null || (viewerId.length > 0 && authorized),
+      enabled:
+        resolved &&
+        (environmentId === null || (viewerId.length > 0 && authorized)),
     },
   });
 }

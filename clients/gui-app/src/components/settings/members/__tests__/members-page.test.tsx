@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentDescriptorV11,
-  EnvironmentMemberV11,
+  EnvironmentMemberV12,
   EnvironmentMembersRemovePreviewResponse,
 } from "@traycer/protocol/host/environment/contracts";
 import {
@@ -13,6 +13,7 @@ import {
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { MembersPage } from "@/components/settings/members/members-page";
 import {
   useHostNotificationsStore,
@@ -38,11 +39,15 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 // method, `environment.members` at @1.1, unless a test says otherwise.
 const handshake = vi.hoisted(() => ({
   servesMembers: true,
+  servesSeats: true,
   membersVersion: { major: 1, minor: 1 },
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (_hostId: string | null, method: string) =>
-    method === "environment.members" ? handshake.servesMembers : true,
+  useHostMethodSupport: (_hostId: string | null, method: string) => {
+    if (method === "environment.members") return handshake.servesMembers;
+    if (method === "environment.members.seats") return handshake.servesSeats;
+    return true;
+  },
   useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
     method === "environment.members" && handshake.servesMembers
       ? handshake.membersVersion
@@ -53,8 +58,10 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useAuthStore.setState({ profile: null });
   useHostNotificationsStore.setState({ byId: {} });
   handshake.servesMembers = true;
+  handshake.servesSeats = true;
   handshake.membersVersion = { major: 1, minor: 1 };
 });
 
@@ -73,11 +80,12 @@ const TEAM: EnvironmentDescriptorV11 = {
 function member(
   userId: string,
   displayName: string,
-  effectiveRole: EnvironmentMemberV11["effectiveRole"],
-): EnvironmentMemberV11 {
+  effectiveRole: EnvironmentMemberV12["effectiveRole"],
+): EnvironmentMemberV12 {
   return {
     userId,
     displayName,
+    email: `${userId}@acme.test`,
     avatarUrl: null,
     effectiveRole,
     linkedPlan: false,
@@ -90,7 +98,7 @@ const ADA = member("u-admin", "Ada", "admin");
 const GRACE = member("u-grace", "Grace", "admin");
 const PRIYA = member("u-priya", "Priya", "editor");
 
-function membersPage(members: readonly EnvironmentMemberV11[]) {
+function membersPage(members: readonly EnvironmentMemberV12[]) {
   return {
     members: [...members],
     nextCursor: null,
@@ -200,7 +208,9 @@ describe("MembersPage members read", () => {
       expect(screen.getByTestId("members-read-failed")).toBeTruthy();
     });
     const failure = screen.getByTestId("members-read-failed");
-    expect(failure.textContent).toContain("Couldn't load Acme's members.");
+    expect(failure.textContent).toContain(
+      "Couldn't load who gained editing with this update.",
+    );
 
     fail = false;
     await userEvent.click(
@@ -208,6 +218,118 @@ describe("MembersPage members read", () => {
     );
     expect(await screen.findByText("Acme · 2 people")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Invite" })).toBeTruthy();
+  });
+
+  it("tells a non-admin the team's members could not load, on one line with Retry", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({
+          environments: [{ ...TEAM, effectiveRole: "viewer" }],
+        }),
+        "environment.members": () => {
+          throw new Error("pool unavailable");
+        },
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const failure = await screen.findByTestId("members-read-failed");
+    expect(failure.textContent).toBe("Couldn't load Acme's members.Retry");
+  });
+
+  it("names members by name and email, you by name, and never by user id", async () => {
+    useAuthStore.setState({
+      profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
+    });
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([
+            ADA,
+            PRIYA,
+            { ...GRACE, email: null },
+            { ...member("u-noname", "", "viewer"), displayName: null },
+            {
+              ...member("u-ghost", "", "viewer"),
+              displayName: null,
+              email: null,
+            },
+          ]),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(await screen.findByText("Ada · you")).toBeTruthy();
+    expect(screen.getByText("Priya · u-priya@acme.test")).toBeTruthy();
+    expect(screen.getByText("Grace")).toBeTruthy();
+    expect(screen.getByText("u-noname@acme.test")).toBeTruthy();
+    expect(screen.getByText("u-admin@acme.test")).toBeTruthy();
+    const ghost = rowOf("u-ghost");
+    expect(ghost.textContent).toContain("Couldn't load this member");
+    expect(ghost.textContent).not.toContain("u-ghost");
+    expect(within(ghost).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("adds the step-down remedy to the last admin's own line", async () => {
+    useAuthStore.setState({
+      profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
+    });
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(
+      await screen.findByText(
+        "u-admin@acme.test · to step down, promote another admin first.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows the legacy notice until Dismiss, which reports it seen once and hides it", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => ({
+          ...membersPage([ADA, PRIYA]),
+          legacyRoleNoticeSeenAt: null,
+          legacyMembers: ["Priya"],
+        }),
+        "environment.members.noticeSeen": () => ({ outcome: "recorded" }),
+      },
+    );
+    const view = render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const notice = await screen.findByTestId("members-legacy-notice");
+    expect(notice.textContent).toContain("Set a role beside each name.");
+    view.rerender(<MembersPage environmentId="env-a" />);
+    expect(screen.getByTestId("members-legacy-notice")).toBeTruthy();
+    expect(harness.paramsOf("environment.members.noticeSeen")).toHaveLength(0);
+
+    await userEvent.click(screen.getByTestId("members-legacy-notice-dismiss"));
+
+    await vi.waitFor(() => {
+      expect(harness.paramsOf("environment.members.noticeSeen")).toEqual([
+        { environmentId: "env-a" },
+      ]);
+    });
+    expect(screen.queryByTestId("members-legacy-notice")).toBeNull();
   });
 
   it("shows a host that does not serve the members read as needing an update, not an empty team", async () => {
@@ -322,7 +444,9 @@ describe("MembersPage offboarding previews", () => {
 
     await userEvent.click(
       within(
-        await screen.findByText("Priya").then(() => rowOf("u-priya")),
+        await screen
+          .findByText("Priya · u-priya@acme.test")
+          .then(() => rowOf("u-priya")),
       ).getByRole("button", { name: "Remove" }),
     );
     const dialog = await screen.findByTestId("members-remove-preview");
@@ -353,6 +477,90 @@ describe("MembersPage offboarding previews", () => {
       within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")
         .disabled,
     ).toBe(false);
+  });
+
+  it("names the member by name in the removal preview and its button by first name", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([ADA, { ...PRIYA, displayName: "Priya Shah" }]),
+        "environment.members.removePreview": () => PREVIEW,
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya Shah · u-priya@acme.test");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const dialog = await screen.findByTestId("members-remove-preview");
+    await within(dialog).findByTestId("members-remove-preview-table");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Remove Priya Shah from Acme",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByTestId("members-remove-confirm").textContent,
+    ).toBe("Remove Priya");
+    expect(dialog.textContent).toContain("Priya Shah's work now");
+    expect(dialog.textContent).not.toContain("u-priya");
+  });
+
+  it("names a member with no name by email everywhere, and shows None. rows and null work as no count", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([
+            ADA,
+            { ...PRIYA, displayName: null, email: "m@acme.dev" },
+          ]),
+        "environment.members.removePreview": () => ({
+          ...PREVIEW,
+          activeTurns: null,
+          terminals: null,
+          localHostId: null,
+        }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("m@acme.dev");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const dialog = await screen.findByTestId("members-remove-preview");
+    const table = await within(dialog).findByTestId(
+      "members-remove-preview-table",
+    );
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Remove m@acme.dev from Acme",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByTestId("members-remove-confirm").textContent,
+    ).toBe("Remove m@acme.dev");
+    const cells = table.querySelectorAll("tr");
+    const valueOf = (label: string): string | undefined =>
+      Array.from(cells)
+        .find((row) => row.querySelector("th")?.textContent === label)
+        ?.querySelector("td")?.textContent;
+    expect(valueOf("m@acme.dev's work now")).toBe(
+      "m@acme.dev's access is revoked now. Anything they have running finishes its current step and starts no new one; Traycer can't list that work from here.",
+    );
+    expect(valueOf("Shared sign-ins")).toBe("None.");
+    expect(valueOf("Linked plan")).toBe("None.");
+    expect(dialog.textContent).not.toContain("u-priya");
+    expect(dialog.textContent).not.toMatch(/\d+ turns?/);
   });
 
   it("says a demotion's turn count is unavailable when the host cannot see it, never 0", async () => {
@@ -422,6 +630,157 @@ describe("MembersPage offboarding previews", () => {
   });
 });
 
+const PENDING_SEATS_SENTENCE =
+  "Pending invitations count toward Acme's paid seats as soon as they are sent, before acceptance.";
+const SEAT_SENTENCE = `${PENDING_SEATS_SENTENCE} Acme will use 5 of 5 seats; nothing is charged now. The next invitation will add a seat.`;
+
+async function openInvite(): Promise<void> {
+  await userEvent.click(await screen.findByRole("button", { name: "Invite" }));
+}
+
+describe("MembersPage invite seats", () => {
+  it("states the seat rule and the count once sent, before Invite is pressed, for a paid team", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA]),
+        "environment.members.seats": () => ({ seats: { used: 4, total: 5 } }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await openInvite();
+    expect(
+      (await screen.findByTestId("members-invite-seat-copy")).textContent,
+    ).toBe(SEAT_SENTENCE);
+    expect(harness.paramsOf("environment.members.invite")).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      name: "a full team, which adds a seat and charges it now",
+      seats: { used: 5, total: 5 },
+      sentence:
+        "Acme has no free seat, so sending this adds one: Acme will use 6 of 6 seats. The added seat is charged now to Acme's card on file, prorated for the rest of the current billing period.",
+    },
+    {
+      name: "a team with seats to spare, which keeps only the seats in use at period end",
+      seats: { used: 2, total: 5 },
+      sentence:
+        "Acme will use 3 of 5 seats; nothing is charged now. At the end of this billing period, Acme keeps only the seats in use and stops paying for the others.",
+    },
+  ])(
+    "states what sending does to the seats for $name",
+    async ({ seats, sentence }) => {
+      const harness = mountTeamPage(
+        { kind: "host" },
+        {
+          "environment.list": () => ({ environments: [TEAM] }),
+          "environment.members": () => membersPage([ADA]),
+          "environment.members.seats": () => ({ seats }),
+        },
+      );
+      render(<MembersPage environmentId="env-a" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      await openInvite();
+      expect(
+        (await screen.findByTestId("members-invite-seat-copy")).textContent,
+      ).toBe(`${PENDING_SEATS_SENTENCE} ${sentence}`);
+    },
+  );
+
+  it("says nothing about seats for a team on no paid plan", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA]),
+        "environment.members.seats": () => ({ seats: null }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await openInvite();
+    await vi.waitFor(() => {
+      expect(harness.paramsOf("environment.members.seats")).toHaveLength(1);
+    });
+    const sheet = await screen.findByRole("dialog");
+    await vi.waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    expect(screen.queryByTestId("members-invite-seat-copy")).toBeNull();
+    expect(screen.queryByTestId("members-invite-seats-failed")).toBeNull();
+    expect(within(sheet).queryByText(/seats/)).toBeNull();
+  });
+
+  it("says a refused read failed, reads again on Retry, and leaves Invite enabled", async () => {
+    let fail = true;
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA]),
+        "environment.members.seats": () => {
+          if (fail) throw new Error("billing unavailable");
+          return { seats: { used: 4, total: 5 } };
+        },
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await openInvite();
+    const failed = await screen.findByTestId("members-invite-seats-failed");
+    expect(failed.textContent).toContain("Couldn't read Acme's seats.");
+    await userEvent.type(
+      screen.getByTestId("members-invite-email"),
+      "new@acme.test",
+    );
+    expect(
+      screen.getByTestId<HTMLButtonElement>("members-invite-submit").disabled,
+    ).toBe(false);
+
+    fail = false;
+    await userEvent.click(
+      within(failed).getByRole("button", { name: "Retry" }),
+    );
+    expect(
+      (await screen.findByTestId("members-invite-seat-copy")).textContent,
+    ).toBe(SEAT_SENTENCE);
+    expect(harness.paramsOf("environment.members.seats")).toHaveLength(2);
+    expect(screen.queryByTestId("members-invite-seats-failed")).toBeNull();
+  });
+
+  it("neither reads nor mentions seats on a host that does not serve them", async () => {
+    handshake.servesSeats = false;
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA]),
+        "environment.members.seats": () => ({ seats: { used: 4, total: 5 } }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await openInvite();
+    await screen.findByTestId("members-invite-email");
+    expect(screen.queryByTestId("members-invite-seat-copy")).toBeNull();
+    expect(screen.queryByTestId("members-invite-seats-failed")).toBeNull();
+    expect(harness.paramsOf("environment.members.seats")).toHaveLength(0);
+  });
+});
+
 describe("MembersPage pending removal", () => {
   it("keeps a removed member's row pending after the membership is gone, until a removal notice with its receipt reports every host done", async () => {
     let removed = false;
@@ -442,7 +801,7 @@ describe("MembersPage pending removal", () => {
       wrapper: harness.Wrapper,
     });
 
-    await screen.findByText("Priya");
+    await screen.findByText("Priya · u-priya@acme.test");
     await userEvent.click(
       within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
     );
@@ -495,7 +854,7 @@ describe("MembersPage pending removal", () => {
       wrapper: harness.Wrapper,
     });
 
-    await screen.findByText("Priya");
+    await screen.findByText("Priya · u-priya@acme.test");
     await userEvent.click(
       within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
     );
@@ -516,7 +875,7 @@ describe("MembersPage pending removal", () => {
 
     phase = "committed";
     await act(() => harness.queryClient.invalidateQueries());
-    expect(await screen.findByText("Grace")).toBeTruthy();
+    expect(await screen.findByText("Grace · u-grace@acme.test")).toBeTruthy();
     expect(rowOf("u-priya").getAttribute("data-removal-state")).toBe("pending");
     expect(screen.getByText("Acme · 2 people")).toBeTruthy();
 

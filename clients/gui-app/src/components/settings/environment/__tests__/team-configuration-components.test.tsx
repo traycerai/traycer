@@ -76,7 +76,7 @@ describe("TeamSecretNames", () => {
 
     expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy();
     expect(screen.getByText("Set")).toBeTruthy();
-    expect(screen.getByText("Access revoked")).toBeTruthy();
+    expect(screen.getByText("Removing · no longer usable")).toBeTruthy();
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.queryAllByRole("textbox")).toHaveLength(0);
   });

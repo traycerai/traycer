@@ -10,9 +10,11 @@ import {
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 
-export const NOT_MOVED_SUBTITLE =
-  "not moved · Personal's settings are not on it";
-export const PARTLY_MOVED_SUBTITLE = "partly moved";
+export const NOT_MOVED_SUBTITLE = "its own settings, not in Personal yet";
+export const PARTLY_MOVED_SUBTITLE = "partly in Personal";
+
+/** The tooltip on every `Local` badge. */
+export const LOCAL_BADGE_TOOLTIP = "Settings on this computer only";
 
 export function needsUpdateSubtitle(hostName: string): string {
   return `${hostName} needs an update to show its settings here.`;
@@ -36,6 +38,8 @@ export interface EnvironmentPickerHost {
 
 export interface EnvironmentPickerModel {
   readonly personalSubtitle: string;
+  /** The computers running Personal; one with a Local row is not among them. */
+  readonly runningPersonal: readonly EnvironmentPickerHost[];
   readonly localRows: readonly LocalPickerRow[];
   /** What the window opens on when the person has picked nothing. */
   readonly defaultPick: EnvironmentPick;
@@ -113,6 +117,23 @@ export function localPickerRow(
   };
 }
 
+/**
+ * Whether `host` runs Personal: it reports Personal as its configuration and
+ * has no Local row. The dropdown lists it under Personal by this rule, and a
+ * Personal page reads that host's own pages only when the window's host
+ * passes it.
+ */
+export function hostRunsPersonal(
+  host: EnvironmentPickerHost,
+  status: EnvironmentStatusResponseV11 | null,
+  version: NegotiatedMethodVersion,
+): boolean {
+  return (
+    status?.principal?.kind === "personal" &&
+    localPickerRow(host, status, version) === null
+  );
+}
+
 /** An old host that has not reached `applying`: it has not moved. */
 function isUnmovedOldHost(
   status: EnvironmentStatusResponseV11 | null,
@@ -176,23 +197,21 @@ export function environmentPickerModel(input: {
   readonly windowHostId: string | null;
 }): EnvironmentPickerModel {
   const localRows: LocalPickerRow[] = [];
-  const runningPersonal: string[] = [];
+  const runningPersonal: EnvironmentPickerHost[] = [];
   for (const host of input.hosts) {
     const status = input.statuses.get(host.hostId) ?? null;
-    const row = localPickerRow(
-      host,
-      status,
-      input.versions.get(host.hostId) ?? null,
-    );
+    const version = input.versions.get(host.hostId) ?? null;
+    const row = localPickerRow(host, status, version);
     if (row !== null) localRows.push(row);
-    else if (status?.principal?.kind === "personal") {
-      runningPersonal.push(host.name);
-    }
+    if (hostRunsPersonal(host, status, version)) runningPersonal.push(host);
   }
   const windowRow =
     localRows.find((row) => row.hostId === input.windowHostId) ?? null;
   return {
-    personalSubtitle: personalSubtitle(runningPersonal),
+    personalSubtitle: personalSubtitle(
+      runningPersonal.map((host) => host.name),
+    ),
+    runningPersonal,
     localRows,
     defaultPick:
       windowRow !== null && !windowRow.needsUpdate && windowRow.defaultsToLocal

@@ -4,8 +4,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const AGENT_SELECTION_GUIDE_TITLE = "Agent selection guide";
-export const AGENT_SELECTION_GUIDE_DESCRIPTION =
-  "Instructions for choosing Traycer agents' harnesses, models, and reasoning effort. Provider-native subagents follow their provider's configuration and do not have separate Traycer agent IDs.";
 
 type AgentSelectionGuideEditorSurfaceProps = {
   readonly titleId: string;
@@ -49,9 +47,6 @@ export function AgentSelectionGuideEditorSurface({
         <h2 id={titleId} className="text-ui-md font-semibold text-foreground">
           {AGENT_SELECTION_GUIDE_TITLE}
         </h2>
-        <p className="mt-1 text-ui-xs text-muted-foreground">
-          {AGENT_SELECTION_GUIDE_DESCRIPTION}
-        </p>
       </div>
 
       <div
@@ -86,7 +81,7 @@ export function AgentSelectionGuideEditorSurface({
           data-testid={revertTestId}
           className="h-7"
         >
-          Revert to default
+          Reset to default
         </Button>
         {status}
       </div>

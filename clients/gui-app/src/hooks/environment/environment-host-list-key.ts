@@ -28,8 +28,8 @@ export function hostListEnvironmentId(
 
 /**
  * A configuration write starts a new round of delivery reports, whichever
- * requester read them: the pool's and a team host's lists of one environment
- * say the same thing.
+ * requester read them: the surface host's and a team host's lists of one
+ * environment say the same thing.
  */
 export function invalidateEnvironmentHostReports(
   queryClient: QueryClient,
