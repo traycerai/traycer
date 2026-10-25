@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BotAvatar } from "@/components/chat/chat-bot-message";
+import { BotAvatar } from "@/components/bots/bot-avatars";
 
 /**
  * The top of a bot channel nobody has written in yet, as Slack opens a new

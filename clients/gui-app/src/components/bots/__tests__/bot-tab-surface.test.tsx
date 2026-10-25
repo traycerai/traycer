@@ -8,6 +8,7 @@
  * The three views are replaced by stubs that expose their props, so what the
  * surface PASSES them is what is asserted.
  */
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { StrictMode, type ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -119,16 +120,27 @@ vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
 // The members of the bot's environment, as the channel view's resolver:
 // one teammate it knows by name.
 vi.mock("@/hooks/bots/use-environment-members-query", () => ({
-  useEnvironmentMembers: (
+  useEnvironmentMemberDirectory: (
     _client: unknown,
     environmentId: string | null,
     enabled: boolean,
   ) => {
     mocks.membersQueries.push({ environmentId, enabled });
-    return (userId: string) =>
-      enabled && userId === "user-teammate"
-        ? { displayName: "Tess Teammate", avatarUrl: null }
-        : null;
+    return {
+      resolve: (userId: string) =>
+        enabled && userId === "user-teammate"
+          ? { displayName: "Tess Teammate", avatarUrl: null }
+          : null,
+      members: enabled
+        ? [
+            {
+              userId: "user-teammate",
+              displayName: "Tess Teammate",
+              avatarUrl: null,
+            },
+          ]
+        : null,
+    };
   },
 }));
 
@@ -140,9 +152,15 @@ vi.mock("@/components/epic-canvas/tab-host-provider", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.hostClient,
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => mocks.state.paneVisible,
-}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-tabs/pane-visibility-context")
+    >()),
+    usePaneVisible: () => mocks.state.paneVisible,
+  }),
+);
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   useBotSubscriptionForHost: () => ({
     snapshot: mocks.state.snapshot,
@@ -743,6 +761,43 @@ describe("<BotTabSurface /> paused", () => {
     },
   );
 
+  it.each([
+    ["a team's", "organization", "Acme", "Members of Acme"],
+    ["a person's own", "user", "Olive Owner", "Only you"],
+  ] as const)(
+    "opens the bot's card from the header for %s bot, naming its owner and who may message it, with its activity a click away",
+    async (_name, ownerKind, owner, access) => {
+      const user = userEvent.setup();
+      useAuthStore.setState({
+        profile: {
+          userId: "user-viewer",
+          userName: "Olive Owner",
+          email: "olive@example.com",
+          avatarUrl: null,
+        },
+      });
+      mocks.state.environments = [
+        { environmentId: "env-team", label: "Acme", ownerKind },
+      ];
+      render(surface());
+
+      await user.click(screen.getByTestId("bot-tab-avatar"));
+      const card = await screen.findByTestId("bot-profile-card");
+      expect(card.textContent).toContain(`Managed by ${owner}`);
+      expect(within(card).getByTestId("bot-profile-access").textContent).toBe(
+        access,
+      );
+
+      await user.click(within(card).getByTestId("bot-profile-view-activity"));
+      expect(
+        screen
+          .getByTestId("bot-tab-view-under-the-hood")
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      useAuthStore.setState({ profile: null });
+    },
+  );
+
   it("treats the environment as not personal until the environment list names it", async () => {
     const user = userEvent.setup();
     mocks.state.environments = [
@@ -874,7 +929,7 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the channel's name and its tabs only, even for the environment's main bot", () => {
+  it("draws the header as the bot's picture, the channel's name and its tabs only, even for the environment's main bot", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -887,7 +942,7 @@ describe("<BotTabSurface /> main bot", () => {
         .map((tab) => tab.textContent),
     ).toEqual(["Messages", "Under the hood", "Settings"]);
     expect(header.textContent).toBe(
-      `${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hoodSettings`,
+      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesUnder the hoodSettings`,
     );
   });
 

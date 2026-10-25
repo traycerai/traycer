@@ -35,6 +35,7 @@ import type {
   AgentSender,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
@@ -178,7 +179,7 @@ function botRow(announcement: BotAnnouncement | undefined): ChatMessageModel {
 const NO_THREAD_LINE = (): ChatBotThreadLine | null => null;
 
 describe("<ChatMessage /> in a bot channel", () => {
-  it("draws a member's post with the sender, a square picture, the text and the request state, and no jump to a reply", () => {
+  it("draws a member's post with the sender, a round picture, the text and the request state, and no jump to a reply", () => {
     renderRow(
       memberPost({
         requestId: "req-1",
@@ -191,9 +192,9 @@ describe("<ChatMessage /> in a bot channel", () => {
     const row = screen.getByTestId("bot-member-row");
     expect(within(row).getByText("Tess Teammate")).toBeTruthy();
     expect(within(row).getByText("Please review the release")).toBeTruthy();
-    expect(
-      within(row).getByTestId("chat-sender-avatar").getAttribute("data-shape"),
-    ).toBe("square");
+    expect(avatarShape(within(row).getByTestId("chat-sender-avatar"))).toBe(
+      "circle",
+    );
     const request = within(row).getByTestId("conversation-request");
     expect(request.getAttribute("data-request-state")).toBe("resolved");
     expect(within(request).getByText("Resolved")).toBeTruthy();
@@ -223,6 +224,7 @@ describe("<ChatMessage /> in a bot channel", () => {
       memberPost(undefined),
       channelPresentation(
         () => ({
+          participants: [],
           replyCount: 3,
           lastReplyAt: Date.now() - 5 * 60_000,
           unread: false,
@@ -248,6 +250,7 @@ describe("<ChatMessage /> in a bot channel", () => {
       memberPost(undefined),
       channelPresentation(
         () => ({
+          participants: [],
           replyCount: 0,
           lastReplyAt: null,
           unread: false,
@@ -274,11 +277,49 @@ describe("<ChatMessage /> in a bot channel", () => {
     ).toBeTruthy();
   });
 
+  it("stacks who is in the thread: the post's writer as a circle, the bot as a squircle", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [
+            {
+              kind: "person",
+              userId: "user-teammate",
+              name: "Tess Teammate",
+              avatarUrl: null,
+            },
+            { kind: "bot" },
+          ],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    const stack = within(screen.getByTestId("bot-thread-line")).getByTestId(
+      "bot-thread-participants",
+    );
+    expect(
+      Array.from(
+        stack.querySelectorAll<HTMLElement>('[data-slot="avatar"]'),
+        avatarShape,
+      ),
+    ).toEqual(["circle", "squircle"]);
+    expect(
+      within(stack).queryByTestId("bot-thread-participants-more"),
+    ).toBeNull();
+  });
+
   it("marks a thread line unread with a dot, and a read one with none", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
         () => ({
+          participants: [],
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: true,
@@ -297,6 +338,7 @@ describe("<ChatMessage /> in a bot channel", () => {
       memberPost(undefined),
       channelPresentation(
         () => ({
+          participants: [],
           replyCount: 2,
           lastReplyAt: 1_000,
           unread: false,
@@ -556,6 +598,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       const threadLine = vi.fn<
         (postMessageId: string) => ChatBotThreadLine | null
       >(() => ({
+        participants: [],
         replyCount: 2,
         lastReplyAt: 1_000,
         unread: false,

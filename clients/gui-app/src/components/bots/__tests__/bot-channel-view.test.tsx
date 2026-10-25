@@ -231,6 +231,13 @@ function PostStub(props: {
             : String(line.lastReplyAt)
         }
         data-unread={line === null ? "" : String(line.unread)}
+        data-participants={
+          line === null
+            ? ""
+            : line.participants
+                .map((entry) => (entry.kind === "bot" ? "bot" : entry.name))
+                .join(",")
+        }
       />
       {openThread === null ? null : (
         <button
@@ -496,6 +503,22 @@ describe("<BotChannelView /> channel", () => {
     expect(line("post-d").getAttribute("data-unread")).toBe("false");
     // A post with no thread listed yet has no line to read.
     expect(line("post-new").getAttribute("data-has-line")).toBe("false");
+  });
+
+  it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 0 }),
+      thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 8_000 }),
+    ];
+    mocks.postIds = ["post-a", "post-b"];
+    mount({ paused: false, openThreadPostId: null });
+
+    const participants = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-participants");
+    expect(participants("post-a")).toBe("Tess Teammate");
+    expect(participants("post-b")).toBe("Tess Teammate,bot");
   });
 
   it("asks the host to open a post's thread when its line is clicked", async () => {
