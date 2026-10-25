@@ -43,6 +43,8 @@ const MOBILE: SettingsAvailabilityContext = {
       get: () => Promise.resolve("granted"),
       request: () => Promise.resolve("granted"),
       openSettings: () => Promise.resolve(),
+      getMutedSeverities: () => Promise.resolve([]),
+      setMutedSeverities: () => Promise.resolve(),
       onChange: () => ({ dispose: () => undefined }),
     },
   }),

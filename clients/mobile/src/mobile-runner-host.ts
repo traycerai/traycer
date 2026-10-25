@@ -92,6 +92,7 @@ import type {
   LocalHostUnresponsive,
   NotificationShowOutcome,
   PushPermissionState,
+  PushSeverity,
   RegisteredHostsChange,
   StoredAuthTokens,
   StoredCredentials,
@@ -1507,7 +1508,8 @@ function buildPushPermission(
  * person flipping the switch in the OS Settings app (observed as the
  * foreground-resume edge on the way back, the same edge registration follows)
  * and the OS prompt a `request()` just raised. Neither tells us the new value,
- * so the reader's `get()` is what settles it.
+ * so the reader's `get()` is what settles it. A stored muted set fires it too,
+ * so the rows re-read through the one signal they already follow.
  */
 class MobilePushPermissionHost implements IPushPermissionHost {
   private readonly handlers = new Set<() => void>();
@@ -1526,10 +1528,23 @@ class MobilePushPermissionHost implements IPushPermissionHost {
     const state = await this.registration.requestPermission();
     // The prompt has settled (either way) - tell subscribers to re-read rather
     // than trusting them to correlate this with the value returned above.
+    this.notifyChange();
+    return state;
+  }
+
+  getMutedSeverities(): Promise<readonly PushSeverity[]> {
+    return this.registration.getMutedSeverities();
+  }
+
+  async setMutedSeverities(set: readonly PushSeverity[]): Promise<void> {
+    await this.registration.setMutedSeverities(set);
+    this.notifyChange();
+  }
+
+  private notifyChange(): void {
     for (const handler of Array.from(this.handlers)) {
       handler();
     }
-    return state;
   }
 
   async openSettings(): Promise<void> {

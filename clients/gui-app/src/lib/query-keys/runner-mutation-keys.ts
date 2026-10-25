@@ -133,6 +133,7 @@ export const runnerMutationKeys = {
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
   pushPermissionOpenSettings: () =>
     ["runner.pushPermission.openSettings"] as const,
+  pushMutedSeveritiesSet: () => ["runner.pushMutedSeverities.set"] as const,
   notificationSystemSettingsOpen: () =>
     ["runner.notifications.systemSettings.open"] as const,
 };
@@ -370,6 +371,9 @@ export const runnerQueryKeys = {
   // phone"). Machine-local and singular - one renderer, one OS switch - so a
   // static key suffices, like `logLevels` and `installedFonts` above.
   pushPermission: () => ["runner.pushPermission"] as const,
+  // Which severities this phone is pushed for. Singular for the same reason;
+  // the phone answers for whichever account is signed in on it.
+  pushMutedSeverities: () => ["runner.pushMutedSeverities"] as const,
   // Report-issue evidence strip's "Nth time on this install" line (ticket 06
   // ledger read). Scoped by fingerprint - each distinct defect caches
   // independently.

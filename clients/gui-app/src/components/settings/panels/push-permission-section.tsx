@@ -1,9 +1,15 @@
 import type { ReactNode } from "react";
-import type { PushPermissionState } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  PushPermissionState,
+  PushSeverity,
+} from "@traycer-clients/shared/platform/runner-host";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { usePushMutedSeveritiesMutation } from "@/hooks/runner/use-push-muted-severities-mutation";
+import { usePushMutedSeveritiesQuery } from "@/hooks/runner/use-push-muted-severities-query";
 import {
   usePushPermissionOpenSettingsMutation,
   type PushPermissionOpenSettingsMutation,
@@ -17,6 +23,7 @@ import {
   type PushPermissionRequestMutation,
 } from "@/hooks/runner/use-push-permission-request-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 
 type PushPermissionView =
   | { readonly kind: "loading" }
@@ -36,26 +43,41 @@ const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
 
 const READ_FAILED = "Couldn't read this phone's notification setting.";
 
+// In the chime rows' order, so the two lists read alike.
+const SEVERITY_ROWS: ReadonlyArray<{
+  readonly severity: PushSeverity;
+  readonly row: SettingsRowDefinition;
+}> = [
+  {
+    severity: "needs_action",
+    row: APP_NOTIFICATIONS.definitions.pushNeedsAction,
+  },
+  { severity: "failure", row: APP_NOTIFICATIONS.definitions.pushFailure },
+  { severity: "done", row: APP_NOTIFICATIONS.definitions.pushDone },
+  { severity: "info", row: APP_NOTIFICATIONS.definitions.pushInfo },
+];
+
 /**
- * The OS push permission of the phone this renderer runs on. It belongs under
- * Application → Sounds because it never varies with the selected host.
+ * The OS push permission of the phone this renderer runs on, and under it the
+ * severities that phone is pushed for. They belong under Application → Sounds
+ * because they never vary with the selected host.
  *
- * It exists because the OS remembers a refusal forever - the app asks once,
- * and after a "Don't Allow" no amount of relaunching can re-prompt. Without
- * this row nothing in Traycer says so, and the only repair (the OS Settings
- * app) is undiscoverable. On every shell without OS push - desktop, dev web,
- * tests - `pushPermission` is `null` and this renders nothing at all, so the
- * panel is byte-identical there.
+ * The permission row exists because the OS remembers a refusal forever - the
+ * app asks once, and after a "Don't Allow" no amount of relaunching can
+ * re-prompt. Without this row nothing in Traycer says so, and the only repair
+ * (the OS Settings app) is undiscoverable. On every shell without OS push -
+ * desktop, dev web, tests - `pushPermission` is `null` and this renders
+ * nothing at all, so the panel is byte-identical there.
  *
  * The row is labelled "on this phone", never "on this device": in this GUI
  * "device" is the UI word for a HOST (Settings → Devices lists hosts), so
  * "this device" would read as one more host-scoped setting - the exact
- * confusion the row is here to end. It is one row of the Sounds page's
+ * confusion the row is here to end. Its rows sit in the Sounds page's
  * Notifications group, which the panel draws.
  *
- * The gate is the only thing rendered above it: every hook the row uses
+ * The gate is the only thing rendered above them: every hook the rows use
  * reaches the runner host, which throws in a host-less shell, so they live in
- * the child and run only once the gate has passed.
+ * the children and run only once the gate has passed.
  */
 export function PushPermissionSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
@@ -64,14 +86,25 @@ export function PushPermissionSection(): ReactNode {
   ) {
     return null;
   }
-  return <PushPermissionRow />;
+  return <PushPermissionRows />;
 }
 
-function PushPermissionRow(): ReactNode {
-  const query = usePushPermissionQuery();
+function PushPermissionRows(): ReactNode {
+  const view = pushPermissionView(usePushPermissionQuery());
+  return (
+    <>
+      <PushPermissionRow view={view} />
+      <PushSeverityRows granted={view.kind === "granted"} />
+    </>
+  );
+}
+
+function PushPermissionRow(props: {
+  readonly view: PushPermissionView;
+}): ReactNode {
+  const { view } = props;
   const request = usePushPermissionRequestMutation();
   const openSettings = usePushPermissionOpenSettingsMutation();
-  const view = pushPermissionView(query);
   return (
     <SettingsRow
       row={APP_NOTIFICATIONS.definitions.pushNotifications}
@@ -165,6 +198,51 @@ function PushPermissionAction(props: {
       {props.label}
     </Button>
   );
+}
+
+/**
+ * A switch is on while its severity is NOT muted, and shows what the phone
+ * stored. The switches only narrow what the hosts already send, so they move
+ * only while pushes are on: in every other state there is nothing for them to
+ * narrow, and the row above says why.
+ */
+function PushSeverityRows(props: { readonly granted: boolean }): ReactNode {
+  const muted = usePushMutedSeveritiesQuery().data;
+  const mutation = usePushMutedSeveritiesMutation();
+  return (
+    <>
+      {SEVERITY_ROWS.map((entry) => (
+        <SettingsRow
+          key={entry.severity}
+          row={entry.row}
+          control={
+            <Switch
+              checked={muted === undefined || !muted.includes(entry.severity)}
+              disabled={
+                !props.granted || muted === undefined || mutation.isPending
+              }
+              aria-label={`${entry.row.label} push notifications`}
+              onCheckedChange={(delivered) => {
+                if (muted === undefined) return;
+                mutation.mutate(
+                  nextMutedSeverities(muted, entry.severity, delivered),
+                );
+              }}
+            />
+          }
+        />
+      ))}
+    </>
+  );
+}
+
+function nextMutedSeverities(
+  muted: readonly PushSeverity[],
+  severity: PushSeverity,
+  delivered: boolean,
+): readonly PushSeverity[] {
+  const others = muted.filter((entry) => entry !== severity);
+  return delivered ? others : [...others, severity];
 }
 
 /**
