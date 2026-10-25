@@ -303,6 +303,17 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
+  it("still re-subscribes on return when the cache dropped the send that succeeded while the channel was away", async () => {
+    const view = mountTranscript(CHANNEL_SURFACE);
+    act(() => view.unmount());
+
+    const sent = await sendSucceeded(CHAT_ID);
+    act(() => sent.evict());
+
+    act(() => view.remount());
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves a thread's close to the thread's own view", () => {
     mountTranscript({ kind: "thread", chooseOption: null });
 

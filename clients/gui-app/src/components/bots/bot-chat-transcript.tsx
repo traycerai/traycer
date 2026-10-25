@@ -3,9 +3,14 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useMutationState } from "@tanstack/react-query";
+import {
+  hashKey,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
@@ -87,31 +92,57 @@ const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 const CHAT_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 
 /**
- * The newest successful send to `chatId`, by the cache's mutation id, which
- * only grows; `null` for none. A mutation the cache later drops can only
- * lower this, and lowering is never read as a send.
+ * Per query client, per chat, the newest successful `bot.conversation.send`
+ * by the cache's mutation id, which only grows. Recorded as the success
+ * happens, whether or not a transcript is mounted, and kept after the cache
+ * drops the mutation (five minutes unobserved): the session registry keeps a
+ * closed channel's handle longer than that.
  */
-function useNewestSendTo(chatId: string): number | null {
-  const sent = useMutationState({
-    filters: {
-      mutationKey: botMutationKeys.conversationSend(),
-      status: "success",
-    },
-    select: (mutation) => {
-      const variables: unknown = mutation.state.variables;
-      const conversationId =
-        typeof variables === "object" &&
-        variables !== null &&
-        "conversationId" in variables
-          ? variables.conversationId
-          : null;
-      return conversationId === chatId ? mutation.mutationId : null;
-    },
+const newestSendByClient = new WeakMap<QueryClient, Map<string, number>>();
+const sendLedgerListeners = new Set<() => void>();
+const CONVERSATION_SEND_KEY = hashKey(botMutationKeys.conversationSend());
+
+function conversationIdOf(variables: unknown): string | null {
+  if (typeof variables !== "object" || variables === null) return null;
+  if (!("conversationId" in variables)) return null;
+  return typeof variables.conversationId === "string"
+    ? variables.conversationId
+    : null;
+}
+
+/** The ledger of `queryClient`, which listens to its mutation cache from its first read. */
+function sendLedgerOf(queryClient: QueryClient): Map<string, number> {
+  const existing = newestSendByClient.get(queryClient);
+  if (existing !== undefined) return existing;
+  const ledger = new Map<string, number>();
+  newestSendByClient.set(queryClient, ledger);
+  queryClient.getMutationCache().subscribe((event) => {
+    if (event.type !== "updated") return;
+    const { mutation } = event;
+    if (mutation.state.status !== "success") return;
+    if (hashKey(mutation.options.mutationKey ?? []) !== CONVERSATION_SEND_KEY) {
+      return;
+    }
+    const chatId = conversationIdOf(mutation.state.variables);
+    if (chatId === null) return;
+    if ((ledger.get(chatId) ?? -1) >= mutation.mutationId) return;
+    ledger.set(chatId, mutation.mutationId);
+    for (const listener of [...sendLedgerListeners]) listener();
   });
-  return sent.reduce<number | null>(
-    (newest, id) =>
-      id !== null && (newest === null || id > newest) ? id : newest,
-    null,
+  return ledger;
+}
+
+function subscribeSendLedger(listener: () => void): () => void {
+  sendLedgerListeners.add(listener);
+  return () => sendLedgerListeners.delete(listener);
+}
+
+/** The newest successful send to `chatId`; `null` for none. */
+function useNewestSendTo(chatId: string): number | null {
+  const ledger = sendLedgerOf(useQueryClient());
+  return useSyncExternalStore(
+    subscribeSendLedger,
+    () => ledger.get(chatId) ?? null,
   );
 }
 
