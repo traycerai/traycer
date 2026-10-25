@@ -24,7 +24,9 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
 } from "./team-configuration-test-support";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -200,6 +202,11 @@ describe("TeamGuide on a build with a server pool and no host running the team",
         }),
       }),
     );
+    useSelectionAuthorityStore.getState().reset();
+    teamHostBoundary.client =
+      requireTeamHostClient().createRequesterForHostId(null);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBeNull();
+    expect(requireTeamHostClient().getActiveHostId()).toBeNull();
     render(<TeamGuide />, { wrapper: harness.Wrapper });
 
     await waitFor(() => {
@@ -209,6 +216,7 @@ describe("TeamGuide on a build with a server pool and no host running the team",
       ).toContain("Prefer sonnet");
     });
     expect(screen.queryByText(/The guide needs a host/)).toBeNull();
+    expect(screen.getByRole("combobox").textContent).toContain("Pick a host");
     expect(
       new Set(hostIdsOf(harness, "environment.configuration.guide.get")),
     ).toEqual(new Set([POOL_HOST_ID]));

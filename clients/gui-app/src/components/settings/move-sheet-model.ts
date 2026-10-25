@@ -47,7 +47,7 @@ function namedOthers(hostNames: readonly string[]): string {
 
 /**
  * Where the moved settings go: the other computers running Personal, up to
- * two by name, and this computer; or the computer moving alone when no other
+ * two by name, and the moving computer; or the moving computer alone when no other
  * runs it.
  */
 export function moveReachSentence(
@@ -61,12 +61,12 @@ export function moveReachSentence(
     return `${reach}. After the move, that is ${movingHostName} only.`;
   }
   if (hostNames.length === 1) {
-    return `${reach}, which today is ${first} and this computer.`;
+    return `${reach}, which today is ${first} and ${movingHostName}.`;
   }
   if (hostNames.length === 2) {
-    return `${reach}, which today is ${first}, ${second} and this computer.`;
+    return `${reach}, which today is ${first}, ${second} and ${movingHostName}.`;
   }
-  return `${reach}, which today is ${namedOthers(hostNames)}, and this computer.`;
+  return `${reach}, which today is ${namedOthers(hostNames)}, and ${movingHostName}.`;
 }
 
 /**

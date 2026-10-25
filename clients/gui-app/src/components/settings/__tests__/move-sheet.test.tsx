@@ -350,13 +350,13 @@ describe("<MoveSheet />", () => {
       "Your settings then reach every computer and sandbox running Personal. After the move, that is Old laptop only. Old laptop keeps working either way. Every row opens to its items.",
     );
     expect(await reach(["MacBook Pro"])).toBe(
-      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro and this computer. Old laptop keeps working either way. Every row opens to its items.",
+      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro and Old laptop. Old laptop keeps working either way. Every row opens to its items.",
     );
     expect(await reach(["MacBook Pro", "dev-box"])).toBe(
-      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro, dev-box and this computer. Old laptop keeps working either way. Every row opens to its items.",
+      "Your settings then reach every computer and sandbox running Personal, which today is MacBook Pro, dev-box and Old laptop. Old laptop keeps working either way. Every row opens to its items.",
     );
     expect(await reach(["MacBook Pro", "dev-box", "build-1"])).toContain(
-      "which today is MacBook Pro, dev-box and 1 more, and this computer. Old laptop keeps",
+      "which today is MacBook Pro, dev-box and 1 more, and Old laptop. Old laptop keeps",
     );
 
     cleanup();
@@ -366,7 +366,7 @@ describe("<MoveSheet />", () => {
     ]);
     await settle();
     expect(screen.getByTestId("move-sheet-description").textContent).toContain(
-      "which today is MacBook Pro and this computer. Old laptop keeps",
+      "which today is MacBook Pro and Old laptop. Old laptop keeps",
     );
   });
 

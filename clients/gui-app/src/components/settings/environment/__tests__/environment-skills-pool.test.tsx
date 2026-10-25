@@ -27,7 +27,9 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
 } from "./team-configuration-test-support";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -115,10 +117,16 @@ describe("The Skills page on a build with a server pool and no host running the 
         skills: [REVIEW],
       })),
     );
+    useSelectionAuthorityStore.getState().reset();
+    teamHostBoundary.client =
+      requireTeamHostClient().createRequesterForHostId(null);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBeNull();
+    expect(requireTeamHostClient().getActiveHostId()).toBeNull();
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
     expect(await screen.findByText("review")).toBeTruthy();
     expect(screen.queryByText(/Skills need a host/)).toBeNull();
+    expect(screen.getByRole("combobox").textContent).toContain("Pick a host");
     expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
     // The pool did not advertise the writes: an older pool keeps the page read-only.

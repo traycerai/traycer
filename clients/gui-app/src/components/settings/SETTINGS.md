@@ -944,11 +944,13 @@ toggles on the server and takes its `mcp_server` item away; on puts it back,
 on for every provider). Add and Edit (`mcp-server-dialog.tsx`) write
 `mcpServers.put@1.1`; a remote server's Secret is picked from the
 configuration's secrets or typed, and a command server is refused one. The
-Skills page (`environment-skills.tsx`) lists the skills of a viewing host that
-serves the configuration (`environment.configuration.skills.list`), with the
-providers that use each ("Built-in" before them for Traycer's own; the
-configuration's own carry no source word), Preview or Edit, and Remove for the
-configuration's own; a built-in is only switched off per provider. On a
+Skills page (`environment-skills.tsx`) lists the configuration's room through
+its serving tier (`environment.configuration.skills.list`), with the providers
+that use each ("Built-in" before them for Traycer's own; the configuration's
+own carry no source word). A pool build uses the pool requester's readiness,
+cache and capabilities even with no selected or viewing host. Preview or Edit
+needs a viewing host; Remove and provider switches use the configuration's
+serving tier. A built-in is only switched off per provider. On a
 provider's Skills tab and in the skill's dialog, where sources mix, a
 configuration's own skill is named by the configuration ("Personal" or the
 team's name). Remove asks first, naming where
@@ -6256,7 +6258,8 @@ only. · Details · Move to Personal`, on one line, (or `Finish moving` when an 
        `Moved to Personal on <date>` after a consented move; and the dated
        lines (`Shared by an earlier version · Details`, `This computer
 stopped using Personal on <date>`) with `Stop using Personal on this
-computer`. A team's host draws no card.
+computer`. A team's host draws no card. The move sheet names the moving computer
+       in its reach disclosure, including when opened for a remote Local row.
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
