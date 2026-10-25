@@ -900,6 +900,98 @@ describe("MobilePushRegistration muted severities", () => {
 });
 
 /**
+ * One registration request on the wire at a time. The register boundary is
+ * held open - each call waits for a hand-delivered result - so a switch
+ * flipped while a send is out is exercised against the real object.
+ */
+describe("MobilePushRegistration with a registration in flight", () => {
+  async function heldPhone(): Promise<{
+    push: MobilePushRegistration;
+    resume: FakeSystemResume;
+    sent: Array<readonly string[]>;
+    settle: (index: number, result: PushTokenFetchResult) => Promise<void>;
+  }> {
+    const plugin = fakePlugin({
+      permission: "granted",
+      afterRequest: "granted",
+    });
+    const sent: Array<readonly string[]> = [];
+    const releases: Array<(result: PushTokenFetchResult) => void> = [];
+    const push = new MobilePushRegistration({
+      plugin,
+      authnBaseUrl: AUTHN_URL,
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: (_authnBaseUrl, _bearer, body) =>
+        new Promise((resolve) => {
+          sent.push(body.mutedSeverities);
+          releases.push(resolve);
+        }),
+      removeToken: async () => OK,
+    });
+    const settle = async (
+      index: number,
+      result: PushTokenFetchResult,
+    ): Promise<void> => {
+      releases[index](result);
+      await drain();
+    };
+    const source = new FakeTokenSource();
+    const resume = new FakeSystemResume();
+    await source.setSignedIn(credentials("user-1", "bearer-1"));
+    push.start(source, resume);
+    await drain();
+    plugin.emitRegistration("apns-token-1");
+    await drain();
+    await settle(0, OK);
+    expect(sent).toEqual([[]]);
+    return { push, resume, sent, settle };
+  }
+
+  it("holds a reverted set back while a send is out, then sends it once that send is accepted", async () => {
+    vi.useFakeTimers();
+    const { push, resume, sent, settle } = await heldPhone();
+
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toEqual([[], ["done"]]);
+
+    await push.setMutedSeverities([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toHaveLength(2);
+
+    await settle(1, OK);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toEqual([[], ["done"], []]);
+    await settle(2, OK);
+
+    await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
+    await resume.resume();
+    expect(sent).toHaveLength(3);
+  });
+
+  it("keeps a send with a lost response dirty, so the reverted set goes out on the next resume", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { push, resume, sent, settle } = await heldPhone();
+
+    await push.setMutedSeverities(["done"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await push.setMutedSeverities([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toHaveLength(2);
+
+    await settle(1, { kind: "network-error" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent).toHaveLength(2);
+
+    await resume.resume();
+    expect(sent).toEqual([[], ["done"], []]);
+    await expect(push.getMutedSeverities()).resolves.toEqual(sent[2]);
+  });
+});
+
+/**
  * The controller is platform-agnostic by construction, so these cover the
  * things that are genuinely Android-shaped rather than re-running the iOS
  * suite: the `(platform, environment)` pair authn receives, the two distinct

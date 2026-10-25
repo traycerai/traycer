@@ -1975,6 +1975,45 @@ describe("MobileRunnerHost", () => {
       ]);
     });
 
+    it("fires onChange when the login session changes - the muted set is per account", async () => {
+      const host = runnerAround(
+        new MobilePushRegistration({
+          plugin: new FakePushPlugin(),
+          authnBaseUrl: "http://localhost:32350",
+          platform: "ios",
+          environment: "sandbox",
+          registerToken: async () => ({ kind: "ok" }),
+          removeToken: async () => ({ kind: "ok" }),
+        }),
+        OPEN_SETTINGS,
+      );
+      const pushPermission = host.pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+      const changes: number[] = [];
+      const subscription = pushPermission.onChange(() => changes.push(1));
+
+      await host.tokenStore.signIn(
+        { token: "access-token", refreshToken: "refresh-token" },
+        { id: "user-1", email: "user@example.com", name: "User" },
+      );
+      await vi.waitFor(() => {
+        expect(changes).toEqual([1]);
+      });
+
+      subscription.dispose();
+      // Self-writes notify asynchronously; wait on the store's own signal.
+      const second = new Promise<void>((resolve) => {
+        host.tokenStore.subscribe(() => resolve());
+      });
+      await host.tokenStore.signIn(
+        { token: "access-token-2", refreshToken: "refresh-token-2" },
+        { id: "user-2", email: "user2@example.com", name: "User2" },
+      );
+      await second;
+      expect(changes).toEqual([1]);
+    });
+
     it("opens the OS page through the injected fn", async () => {
       const opened: number[] = [];
       const pushPermission = phoneRunner({

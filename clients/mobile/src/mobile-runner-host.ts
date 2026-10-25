@@ -407,14 +407,15 @@ export class MobileRunnerHost implements IRunnerHost {
     this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
     this.notifications = buildNotifications(options.pushRegistration);
+    this.tokenStore = new MobileTokenStore(
+      this.secureStorage,
+      options.authnBaseUrl,
+    );
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
       options.openPushSettings,
       this.systemResume,
-    );
-    this.tokenStore = new MobileTokenStore(
-      this.secureStorage,
-      options.authnBaseUrl,
+      this.tokenStore,
     );
     this.deviceFlow = new MobileDeviceFlowHost(
       options.authnBaseUrl,
@@ -1493,9 +1494,15 @@ function buildPushPermission(
   push: MobilePushRegistration | null,
   openPushSettings: (() => Promise<void>) | null,
   systemResume: MobileSystemResume,
+  tokenStore: ITokenStore,
 ): IPushPermissionHost | null {
   if (push === null || openPushSettings === null) return null;
-  return new MobilePushPermissionHost(push, openPushSettings, systemResume);
+  return new MobilePushPermissionHost(
+    push,
+    openPushSettings,
+    systemResume,
+    tokenStore,
+  );
 }
 
 /**
@@ -1509,7 +1516,9 @@ function buildPushPermission(
  * foreground-resume edge on the way back, the same edge registration follows)
  * and the OS prompt a `request()` just raised. Neither tells us the new value,
  * so the reader's `get()` is what settles it. A stored muted set fires it too,
- * so the rows re-read through the one signal they already follow.
+ * so the rows re-read through the one signal they already follow, and so does
+ * a change of login session: the muted set is kept per account, so a sign-in
+ * on a phone whose rows are already showing has a different answer.
  */
 class MobilePushPermissionHost implements IPushPermissionHost {
   private readonly handlers = new Set<() => void>();
@@ -1518,6 +1527,7 @@ class MobilePushPermissionHost implements IPushPermissionHost {
     private readonly registration: MobilePushRegistration,
     private readonly openPushSettings: () => Promise<void>,
     private readonly systemResume: MobileSystemResume,
+    private readonly tokenStore: ITokenStore,
   ) {}
 
   get(): Promise<PushPermissionState> {
@@ -1556,10 +1566,14 @@ class MobilePushPermissionHost implements IPushPermissionHost {
 
   onChange(handler: () => void): Disposable {
     const resumeSubscription = this.systemResume.subscribe(handler);
+    const sessionSubscription = this.tokenStore.subscribe(() => {
+      handler();
+    });
     this.handlers.add(handler);
     return {
       dispose: () => {
         resumeSubscription.dispose();
+        sessionSubscription.dispose();
         this.handlers.delete(handler);
       },
     };

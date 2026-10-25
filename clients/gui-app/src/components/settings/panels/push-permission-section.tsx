@@ -24,6 +24,7 @@ import {
 } from "@/hooks/runner/use-push-permission-request-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 type PushPermissionView =
   | { readonly kind: "loading" }
@@ -202,13 +203,29 @@ function PushPermissionAction(props: {
 
 /**
  * A switch is on while its severity is NOT muted, and shows what the phone
- * stored. The switches only narrow what the hosts already send, so they move
- * only while pushes are on: in every other state there is nothing for them to
- * narrow, and the row above says why.
+ * stored for the signed-in account. The switches only narrow what the hosts
+ * already send, so they move only while pushes are on: in every other state
+ * there is nothing for them to narrow, and the row above says why.
+ *
+ * They also move only once this account's set has been read since the rows
+ * started showing it. A toggle sends a whole set derived from the loaded one,
+ * so an answer still in flight - or one cached before a change made while the
+ * rows were not showing - must not be the base it is derived from.
  */
 function PushSeverityRows(props: { readonly granted: boolean }): ReactNode {
-  const muted = usePushMutedSeveritiesQuery().data;
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const query = usePushMutedSeveritiesQuery();
   const mutation = usePushMutedSeveritiesMutation();
+  const loaded =
+    query.isSuccess && query.isFetchedAfterMount ? query.data : undefined;
+  const editing =
+    !props.granted ||
+    mutation.isPending ||
+    userId === null ||
+    loaded === undefined
+      ? null
+      : { userId, muted: loaded };
+  const shown = query.data ?? [];
   return (
     <>
       {SEVERITY_ROWS.map((entry) => (
@@ -217,16 +234,19 @@ function PushSeverityRows(props: { readonly granted: boolean }): ReactNode {
           row={entry.row}
           control={
             <Switch
-              checked={muted === undefined || !muted.includes(entry.severity)}
-              disabled={
-                !props.granted || muted === undefined || mutation.isPending
-              }
+              checked={!shown.includes(entry.severity)}
+              disabled={editing === null}
               aria-label={`${entry.row.label} push notifications`}
               onCheckedChange={(delivered) => {
-                if (muted === undefined) return;
-                mutation.mutate(
-                  nextMutedSeverities(muted, entry.severity, delivered),
-                );
+                if (editing === null) return;
+                mutation.mutate({
+                  userId: editing.userId,
+                  severities: nextMutedSeverities(
+                    editing.muted,
+                    entry.severity,
+                    delivered,
+                  ),
+                });
               }}
             />
           }

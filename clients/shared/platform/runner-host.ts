@@ -1182,8 +1182,9 @@ export interface IPushPermissionHost {
   setMutedSeverities(set: readonly PushSeverity[]): Promise<void>;
   /**
    * Fires when the state MAY have changed - a foreground resume (the person
-   * may have just changed it in OS Settings), a completed `request()`, or a
-   * completed `setMutedSeverities()`. Subscribers re-read via `get()` and
+   * may have just changed it in OS Settings), a completed `request()`, a
+   * completed `setMutedSeverities()`, or a change of login session (the muted
+   * set is kept per account). Subscribers re-read via `get()` and
    * `getMutedSeverities()`; the signal carries no state itself.
    */
   onChange(handler: () => void): Disposable;

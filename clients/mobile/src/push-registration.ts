@@ -44,16 +44,19 @@ import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DevicePushEnvironment,
   DevicePushPlatform,
+  PushTokenFetchResult,
   RegisterDevicePushTokenFn,
   RemoveDevicePushTokenFn,
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 
 /**
- * How long a muted-set change waits for the next one before it is sent. The
- * register route allows 20 calls per user per hour, and a person flipping
- * switches back and forth must not spend them on the states in between.
+ * How long a scheduled re-registration waits for the next reason to send
+ * before it goes: a muted-set change, or a want that moved while a request
+ * was on the wire. The register route allows 20 calls per user per hour, and
+ * a person flipping switches back and forth must not spend them on the
+ * states in between.
  */
-const MUTED_SEVERITIES_SEND_DELAY_MS = 1_000;
+const SCHEDULED_REGISTRATION_DELAY_MS = 1_000;
 
 /** Capacitor's PermissionState, spelled out (no type dep on the plugin). */
 export type CapacitorPushPermissionState =
@@ -198,17 +201,20 @@ export class MobilePushRegistration {
    */
   private bearerToken: string | null = null;
   /**
-   * `userId:deviceToken:<sorted muted set>` of the last successful
-   * registration (see `registrationKey`). A routine bearer rotation (which
-   * also fires the token-store change event) leaves all three unchanged, so
-   * it re-sends nothing; a provider-token rotation or a muted-set change is a
-   * mismatch, and every path that compares the key sends again. Set only on
-   * an accepted registration, so a send that failed stays a mismatch for the
-   * next edge to retry.
+   * `userId:deviceToken:<sorted muted set>` the server is KNOWN to hold (see
+   * `registrationKey`), or `null` when that is not known. A routine bearer
+   * rotation (which also fires the token-store change event) leaves all
+   * three unchanged, so it re-sends nothing; a provider-token rotation or a
+   * muted-set change is a mismatch, and every path that compares the key
+   * sends again. Cleared while a request is on the wire and set only on an
+   * accepted response, so a failed or lost request stays a mismatch for the
+   * next edge to retry (see `registerCurrentToken`).
    */
   private lastRegisteredKey: string | null = null;
-  /** The pending trailing send of a muted-set change, if one is waiting. */
-  private mutedSeveritiesSendTimer: number | null = null;
+  /** At most one registration request on the wire at a time. */
+  private registrationInFlight = false;
+  /** The pending scheduled re-registration, if one is waiting. */
+  private scheduledRegistrationTimer: number | null = null;
   private userId: string | null = null;
   private clickHandler: ((payload: unknown) => void) | null = null;
   private readonly pendingClicks: unknown[] = [];
@@ -327,11 +333,7 @@ export class MobilePushRegistration {
       mutedSeveritiesStorageKey(userId),
       JSON.stringify(normalizeMutedSeverities(set)),
     );
-    this.cancelMutedSeveritiesSend();
-    this.mutedSeveritiesSendTimer = window.setTimeout(() => {
-      this.mutedSeveritiesSendTimer = null;
-      void this.registerIfGranted(false);
-    }, MUTED_SEVERITIES_SEND_DELAY_MS);
+    this.scheduleRegistration();
   }
 
   /**
@@ -425,15 +427,8 @@ export class MobilePushRegistration {
   private async registerIfGranted(
     permissionKnownGranted: boolean,
   ): Promise<void> {
-    const currentKey =
-      this.userId === null || this.deviceToken === null
-        ? null
-        : registrationKey(
-            this.userId,
-            this.deviceToken,
-            readMutedSeverities(this.userId),
-          );
-    if (currentKey !== null && currentKey === this.lastRegisteredKey) return;
+    const wantedKey = this.wantedRegistrationKey();
+    if (wantedKey !== null && wantedKey === this.lastRegisteredKey) return;
     const tokenStore = this.tokenSource;
     if (tokenStore === null) return;
     try {
@@ -457,7 +452,25 @@ export class MobilePushRegistration {
     }
   }
 
+  /**
+   * Sends what the phone wants now, unless the server is known to hold it.
+   *
+   * One request at a time: two on the wire could land out of order and leave
+   * the older one standing, so a call that arrives while one is in flight
+   * sends nothing itself. While a request is out, whatever the server held
+   * before is no longer known, so the key is cleared when it starts. When it
+   * settles:
+   *
+   *   - accepted: the sent key is recorded (for the login that sent it), and
+   *     if the phone now wants something else - a switch flipped back, a
+   *     rotated token, a sign-in that arrived meanwhile - one more send is
+   *     scheduled.
+   *   - failed, rejected or lost: the key stays cleared, so the next resume
+   *     sends whatever is wanted then. That holds even when the wanted set is
+   *     one the server accepted earlier: a lost response may have changed it.
+   */
   private async registerCurrentToken(): Promise<void> {
+    if (this.registrationInFlight) return;
     const token = this.deviceToken;
     const bearer = this.bearerToken;
     const userId = this.userId;
@@ -465,8 +478,11 @@ export class MobilePushRegistration {
     const mutedSeverities = readMutedSeverities(userId);
     const key = registrationKey(userId, token, mutedSeverities);
     if (this.lastRegisteredKey === key) return;
+    this.lastRegisteredKey = null;
+    this.registrationInFlight = true;
+    let result: PushTokenFetchResult;
     try {
-      const result = await this.options.registerToken(
+      result = await this.options.registerToken(
         this.options.authnBaseUrl,
         bearer,
         {
@@ -476,20 +492,37 @@ export class MobilePushRegistration {
           mutedSeverities,
         },
       );
-      // Cache the key only if this login is still the current one: a sign-out
-      // that landed during the HTTP round trip already cleared the guard, and
-      // restoring it here would make the NEXT sign-in of this same user skip
-      // registering a row the sign-out just removed.
-      if (result.kind === "ok") {
-        if (this.bearerToken === bearer) {
-          this.lastRegisteredKey = key;
-        }
-      } else {
-        console.warn("[push] token registration was not accepted", result.kind);
-      }
     } catch (error) {
       logPushFailure("register token")(error);
+      return;
+    } finally {
+      this.registrationInFlight = false;
     }
+    if (result.kind !== "ok") {
+      console.warn("[push] token registration was not accepted", result.kind);
+      return;
+    }
+    // Record the key only if this login is still the current one: a sign-out
+    // that landed during the HTTP round trip already cleared the guard, and
+    // restoring it here would make the NEXT sign-in of this same user skip
+    // registering a row the sign-out just removed.
+    if (this.bearerToken === bearer) {
+      this.lastRegisteredKey = key;
+    }
+    const wantedKey = this.wantedRegistrationKey();
+    if (wantedKey !== null && wantedKey !== this.lastRegisteredKey) {
+      this.scheduleRegistration();
+    }
+  }
+
+  /** The key a registration sent now would carry; `null` with nothing to send. */
+  private wantedRegistrationKey(): string | null {
+    if (this.userId === null || this.deviceToken === null) return null;
+    return registrationKey(
+      this.userId,
+      this.deviceToken,
+      readMutedSeverities(this.userId),
+    );
   }
 
   /** The signed-in account's user id, read from the login session itself. */
@@ -500,10 +533,22 @@ export class MobilePushRegistration {
     return credentials === null ? null : credentials.user.id;
   }
 
-  private cancelMutedSeveritiesSend(): void {
-    if (this.mutedSeveritiesSendTimer === null) return;
-    window.clearTimeout(this.mutedSeveritiesSendTimer);
-    this.mutedSeveritiesSendTimer = null;
+  /**
+   * (Re)arms one trailing send through the late-grant path, which sends only
+   * while signed in with permission granted.
+   */
+  private scheduleRegistration(): void {
+    this.cancelScheduledRegistration();
+    this.scheduledRegistrationTimer = window.setTimeout(() => {
+      this.scheduledRegistrationTimer = null;
+      void this.registerIfGranted(false);
+    }, SCHEDULED_REGISTRATION_DELAY_MS);
+  }
+
+  private cancelScheduledRegistration(): void {
+    if (this.scheduledRegistrationTimer === null) return;
+    window.clearTimeout(this.scheduledRegistrationTimer);
+    this.scheduledRegistrationTimer = null;
   }
 
   private async unregisterAfterSignOut(): Promise<void> {
@@ -513,7 +558,7 @@ export class MobilePushRegistration {
     this.userId = null;
     this.lastRegisteredKey = null;
     // The stored set stays for this account's next sign-in, which sends it.
-    this.cancelMutedSeveritiesSend();
+    this.cancelScheduledRegistration();
     if (bearer === null || token === null) return;
     try {
       // This remove is the PRIMARY cleanup, not a nicety: plain sign-out is
