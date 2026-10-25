@@ -446,7 +446,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
       jsonResponse(200, { sandboxes: [] }),
     );
 
-    await listSandboxesViaHttp(BASE, BEARER, null, null);
+    await listSandboxesViaHttp(BASE, BEARER, null);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -454,7 +454,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
   it("aborts a request that never answers once the site's timeout passes, and resolves to a network error", async () => {
     const fetchMock = stubHangingFetch();
 
-    const pending = listSandboxesViaHttp(BASE, BEARER, null, null);
+    const pending = listSandboxesViaHttp(BASE, BEARER, null);
     const signal = signalOfLastFetch(fetchMock);
     expect(signal.aborted).toBe(false);
 
@@ -624,7 +624,7 @@ describe("fetchSandboxCostsViaHttp", () => {
 
   it("parses the user's cost view", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, COSTS));
-    const result = await fetchSandboxCostsViaHttp(BASE, BEARER, null, null);
+    const result = await fetchSandboxCostsViaHttp(BASE, BEARER, null);
     expect(String(fetchMock.mock.calls[0][0])).toBe(
       `${BASE}/api/sandboxes/cost`,
     );
@@ -641,7 +641,7 @@ describe("fetchSandboxCostsViaHttp", () => {
         awakeBurnMillicreditsPerHour: "lots",
       }),
     );
-    expect(await fetchSandboxCostsViaHttp(BASE, BEARER, null, null)).toEqual({
+    expect(await fetchSandboxCostsViaHttp(BASE, BEARER, null)).toEqual({
       kind: "network-error",
       detail: "the sandbox cost did not match the contract",
     });
@@ -651,7 +651,7 @@ describe("fetchSandboxCostsViaHttp", () => {
 describe("the other sandbox routes parse or fail the same way", () => {
   it("list: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { sandboxes: [{ id: "" }] }));
-    expect(await listSandboxesViaHttp(BASE, BEARER, null, null)).toEqual({
+    expect(await listSandboxesViaHttp(BASE, BEARER, null)).toEqual({
       kind: "network-error",
       detail: "the sandbox list did not match the contract",
     });
@@ -661,7 +661,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
     stubFetch(async () =>
       jsonResponse(200, { sandboxes: [OLDER_SUMMARY_BODY] }),
     );
-    const result = await listSandboxesViaHttp(BASE, BEARER, null, null);
+    const result = await listSandboxesViaHttp(BASE, BEARER, null);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
       expect(result.response.sandboxes[0]?.frozenAt).toBeNull();
@@ -670,9 +670,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
 
   it("catalogue: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { providers: "none" }));
-    expect(
-      await fetchSandboxCatalogueViaHttp(BASE, BEARER, null, null),
-    ).toEqual({
+    expect(await fetchSandboxCatalogueViaHttp(BASE, BEARER, null)).toEqual({
       kind: "network-error",
       detail: "the sandbox catalogue did not match the contract",
     });
