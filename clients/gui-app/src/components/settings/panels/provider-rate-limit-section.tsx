@@ -1,15 +1,13 @@
-import { useCallback, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rate-limit-views";
+import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
-import { useHostClient } from "@/lib/host";
-import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
-import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import {
   isRateLimitCapableProvider,
   type RateLimitProviderId,
@@ -40,7 +38,25 @@ export function ProviderRateLimitForProvider({
   );
 }
 
-/** The surrounding Profiles card owns the refresh action for embedded usage. */
+/**
+ * A live-fact card's heading: what it shows and the host that reported it.
+ * A Personal page reads through the window's own host and offers no other, so
+ * the heading carries no `Use another host`.
+ */
+function RateLimitsHeading(): ReactNode {
+  const hostName = usePersonalHostName() ?? "this computer";
+  return (
+    <div className="text-ui-sm text-foreground">
+      <span className="font-medium">Rate limits</span>
+      <span className="text-muted-foreground">
+        {" "}
+        · as reported by {hostName}
+      </span>
+    </div>
+  );
+}
+
+/** Rate limits for the profile the surrounding Profiles card has selected. */
 export function EmbeddedProviderRateLimitForProvider({
   providerId,
   profileId,
@@ -59,118 +75,6 @@ export function EmbeddedProviderRateLimitForProvider({
       profileId={profileId}
       usageUpdatedAt={usageUpdatedAt}
       fetchEligible={fetchEligible}
-    />
-  );
-}
-
-/** Combined Profiles-header action: refresh auth/profile status and the
- * selected profile's usage limits from one control. */
-export function ProviderProfilesRefreshButton({
-  providerId,
-  profileId,
-  usageUpdatedAt,
-  fetchEligible,
-  maintenanceAvailable,
-}: {
-  readonly providerId: ProviderId;
-  readonly profileId: string | null;
-  readonly usageUpdatedAt: number | null;
-  readonly fetchEligible: boolean;
-  readonly maintenanceAvailable: boolean;
-}): ReactNode {
-  if (!maintenanceAvailable) {
-    return isRateLimitCapableProvider(providerId) && fetchEligible ? (
-      <ProfilesAndUsageRefreshButton
-        providerId={providerId}
-        profileId={profileId}
-        usageUpdatedAt={usageUpdatedAt}
-        fetchEligible={fetchEligible}
-      />
-    ) : (
-      <ProfilesOnlyRefreshButton />
-    );
-  }
-  return (
-    <ProfileMaintenanceRefreshButton
-      providerId={providerId}
-      profileId={profileId}
-    />
-  );
-}
-
-function ProfileMaintenanceRefreshButton({
-  providerId,
-  profileId,
-}: {
-  readonly providerId: ProviderId;
-  readonly profileId: string | null;
-}): ReactNode {
-  const client = useHostClient();
-  const refresh = useProvidersRefreshProfileStatusForClient(client);
-
-  return (
-    <RefreshIconButton
-      onRefresh={async () => {
-        await refresh.mutateAsync({
-          providerId,
-          profileId: profileId ?? "ambient",
-        });
-      }}
-      label={
-        isRateLimitCapableProvider(providerId)
-          ? "Refresh profile status and usage limits"
-          : "Refresh profile status"
-      }
-      refreshing={refresh.isPending}
-    />
-  );
-}
-
-function ProfilesOnlyRefreshButton(): ReactNode {
-  const refreshProviders = useRefreshProviders();
-  return (
-    <RefreshIconButton
-      onRefresh={refreshProviders}
-      label="Refresh profile statuses"
-    />
-  );
-}
-
-function ProfilesAndUsageRefreshButton({
-  providerId,
-  profileId,
-  usageUpdatedAt,
-  fetchEligible,
-}: {
-  readonly providerId: RateLimitProviderId;
-  readonly profileId: string | null;
-  readonly usageUpdatedAt: number | null;
-  readonly fetchEligible: boolean;
-}): ReactNode {
-  const refreshProviders = useRefreshProviders();
-  const query = useHostProviderRateLimitsQuery(
-    providerId,
-    profileId,
-    fetchEligible,
-  );
-  const { refresh: refreshUsage, isRefreshing } = useProviderRateLimitRefresh({
-    providerId,
-    profileId,
-    usageUpdatedAt,
-    hasCachedValue: query.data !== undefined && query.data.lastGood !== null,
-    fetchEligible,
-    isFetching: query.isFetching,
-    refetch: query.refetch,
-  });
-  const refresh = useCallback(async (): Promise<void> => {
-    await Promise.all([refreshProviders(), refreshUsage()]);
-  }, [refreshProviders, refreshUsage]);
-
-  return (
-    <RefreshIconButton
-      onRefresh={refresh}
-      label="Refresh profile statuses and usage limits"
-      refreshing={isRefreshing}
     />
   );
 }
@@ -203,7 +107,7 @@ function EmbeddedProviderRateLimitSettingsCard({
 
   return (
     <div className="flex flex-col gap-3 border-t border-border/60 pt-3">
-      <div className="text-ui-sm font-medium text-foreground">Usage limits</div>
+      <RateLimitsHeading />
       <ProviderRateLimitBody
         isPending={query.isPending}
         isFetching={query.isFetching}
@@ -255,9 +159,7 @@ function ProviderRateLimitSettingsCard({
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-ui-sm font-medium text-foreground">
-          Usage limits
-        </div>
+        <RateLimitsHeading />
         {fetchEligible ? (
           <RefreshIconButton
             onRefresh={refresh}

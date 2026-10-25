@@ -12,12 +12,16 @@ import type { MessageSegment } from "@/stores/composer/chat-store";
 export function collectAssistantReplyText(
   segments: ReadonlyArray<MessageSegment>,
 ): string {
-  return segments
-    .flatMap((segment) =>
-      segment.kind === "text" && segment.browserSession === undefined
-        ? [segment.markdown]
-        : [],
-    )
-    .join("\n\n")
-    .trim();
+  return collectAssistantReplyMarkdowns(segments).join("\n\n").trim();
+}
+
+/** The same `text` segments, one markdown string each. */
+export function collectAssistantReplyMarkdowns(
+  segments: ReadonlyArray<MessageSegment>,
+): string[] {
+  return segments.flatMap((segment) =>
+    segment.kind === "text" && segment.browserSession === undefined
+      ? [segment.markdown]
+      : [],
+  );
 }

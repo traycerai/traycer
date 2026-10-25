@@ -106,7 +106,7 @@ export function createLoginImportService(
         title: "Import logins?",
         message: `Import the logins for ${sites} from ${browser} (${summary.profileLabel})?`,
         detail:
-          "Any login Traycer already saved for those sites is replaced by the one from that profile, on this machine and on every host that syncs your browser logins.",
+          "Any login Traycer already saved for those sites is replaced by the one from that profile, on this computer and on every host that syncs your browser logins.",
         confirmLabel: "Import",
       });
     },

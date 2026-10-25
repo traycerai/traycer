@@ -435,7 +435,7 @@ export function providerSignInUnavailableReason(
   ) {
     return {
       kind: "other",
-      hint: "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.",
+      hint: "Signing in opens a browser on the computer running Traycer, so it is only available on a local host.",
     };
   }
   // After the permanent reasons, so a provider that can never sign in here is

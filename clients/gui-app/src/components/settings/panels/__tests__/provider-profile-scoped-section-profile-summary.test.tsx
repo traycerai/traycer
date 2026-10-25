@@ -132,7 +132,6 @@ function renderSection(
           selectedProfileId="profile-managed"
           onSelectedProfileIdChange={() => undefined}
           profileEnablementAvailable
-          profileStatusRefreshAvailable
           profileEnablementPending={() => false}
           onSetProfileEnabled={() => undefined}
           {...overrides}

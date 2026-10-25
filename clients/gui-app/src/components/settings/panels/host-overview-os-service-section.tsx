@@ -315,7 +315,7 @@ function describeDeregisterConfirm(
   foregroundRun: boolean,
 ): string {
   const tail =
-    "Nothing is uninstalled and no data is deleted — but Traycer cannot start this host again from here, so bringing it back means running 'traycer host service install' on the machine itself.";
+    "Nothing is uninstalled and no data is deleted — but Traycer cannot start this host again from here, so bringing it back means running 'traycer host service install' on the computer itself.";
   return foregroundRun
     ? `This removes the registration that starts ${hostName} at login. The host you started in a terminal keeps running until you stop it there. ${tail}`
     : `This stops ${hostName} and removes the registration that starts it again at login. ${tail}`;

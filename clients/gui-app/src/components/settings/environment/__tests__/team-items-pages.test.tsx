@@ -8,11 +8,16 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import {
   configurationItem,
   mountTeamPage,
+  personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -73,6 +78,55 @@ describe("TeamVariablesAndShells", () => {
     });
     expect(harness.paramsOf("config.env.list")).toHaveLength(0);
     expect(harness.paramsOf("config.shell.get")).toHaveLength(0);
+  });
+
+  it("names the team in the subtitle, and a failed read shows one line whose Retry reads again", async () => {
+    let fail = true;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => {
+        if (fail) throw new Error("host unavailable");
+        return { items: [variable("NODE_ENV", "production", 3)] };
+      },
+      "environment.host.list": () => ({ hosts: [] }),
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "editor" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+    });
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    const failure = await screen.findByText(
+      "Couldn't read Acme's variables and shells.",
+    );
+    expect(
+      await screen.findByText(
+        "Plain values every host running Acme gets, and the shell agents run in.",
+      ),
+    ).toBeTruthy();
+    const reads = harness.paramsOf("environment.configuration.items").length;
+
+    fail = false;
+    await userEvent.click(
+      within(failure.closest("p") ?? failure).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    expect(await screen.findByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(
+      harness.paramsOf("environment.configuration.items").length,
+    ).toBeGreaterThan(reads);
   });
 
   it("gives a viewer the values with no Save, Delete or new-variable verbs", async () => {
@@ -273,6 +327,34 @@ describe("TeamMcpServers", () => {
       revision,
     });
 
+  it("names the team in the subtitle", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "editor" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+    });
+    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByText(
+        "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("toggles a tool against the displayed revision for an editor", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({ items: [server(5, true)] }),
@@ -335,6 +417,182 @@ describe("TeamMcpServers", () => {
       expect(
         screen.getByRole("switch", { name: "github claude search" }),
       ).toHaveProperty("ariaChecked", "false");
+    });
+  });
+});
+
+describe("Environment page subtitles", () => {
+  const environments = {
+    environments: [
+      {
+        environmentId: "env-a",
+        ownerKind: "organization" as const,
+        ownerId: "team-a",
+        roomId: "room-a",
+        label: "Acme",
+        effectiveRole: "editor" as const,
+        kind: "team" as const,
+        hostCount: 1,
+        providerHandle: "handle-a",
+      },
+      {
+        environmentId: "env-personal",
+        ownerKind: "user" as const,
+        ownerId: "user-me",
+        roomId: "room-personal",
+        label: "Personal",
+        effectiveRole: "owner" as const,
+        kind: "personal" as const,
+        hostCount: 1,
+        providerHandle: null,
+      },
+    ],
+  };
+  const handlers = {
+    "environment.list": () => environments,
+    "environment.configuration.items": () => ({ items: [] }),
+    "environment.host.list": () => ({ hosts: [] }),
+    "environment.plans.list": () => ({ plans: [] }),
+    "environment.members": () => ({
+      members: [],
+      nextCursor: null,
+      legacyRoleNoticeSeenAt: null,
+      legacyMembers: [],
+    }),
+  } as const;
+
+  it.each([
+    [
+      "Providers",
+      <TeamProviders key="p" />,
+      "Plans, keys and settings for each coding agent, on every host running Acme.",
+      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+    ],
+    [
+      "MCP servers",
+      <TeamMcpServers key="m" />,
+      "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
+      "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
+    ],
+    [
+      "Skills",
+      <TeamSkillsPage key="s" />,
+      null,
+      "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+    ],
+    [
+      "Permissions",
+      <TeamPermissions key="x">{null}</TeamPermissions>,
+      "What Acme's agents may do without asking, on every host running Acme.",
+      "What your agents may do without asking, on every computer and sandbox running Personal.",
+    ],
+    [
+      "Variables & shells",
+      <TeamVariablesAndShells key="v" />,
+      "Plain values every host running Acme gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+    ],
+  ])("%s names its configuration", async (_page, page, team, personal) => {
+    if (team !== null) {
+      const harness = mountTeamPage(poolSource("editor"), handlers);
+      render(page, { wrapper: harness.Wrapper });
+      expect(await screen.findByText(team)).toBeTruthy();
+      cleanup();
+      resetTeamPageHarness();
+    }
+    const harness = mountTeamPage(personalPoolSource(), handlers);
+    render(page, { wrapper: harness.Wrapper });
+    expect(await screen.findByText(personal)).toBeTruthy();
+  });
+});
+
+describe("A cloud page's failed read", () => {
+  const environments = {
+    environments: [
+      {
+        environmentId: "env-a",
+        ownerKind: "organization" as const,
+        ownerId: "team-a",
+        roomId: "room-a",
+        label: "Acme",
+        effectiveRole: "admin" as const,
+        kind: "team" as const,
+        hostCount: 1,
+        providerHandle: "handle-a",
+      },
+      {
+        environmentId: "env-personal",
+        ownerKind: "user" as const,
+        ownerId: "user-me",
+        roomId: "room-personal",
+        label: "Me",
+        effectiveRole: "owner" as const,
+        kind: "personal" as const,
+        hostCount: 1,
+        providerHandle: null,
+      },
+    ],
+  };
+  const failingHandlers = {
+    "environment.list": () => environments,
+    "environment.configuration.items": () => {
+      throw new Error("host unavailable");
+    },
+    "environment.host.list": () => ({ hosts: [] }),
+    "environment.plans.list": () => ({ plans: [] }),
+    "environment.members": () => ({
+      members: [],
+      nextCursor: null,
+      legacyRoleNoticeSeenAt: null,
+      legacyMembers: [],
+    }),
+  } as const;
+
+  it.each([
+    ["a team", poolSource("editor"), "Acme"],
+    ["Personal", personalPoolSource(), "Personal"],
+  ])(
+    "names %s and the page, and Retry reads again",
+    async (_name, source, who) => {
+      const harness = mountTeamPage(source, failingHandlers);
+      render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+      const failure = await screen.findByText(
+        `Couldn't read ${who}'s providers.`,
+      );
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      await userEvent.click(
+        within(failure.closest("p") ?? failure).getByRole("button", {
+          name: "Retry",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.items").length,
+        ).toBeGreaterThan(reads);
+      });
+    },
+  );
+
+  it("names the team on the Browser agent access row, and Retry reads again", async () => {
+    const harness = mountTeamPage(poolSource("editor"), failingHandlers);
+    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
+
+    const failure = await screen.findByText(
+      "Couldn't read Acme's browser agent access.",
+    );
+    const reads = harness.paramsOf("environment.configuration.items").length;
+    await userEvent.click(
+      within(failure.closest("p") ?? failure).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
     });
   });
 });

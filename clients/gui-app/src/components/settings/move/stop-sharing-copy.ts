@@ -1,23 +1,24 @@
-export const STOP_SHARING_TITLE = "Stop sharing from this computer";
+export const STOP_SHARING_TITLE = "Stop using Personal on this computer";
 
-export const STOP_SHARING_CONFIRM = "Stop sharing";
-export const STOP_SHARING_KEEP = "Keep sharing";
+export const STOP_SHARING_CONFIRM = "Stop using Personal";
+export const STOP_SHARING_KEEP = "Cancel";
 
-export const STOP_SHARING_MANAGED = "Personal manages here";
-export const STOP_SHARING_NEEDS_CHOICE = "Needs a choice";
+export const STOP_SHARING_NEEDS_CHOICE = "Choose what stays on this computer";
+export const STOP_SHARING_REMOVED = "Removed from this computer when you stop";
+export const STOP_SHARING_REMOVED_LINE =
+  "These came from Personal. Stopping removes them from this computer only; they stay in Personal and come back if you move this computer to Personal again.";
 export const STOP_SHARING_MANAGED_EMPTY =
-  "Nothing of Personal's is on this computer.";
+  "Nothing from Personal is on this computer.";
 
-export const KEEP_LOCALLY = "Keep locally";
+export const KEEP_ON_THIS_COMPUTER = "Keep on this computer";
 export const REMOVE_FROM_THIS_COMPUTER = "Remove from this computer";
-export const RESOLVE = "Resolve";
 
-export type StopChoice =
-  | "keep_locally"
-  | "remove_from_this_computer"
-  | "resolve";
+export type StopChoice = "keep_locally" | "remove_from_this_computer";
 
-export type StopChoiceReason = "edited_here" | "depended_on";
+export type StopChoiceOrigin =
+  | "from_this_computer"
+  | "changed_here"
+  | "depended_on";
 
 export interface StopChoiceAction {
   readonly choice: StopChoice;
@@ -25,9 +26,8 @@ export interface StopChoiceAction {
 }
 
 export const STOP_CHOICES: readonly StopChoiceAction[] = [
-  { choice: "keep_locally", label: KEEP_LOCALLY },
+  { choice: "keep_locally", label: KEEP_ON_THIS_COMPUTER },
   { choice: "remove_from_this_computer", label: REMOVE_FROM_THIS_COMPUTER },
-  { choice: "resolve", label: RESOLVE },
 ];
 
 export function stopSharingDescription(hostName: string): string {
@@ -39,17 +39,31 @@ export function stopSharingDescription(hostName: string): string {
  * read it; `labels` are the rows that need a choice now.
  */
 export function stopPreviewChangedLine(labels: readonly string[]): string {
-  const changed = "What stopping sharing touches changed since you opened it.";
+  const changed =
+    "What stopping using Personal touches changed since you opened it.";
   return labels.length === 0
     ? changed
     : `${changed} Now needs a choice: ${labels.join(", ")}.`;
 }
 
-export function stopChoiceReasonLine(reason: StopChoiceReason): string {
-  switch (reason) {
-    case "edited_here":
-      return "Edited on this computer.";
+const CHOOSE_HERE = "Choose what happens to it here when you stop.";
+
+/**
+ * Why a row needs a choice. `usedBy` names what depends on it; a host that
+ * names none (a `@1.0` host) reads the general line.
+ */
+export function stopChoiceReasonLine(
+  origin: StopChoiceOrigin,
+  usedBy: readonly string[],
+): string {
+  switch (origin) {
+    case "from_this_computer":
+      return `Came from this computer. ${CHOOSE_HERE}`;
+    case "changed_here":
+      return `Changed on this computer. ${CHOOSE_HERE}`;
     case "depended_on":
-      return "Other items depend on this.";
+      return usedBy.length === 0
+        ? `Other settings use it. ${CHOOSE_HERE}`
+        : `Used by ${usedBy.join(", ")}. ${CHOOSE_HERE}`;
   }
 }

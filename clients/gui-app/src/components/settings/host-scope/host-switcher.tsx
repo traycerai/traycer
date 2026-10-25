@@ -1224,7 +1224,11 @@ function ComposerComputerRow(props: {
           host={props.host}
           className="size-4 shrink-0 text-muted-foreground"
         />
-        <span className="sr-only">{hostOptionKindLabel(props.host)}</span>
+        {/* A title that already says what it is (`This computer`) is not
+            announced twice. */}
+        {props.title === hostOptionKindLabel(props.host) ? null : (
+          <span className="sr-only">{hostOptionKindLabel(props.host)}</span>
+        )}
         <span className="min-w-0 flex-1 truncate text-start">
           {props.title}
         </span>

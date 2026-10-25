@@ -550,7 +550,7 @@ export function LandingTerminalTileLive(props: {
         toast.warning(`Terminal exited immediately (code ${exitCode})`, {
           id: "landing-terminal-fast-exit",
           description:
-            "The shell couldn't start. Check Settings → Shell — if it points at WSL, WSL may not be installed on this machine.",
+            "The shell couldn't start. Check Settings → Shell — if it points at WSL, WSL may not be installed on this computer.",
         });
       }
     }

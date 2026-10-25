@@ -63,6 +63,7 @@ import { ThemeProvider } from "@/providers/theme-provider";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
@@ -145,6 +146,14 @@ vi.mock("@/components/settings/panels/permissions/judge-tab", () => ({
 }));
 vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
   ActivityTab: (): ReactNode => <div data-testid="activity-body" />,
+}));
+// Permissions' Browser agent access region reads its host through the real
+// binding, which the scoped-binding fixture does not carry. The region has its
+// own suite (`browser-agent-access-group.test.tsx`).
+vi.mock("@/components/settings/panels/browser-agent-access-group", () => ({
+  BrowserAgentAccessGroup: (): ReactNode => (
+    <div data-testid="browser-agent-access-probe" />
+  ),
 }));
 
 // ---- shell: real modal host, stand-in strip tab ---------------------------
@@ -246,6 +255,11 @@ function resetStores(): void {
     error: null,
   });
   useSettingsHostScopeStore.setState({ scopedHostId: null });
+  // host-a's own Permissions page, through its Local row: Personal waits on
+  // the window host's environment status, which this harness never answers.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: "host-a", hostName: "host-a" },
+  });
   useSettingsSearchStore.setState({ pendingReveal: null });
   resetSettingsOpenIntentForTests();
   resetRulesEditForTests();

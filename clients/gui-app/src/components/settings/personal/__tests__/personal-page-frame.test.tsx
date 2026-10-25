@@ -35,6 +35,7 @@ import { usePersonalRowNotes } from "@/components/settings/personal/personal-pag
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { UPDATE_HOST_TEXT } from "@/components/settings/personal/personal-page-status";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -53,6 +54,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 function variableOverride(key: string): LocalOverride {
@@ -117,6 +119,10 @@ function renderFrame(options: {
   if (options.methods !== null) {
     recordNegotiatedHostMethods(HOST_ID, options.methods);
   }
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,
@@ -162,17 +168,42 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       section: "shell",
       methods: STATUS_METHODS,
       status: environmentStatusFixture({
-        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
+        items: [
+          itemStatusFixture({
+            kind: "variable",
+            key: "LOG_LEVEL",
+            status: "pending",
+          }),
+        ],
       }),
       overrides: [],
     });
     const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe("Applied on dev-box.");
+    expect(line.textContent).toBe("Applying LOG_LEVEL on dev-box.");
     const header = line.closest("header");
     if (header === null) throw new Error("the line is not inside a header");
     expect(header.closest("[data-settings-panel-shell]")).not.toBeNull();
     expect(within(header).getByRole("heading", { name: "Shell" })).toBeTruthy();
     expect(line.closest("[inert]")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
+    ).toBeNull();
+  });
+
+  it("says nothing once every item applied, and leaves the page as it was", async () => {
+    renderFrame({
+      section: "shell",
+      methods: STATUS_METHODS,
+      status: environmentStatusFixture({
+        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
+      }),
+      // The override's note appears only once the page has rendered the
+      // status it read.
+      overrides: [variableOverride("LOG_LEVEL")],
+    });
+    await screen.findByText("LOG_LEVEL: Overridden on dev-box");
+    expect(screen.queryByTestId("personal-page-status")).toBeNull();
+    expect(screen.queryByText(/^Applied on/)).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -404,6 +435,9 @@ describe("<PersonalPageFrame /> around a page that reads the variables", () => {
         ...STATUS_METHODS,
         "config.env.list",
       ]);
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+      });
       scopeOverrides.current = {
         host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
         hostId: HOST_ID,

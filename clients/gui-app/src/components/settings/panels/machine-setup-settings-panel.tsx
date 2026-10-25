@@ -65,6 +65,7 @@ export function MachineSetupSettingsPanel(): ReactNode {
 }
 
 function SetupScripts(): ReactNode {
+  const hostId = useAddressableHostId();
   const query = useHostQuery<HostRpcRegistry, "environment.setup.get">({
     cacheKeyIdentity: undefined,
     client: useHostClient(),
@@ -103,10 +104,11 @@ function SetupScripts(): ReactNode {
         const script = scripts.find((candidate) => candidate.os === entry.os);
         return (
           <TabsContent key={entry.os} value={entry.os}>
-            {/* Keyed by revision: a re-read after any save remounts the
-                editor on the script it now has. */}
+            {/* Keyed by host and revision: a re-read after any save remounts
+                the editor on the script it now has, and another host's script
+                never shows this one's draft. */}
             <SetupScriptEditor
-              key={`${entry.os}:${script?.revision ?? "none"}`}
+              key={`${hostId}:${entry.os}:${script?.revision ?? "none"}`}
               os={entry.os}
               label={entry.label}
               script={script ?? null}

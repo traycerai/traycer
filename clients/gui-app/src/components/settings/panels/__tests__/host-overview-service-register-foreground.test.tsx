@@ -119,12 +119,12 @@ function foregroundDeregisterDescription(hostName: string): string {
     "The host you started in a terminal keeps running until you stop it " +
     "there. Nothing is uninstalled and no data is deleted — but Traycer " +
     "cannot start this host again from here, so bringing it back means " +
-    "running 'traycer host service install' on the machine itself."
+    "running 'traycer host service install' on the computer itself."
   );
 }
 
 function todaysDeregisterDescription(hostName: string): string {
-  return `This stops ${hostName} and removes the registration that starts it again at login. Nothing is uninstalled and no data is deleted — but Traycer cannot start this host again from here, so bringing it back means running 'traycer host service install' on the machine itself.`;
+  return `This stops ${hostName} and removes the registration that starts it again at login. Nothing is uninstalled and no data is deleted — but Traycer cannot start this host again from here, so bringing it back means running 'traycer host service install' on the computer itself.`;
 }
 
 function lifecycleView(

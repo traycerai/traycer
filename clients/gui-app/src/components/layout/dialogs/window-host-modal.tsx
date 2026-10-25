@@ -580,7 +580,7 @@ function modalCopy(
       // and saying where it can be updated is an honest absence.
       description: variant.isTargetHost
         ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
-        : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that machine, or switch to a host this one can reach.",
+        : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that computer, or switch to a host this one can reach.",
       reportTitle: "Host update required",
       reportMessage: "Traycer Host requires an update.",
       reportCode: "HOST_INCOMPATIBLE",
@@ -590,7 +590,7 @@ function modalCopy(
     return {
       title: "Setting up Traycer",
       description:
-        "Traycer is getting this machine's host ready. This runs once, and the app opens as soon as it's done.",
+        "Traycer is getting this computer's host ready. This runs once, and the app opens as soon as it's done.",
       reportTitle: "Traycer Host did not start",
       reportMessage: "Traycer Host did not become available at launch.",
       reportCode: "HOST_COLD_START_FAILED",

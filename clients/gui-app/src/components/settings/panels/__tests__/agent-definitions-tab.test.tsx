@@ -24,6 +24,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
 // The stale notice is a toast; the rest of sonner stays real.
 const toastInfo = vi.hoisted(() => vi.fn());
 vi.mock("sonner", async (importOriginal) => {
@@ -50,7 +57,13 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { AgentDefinition } from "@traycer/protocol/host/environment-schemas";
-import { AgentDefinitionsSettingsPanel } from "@/components/settings/panels/agent-definitions-settings-panel";
+import {
+  ConfigurationSourceContext,
+  type ConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definitions-tab";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -71,6 +84,8 @@ const METHODS = [
   "environment.agentDefinitions.list",
   "environment.agentDefinitions.put",
   "environment.agentDefinitions.delete",
+  "environment.list",
+  "environment.configuration.items",
 ];
 
 afterEach(() => {
@@ -80,7 +95,15 @@ afterEach(() => {
   hostMock.client = null;
   hostMock.binding = null;
   hostIdMock.id = "host-a";
+  cloudSource.current = { kind: "host" };
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+  useAuthStore.setState({ status: "signed-out" });
 });
+
+/** The configuration the page under test reads; the host's own unless a case says. */
+const cloudSource: { current: ConfigurationSource } = {
+  current: { kind: "host" },
+};
 
 interface Rig {
   /** The definitions the host holds; a write changes them like the host would. */
@@ -88,6 +111,8 @@ interface Rig {
   readonly puts: PutRequest[];
   readonly deletes: DeleteRequest[];
   readonly lists: () => number;
+  /** Reads of the cloud configuration the page makes under a team or Personal. */
+  readonly itemReads: () => number;
 }
 
 interface RigOptions {
@@ -108,12 +133,55 @@ function renderPage(
   initial: readonly AgentDefinition[],
   options: RigOptions,
 ): Rig {
+  useAuthStore.setState({ status: "signed-in" });
   const definitions = [...initial];
   const puts: PutRequest[] = [];
   const deletes: DeleteRequest[] = [];
   let listCalls = 0;
+  let itemReadCalls = 0;
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => environmentStatusFixture({}),
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-a",
+          ownerKind: "organization" as const,
+          ownerId: "team-a",
+          roomId: "room-a",
+          label: "Acme",
+          effectiveRole: "admin" as const,
+          kind: "team" as const,
+          hostCount: 1,
+          providerHandle: "handle-a",
+        },
+        {
+          environmentId: "env-personal",
+          ownerKind: "user" as const,
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Me",
+          effectiveRole: "owner" as const,
+          kind: "personal" as const,
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+    "environment.configuration.items": () => {
+      itemReadCalls += 1;
+      if (options.failList) return Promise.reject(new Error("host is down"));
+      return Promise.resolve({
+        items: definitions.map((definition) => ({
+          kind: "agent_definition" as const,
+          key: definition.name,
+          os: null,
+          value: { text: definition.text },
+          revision: definition.revision,
+          updatedAt: 1,
+          writtenBy: { source: "live" as const, hostId: null, hostName: null },
+        })),
+      });
+    },
     "environment.agentDefinitions.list": () => {
       listCalls += 1;
       if (options.failList) return Promise.reject(new Error("host is down"));
@@ -172,10 +240,18 @@ function renderPage(
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <AgentDefinitionsSettingsPanel />
+      <ConfigurationSourceContext.Provider value={cloudSource.current}>
+        <AgentDefinitionsTab />
+      </ConfigurationSourceContext.Provider>
     </QueryClientProvider>,
   );
-  return { definitions, puts, deletes, lists: () => listCalls };
+  return {
+    definitions,
+    puts,
+    deletes,
+    lists: () => listCalls,
+    itemReads: () => itemReadCalls,
+  };
 }
 
 const REVIEWER: AgentDefinition = {
@@ -221,7 +297,7 @@ function nameField(): HTMLInputElement {
   return field;
 }
 
-describe("<AgentDefinitionsSettingsPanel />", () => {
+describe("<AgentDefinitionsTab />", () => {
   it("lists each definition as an editor on its text, with the New form after them", async () => {
     renderPage([REVIEWER, PLANNER], DEFAULT_RIG);
 
@@ -386,6 +462,96 @@ describe("<AgentDefinitionsSettingsPanel />", () => {
     expect(screen.getByRole("heading", { name: "planner.md" })).toBeTruthy();
   });
 
+  it.each([
+    [
+      "a team",
+      { kind: "team", environmentId: "env-a" } as const,
+      {
+        kind: "pool",
+        configuration: "team",
+        environmentId: "env-a",
+        roomId: "room-a",
+        providerHandle: "handle-a",
+        effectiveRole: "admin",
+      } satisfies ConfigurationSource,
+      "Delete “reviewer.md” from Acme? Harnesses on Acme's hosts can no longer start it.",
+    ],
+    [
+      "Personal in the cloud",
+      { kind: "personal" } as const,
+      {
+        kind: "pool",
+        configuration: "personal",
+        environmentId: "env-personal",
+        roomId: "room-personal",
+        providerHandle: null,
+        effectiveRole: "owner",
+      } satisfies ConfigurationSource,
+      "Delete “reviewer.md” from Personal? Harnesses on your computers and sandboxes can no longer start it.",
+    ],
+    [
+      "Personal on the host that runs it",
+      { kind: "personal" } as const,
+      { kind: "host" } satisfies ConfigurationSource,
+      "Delete “reviewer.md” from Personal? Harnesses on your computers and sandboxes can no longer start it.",
+    ],
+    [
+      "a Local row",
+      { kind: "local", hostId: "host-a", hostName: "dev-box" } as const,
+      { kind: "host" } satisfies ConfigurationSource,
+      "Delete “reviewer.md” from every host you use?",
+    ],
+  ])(
+    "words the delete confirmation for %s",
+    async (_name, pick, source, sentence) => {
+      useSettingsEnvironmentPickStore.setState({ pick });
+      cloudSource.current = source;
+      const rig = renderPage([REVIEWER], DEFAULT_RIG);
+      expect(rig.deletes).toEqual([]);
+      await screen.findAllByTestId("agent-definition");
+
+      fireEvent.click(
+        within(sectionFor("reviewer.md")).getByRole("button", {
+          name: "Delete",
+        }),
+      );
+      const dialog = await screen.findByTestId("confirm-destructive-dialog");
+      expect(dialog.textContent).toContain(sentence);
+      expect(
+        within(dialog).getByRole("button", { name: "Cancel" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("names the team when its definitions cannot be read, and Retry reads again", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    cloudSource.current = {
+      kind: "pool",
+      configuration: "team",
+      environmentId: "env-a",
+      roomId: "room-a",
+      providerHandle: "handle-a",
+      effectiveRole: "admin",
+    };
+    const rig = renderPage([], { ...DEFAULT_RIG, failList: true });
+
+    const failure = await screen.findByText(
+      "Couldn't read Acme's agent definitions.",
+    );
+    const reads = rig.itemReads();
+    expect(reads).toBeGreaterThan(0);
+    fireEvent.click(
+      within(failure.closest("p") ?? failure).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+    await waitFor(() => {
+      expect(rig.itemReads()).toBeGreaterThan(reads);
+    });
+  });
+
   it("deletes nothing when the confirmation is cancelled", async () => {
     const rig = renderPage([REVIEWER], DEFAULT_RIG);
     await screen.findAllByTestId("agent-definition");
@@ -515,7 +681,7 @@ describe("<AgentDefinitionsSettingsPanel />", () => {
     // A fresh element each time: React skips re-rendering an identical one.
     const page = (): ReactNode => (
       <QueryClientProvider client={queryClient}>
-        <AgentDefinitionsSettingsPanel />
+        <AgentDefinitionsTab />
       </QueryClientProvider>
     );
     hostIdMock.id = "host-a";
@@ -566,5 +732,144 @@ describe("<AgentDefinitionsSettingsPanel />", () => {
     ).toBeTruthy();
     expect(screen.queryByText("No agent definitions yet.")).toBeNull();
     expect(screen.queryByRole("textbox", { name: "File name" })).toBeNull();
+  });
+
+  describe("moving between two teams' configurations", () => {
+    const teamSource = (environmentId: string): ConfigurationSource => ({
+      kind: "pool",
+      configuration: "team",
+      environmentId,
+      roomId: `room-${environmentId}`,
+      providerHandle: `handle-${environmentId}`,
+      effectiveRole: "admin",
+    });
+
+    interface TwoTeams {
+      readonly puts: Record<string, unknown>[];
+      readonly show: (environmentId: string) => void;
+    }
+
+    // Same name and revision in both teams, different text; a write under
+    // env-b loses to a change by Rin.
+    function renderTwoTeams(): TwoTeams {
+      useAuthStore.setState({ status: "signed-in" });
+      const puts: Record<string, unknown>[] = [];
+      const textOf: Record<string, string> = {
+        "env-a": "Text in A.",
+        "env-b": "Text in B.",
+      };
+      const { client } = buildEnvironmentClient({
+        hostId: "host-a",
+        handlers: {
+          "environment.status": () => environmentStatusFixture({}),
+          "environment.list": () => ({ environments: [] }),
+          "environment.configuration.items": (request) =>
+            Promise.resolve({
+              items: [
+                {
+                  kind: "agent_definition" as const,
+                  key: "reviewer.md",
+                  os: null,
+                  value: { text: textOf[request.environmentId] ?? "" },
+                  revision: 3,
+                  updatedAt: 1,
+                  writtenBy: {
+                    source: "live" as const,
+                    hostId: null,
+                    hostName: null,
+                  },
+                },
+              ],
+            }),
+          "environment.configuration.items.put": (request) => {
+            puts.push({ ...request });
+            return Promise.resolve(
+              request.environmentId === "env-b"
+                ? {
+                    outcome: "conflict" as const,
+                    current: { revision: 3, changedBy: "Rin", changedAt: 1 },
+                  }
+                : { outcome: "saved" as const, revision: 4 },
+            );
+          },
+        },
+      });
+      recordNegotiatedHostMethods("host-a", [
+        ...METHODS,
+        "environment.configuration.items.put",
+      ]);
+      hostMock.client = client;
+      hostMock.binding = null;
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      // A fresh element each time: React skips re-rendering an identical one.
+      const page = (environmentId: string): ReactNode => (
+        <QueryClientProvider client={queryClient}>
+          <ConfigurationSourceContext.Provider
+            value={teamSource(environmentId)}
+          >
+            <AgentDefinitionsTab />
+          </ConfigurationSourceContext.Provider>
+        </QueryClientProvider>
+      );
+      const view = render(page("env-a"));
+      return {
+        puts,
+        show: (environmentId) => view.rerender(page(environmentId)),
+      };
+    }
+
+    it("never carries a draft or a write's outcome from one team to the other, and saves to the team shown", async () => {
+      const teams = renderTwoTeams();
+      await waitFor(() => {
+        expect(editorFor("reviewer.md").value).toBe("Text in A.");
+      });
+      fireEvent.change(editorFor("reviewer.md"), {
+        target: { value: "A draft." },
+      });
+
+      teams.show("env-b");
+      await waitFor(() => {
+        expect(editorFor("reviewer.md").value).toBe("Text in B.");
+      });
+      fireEvent.change(editorFor("reviewer.md"), {
+        target: { value: "B edit." },
+      });
+      fireEvent.click(
+        within(sectionFor("reviewer.md")).getByRole("button", { name: "Save" }),
+      );
+      expect(await screen.findByText(/Changed by Rin/)).toBeTruthy();
+
+      // A's data is cached, so no pending read unmounts anything: only the
+      // keys can drop B's draft and B's conflict.
+      teams.show("env-a");
+      await waitFor(() => {
+        expect(editorFor("reviewer.md").value).toBe("Text in A.");
+      });
+      expect(screen.queryByText(/Changed by Rin/)).toBeNull();
+
+      fireEvent.change(editorFor("reviewer.md"), {
+        target: { value: "A edit." },
+      });
+      fireEvent.click(
+        within(sectionFor("reviewer.md")).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(teams.puts).toHaveLength(2);
+      });
+      expect(teams.puts[0]).toMatchObject({
+        environmentId: "env-b",
+        value: { text: "B edit." },
+      });
+      expect(teams.puts[1]).toMatchObject({
+        environmentId: "env-a",
+        value: { text: "A edit." },
+        revision: 3,
+      });
+    });
   });
 });

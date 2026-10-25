@@ -262,3 +262,41 @@ describe("HostOptionRow — environment label (Tracy Bots)", () => {
     expect(queryByTestId("host-option-environment-host-b")).toBeNull();
   });
 });
+
+describe("HostOptionRow — terminal-run note", () => {
+  afterEach(cleanup);
+
+  function renderRow(terminalRunNote: string | null) {
+    return render(
+      <HostOptionRow
+        host={hostScopeOptionFixture({
+          hostId: "host-a",
+          name: "Host A",
+          terminalRunNote,
+        })}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={UNKNOWN_FLEET_UPDATE_VIEW}
+        nameRef={null}
+        environmentLabel={null}
+      />,
+    );
+  }
+
+  it("shows the note as the row's second line, under the name", () => {
+    const { getByTestId, getByText } = renderRow("Started from a terminal.");
+
+    expect(getByTestId("host-option-terminal-run-host-a").textContent).toBe(
+      "Started from a terminal.",
+    );
+    expect(getByText("Host A")).toBeDefined();
+  });
+
+  it("shows no second line without a note", () => {
+    const { queryByTestId } = renderRow(null);
+
+    expect(queryByTestId("host-option-terminal-run-host-a")).toBeNull();
+  });
+});

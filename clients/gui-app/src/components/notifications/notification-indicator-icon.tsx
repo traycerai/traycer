@@ -26,15 +26,14 @@ export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
  * may be perfectly busy on another machine.
  */
 export const UNKNOWN_ACTIVITY_TITLE =
-  "Agent status unknown. This device isn't receiving activity for its machine.";
+  "Agent status unknown. This device isn't receiving activity for its computer.";
 
 /**
  * Qualifies activity read from a union that reaches some of the account's
  * hosts but not all: what it shows is real, and more may be running where it
- * cannot see.
+ * cannot see. Current tasks pairs it with a Retry that reads again.
  */
-export const PARTIAL_ACTIVITY_NOTICE =
-  "Can't check everything that's running right now";
+export const PARTIAL_ACTIVITY_NOTICE = "Couldn't check running tasks.";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually

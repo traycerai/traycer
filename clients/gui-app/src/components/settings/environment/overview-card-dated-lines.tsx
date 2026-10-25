@@ -1,13 +1,10 @@
 import { useState, type ReactNode } from "react";
-import type { EnvironmentReviewResponse } from "@traycer/protocol/host/environment-schemas";
 import type { OverviewCardLineProps } from "@/components/settings/environment/overview-card-line-props";
 import {
   overviewDatedCopy,
   SHARED_BY_EARLIER_VERSION_DETAILS_LABEL,
   SHARED_BY_EARLIER_VERSION_LINE,
 } from "@/components/settings/move/overview-dated-lines";
-import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
-import { isReviewV11 } from "@/components/settings/move/review-v11";
 import { statusPlanesSupported } from "@/components/settings/move/status-planes-supported";
 import {
   planesFromStatus,
@@ -20,21 +17,23 @@ import {
   stopCleanup,
   type StopCleanup,
 } from "@/components/settings/move/stop-cleanup";
-import { STOP_SHARING_TITLE } from "@/components/settings/move/stop-sharing-copy";
+import {
+  STOP_SHARING_TITLE,
+  stopSharingDescription,
+} from "@/components/settings/move/stop-sharing-copy";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import { Button } from "@/components/ui/button";
-import {
-  useEnvironmentReviewRead,
-  type EnvironmentRead,
-} from "@/hooks/environment/use-environment-reads";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 
 /**
  * Overview settings-card dated lines P5 owns (shared by an earlier version,
- * stopped sharing with the cleanup it still owes, returned from a team) and
- * `Stop sharing from this computer`. `Moved to Personal on …` is E4's; P3's
+ * stopped using Personal with the cleanup it still owes, returned from a
+ * team) and `Stop using Personal on this computer` with its help line.
+ * `Moved to Personal on …` is E4's; P3's
  * `Details` line is a separate stub. The `Details` verb on the
- * earlier-version line opens the retrospective sheet.
+ * earlier-version line opens the retrospective sheet, mounted app-wide
+ * (`EnvironmentSheetsHost`), which also shows it once by itself.
  */
 export function OverviewCardDatedLines(
   props: OverviewCardLineProps,
@@ -43,20 +42,14 @@ export function OverviewCardDatedLines(
     props.client,
     "environment.status",
   );
-  const review = useEnvironmentReviewRead(props.client, props.hostId, true);
   const [stopOpen, setStopOpen] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [autoConsumed, setAutoConsumed] = useState(false);
+  const openRetrospective = useRetrospectiveSheetStore(
+    (state) => state.openSheet,
+  );
   if (!statusPlanesSupported(version)) return null;
   const planes = planesFromStatus(props.status);
   const sharedUnrecorded =
     planes !== null && planesHaveSharedUnrecorded(planes);
-  const shouldAutoOpen =
-    sharedUnrecorded && reviewNeverShown(review) && !autoConsumed;
-  if (shouldAutoOpen && !sheetOpen) {
-    setSheetOpen(true);
-    setAutoConsumed(true);
-  }
   const lines = overviewDatedCopy({
     returnedFromTeamAt: returnedFromTeamAt(props.status),
     sharedUnrecorded,
@@ -64,7 +57,7 @@ export function OverviewCardDatedLines(
   });
   const cleanup = stopCleanup(props.status);
   const offerStop = planes !== null && planesOfferStopSharing(planes);
-  if (lines.length === 0 && !offerStop && !sheetOpen) return null;
+  if (lines.length === 0 && !offerStop) return null;
   return (
     <div
       className="flex flex-col gap-2"
@@ -84,7 +77,12 @@ export function OverviewCardDatedLines(
               variant="link"
               size="inline-xs"
               data-testid="overview-shared-by-earlier-version-details"
-              onClick={() => setSheetOpen(true)}
+              onClick={() =>
+                openRetrospective({
+                  hostId: props.hostId,
+                  hostName: props.hostName,
+                })
+              }
             >
               {SHARED_BY_EARLIER_VERSION_DETAILS_LABEL}
             </Button>
@@ -97,15 +95,23 @@ export function OverviewCardDatedLines(
       )}
       {cleanup === null ? null : <StopCleanupLines cleanup={cleanup} />}
       {offerStop ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          data-testid="overview-stop-sharing"
-          onClick={() => setStopOpen(true)}
-        >
-          {STOP_SHARING_TITLE}
-        </Button>
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            data-testid="overview-stop-sharing"
+            onClick={() => setStopOpen(true)}
+          >
+            {STOP_SHARING_TITLE}
+          </Button>
+          <p
+            className="max-w-[72ch] text-ui-xs text-muted-foreground"
+            data-testid="overview-stop-sharing-help"
+          >
+            {stopSharingDescription(props.hostName)}
+          </p>
+        </>
       ) : null}
       <StopSharingSession
         client={props.client}
@@ -114,32 +120,7 @@ export function OverviewCardDatedLines(
         open={stopOpen}
         onOpenChange={setStopOpen}
       />
-      <RetrospectiveSession
-        client={props.client}
-        reviewHostId={props.hostId}
-        stopClient={props.client}
-        stopHostId={props.hostId}
-        hostName={props.hostName}
-        open={sheetOpen}
-        held={null}
-        onOpenChange={setSheetOpen}
-      />
     </div>
-  );
-}
-
-/**
- * Only an answered `@1.1` review knows the sheet was never shown; a review
- * still loading, refused or unsupported is not "never shown".
- */
-function reviewNeverShown(
-  review: EnvironmentRead<EnvironmentReviewResponse>,
-): boolean {
-  return (
-    review.supported === true &&
-    review.data !== null &&
-    isReviewV11(review.data) &&
-    review.data.shownAt === null
   );
 }
 

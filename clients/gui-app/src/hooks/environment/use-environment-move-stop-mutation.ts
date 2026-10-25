@@ -10,7 +10,7 @@ export function useEnvironmentMoveStopMutation(
   return useHostScopedMutationForClient(client, {
     method: "environment.move.stop",
     mutationKey: environmentMutationKeys.moveStop(),
-    errorMessage: "Couldn't stop sharing from this computer.",
+    errorMessage: "Couldn't stop using Personal on this computer.",
     invalidateMethods: ["environment.status"],
   });
 }

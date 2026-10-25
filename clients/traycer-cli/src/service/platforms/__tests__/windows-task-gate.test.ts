@@ -68,18 +68,22 @@ interface Harness {
   readonly deps: WindowsTaskOwnershipDeps;
   readonly queries: string[];
   readonly resolved: string[];
+  readonly hiddenAsked: string[];
 }
 
 function harness(options: {
   readonly query: ScheduledTaskXmlQuery;
   readonly callerSid: string | null;
   readonly resolve: (account: string) => string | null;
+  readonly hidden: boolean;
 }): Harness {
   const queries: string[] = [];
   const resolved: string[] = [];
+  const hiddenAsked: string[] = [];
   return {
     queries,
     resolved,
+    hiddenAsked,
     deps: {
       queryTaskXml: async (taskName) => {
         queries.push(taskName);
@@ -89,6 +93,10 @@ function harness(options: {
       resolveAccountSid: async (account) => {
         resolved.push(account);
         return options.resolve(account);
+      },
+      taskHiddenFromCaller: async (taskName) => {
+        hiddenAsked.push(taskName);
+        return options.hidden;
       },
     },
   };
@@ -166,6 +174,7 @@ describe("readWindowsTaskOwnership", () => {
       query: { kind: "xml", xml: W1_DOMAIN },
       callerSid: CALLER_SID,
       resolve: (account) => (account === "CONTOSO\\alice" ? CALLER_SID : null),
+      hidden: false,
     });
     expect(await readWindowsTaskOwnership(TASK, h.deps)).toEqual({
       kind: "caller",
@@ -179,6 +188,7 @@ describe("readWindowsTaskOwnership", () => {
       query: { kind: "xml", xml: W1_DOMAIN },
       callerSid: CALLER_SID,
       resolve: () => OTHER_SID,
+      hidden: false,
     });
     expect(await readWindowsTaskOwnership(TASK, h.deps)).toMatchObject({
       kind: "not-owned",
@@ -191,6 +201,7 @@ describe("readWindowsTaskOwnership", () => {
       query: { kind: "xml", xml: W1_DOMAIN },
       callerSid: CALLER_SID,
       resolve: () => null,
+      hidden: false,
     });
     expect(await readWindowsTaskOwnership(TASK, h.deps)).toMatchObject({
       kind: "not-owned",
@@ -203,6 +214,7 @@ describe("readWindowsTaskOwnership", () => {
       query: { kind: "xml", xml: W1_BARE },
       callerSid: CALLER_SID,
       resolve: () => CALLER_SID,
+      hidden: false,
     });
     expect((await readWindowsTaskOwnership(TASK, bare.deps)).kind).toBe(
       "caller",
@@ -215,6 +227,7 @@ describe("readWindowsTaskOwnership", () => {
       },
       callerSid: CALLER_SID,
       resolve: () => CALLER_SID,
+      hidden: false,
     });
     expect((await readWindowsTaskOwnership(TASK, dotted.deps)).kind).toBe(
       "caller",
@@ -233,6 +246,7 @@ describe("readWindowsTaskOwnership", () => {
       resolve: () => {
         throw new Error("a SID principal is never looked up");
       },
+      hidden: false,
     });
     expect((await readWindowsTaskOwnership(TASK, h.deps)).kind).toBe("caller");
     expect(h.resolved).toEqual([]);
@@ -243,6 +257,7 @@ describe("readWindowsTaskOwnership", () => {
       },
       callerSid: CALLER_SID,
       resolve: () => null,
+      hidden: false,
     });
     expect(await readWindowsTaskOwnership(TASK, other.deps)).toMatchObject({
       kind: "not-owned",
@@ -271,6 +286,7 @@ describe("readWindowsTaskOwnership", () => {
         query: c.query,
         callerSid: c.callerSid,
         resolve: () => CALLER_SID,
+        hidden: false,
       });
       expect(await readWindowsTaskOwnership(TASK, h.deps)).toMatchObject({
         kind: "not-owned",
@@ -284,6 +300,7 @@ describe("readWindowsTaskOwnership", () => {
       query: { kind: "absent" },
       callerSid: CALLER_SID,
       resolve: () => CALLER_SID,
+      hidden: false,
     });
     expect(await readWindowsTaskOwnership(TASK, h.deps)).toEqual({
       kind: "absent",
@@ -291,11 +308,65 @@ describe("readWindowsTaskOwnership", () => {
     expect(h.resolved).toEqual([]);
   });
 
+  it("a task the query finds absent or fails on, but that is hidden from the caller, is another account's", async () => {
+    const queries: readonly ScheduledTaskXmlQuery[] = [
+      { kind: "absent" },
+      { kind: "failed", reason: "the system cannot find the path specified" },
+    ];
+    for (const query of queries) {
+      const h = harness({
+        query,
+        callerSid: CALLER_SID,
+        resolve: () => CALLER_SID,
+        hidden: true,
+      });
+      expect(await readWindowsTaskOwnership(TASK, h.deps)).toMatchObject({
+        kind: "not-owned",
+        reason: "other-owner",
+      });
+      expect(h.hiddenAsked).toEqual([TASK]);
+    }
+  });
+
+  it("an absent task that is not hidden stays absent, and a failed query stays unconfirmed", async () => {
+    const absent = harness({
+      query: { kind: "absent" },
+      callerSid: CALLER_SID,
+      resolve: () => CALLER_SID,
+      hidden: false,
+    });
+    expect(await readWindowsTaskOwnership(TASK, absent.deps)).toEqual({
+      kind: "absent",
+    });
+    const failed = harness({
+      query: { kind: "failed", reason: "access denied" },
+      callerSid: CALLER_SID,
+      resolve: () => CALLER_SID,
+      hidden: false,
+    });
+    expect(await readWindowsTaskOwnership(TASK, failed.deps)).toMatchObject({
+      kind: "not-owned",
+      reason: "unconfirmed",
+    });
+  });
+
+  it("a task whose XML was read is never probed for being hidden", async () => {
+    const h = harness({
+      query: { kind: "xml", xml: taskXml(principal("A", CALLER_SID), "A") },
+      callerSid: CALLER_SID,
+      resolve: () => CALLER_SID,
+      hidden: true,
+    });
+    expect((await readWindowsTaskOwnership(TASK, h.deps)).kind).toBe("caller");
+    expect(h.hiddenAsked).toEqual([]);
+  });
+
   it("reads the task's principal again for every call: one /Query /XML per read, none cached", async () => {
     const h = harness({
       query: { kind: "xml", xml: taskXml(principal("A", CALLER_SID), "A") },
       callerSid: CALLER_SID,
       resolve: () => CALLER_SID,
+      hidden: false,
     });
     await readWindowsTaskOwnership(TASK, h.deps);
     await readWindowsTaskOwnership(TASK, h.deps);
@@ -315,6 +386,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         query: { kind: "absent" },
         callerSid: CALLER_SID,
         resolve: () => null,
+        hidden: false,
       }).deps,
     );
     expect(absent.kind).toBe("permitted");
@@ -325,6 +397,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         query: { kind: "xml", xml: taskXml(principal("A", CALLER_SID), "A") },
         callerSid: CALLER_SID,
         resolve: () => null,
+        hidden: false,
       }).deps,
     );
     expect(own.kind).toBe("permitted");
@@ -335,6 +408,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         query: { kind: "xml", xml: taskXml(principal("A", OTHER_SID), "A") },
         callerSid: CALLER_SID,
         resolve: () => null,
+        hidden: false,
       }).deps,
     );
     expect(foreign.kind).toBe("not-owned");
@@ -348,6 +422,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         query: { kind: "absent" },
         callerSid: CALLER_SID,
         resolve: () => null,
+        hidden: false,
       }).deps,
     );
     if (gate.kind !== "permitted") throw new Error("unreachable");
@@ -411,6 +486,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         query: { kind: "failed", reason: "access denied" },
         callerSid: CALLER_SID,
         resolve: () => CALLER_SID,
+        hidden: false,
       }).deps,
     );
     if (gate.kind !== "not-owned") throw new Error("unreachable");
@@ -435,6 +511,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         },
         callerSid: CALLER_SID,
         resolve: () => null,
+        hidden: false,
       }).deps,
     );
     if (gate.kind !== "not-owned") throw new Error("unreachable");
@@ -452,6 +529,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         query: { kind: "xml", xml: W1_DOMAIN },
         callerSid: CALLER_SID,
         resolve: () => OTHER_SID,
+        hidden: false,
       }).deps,
     );
     if (gate.kind !== "not-owned") throw new Error("unreachable");

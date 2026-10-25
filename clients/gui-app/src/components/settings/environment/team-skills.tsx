@@ -1,3 +1,4 @@
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import type {
   ProviderId,
@@ -20,21 +21,31 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import {
   useConfigurationSource,
   useCanEditConfiguration,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamSkillUpload } from "./team-skill-upload";
+import { ConfigurationReadFailed } from "./team-read-failed";
 
 export function TeamSkillsPage(): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
   return (
     <SettingsPanelShell
       title="Skills"
-      description="Instructions for a kind of task, available to agents running this team."
+      description={
+        personal
+          ? "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal."
+          : "Instructions for a kind of task, available to agents running this team."
+      }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <TeamSkills providerId={null} />
+      <TeamSkills key={configurationKey} providerId={null} />
     </SettingsPanelShell>
   );
 }
@@ -85,9 +96,10 @@ export function TeamSkills(props: {
         <TeamViewingHostBinding unavailable={noHost}>
           {query.isPending ? <MutedAgentSpinner /> : null}
           {query.isError ? (
-            <p role="status" className="text-ui-sm text-muted-foreground">
-              Couldn't read these skills.
-            </p>
+            <ConfigurationReadFailed
+              page="skills"
+              onRetry={() => void query.refetch()}
+            />
           ) : null}
           {props.providerId === null && providers.length > 0 ? (
             <Select

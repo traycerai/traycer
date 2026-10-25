@@ -439,7 +439,7 @@ describe("ActivityTab", () => {
       defaultTab();
 
       expect(screen.getByTestId("auto-judge-activity-empty").textContent).toBe(
-        "No Auto mode decisions on this machine yet.",
+        "No Auto mode decisions on this host yet.",
       );
       expect(screen.queryByTestId("auto-judge-activity-filter-all")).toBeNull();
     });
@@ -467,7 +467,7 @@ describe("ActivityTab", () => {
       defaultTab();
 
       expect(
-        screen.getByText(/Couldn't read this machine's recent decisions/),
+        screen.getByText(/Couldn't read this host's recent decisions/),
       ).not.toBeNull();
     });
   });

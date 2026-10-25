@@ -1,8 +1,9 @@
 /**
  * Account ▸ Credits. E4 mounts this under the `credits` row. The balance is
- * the signed-in user's remaining credits; `Add credits ↗` opens the
- * dashboard billing page; the hourly line is the staged sandbox's awake
- * price, or the default shape when none is staged.
+ * the signed-in user's remaining credits, $0.00 included (a user with no
+ * subscription has none); `Add credits ↗` opens the dashboard billing page;
+ * the hourly line is the staged sandbox's awake price, or the default shape
+ * when none is staged.
  */
 import { ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
@@ -11,6 +12,7 @@ import { CREDITS_PAGE } from "@/components/settings/panels/credits-settings.defi
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useRefreshCreditsOnTraycerTurn } from "@/hooks/auth/use-refresh-credits-on-traycer-turn";
@@ -45,7 +47,6 @@ export function CreditsSettingsPanel(): ReactNode {
   const user = query.data ?? null;
   const remainingMc = sandboxBalanceMc(user);
   const quote = sandboxHourlyQuote(catalogue.data, staged);
-  const empty = remainingMc === null || remainingMc === 0;
 
   return (
     <SettingsPanelShell
@@ -65,7 +66,7 @@ export function CreditsSettingsPanel(): ReactNode {
       <CreditsBody
         pending={query.isPending}
         error={query.isError}
-        empty={empty}
+        onRetry={() => void query.refetch()}
         remainingMc={remainingMc}
         quote={quote}
         installedApp={installedApp}
@@ -79,7 +80,7 @@ export function CreditsSettingsPanel(): ReactNode {
 function CreditsBody(props: {
   readonly pending: boolean;
   readonly error: boolean;
-  readonly empty: boolean;
+  readonly onRetry: () => void;
   readonly remainingMc: number | null;
   readonly quote: SandboxHourlyQuote | null;
   readonly installedApp: boolean;
@@ -98,11 +99,23 @@ function CreditsBody(props: {
   }
   if (props.error) {
     return (
-      <div className="text-ui-sm text-destructive" data-testid="credits-error">
-        Couldn&apos;t load your credits. Try refreshing.
+      <div
+        role="status"
+        className="flex flex-wrap items-baseline gap-x-1 text-ui-sm text-muted-foreground"
+        data-testid="credits-error"
+      >
+        {CREDITS_PAGE.readFailed}
+        <Button
+          type="button"
+          variant="link"
+          size="inline"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
         <ReportIssueAction
           context={createReportIssueContext({
-            title: "Couldn't load your credits",
+            title: "Couldn't read your credits",
             message: null,
             code: null,
             source: "Credits",
@@ -113,37 +126,12 @@ function CreditsBody(props: {
       </div>
     );
   }
-  if (props.empty) {
-    return (
-      <div
-        role="status"
-        className="flex flex-col items-start gap-3 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
-        data-testid="credits-empty"
-      >
-        <p className="max-w-[60ch] text-ui-sm text-muted-foreground">
-          {CREDITS_PAGE.description}
-        </p>
-        {props.quote !== null ? (
-          <p
-            className="text-ui-sm text-muted-foreground"
-            data-testid="credits-hourly-price"
-          >
-            {formatAwakeHourlyPrice(props.quote)}
-          </p>
-        ) : null}
-        {props.installedApp ? null : (
-          <AddCreditsButton
-            billingUrl={props.billingUrl}
-            openLink={props.openLink}
-          />
-        )}
-      </div>
-    );
-  }
   const remainingCredits = (props.remainingMc ?? 0) / MC_PER_CREDIT;
-  const remainingLabel = props.installedApp
-    ? `${formatCreditsPlain(remainingCredits)} credits`
-    : formatCredits(remainingCredits);
+  const remainingLabel = CREDITS_PAGE.remaining(
+    props.installedApp
+      ? `${formatCreditsPlain(remainingCredits)} credits`
+      : formatCredits(remainingCredits),
+  );
   return (
     <div
       className="flex flex-col items-start gap-3 rounded-lg border border-border/60 bg-card/40 px-5 py-6"

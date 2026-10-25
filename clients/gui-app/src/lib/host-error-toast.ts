@@ -662,7 +662,7 @@ function hostErrorToastForSimpleCode(
     return "This terminal is being deleted. Try again in a moment.";
   }
   if (code === "E_HOST_STORAGE_FULL") {
-    return "The host machine is out of disk space. Free some space on it, then try again.";
+    return "The host computer is out of disk space. Free some space on it, then try again.";
   }
   return null;
 }
@@ -690,7 +690,7 @@ function shareRefusalMessage(refusal: EpicShareRefusal): string {
       // on every plan, so this is a state of the epic, never of the account.
       return "This epic isn't synced to the cloud yet, so it can't be shared. The epic keeps working locally either way.";
     case "not-owned":
-      return "This epic was created on this machine by a different account, so it can't be shared from yours. Sign in with the account that created it.";
+      return "This epic was created on this computer by a different account, so it can't be shared from yours. Sign in with the account that created it.";
     case "promotion-pending":
       return sharePendingMessage(refusal.reason);
     case "refused":

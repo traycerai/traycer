@@ -32,6 +32,7 @@ import {
 } from "@/components/settings/panels/host-overview-tab-state";
 import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
+import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import {
   describeHostOfflineNotice,
@@ -1999,8 +2000,17 @@ export function HostOverviewPanel(props: {
           hostId={scope.hostId}
           enabled={usable}
         />
-        {/* Whose bots this host runs, for the host the picker names. */}
+        {/* Which configuration this host runs, for the host the picker names. */}
         <HostEnvironmentSection scope={scope} />
+        {/* The settings card, on every tab like the lines above it: whether
+            this computer's settings are its own, moving, moved, shared by an
+            earlier version or stopped. */}
+        <HostOverviewSettingsCardSlot
+          client={client}
+          hostId={scope.hostId}
+          hostName={displayName}
+          usable={usable}
+        />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs

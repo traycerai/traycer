@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
-import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import {
   PROVIDER_TAB_ORDER,
-  providerTabLabel,
   supportedTabsFor,
   tabsForView,
   type ProvidersPanelView,
@@ -244,69 +242,11 @@ describe("supportedTabsFor", () => {
       }),
     ).toEqual(["account"]);
   });
-
-  describe("the usage tab's label", () => {
-    // The tab holds managed profiles AND usage limits, but profiles exist for
-    // Claude Code, Codex, Grok, and Antigravity - so a fixed
-    // "Profiles & Limits" promised a section that is not there on the other
-    // providers.
-    const LABELS = {
-      general: "CLI & Args",
-      permissions: "Permissions",
-      account: "Account",
-      usage: "Profiles & Limits",
-      env: "Env",
-      mcp: "MCP",
-      plugins: "Plugins",
-      skills: "Skills",
-      modelProviders: "Model Providers",
-    } as const;
-
-    it("promises profiles only where profiles exist", () => {
-      for (const providerId of [
-        "claude-code",
-        "codex",
-        "grok",
-        "antigravity",
-      ] as const) {
-        expect(providerTabLabel("usage", LABELS, providerId)).toBe(
-          "Profiles & Limits",
-        );
-      }
-    });
-
-    it("names what the tab actually holds everywhere else", () => {
-      // The panel's own words: the section inside is headed "Usage limits".
-      // Every provider id except the profile-backed ones, so a newly added
-      // provider cannot regress to the profiles label without failing here.
-      const everywhereElse = providerIdSchema.options.filter(
-        (id) =>
-          id !== "claude-code" &&
-          id !== "codex" &&
-          id !== "grok" &&
-          id !== "antigravity",
-      );
-      for (const providerId of everywhereElse) {
-        expect(providerTabLabel("usage", LABELS, providerId)).toBe(
-          "Usage limits",
-        );
-      }
-    });
-
-    it("leaves every other tab's label alone", () => {
-      // Only `usage` varies, and the tab ID never does - it is the wire enum.
-      for (const tab of ["general", "env", "mcp", "skills"] as const) {
-        expect(providerTabLabel(tab, LABELS, "grok")).toBe(LABELS[tab]);
-        expect(providerTabLabel(tab, LABELS, "claude-code")).toBe(LABELS[tab]);
-      }
-    });
-  });
 });
 
 describe("tabsForView", () => {
-  // MCP servers and Skills are Personal pages of their own: the Providers page
-  // drops those two tabs and each page keeps only its own. Every other tab
-  // stays on Providers, in the order it came in.
+  // Providers keeps every tab, MCP and Skills included, in the order it came
+  // in; a page view keeps only its own tab.
   const EVERY_TAB: readonly ProviderTabKey[] = PROVIDER_TAB_ORDER;
 
   const CASES: ReadonlyArray<{
@@ -317,15 +257,7 @@ describe("tabsForView", () => {
     {
       view: "providers",
       tabs: EVERY_TAB,
-      expected: [
-        "account",
-        "usage",
-        "general",
-        "env",
-        "permissions",
-        "modelProviders",
-        "plugins",
-      ],
+      expected: EVERY_TAB,
     },
     { view: "mcp-servers", tabs: EVERY_TAB, expected: ["mcp"] },
     { view: "skills", tabs: EVERY_TAB, expected: ["skills"] },
@@ -333,12 +265,12 @@ describe("tabsForView", () => {
     // page, which is what narrows the page's provider rail.
     { view: "mcp-servers", tabs: ["general", "env", "skills"], expected: [] },
     { view: "skills", tabs: ["general", "mcp"], expected: [] },
-    // A provider with only MCP and Skills has nothing left on Providers.
-    { view: "providers", tabs: ["mcp", "skills"], expected: [] },
+    // A provider with only MCP and Skills keeps both on Providers.
+    { view: "providers", tabs: ["mcp", "skills"], expected: ["mcp", "skills"] },
     {
       view: "providers",
       tabs: ["env", "mcp", "skills", "plugins"],
-      expected: ["env", "plugins"],
+      expected: ["env", "mcp", "skills", "plugins"],
     },
   ];
 
@@ -349,9 +281,9 @@ describe("tabsForView", () => {
     },
   );
 
-  it("never gives the Providers view an mcp or skills tab, nor a page view any other tab", () => {
-    expect(tabsForView(EVERY_TAB, "providers")).not.toContain("mcp");
-    expect(tabsForView(EVERY_TAB, "providers")).not.toContain("skills");
+  it("gives the Providers view the mcp and skills tabs, and a page view no other tab", () => {
+    expect(tabsForView(EVERY_TAB, "providers")).toContain("mcp");
+    expect(tabsForView(EVERY_TAB, "providers")).toContain("skills");
     for (const view of ["mcp-servers", "skills"] as const) {
       expect(tabsForView(EVERY_TAB, view)).toHaveLength(1);
     }

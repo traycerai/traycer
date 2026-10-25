@@ -86,7 +86,7 @@ describe("status planes", () => {
     });
   });
 
-  it("offers Stop sharing only once something has moved or was shared", () => {
+  it("offers Stop using Personal only once something has moved or was shared", () => {
     const local = { records: "local", broker: "local", room: "local" } as const;
     expect(planesOfferStopSharing(local)).toBe(false);
     expect(
@@ -177,7 +177,7 @@ describe("localRowCohort on environment.status planes", () => {
     const cohort = localRowCohort(status);
     expect(cohort).toMatchObject({
       kind: "local",
-      subtitle: "partly moved",
+      subtitle: "partly in Personal",
       verb: "finish_moving",
       defaultsToLocal: false,
     });

@@ -4,3 +4,9 @@ b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings
 98763c4007b8a93d266c460f93049acd21925b36:clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question.test.tsx:generic-api-key:68
 1876741defe5e9b37e5c0fdcd03bd418bf3ce3d5:clients/gui-app/src/components/home/bots/__tests__/create-bot-form.test.tsx:generic-api-key:771
 3f92dab48f26eef8a1d336e2c462170d6f2fca1f:clients/gui-app/src/components/home/bots/__tests__/create-bot-form.test.tsx:generic-api-key:786
+8c61d896384cc4818aa0565a3b9844c4eed22d49:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3460
+8c61d896384cc4818aa0565a3b9844c4eed22d49:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3568
+8c61d896384cc4818aa0565a3b9844c4eed22d49:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:generic-api-key:524
+5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:generic-api-key:524
+5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3475
+5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3583

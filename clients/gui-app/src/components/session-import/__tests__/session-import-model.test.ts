@@ -1234,7 +1234,7 @@ describe("buildSessionImportView - Deleted Folders group", () => {
       SESSION_IMPORT_DELETED_FOLDERS_GROUP_KEY,
     );
     expect(deletedGroup.name).toBe("Deleted Folders");
-    expect(deletedGroup.path).toBe("2 folders no longer on this machine");
+    expect(deletedGroup.path).toBe("2 folders no longer on this computer");
     expect(deletedGroup.missingFolder).toBe(true);
     // Two rows across two folders, summed - not a per-folder count.
     expect(deletedGroup.totalCount).toBe(2);

@@ -21,6 +21,7 @@ import type {
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
+import { SIGNED_OUT_SEND_HINT } from "@/components/chat/composer/use-provider-reauth-gate";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -65,6 +66,7 @@ const testState = vi.hoisted(() => ({
   providers: undefined as
     | ReadonlyArray<{
         readonly providerId: string;
+        readonly auth: { readonly status: "authenticated" | "unauthenticated" };
         readonly profiles: [];
         readonly managedInstallState: {
           readonly status: "downloading";
@@ -87,6 +89,7 @@ function claudeCodeProvider(
 ): NonNullable<(typeof testState)["providers"]>[number] {
   return {
     providerId: "claude-code",
+    auth: { status: "authenticated" },
     profiles: [],
     managedInstallState,
     availabilityPending: false,
@@ -119,6 +122,12 @@ vi.mock("@/components/home/composer/composer-body", async () => {
           "Submit landing",
         ),
         props.workspaceControls,
+        props.topBanner,
+        React.createElement(
+          "span",
+          { "data-testid": "send-hint" },
+          props.workspaceDisabledHint,
+        ),
       );
     },
   };
@@ -359,6 +368,19 @@ vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
     enablePending: false,
     enableProfile: vi.fn(),
   }),
+}));
+
+// The banner's own copy and sign-in flow are held by its own suite; here it is
+// the marker that the landing composer put it above the send.
+vi.mock("@/components/chat/composer/provider-reauth-banner", () => ({
+  ProviderReauthBanner: (props: {
+    readonly providerId: string;
+    readonly reason: string;
+  }) => (
+    <div data-testid="reauth-banner">
+      {props.providerId}:{props.reason}
+    </div>
+  ),
 }));
 
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
@@ -1197,6 +1219,55 @@ describe("LandingComposer direct submit gate", () => {
       useStagedSandboxStore.getState().bySurface["landing:window-test"]
         ?.ownerId,
     ).toBe("pending-test");
+  });
+
+  it("refuses a send while the provider's terminal login is signed out, says why on the send button, and shows the sign-in banner above it", () => {
+    testState.providers = [
+      {
+        ...claudeCodeProvider(null),
+        auth: { status: "unauthenticated" },
+      },
+    ];
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+    expect(testState.submit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("send-hint").textContent).toBe(
+      SIGNED_OUT_SEND_HINT,
+    );
+    expect(screen.getByTestId("reauth-banner").textContent).toBe(
+      "claude-code:provider_unauthenticated",
+    );
+
+    act(() => {
+      answerProviders([claudeCodeProvider(null)]);
+    });
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("reauth-banner")).toBeNull();
   });
 
   it("locks editor input, paste ingestion, and workspace controls during a submission", () => {

@@ -11,8 +11,9 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
  *
  * A Personal page edits settings that follow the person to every host. The
  * host this window reads through answers for itself only, so the line names
- * it: "Applied on dev-box", "Applying Shell on dev-box", "Changes apply on
- * dev-box when it reconnects". The dashboard's Hosts page is where every host
+ * it: "Applying Shell on dev-box", "Changes apply on dev-box when it
+ * reconnects". Once everything applied it says nothing: the page's chip
+ * already reads "On dev-box". The dashboard's Hosts page is where every host
  * is compared.
  */
 
@@ -23,11 +24,9 @@ const PAGE_ITEM_KINDS: Readonly<
   providers: new Set(["managed_profile", "env_override", "pack_policy"]),
   fallback: new Set(["fallback_policy"]),
   shell: new Set(["variable", "shell"]),
-  agents: new Set(["agent_selection_guide"]),
-  "browser-agent-access": new Set(["browser_agent_access"]),
+  agents: new Set(["agent_selection_guide", "agent_definition"]),
   "mcp-servers": new Set(["mcp_server"]),
   skills: new Set(["skill"]),
-  "agent-definitions": new Set(["agent_definition"]),
   "machine-setup": new Set(["setup_script"]),
 };
 
@@ -38,7 +37,7 @@ export function personalPageItemKinds(
   return PAGE_ITEM_KINDS[section] ?? null;
 }
 
-export type PersonalPageStatusTone = "info" | "warning" | "success";
+export type PersonalPageStatusTone = "info" | "warning";
 
 export interface PersonalPageStatusLine {
   readonly tone: PersonalPageStatusTone;
@@ -93,14 +92,59 @@ const FAILURE_CASES: Readonly<
   ),
 };
 
-const SINGLETON_LABELS: Readonly<Partial<Record<string, string>>> = {
+/**
+ * The kinds a configuration holds one of, named by the Settings page or tab
+ * that owns them; their keys are storage names a person never reads.
+ */
+const PAGE_NAMED_KINDS: Readonly<Partial<Record<string, string>>> = {
   shell: "The shell",
   fallback_policy: "Model routing",
   agent_selection_guide: "Agent selection",
   browser_agent_access: "Browser agent access",
-  managed_profile: "A profile",
+  auto_policy: "Permissions",
   sandbox_defaults: "Sandbox defaults",
 };
+
+/**
+ * The page name of an item of `kind`, or `null` for a kind a person knows by
+ * each item's own name (a variable, an MCP server).
+ */
+export function itemPageName(kind: string): string | null {
+  return PAGE_NAMED_KINDS[kind] ?? null;
+}
+
+/**
+ * An env override's provider, from its item key `<providerId>:<variable>`,
+ * or `null` for a key without a known provider.
+ */
+export function envOverrideProviderName(key: string): string | null {
+  const separator = key.indexOf(":");
+  if (separator === -1) return null;
+  const providerId = key.slice(0, separator);
+  return (
+    Object.entries(PROVIDER_DISPLAY_NAMES).find(
+      ([id]) => id === providerId,
+    )?.[1] ?? null
+  );
+}
+
+/**
+ * A move or stop row's name: its page's name for a kind a configuration
+ * holds one of, `<Provider>: <variable>` for an env override, else the row's
+ * own label (a variable's or a server's name).
+ */
+export function moveRowLabel(row: {
+  readonly kind: string;
+  readonly key: string;
+  readonly label: string;
+}): string {
+  const pageName = itemPageName(row.kind);
+  if (pageName !== null) return pageName;
+  if (row.kind !== "env_override") return row.label;
+  const provider = envOverrideProviderName(row.key);
+  const variable = itemLabel(row);
+  return provider === null ? variable : `${provider}: ${variable}`;
+}
 
 /** The name a person knows an item by: a variable's own name, else the page's. */
 export function itemLabel(item: {
@@ -115,7 +159,8 @@ export function itemLabel(item: {
   if (item.kind === "pack_policy") return item.key;
   // An MCP server's item is keyed by the server's name.
   if (item.kind === "mcp_server") return item.key;
-  return SINGLETON_LABELS[item.kind] ?? "A setting";
+  if (item.kind === "managed_profile") return "A profile";
+  return itemPageName(item.kind) ?? "A setting";
 }
 
 function failedText(item: EnvironmentItemStatus, hostName: string): string {
@@ -149,7 +194,8 @@ function unsupportedText(
 /**
  * The one line a Personal page shows for `state`, or `null` for nothing to
  * say. Worst first: a host that cannot be reached, then a failure, then an
- * item this version cannot apply, then one still applying, then applied.
+ * item this version cannot apply, then one still applying; applied is the
+ * chip's to say.
  */
 export function personalPageStatusLine(
   state: PersonalHostState,
@@ -185,7 +231,7 @@ export function personalPageStatusLine(
       text: `Applying ${itemLabel(pending)} on ${hostName}.`,
     };
   }
-  return { tone: "success", text: `Applied on ${hostName}.` };
+  return null;
 }
 
 /**

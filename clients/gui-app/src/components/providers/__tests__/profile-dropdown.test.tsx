@@ -171,7 +171,10 @@ interface RenderDropdownInput {
   > | null;
 }
 
-function renderDropdown(input: RenderDropdownInput) {
+function renderDropdown(
+  input: RenderDropdownInput,
+  showTerminalBadge: boolean,
+) {
   return render(
     <ProfileDropdown
       providerLabel="Codex"
@@ -197,6 +200,7 @@ function renderDropdown(input: RenderDropdownInput) {
           : null
       }
       admissionByProfileId={input.admissionByProfileId}
+      showTerminalBadge={showTerminalBadge}
     />,
   );
 }
@@ -237,7 +241,7 @@ describe("<ProfileDropdown />", () => {
   afterEach(() => cleanup());
 
   it("moves focus between a profile row and its enablement switch", () => {
-    renderDropdown(baseDropdownInput({ activeProfileId: "ambient" }));
+    renderDropdown(baseDropdownInput({ activeProfileId: "ambient" }), true);
 
     const workRow = screen.getByRole("menuitem", { name: "Work" });
     const workSwitch = screen.getByRole("switch", {
@@ -253,7 +257,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("shows the active profile's dot and name on the closed trigger", () => {
-    renderDropdown(baseDropdownInput({}));
+    renderDropdown(baseDropdownInput({}), true);
 
     const trigger = screen.getByRole("button", {
       name: "Codex profile: Work",
@@ -268,7 +272,7 @@ describe("<ProfileDropdown />", () => {
 
   it("shows the active profile switch before the chevron without nesting it in the menu trigger", () => {
     const onSetProfileEnabled = vi.fn();
-    renderDropdown(baseDropdownInput({ onSetProfileEnabled }));
+    renderDropdown(baseDropdownInput({ onSetProfileEnabled }), true);
 
     const trigger = screen.getByRole("button", {
       name: "Codex profile: Work",
@@ -304,7 +308,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("shows the Terminal badge on the closed trigger for the ambient profile", () => {
-    renderDropdown(baseDropdownInput({ activeProfileId: null }));
+    renderDropdown(baseDropdownInput({ activeProfileId: null }), true);
 
     const trigger = screen.getByRole("button", {
       name: "Codex profile: Terminal account, Terminal",
@@ -316,8 +320,29 @@ describe("<ProfileDropdown />", () => {
     ).toBeDefined();
   });
 
+  it("leaves the Terminal badge off the trigger and the rows when the caller names that login itself", () => {
+    renderDropdown(baseDropdownInput({ activeProfileId: null }), false);
+
+    const trigger = screen.getByRole("button", {
+      name: "Codex profile: Terminal account",
+    });
+    expect(
+      within(trigger).queryByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeNull();
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    expect(
+      screen.getByRole("menuitem", { name: "Terminal account" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText("Terminal", { selector: '[data-slot="badge"]' }),
+    ).toBeNull();
+  });
+
   it("renders non-modal so nested picker clicks can dismiss only the profile menu", () => {
-    renderDropdown(baseDropdownInput({}));
+    renderDropdown(baseDropdownInput({}), true);
 
     expect(screen.getByTestId("profile-dropdown-root").dataset.modal).toBe(
       "false",
@@ -327,7 +352,7 @@ describe("<ProfileDropdown />", () => {
   it("stops only menu-owned keys from bubbling beyond the dropdown", () => {
     const onDocumentKeyDown = vi.fn();
     document.addEventListener("keydown", onDocumentKeyDown);
-    renderDropdown(baseDropdownInput({}));
+    renderDropdown(baseDropdownInput({}), true);
     const content = screen.getByTestId("profile-dropdown-content");
 
     ["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Escape"].forEach((key) =>
@@ -345,6 +370,7 @@ describe("<ProfileDropdown />", () => {
       baseDropdownInput({
         profiles: [AMBIENT, WORK, PERSONAL_SIGNED_OUT],
       }),
+      true,
     );
 
     expect(
@@ -367,6 +393,7 @@ describe("<ProfileDropdown />", () => {
         activeProfileId: null,
         profileEnablementAvailable: false,
       }),
+      true,
     );
 
     expect(screen.queryAllByRole("switch")).toHaveLength(0);
@@ -378,6 +405,7 @@ describe("<ProfileDropdown />", () => {
         profiles: [PERSONAL_DISABLED, WORK, AMBIENT],
         activeProfileId: "work-profile",
       }),
+      true,
     );
 
     const profileRows = screen.getAllByRole("menuitem").slice(0, 3);
@@ -400,6 +428,7 @@ describe("<ProfileDropdown />", () => {
         onSetProfileEnabled,
         activeProfileId: null,
       }),
+      true,
     );
 
     const workGroup = screen.getByRole("group", {
@@ -427,7 +456,10 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("explains enabled and disabled profile availability on the switches", () => {
-    renderDropdown(baseDropdownInput({ profiles: [WORK, PERSONAL_DISABLED] }));
+    renderDropdown(
+      baseDropdownInput({ profiles: [WORK, PERSONAL_DISABLED] }),
+      true,
+    );
 
     const workSwitch = within(
       screen.getByRole("group", { name: "Work profile controls" }),
@@ -454,6 +486,7 @@ describe("<ProfileDropdown />", () => {
         onSelectProfile,
         onSetProfileEnabled,
       }),
+      true,
     );
 
     const disabledGroup = screen.getByRole("group", {
@@ -487,6 +520,7 @@ describe("<ProfileDropdown />", () => {
         activeProfileId: null,
         onSelectProfile,
       }),
+      true,
     );
 
     expect(screen.getByTestId("model-profile-digit-1")).toBeDefined();
@@ -508,6 +542,7 @@ describe("<ProfileDropdown />", () => {
         onSetProfileEnabled,
         onSelectProfile,
       }),
+      true,
     );
 
     const workGroup = screen.getByRole("group", {
@@ -546,6 +581,7 @@ describe("<ProfileDropdown />", () => {
       baseDropdownInput({
         profileEnablementPending: (profileId) => profileId === "work-profile",
       }),
+      true,
     );
 
     expect(
@@ -569,6 +605,7 @@ describe("<ProfileDropdown />", () => {
         profileEnablementAvailable: false,
         profileEnablementPending: (profileId) => profileId === "work-profile",
       }),
+      true,
     );
 
     expect(
@@ -590,6 +627,7 @@ describe("<ProfileDropdown />", () => {
         profileEnablementPending: (profileId) => profileId === "work-profile",
         onSetProfileEnabled,
       }),
+      true,
     );
 
     const workSwitch = within(
@@ -613,6 +651,7 @@ describe("<ProfileDropdown />", () => {
           profileId === "work-profile" ? disabledReason : null,
         onSetProfileEnabled,
       }),
+      true,
     );
 
     const workSwitch = within(
@@ -633,7 +672,7 @@ describe("<ProfileDropdown />", () => {
 
   it("commits the clicked row's commit id, using null for the ambient row", () => {
     const onSelectProfile = vi.fn();
-    renderDropdown(baseDropdownInput({ onSelectProfile }));
+    renderDropdown(baseDropdownInput({ onSelectProfile }), true);
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -646,7 +685,7 @@ describe("<ProfileDropdown />", () => {
 
   it("shows the create-new-profile row last and invokes onCreateProfile", () => {
     const onCreateProfile = vi.fn();
-    renderDropdown(baseDropdownInput({ onCreateProfile }));
+    renderDropdown(baseDropdownInput({ onCreateProfile }), true);
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -665,6 +704,7 @@ describe("<ProfileDropdown />", () => {
         createProfileDisabledReason: "Local sign-in required.",
         shortcutHintForIndex: noShortcutHint,
       }),
+      true,
     );
 
     const row = screen.getByRole("menuitem", { name: "Create new profile" });
@@ -684,7 +724,7 @@ describe("<ProfileDropdown />", () => {
   // `shortcutHintForIndex` returns, per row, and nothing when it returns
   // `null` - `ProfileDropdown` itself owns no keybinding-formatting logic.
   it("renders each injected shortcut hint in the native Kbd component", () => {
-    renderDropdown(baseDropdownInput({}));
+    renderDropdown(baseDropdownInput({}), true);
 
     const firstHint = screen.getByTestId("model-profile-digit-1");
     const secondHint = screen.getByTestId("model-profile-digit-2");
@@ -695,7 +735,10 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("hides shortcut hints when the caller (Settings) disables them", () => {
-    renderDropdown(baseDropdownInput({ shortcutHintForIndex: noShortcutHint }));
+    renderDropdown(
+      baseDropdownInput({ shortcutHintForIndex: noShortcutHint }),
+      true,
+    );
 
     expect(screen.queryByTestId("model-profile-digit-1")).toBeNull();
   });
@@ -712,6 +755,7 @@ describe("<ProfileDropdown />", () => {
         onSelectProfile,
         shortcutHintForIndex: hintOnlyForFirstRow,
       }),
+      true,
     );
 
     expect(screen.getByTestId("model-profile-digit-1")).toBeDefined();
@@ -721,7 +765,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("marks the active row with aria-current and leaves inactive rows unmarked", () => {
-    renderDropdown(baseDropdownInput({}));
+    renderDropdown(baseDropdownInput({}), true);
 
     expect(
       screen
@@ -755,6 +799,7 @@ describe("<ProfileDropdown />", () => {
         onSelectProfile,
         admissionByProfileId,
       }),
+      true,
     );
 
     // The accessible label folds in the admission reason (amend-01 Fix 5) so
@@ -801,6 +846,7 @@ describe("<ProfileDropdown />", () => {
         onSelectProfile,
         admissionByProfileId,
       }),
+      true,
     );
 
     // The accessible label folds in the admission reason (amend-01 Fix 5) so
@@ -832,6 +878,7 @@ describe("<ProfileDropdown />", () => {
         activeProfileId: null,
         admissionByProfileId,
       }),
+      true,
     );
 
     const blocked = screen.getByRole("menuitem", { name: "Work" });

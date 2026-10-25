@@ -93,4 +93,33 @@ describe("the Personal page chip's hosts", () => {
 
     expect(screen.getByRole("button").textContent).toBe("✓ On MacBook Pro");
   });
+
+  it("says Not on any computer or sandbox while no computer runs Personal", () => {
+    const hosts = [
+      hostScopeOptionFixture({
+        hostId: "mac",
+        name: "MacBook Pro",
+        isLocalMachine: true,
+        registered: false,
+        item: null,
+      }),
+    ];
+    reads.scope = hostScopeFixture({
+      hosts,
+      host: hosts[0],
+      activeHostId: "mac",
+    });
+    reads.statuses.set("mac", environmentStatusFixture({ principal: null }));
+    reads.versions.set("mac", { major: 1, minor: 1 });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PageChip section="mcp-servers" pick={PERSONAL_PICK} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button").textContent).toBe(
+      "Not on any computer or sandbox",
+    );
+  });
 });
