@@ -408,14 +408,21 @@ export function reduceRequestTargetToPath(value: string): string {
 }
 
 /**
- * One space-free word of a home folder's name that a separator closes: any
- * character but a separator and those no folder name holds on any OS (`"`,
- * `:`, `<`, `>`, `|`, `*`, `?`, and `` ` ``, which only quotes one), so a
- * Windows name's apostrophe or parentheses (`Syn'thetic`, `Name (Work)`) stay
- * inside it. Leaving out `<` and `>` is also what makes the rule idempotent:
- * `<redacted>` is not a name.
+ * A character of a home folder's name: any but a separator, whitespace, a
+ * quote or bracket, and those no folder name holds on any OS (`:`, `|`, `*`,
+ * `?`, and `<` and `>`, which is also what makes the rule idempotent:
+ * `<redacted>` is not a name).
  */
-const HOME_FOLDER_NAME_WORD = String.raw`[^\s/\\:"\x60<>|*?]+`;
+const HOME_FOLDER_NAME_LETTER = String.raw`[^\s/\\:'"\x60<>|*?()\[\]{}]`;
+
+/**
+ * One space-free word of a name a separator or a closing delimiter ends. A
+ * Windows name's apostrophe or parentheses (`O'Brien`, `Syn'thetic`,
+ * `Name (Work)`, `a(b)`) stay inside it, but only between its letters or as a
+ * whole `(...)` group, so no word ends on a quote: `'/home/a b' to '/home/c/x'`
+ * holds two names, not one running from `a` to the second path's slash.
+ */
+const HOME_FOLDER_NAME_WORD = String.raw`(?:\(${HOME_FOLDER_NAME_LETTER}+\)|${HOME_FOLDER_NAME_LETTER}+(?:['()]${HOME_FOLDER_NAME_LETTER}+)*\)?)`;
 
 /**
  * A name nothing closes (the path ends at it): also stops at the characters
@@ -447,12 +454,39 @@ const HOME_ROOT_START = String.raw`^(?:null)?|[\s"'\x60(\[{<>=,;|]|:(?!//[^/])`;
 const HOME_ROOT_MOUNT = String.raw`[/\\]+(?:mnt[/\\]+[a-z]|cygdrive[/\\]+[a-z]|([a-z])|(?:System[/\\]+)?Volumes[/\\]+[^/\\\r\n]+|usr|var|wsl(?:\$|\.localhost)[/\\]+[^\s/\\]+)`;
 
 /**
+ * The delimiters that close a quoted or bracketed path, each mapped to the
+ * opener it pairs with.
+ */
+const HOME_PATH_OPENER_OF_CLOSER: ReadonlyMap<string, string> = new Map([
+  ["'", "'"],
+  ['"', '"'],
+  ["`", "`"],
+  [")", "("],
+  ["]", "["],
+  ["}", "{"],
+  [">", "<"],
+]);
+const HOME_PATH_OPENERS: ReadonlySet<string> = new Set(
+  HOME_PATH_OPENER_OF_CLOSER.values(),
+);
+
+/** A closer no name letter follows, so not an apostrophe inside a name. */
+const HOME_PATH_CLOSER = String.raw`['"\x60)\]}>](?!${HOME_FOLDER_NAME_LETTER})`;
+
+/**
+ * How far before a home root its opener may stand: past a drive, a `\\?\`
+ * prefix or a `file:///` scheme (`'C:\Users\...`, `"file:///Users/..."`).
+ */
+const HOME_PATH_OPENER_LOOKBACK = 16;
+
+/**
  * The segment right after a `Users` (macOS, Windows) or `home` (Linux) root
  * that starts an absolute path, under either separator, and under doubled ones
- * (a JSON-escaped Windows path). Where a separator follows, the whole segment
- * goes, with any run of spaces or tabs before or between its words (a macOS
- * full-name folder, `/Users/Mary Jane/...`); where none does, only the bare
- * name, so `/Users/name is missing` and `'/home/name' failed, see /tmp/x`
+ * (a JSON-escaped Windows path). Where a separator follows, or a delimiter
+ * that closes the path's quote or bracket, the whole segment goes, with any
+ * run of spaces or tabs before or between its words (a macOS full-name folder,
+ * `/Users/Mary Jane/...`, `scandir '/Users/Mary Jane'`); where neither does,
+ * only the bare name, so `/Users/name is missing` and `see /home/name) here`
  * keep their prose. Whitespace after the last word is not taken, so a home
  * root in prose (`under /Users/ and /home/`) is not read as a name.
  *
@@ -460,9 +494,29 @@ const HOME_ROOT_MOUNT = String.raw`[/\\]+(?:mnt[/\\]+[a-z]|cygdrive[/\\]+[a-z]|(
  * take its characters.
  */
 const HOME_FOLDER_NAME_PATTERN = new RegExp(
-  String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
+  String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\]|${HOME_PATH_CLOSER})|${HOME_FOLDER_NAME_BARE})`,
   "gi",
 );
+
+const HOME_FOLDER_NAME_BARE_PREFIX = new RegExp(
+  `^${HOME_FOLDER_NAME_BARE}`,
+  "i",
+);
+
+/**
+ * The opener a home path at `index` stands inside: the nearest quote or
+ * opening bracket before it, within {@link HOME_PATH_OPENER_LOOKBACK} and with
+ * no whitespace between.
+ */
+function homePathOpener(value: string, index: number): string | undefined {
+  const stop = Math.max(-1, index - HOME_PATH_OPENER_LOOKBACK);
+  for (let at = index; at > stop; at -= 1) {
+    const char = value.charAt(at);
+    if (HOME_PATH_OPENERS.has(char)) return char;
+    if (/\s/.test(char)) return undefined;
+  }
+  return undefined;
+}
 
 /**
  * The OS account's home-folder name, wherever an absolute path carries it:
@@ -487,9 +541,25 @@ export function redactHomeDirectoryNames(value: string): string {
       root: string,
       driveLetter: string | undefined,
       rootName: string,
-    ) =>
-      driveLetter !== undefined && rootName !== "Users"
-        ? path
-        : `${root}${REDACTED}`,
+      name: string,
+      offset: number,
+    ) => {
+      if (driveLetter !== undefined && rootName !== "Users") return path;
+      // A name a closer ended only when the closer pairs with the path's
+      // opener; past a stray one it is the bare name and the rest is prose.
+      const closerOpener = HOME_PATH_OPENER_OF_CLOSER.get(
+        value.charAt(offset + path.length),
+      );
+      if (
+        closerOpener !== undefined &&
+        homePathOpener(value, offset) !== closerOpener
+      ) {
+        const bare = HOME_FOLDER_NAME_BARE_PREFIX.exec(name)?.[0];
+        return bare === undefined
+          ? path
+          : `${root}${REDACTED}${name.slice(bare.length)}`;
+      }
+      return `${root}${REDACTED}`;
+    },
   );
 }

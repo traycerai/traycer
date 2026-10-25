@@ -278,6 +278,56 @@ describe("redactHomeDirectoryNames", () => {
       "@/components/home/landing-draft-surface",
       "@/components/home/landing-draft-surface",
     ],
+    // A multiword name ends at the delimiter that closes its quote or bracket.
+    [
+      "ENOENT: no such file or directory, scandir '/Users/Syn Thetic'",
+      "ENOENT: no such file or directory, scandir '/Users/<redacted>'",
+    ],
+    [
+      "EACCES: permission denied, lstat '/home/Syn Thetic'",
+      "EACCES: permission denied, lstat '/home/<redacted>'",
+    ],
+    [
+      "ENOENT: no such file or directory, watch 'C:\\Users\\Syn Thetic'",
+      "ENOENT: no such file or directory, watch 'C:\\Users\\<redacted>'",
+    ],
+    ['open "/Users/Syn Thetic"', 'open "/Users/<redacted>"'],
+    ["(/Users/Syn Thetic)", "(/Users/<redacted>)"],
+    ["`/Users/Syn Thetic`", "`/Users/<redacted>`"],
+    ["[/Users/Syn Thetic]", "[/Users/<redacted>]"],
+    ["{/home/Syn Thetic}", "{/home/<redacted>}"],
+    ['{"cwd":"/home/Syn Thetic"}', '{"cwd":"/home/<redacted>"}'],
+    ["'C:\\Users\\Syn (Work)'", "'C:\\Users\\<redacted>'"],
+    // Two quoted paths on one line: each path's name is its own.
+    [
+      "copy '/home/syn a' to '/home/syn b/x'",
+      "copy '/home/<redacted>' to '/home/<redacted>/x'",
+    ],
+    [
+      "copy '/home/syna' to '/home/synb/x'",
+      "copy '/home/<redacted>' to '/home/<redacted>/x'",
+    ],
+    [
+      "'/home/syn' and '/home/other/x'",
+      "'/home/<redacted>' and '/home/<redacted>/x'",
+    ],
+    [
+      "(/home/syn a) and (/home/syn b/x)",
+      "(/home/<redacted>) and (/home/<redacted>/x)",
+    ],
+    // An apostrophe or parentheses inside a name stay part of it.
+    ["'/Users/O'Brien Syn/x'", "'/Users/<redacted>/x'"],
+    ["'/Users/O'Brien'", "'/Users/<redacted>'"],
+    ["'/Users/O'Brien Syn'", "'/Users/<redacted>'"],
+    ["C:\\Users\\Syn (Work) Two\\x", "C:\\Users\\<redacted>\\x"],
+    ["C:\\Users\\a(b)\\x", "C:\\Users\\<redacted>\\x"],
+    // A closer that pairs with no opener ends only the bare name; a route keeps its segment.
+    ["at /Users/syn is gone)", "at /Users/<redacted> is gone)"],
+    ["POST /api/collab/users/lookup'", "POST /api/collab/users/lookup'"],
+    [
+      "'https://credit.test/api/collab/users/lookup'",
+      "'https://credit.test/api/collab/users/lookup'",
+    ],
   ])("rewrites %j to %j", (input, expected) => {
     expect(redactHomeDirectoryNames(input)).toBe(expected);
     expect(redactHomeDirectoryNames(expected)).toBe(expected);

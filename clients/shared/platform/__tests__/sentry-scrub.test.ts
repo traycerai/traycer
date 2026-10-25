@@ -148,6 +148,27 @@ describe("shared client Sentry scrub", () => {
       expect(json).not.toContain("SyntheticUser");
     });
 
+    it("redacts a multiword home name a quote closes, and each of two quoted paths", () => {
+      const event: ClientSentryEvent = {
+        breadcrumbs: [{ message: "copy '/home/syn a' to '/home/syn b/x'" }],
+        exception: {
+          values: [
+            {
+              value:
+                "ENOENT: no such file or directory, scandir 'C:\\Users\\Syn Thetic'",
+            },
+          ],
+        },
+      };
+      scrubSentryEventInPlace(event);
+      expect(event.exception?.values?.[0]?.value).toBe(
+        "ENOENT: no such file or directory, scandir 'C:\\Users\\<redacted>'",
+      );
+      expect(event.breadcrumbs?.[0]?.message).toBe(
+        "copy '/home/<redacted>' to '/home/<redacted>/x'",
+      );
+    });
+
     it("keeps a module id with a home segment in a console breadcrumb and still redacts a frame path", () => {
       // The line `appLogger.warn` writes for a failed chunk warm-up.
       const line = `[traycer-log] ${JSON.stringify({
