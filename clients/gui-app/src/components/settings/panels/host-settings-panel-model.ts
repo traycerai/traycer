@@ -141,7 +141,7 @@ export function statusDescription(
     case "stopped":
       return "Installed, but the host process isn't running.";
     case "not-installed":
-      return "No host is installed on this machine yet.";
+      return "No host is installed on this computer yet.";
     case undefined:
       return "Checking the local host…";
   }

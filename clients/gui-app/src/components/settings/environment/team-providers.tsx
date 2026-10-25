@@ -31,15 +31,26 @@ import {
 } from "./configuration-write-issue";
 import { TeamTextItems } from "./team-text-items";
 import { TeamProfileItem, TeamPackItem } from "./team-provider-items";
-import { TeamMcpItems } from "./team-mcp-servers";
+import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { TeamPlans } from "./team-plans";
 import { TeamProviderKeys } from "./team-provider-keys";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
-import { TeamSkills } from "./team-skills";
+import { EnvironmentProviderSkillsTab } from "./environment-skills";
+import { ConfigurationReadFailed } from "./team-read-failed";
+import { usePickedTeamLabel } from "./team-pick-label";
+import {
+  useConfigurationIsPersonal,
+  useConfigurationSource,
+} from "./configuration-source";
 
 export function TeamProviders(): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const source = useConfigurationSource();
+  const teamName =
+    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
+    "this team";
   const query = useConfigurationProviderItemsQuery();
   const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
@@ -74,15 +85,20 @@ export function TeamProviders(): ReactNode {
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Plans, keys and settings for agents running this team."
+      description={
+        personal
+          ? "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal."
+          : `Plans, keys and settings for each coding agent, on every host running ${teamName}.`
+      }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationWriteFeedback issue={issue} />
       {query.isPending ? <MutedAgentSpinner /> : null}
       {query.isError ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Couldn't read these provider settings.
-        </p>
+        <ConfigurationReadFailed
+          page="providers"
+          onRetry={() => void query.refetch()}
+        />
       ) : null}
       {query.data === undefined ? null : (
         <>
@@ -194,10 +210,10 @@ export function TeamProviders(): ReactNode {
                 />
               </TabsContent>
               <TabsContent value="mcp">
-                <TeamMcpItems providerId={harness} />
+                <EnvironmentProviderMcpTab providerId={providerId} />
               </TabsContent>
               <TabsContent value="skills">
-                <TeamSkills providerId={providerId} />
+                <EnvironmentProviderSkillsTab providerId={providerId} />
               </TabsContent>
               <TabsContent value="pack" className="flex flex-col gap-3">
                 {packIds.map((id) => (

@@ -26,6 +26,7 @@ import {
   agentActivityPlaneAnswers,
   agentActivityPlaneCoversHost,
   openAgentActivityStream,
+  rereadAgentActivity,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 
@@ -562,5 +563,40 @@ describe("agent activity stream epoch handoff", () => {
     expect(hostSlice(HOST_ID).byEpic.get(EPIC_ID)?.working).toEqual(
       new Set([AGENT_ID]),
     );
+  });
+
+  it("rereadAgentActivity closes each open stream's client and subscribes a fresh one, and a disposed stream is left alone", () => {
+    const sessionA = new StubSession();
+    const clientA = new StubHostStreamClient(sessionA, "host-stream-a");
+    const subscribeA = vi.spyOn(clientA, "subscribe");
+    const sessionB = new StubSession();
+    const clientB = new StubHostStreamClient(sessionB, "host-stream-b");
+    const subscribeB = vi.spyOn(clientB, "subscribe");
+    const reconnectEngine = createStubReconnectEngine();
+    openAgentActivityStream({
+      hostId: "host-a",
+      reconnectEngine,
+      wsStreamClient: clientA,
+      onAuthError: null,
+      plane: null,
+    });
+    const disposeB = openAgentActivityStream({
+      hostId: "host-b",
+      reconnectEngine,
+      wsStreamClient: clientB,
+      onAuthError: null,
+      plane: null,
+    });
+    expect(subscribeA).toHaveBeenCalledTimes(1);
+    expect(subscribeB).toHaveBeenCalledTimes(1);
+
+    disposeB();
+    sessionB.close.mockClear();
+    rereadAgentActivity();
+
+    expect(sessionA.close).toHaveBeenCalledOnce();
+    expect(subscribeA).toHaveBeenCalledTimes(2);
+    expect(subscribeB).toHaveBeenCalledTimes(1);
+    expect(sessionB.close).not.toHaveBeenCalled();
   });
 });

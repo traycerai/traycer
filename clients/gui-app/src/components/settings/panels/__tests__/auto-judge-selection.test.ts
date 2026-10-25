@@ -380,7 +380,7 @@ describe("judgeWarningCause", () => {
 describe("the pick lines", () => {
   it("names the provider in the no-models line", () => {
     expect(judgeNoModelsLine("Codex")).toBe(
-      "Codex offers no models on this machine. Pick another provider.",
+      "Codex offers no models on this host. Pick another provider.",
     );
   });
 

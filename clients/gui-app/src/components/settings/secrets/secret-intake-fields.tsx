@@ -108,8 +108,12 @@ function DestinationFields(props: {
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)]">
       <Field
         id="secret-hosts"
-        label="Host"
-        hint="Separate several hosts with commas."
+        label="Server address"
+        hint={
+          state.kind === "database"
+            ? "Separate several with commas."
+            : "Where this key is sent, e.g. api.stripe.com. Separate several with commas."
+        }
       >
         <Input
           id="secret-hosts"
@@ -377,9 +381,11 @@ function ModeFields(props: {
               <Label htmlFor={`secret-mode-${mode}`}>
                 {SECRET_MODE_LABEL[mode]}
               </Label>
-              <span className="text-ui-xs text-muted-foreground">
-                {SECRET_MODE_CONSEQUENCE[mode]}
-              </span>
+              {SECRET_MODE_CONSEQUENCE[mode] === null ? null : (
+                <span className="text-ui-xs text-muted-foreground">
+                  {SECRET_MODE_CONSEQUENCE[mode]}
+                </span>
+              )}
             </div>
           </div>
         ))}

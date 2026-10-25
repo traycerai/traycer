@@ -1,5 +1,4 @@
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient } from "@/lib/host";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 
@@ -7,7 +6,7 @@ import { useConfigurationSource } from "@/components/settings/environment/config
 export function useConfigurationAdminNames() {
   const source = useConfigurationSource();
   const result = useEnvironmentMembersList(
-    usePoolTierHostClient(useHostClient()),
+    useHostClient(),
     source.kind === "pool" ? source.environmentId : null,
     source.kind === "pool",
   );

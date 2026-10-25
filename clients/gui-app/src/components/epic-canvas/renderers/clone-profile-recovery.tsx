@@ -96,6 +96,7 @@ export function CloneProfileRecovery(props: {
             profileEnablementPending={null}
             eligibilityControls={null}
             admissionByProfileId={null}
+            showTerminalBadge
           />
         </div>
       ) : (

@@ -1,28 +1,30 @@
-import type { EnvironmentMoveStopPreviewResponse } from "@traycer/protocol/host/environment/move-contracts";
+import type { EnvironmentMoveStopPreviewResponseV11 } from "@traycer/protocol/host/environment/move-contracts";
 import type {
   StopManagedRow,
   StopNeedsChoiceRow,
 } from "@/components/settings/move/stop-sharing-choices";
+import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
 
 export function stopManagedFromPreview(
-  preview: EnvironmentMoveStopPreviewResponse,
+  preview: EnvironmentMoveStopPreviewResponseV11,
 ): readonly StopManagedRow[] {
   return preview.managed.map((row) => ({
     kind: row.kind,
     key: row.key,
-    label: row.label,
+    label: moveRowLabel(row),
     detail: row.detail,
   }));
 }
 
 export function stopNeedsChoiceFromPreview(
-  preview: EnvironmentMoveStopPreviewResponse,
+  preview: EnvironmentMoveStopPreviewResponseV11,
 ): readonly StopNeedsChoiceRow[] {
   return preview.needsChoice.map((entry) => ({
     kind: entry.row.kind,
     key: entry.row.key,
-    label: entry.row.label,
+    label: moveRowLabel(entry.row),
     detail: entry.row.detail,
-    reason: entry.reason,
+    origin: entry.origin,
+    usedBy: entry.usedBy.map(moveRowLabel),
   }));
 }

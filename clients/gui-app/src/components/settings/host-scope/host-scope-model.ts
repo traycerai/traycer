@@ -62,6 +62,13 @@ export interface HostScopeOption {
    * belongs to the local host controller and says nothing about anyone else's.
    */
   readonly settingUp: boolean;
+  /**
+   * Why this machine's host is left alone, as the row's second line: main's
+   * words for an ensure refused over a host a person started in a terminal
+   * that does not answer, or `null`. Only ever this machine's, like
+   * `settingUp`, and settled - never shown under a lane job in flight.
+   */
+  readonly terminalRunNote: string | null;
   /** Present in the account's host registry. */
   readonly registered: boolean;
   readonly platform: string | null;
@@ -134,6 +141,8 @@ export interface BuildHostScopeOptionsInput {
    * the selection authority's ensure, or a user's Retry asked for it.
    */
   readonly localHostSettingUp: boolean;
+  /** See `HostScopeOption.terminalRunNote`, for this machine. */
+  readonly localHostTerminalRunNote: string | null;
   /**
    * The control plane's sandbox rows, or `null` until `GET /api/sandboxes`
    * has answered (or while it fails), which keeps every sandbox's `summary`
@@ -166,7 +175,7 @@ export function buildHostScopeOptions(
       isLocalMachine,
       isActive: hostId === input.activeHostId,
       connectable: isAdministrableRoute(entry, input.hasLiveSession(hostId)),
-      settingUp: isLocalMachine && input.localHostSettingUp,
+      ...localLaneFacts(isLocalMachine, input),
       registered: item !== null,
       platform: item?.platform ?? null,
       version: item?.status.appVersion ?? entry?.version ?? null,
@@ -194,6 +203,21 @@ export function buildHostScopeOptions(
 }
 
 /**
+ * What the local host controller's lane says of a row: only ever about this
+ * machine, so every other host is not setting up and carries no note.
+ */
+function localLaneFacts(
+  isLocalMachine: boolean,
+  input: BuildHostScopeOptionsInput,
+): Pick<HostScopeOption, "settingUp" | "terminalRunNote"> {
+  if (!isLocalMachine) return { settingUp: false, terminalRunNote: null };
+  return {
+    settingUp: input.localHostSettingUp,
+    terminalRunNote: input.localHostTerminalRunNote,
+  };
+}
+
+/**
  * A sandbox the control plane lists before any host row exists for it: its
  * guest has not enrolled yet (`creating`), or never will (`failed`, `lost`),
  * so authn has nothing to list. The host list shows it so the
@@ -212,6 +236,7 @@ function unenrolledSandboxOption(
     isActive: summary.hostId === input.activeHostId,
     connectable: false,
     settingUp: false,
+    terminalRunNote: null,
     registered: false,
     platform: null,
     version: null,
@@ -633,6 +658,7 @@ export function unavailableHostOption(
     // installing: the mutation lane only ever describes THIS machine, and this
     // stand-in is by definition some other one.
     settingUp: false,
+    terminalRunNote: null,
     registered: false,
     platform: null,
     version: null,

@@ -31,6 +31,7 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
@@ -51,6 +52,7 @@ const HOST_NAME = "dev-box";
 const OFFLINE_LINE = "Changes apply on dev-box when it reconnects.";
 
 afterEach(() => {
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
@@ -137,6 +139,10 @@ function mountPageOver(first: EnvironmentStatusResponseV11): MountedPage {
     "environment.status",
     "environment.localOverrides",
   ]);
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,

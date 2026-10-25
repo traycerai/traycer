@@ -130,7 +130,15 @@ export function buildAccessHostOn(
       "environment.review": () => {
         reads.review += 1;
         return {
-          entries: [...state.review],
+          // A row a test built as `@1.2` keeps its facts.
+          entries: state.review.map((entry) => ({
+            command: null,
+            event: null,
+            description: null,
+            harness: null,
+            value: null,
+            ...entry,
+          })),
           shownAt: null,
           acknowledgedAt: null,
           evidence: { version: null, at: null },

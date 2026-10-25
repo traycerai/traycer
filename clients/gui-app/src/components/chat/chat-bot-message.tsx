@@ -8,6 +8,9 @@ import type {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RetrospectiveSheetReview } from "@/components/settings/move/retrospective-sheet-link";
+import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
+import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overview-dated-lines";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -246,6 +249,18 @@ const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
   question: "border-l-chart-2",
 };
 
+/**
+ * Tracy's message on a computer an earlier version shared is a record, not a
+ * proposal: it carries the retrospective sheet's link, and is labelled with
+ * the Overview's own line.
+ */
+function announcementLabel(announcement: BotAnnouncement): string {
+  return announcement.link !== null &&
+    retrospectiveSheetLinkHostId(announcement.link) !== null
+    ? SHARED_BY_EARLIER_VERSION_LINE
+    : ANNOUNCEMENT_LABELS[announcement.kind];
+}
+
 function BotAnnouncementBody(props: {
   readonly announcement: BotAnnouncement;
   readonly children: ReactNode;
@@ -260,7 +275,7 @@ function BotAnnouncementBody(props: {
       )}
     >
       <span className="text-ui-sm font-semibold text-foreground">
-        {ANNOUNCEMENT_LABELS[announcement.kind]}
+        {announcementLabel(announcement)}
       </span>
       {props.children}
       {announcement.link === null ? null : (
@@ -304,10 +319,19 @@ function ReplyOptions(props: {
   );
 }
 
-/** An http(s) link opens; an epic-relative path is shown as the path it is. */
+/**
+ * An http(s) link opens; a retrospective sheet link is the message's Review
+ * action; any other epic-relative path is shown as the path it is.
+ */
 function AnnouncementLink(props: { readonly link: string }): ReactElement {
   const openLink = useOpenLink();
   const isWebLink = /^https?:\/\//i.test(props.link);
+  const reviewHostId = isWebLink
+    ? null
+    : retrospectiveSheetLinkHostId(props.link);
+  if (reviewHostId !== null) {
+    return <RetrospectiveSheetReview hostId={reviewHostId} />;
+  }
   if (!isWebLink) {
     return (
       <code className="truncate text-ui-xs text-muted-foreground">

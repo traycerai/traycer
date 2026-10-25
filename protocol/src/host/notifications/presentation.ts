@@ -143,7 +143,7 @@ function environmentNotificationPresentation(
         title: "Move to Personal stalled",
         body:
           known?.kind === "environment_move_stalled"
-            ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not moved yet`
+            ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not in Personal yet`
             : "A computer's move to Personal stopped before it finished",
       };
     case "environment.apply.failed":

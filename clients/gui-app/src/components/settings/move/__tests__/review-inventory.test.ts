@@ -71,6 +71,45 @@ describe("sharedInUseFromItems", () => {
   });
 });
 
+describe("sharedInUseFromItems naming", () => {
+  it("names a one-of-a-kind item by its page, with no count and no names", () => {
+    expect(
+      sharedInUseFromItems([
+        item("shell", "default", "applied"),
+        item("browser_agent_access", "browser", "applied"),
+        item("auto_policy", "auto", "applied"),
+      ]).map((row) => [row.label, row.names]),
+    ).toEqual([
+      ["The shell", []],
+      ["Browser agent access", []],
+      ["Permissions", []],
+    ]);
+  });
+
+  it("groups env overrides per provider, naming the variables without the provider prefix", () => {
+    const rows = sharedInUseFromItems([
+      item("env_override", "claude-code:ANTHROPIC_BASE_URL", "applied"),
+      item("env_override", "claude-code:ANTHROPIC_MODEL", "applied"),
+      item("env_override", "codex:OPENAI_BASE_URL", "applied"),
+    ]);
+    expect(rows.map((row) => [row.label, row.names])).toEqual([
+      ["2 Claude Code env settings", ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"]],
+      ["1 Codex env setting", ["OPENAI_BASE_URL"]],
+    ]);
+  });
+
+  it("keeps variables counted, with their names", () => {
+    const [row] = sharedInUseFromItems([
+      item("variable", "LOG_LEVEL", "applied"),
+      item("variable", "EDITOR", "applied"),
+    ]);
+    expect([row.label, row.names]).toEqual([
+      "2 variables",
+      ["LOG_LEVEL", "EDITOR"],
+    ]);
+  });
+});
+
 describe("roomSharedLine", () => {
   const shared: EnvironmentPlanes = {
     records: "shared_unrecorded",

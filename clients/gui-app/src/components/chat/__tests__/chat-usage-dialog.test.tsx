@@ -226,7 +226,7 @@ describe("<ChatUsageDialog />", () => {
     // the loaded branch has to survive the route into empty.
     expect(
       screen.getByTestId("usage-served-by-local-note").textContent,
-    ).toContain("This machine's usage only");
+    ).toContain("This computer's usage only");
   });
 
   it("absorbs the sheet's bottom safe-area inset in the body, having no footer", async () => {

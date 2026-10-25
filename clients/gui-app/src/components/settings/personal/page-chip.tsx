@@ -1,16 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
-import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
-import {
-  isEnvironmentComputer,
-  localPickerRow,
-} from "@/components/settings/environment/environment-picker-model";
+import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
 import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
 import { hostConfigurationChip } from "@/components/settings/environment/status-chip-hosts";
@@ -41,6 +36,8 @@ function PageChipContent(props: {
   readonly section: SettingsSectionId;
   readonly environmentId: string;
   readonly hosts: readonly ConfigurationChipHost[];
+  /** The chip while no host runs the configuration. */
+  readonly emptyText: string;
 }): ReactNode {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const hostIds = useMemo(
@@ -56,6 +53,7 @@ function PageChipContent(props: {
     <>
       <ConfigurationStatusChip
         hosts={props.hosts}
+        emptyText={props.emptyText}
         savingOffline={savingOffline}
         local={false}
         onDetails={() => setDetailsOpen(true)}
@@ -69,6 +67,7 @@ function PageChipContent(props: {
           key: props.section,
         }}
         title="Settings delivery"
+        controls={null}
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
       />
@@ -83,24 +82,13 @@ function PersonalPageChip(props: {
   const client = useHostClient();
   const environmentId = useDetailsEnvironmentId(client);
   const queryClient = useQueryClient();
-  const hosts = useMemo(
-    () => scope.hosts.filter(isEnvironmentComputer),
-    [scope.hosts],
-  );
-  const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);
-  const statuses = useRegisteredHostEnvironmentStatuses(hosts);
-  const versions = useHostNegotiatedMethodVersions(
-    hostIds,
-    "environment.status",
-  );
+  const {
+    computers: hosts,
+    statuses,
+    versions,
+    participants,
+  } = usePersonalComputers(true);
   const kinds = chipPageKinds(props.section);
-  const participants = hosts.filter((host) => {
-    const status = statuses.get(host.hostId) ?? null;
-    return (
-      status?.principal?.kind === "personal" &&
-      localPickerRow(host, status, versions.get(host.hostId) ?? null) === null
-    );
-  });
   const chips = participants.map((host) => {
     const status = statuses.get(host.hostId) ?? null;
     const readAt =
@@ -135,6 +123,7 @@ function PersonalPageChip(props: {
       section={props.section}
       environmentId={environmentId}
       hosts={chips}
+      emptyText="Not on any computer or sandbox"
     />
   );
 }
@@ -143,11 +132,7 @@ function TeamPageChip(props: {
   readonly section: SettingsSectionId;
   readonly environmentId: string;
 }): ReactNode {
-  const surfaceClient = useHostClient();
-  const client = useMemo(
-    () => resolvePoolTierHostClient(surfaceClient),
-    [surfaceClient],
-  );
+  const client = useHostClient();
   const viewerUserId = useCloudChatViewerId();
   const hosts = useHostQuery<HostRpcRegistry, "environment.host.list">({
     client,
@@ -200,6 +185,7 @@ function TeamPageChip(props: {
       section={props.section}
       environmentId={props.environmentId}
       hosts={chips}
+      emptyText="No hosts yet"
     />
   );
 }

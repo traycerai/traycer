@@ -14,10 +14,7 @@ import {
   KEEP_AS_SECRET,
   KEEP_AS_VARIABLE,
   LEAVE_ON_THIS_COMPUTER_ONLY,
-  NO_MOVE_SHEET_ACCEPTANCE,
-  RETROSPECTIVE_EVIDENCE_UNKNOWN,
   RETROSPECTIVE_GOT_IT,
-  RETROSPECTIVE_STOP_SHARING,
   type HeldApplyChoice,
 } from "@/components/settings/move/retrospective-copy";
 import { sharedInUseFromItems } from "@/components/settings/move/review-inventory";
@@ -61,12 +58,13 @@ const HELD_VALUE: HeldRow = {
 const HELD_HOOK: HeldRow = {
   heldId: "held-hook",
   name: "notify.sh",
-  kind: "hook",
-  detail: "runs on a notification and was held.",
+  kind: "command",
+  detail:
+    "(MCP server) runs notify.sh --loud. Once approved, it runs on every computer and sandbox running Personal.",
 };
 
 const STILL_LOCAL: readonly StillLocalRow[] = [
-  { id: "records", summary: "settings have not moved" },
+  { id: "records", summary: "settings are not in Personal yet" },
 ];
 
 interface SheetOverrides {
@@ -78,7 +76,7 @@ interface SheetOverrides {
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
   readonly onOpenChange: (open: boolean) => void;
   readonly onMoveToPersonal: () => void;
-  readonly onStopSharing: () => void;
+  readonly onStopSharing: (() => void) | null;
   readonly evidenceVersion: string | null;
   readonly evidenceAt: number | null;
   readonly heldPendingId: string | null;
@@ -100,6 +98,8 @@ function sheetElement(overrides: SheetOverrides): ReactNode {
       held={[HELD_VALUE, HELD_HOOK]}
       stillLocal={STILL_LOCAL}
       heldPendingId={overrides.heldPendingId}
+      heldIssue={null}
+      inventoryRead={null}
       onOpenChange={overrides.onOpenChange}
       onShown={overrides.onShown}
       onAcknowledged={overrides.onAcknowledged}
@@ -151,7 +151,7 @@ describe("RetrospectiveSheet", () => {
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onAcknowledged).not.toHaveBeenCalled();
     expect(screen.getByTestId("retrospective-no-consent").textContent).toBe(
-      NO_MOVE_SHEET_ACCEPTANCE,
+      "You never approved this upload.",
     );
     fireEvent.click(screen.getByTestId("retrospective-got-it"));
     expect(handlers.onAcknowledged).toHaveBeenCalledTimes(1);
@@ -159,6 +159,32 @@ describe("RetrospectiveSheet", () => {
     expect(
       screen.getByRole("button", { name: RETROSPECTIVE_GOT_IT }),
     ).toBeTruthy();
+  });
+
+  it("labels the shared files and the held rows", () => {
+    openSheet();
+    expect(screen.getByText("Shared files")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The skills folder (6 skills) and the agent selection guide",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("On hold until you choose")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("retrospective-held-commands")).getByText(
+        "Commands on hold",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("retrospective-held-values")).queryByText(
+        /notify\.sh/,
+      ),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("retrospective-held-held-hook").textContent,
+    ).toContain(
+      "(MCP server) runs notify.sh --loud. Once approved, it runs on every computer and sandbox running Personal.",
+    );
   });
 
   it("records no acknowledgement when the sheet is closed", () => {
@@ -214,14 +240,51 @@ describe("RetrospectiveSheet", () => {
     expect(screen.queryByTestId("retrospective-sheet")).toBeNull();
   });
 
-  it("names the upload from evidence, or unknown where none exists", () => {
-    openSheet();
-    expect(
-      screen.getByText(
-        "Traycer 1.5.2 uploaded these into Personal on 14 Oct without asking you.",
-      ),
-    ).toBeTruthy();
-    cleanup();
+  it.each([
+    [
+      "1.5.2",
+      OCT_14,
+      "Traycer 1.5.2 shared this computer's settings into Personal on 14 Oct without asking.",
+    ],
+    [
+      null,
+      OCT_14,
+      "An earlier version of Traycer shared this computer's settings into Personal on 14 Oct without asking.",
+    ],
+    [
+      "1.5.2",
+      null,
+      "Traycer 1.5.2 shared this computer's settings into Personal without asking; the date wasn't recorded.",
+    ],
+    [
+      null,
+      null,
+      "An earlier version of Traycer shared this computer's settings into Personal without asking; the date wasn't recorded.",
+    ],
+  ])(
+    "names the upload from its evidence (version %s, at %s) without ever saying unknown",
+    (evidenceVersion, evidenceAt, line) => {
+      renderSheet({
+        open: true,
+        inventoryReady: true,
+        shownAt: null,
+        onShown: vi.fn(),
+        onAcknowledged: vi.fn(),
+        onHeldApply: vi.fn(),
+        onOpenChange: vi.fn(),
+        onMoveToPersonal: vi.fn(),
+        onStopSharing: vi.fn(),
+        evidenceVersion,
+        evidenceAt,
+        heldPendingId: null,
+      });
+      const sheet = screen.getByTestId("retrospective-sheet");
+      expect(within(sheet).getByText(line)).toBeTruthy();
+      expect(sheet.textContent).not.toMatch(/unknown/i);
+    },
+  );
+
+  it("hides Stop using Personal when none is offered, and keeps Got it", () => {
     renderSheet({
       open: true,
       inventoryReady: true,
@@ -231,12 +294,13 @@ describe("RetrospectiveSheet", () => {
       onHeldApply: vi.fn(),
       onOpenChange: vi.fn(),
       onMoveToPersonal: vi.fn(),
-      onStopSharing: vi.fn(),
-      evidenceVersion: null,
-      evidenceAt: null,
+      onStopSharing: null,
+      evidenceVersion: "1.5.2",
+      evidenceAt: OCT_14,
       heldPendingId: null,
     });
-    expect(screen.getByText(RETROSPECTIVE_EVIDENCE_UNKNOWN)).toBeTruthy();
+    expect(screen.queryByTestId("retrospective-stop-sharing")).toBeNull();
+    expect(screen.getByTestId("retrospective-got-it")).toBeTruthy();
   });
 
   it("sends each held value choice through heldApply", () => {
@@ -275,12 +339,14 @@ describe("RetrospectiveSheet", () => {
     ]);
   });
 
-  it("opens the page that owns a shared item, and offers Stop sharing", () => {
+  it("opens the page that owns a shared item, and offers Stop using Personal", () => {
     const { onStopSharing } = openSheet();
     fireEvent.click(screen.getByTestId("retrospective-link-keys"));
     expect(navigateMock).toHaveBeenCalledWith("providers");
     fireEvent.click(
-      screen.getByRole("button", { name: RETROSPECTIVE_STOP_SHARING }),
+      screen.getByRole("button", {
+        name: "Stop using Personal on this computer",
+      }),
     );
     expect(onStopSharing).toHaveBeenCalledTimes(1);
   });
@@ -310,6 +376,8 @@ describe("RetrospectiveSheet", () => {
         held={[]}
         stillLocal={STILL_LOCAL}
         heldPendingId={null}
+        heldIssue={null}
+        inventoryRead={null}
         onOpenChange={vi.fn()}
         onShown={vi.fn()}
         onAcknowledged={vi.fn()}

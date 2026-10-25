@@ -18,6 +18,7 @@ import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
+import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamProviderLiveFacts(props: {
   readonly providerId: ProviderId;
@@ -56,19 +57,15 @@ export function TeamProviderLiveFacts(props: {
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-ui-sm font-medium">
-          Rate limits
-          {scope.viewingHost === null
-            ? ""
-            : ` · read through ${scope.viewingHost.hostLabel ?? scope.viewingHost.hostId}`}
-        </h3>
+        <h3 className="text-ui-sm font-medium">Rate limits</h3>
         <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
       </div>
       <TeamViewingHostBinding unavailable={noHost}>
         {query.isError ? (
-          <p role="status" className="text-ui-sm text-muted-foreground">
-            Couldn't read this host's providers.
-          </p>
+          <TeamReadFailed
+            message="Couldn't read this host's providers."
+            onRetry={() => void query.refetch()}
+          />
         ) : null}
         {state === undefined ? null : (
           <>

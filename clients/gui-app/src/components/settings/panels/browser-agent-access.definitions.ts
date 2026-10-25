@@ -1,11 +1,14 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  alwaysAvailable,
+  neverOffered,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 export const BROWSER_AGENT_ACCESS = defineSettingsSection(
   "browser-agent-access",
   {
     page: {
-      availableWhen: alwaysAvailable,
+      availableWhen: neverOffered,
       label: "Browser agent access",
       description: "Whether your agents can use Traycer's in-app browser.",
       keywords: ["agent", "browser", "playwright", "mcp", "web"],
@@ -13,7 +16,7 @@ export const BROWSER_AGENT_ACCESS = defineSettingsSection(
     access: {
       kind: "group",
       search: { contributesTo: "page" },
-      label: "Access",
+      label: "Browser agent access",
       description: null,
       breadcrumb: null,
       availableWhen: alwaysAvailable,

@@ -179,13 +179,18 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-set-mutation", () => ({
   }),
 }));
 
-// ---- the other two tabs are markers ---------------------------------------
+// ---- the other two tabs and the Browser agent access region are markers ---------------------------------------
 
 vi.mock("@/components/settings/panels/permissions/judge-tab", () => ({
   JudgeTab: (): ReactNode => <div data-testid="judge-body" />,
 }));
 vi.mock("@/components/settings/panels/permissions/activity-tab", () => ({
   ActivityTab: (): ReactNode => <div data-testid="activity-body" />,
+}));
+vi.mock("@/components/settings/panels/browser-agent-access-group", () => ({
+  BrowserAgentAccessGroup: (): ReactNode => (
+    <div data-testid="browser-agent-access-body" />
+  ),
 }));
 
 // ---- helpers --------------------------------------------------------------

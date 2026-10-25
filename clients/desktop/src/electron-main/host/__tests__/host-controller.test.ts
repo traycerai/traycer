@@ -14264,7 +14264,7 @@ describe("service-registration states: disabled task and another user's task", (
         runtimeVersion: "1.7.0",
       });
       vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
-        new TraycerCliError("E_HOST_NOT_SERVICE_RUN", "not a service-run host"),
+        new TraycerCliError("E_HOST_RESTART_TARGET_CHANGED", "target changed"),
       );
 
       const outcome = await controller.convergeReady(
@@ -14379,5 +14379,88 @@ describe("service-registration states: disabled task and another user's task", (
         value: { deregisteredService: true, serviceWarning: null },
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A person's terminal-started host (`traycer host start`) is never started,
+// restarted, replaced or killed by this app, and it never holds the lane: the
+// ensure adopts one that answers and defers over one that does not.
+// ---------------------------------------------------------------------------
+describe("host start over a terminal-started host", () => {
+  function arrangeTerminalRun(): void {
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 4242,
+      admittedAs: "foreground",
+      cliVersion: null,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+  }
+
+  it("convergeReady adopts a terminal host that answers - ok with its version, no CLI spawn", async () => {
+    arrangeTerminalRun();
+    const controller = newController("production");
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect((await controller.getStatus()).lastEnsureFailure).toBeNull();
+  });
+
+  it("convergeReady defers over a terminal host that does not answer, spawns nothing, and frees the lane", async () => {
+    arrangeTerminalRun();
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_NOT_SERVICE_RUN_MESSAGE,
+    });
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    const status = await controller.getStatus();
+    expect(status.mutation).toBeNull();
+    expect(status.lastEnsureFailure).toEqual({
+      message: HOST_NOT_SERVICE_RUN_MESSAGE,
+      code: "E_HOST_NOT_SERVICE_RUN",
+    });
+  });
+
+  it("recoverIfDown defers over a terminal host - nothing is spawned to replace it", async () => {
+    arrangeTerminalRun();
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+
+    const outcome = await controller.recoverIfDown();
+
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_NOT_SERVICE_RUN_MESSAGE,
+    });
+    expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
+    expect((await controller.getStatus()).mutation).toBeNull();
   });
 });

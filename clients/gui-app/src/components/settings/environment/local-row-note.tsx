@@ -18,9 +18,9 @@ export function LocalRowNote(): ReactNode {
       data-testid="local-row-note"
     >
       <span className="min-w-0 max-w-[72ch]">
-        These settings are on {pick.hostName} only. Personal's settings are not
-        on it. Move them to Personal to use them on every computer and sandbox;
-        you see every item first.
+        These settings are on {pick.hostName} only, not in Personal yet. Move
+        them to Personal to use them on every computer and sandbox; you see
+        every item first.
       </span>
       <Button
         type="button"

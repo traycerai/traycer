@@ -202,7 +202,7 @@ describe("adversarial: Add-a-shell race conditions", () => {
     openPopover();
     const input = screen.getByRole("textbox", { name: "Add a shell by path" });
     fireEvent.change(input, { target: { value: "/does/not/exist" } });
-    await screen.findByText("not found on this machine");
+    await screen.findByText("not found on this computer");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onAdd).not.toHaveBeenCalled();
   });

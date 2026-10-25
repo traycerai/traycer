@@ -18,7 +18,7 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentMembersResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -43,12 +43,13 @@ const ENVIRONMENT = "env-team";
 function page(
   userId: string,
   nextCursor: string | null,
-): EnvironmentMembersResponseV11 {
+): EnvironmentMembersResponseV12 {
   return {
     members: [
       {
         userId,
         displayName: `Name of ${userId}`,
+        email: `${userId}@acme.test`,
         avatarUrl: null,
         effectiveRole: "viewer",
         linkedPlan: false,
@@ -68,7 +69,7 @@ const FORTY_USER_IDS = Array.from(
 );
 
 /** Forty chained pages of one member each, by the cursor that asks for them. */
-function fortyPages(): Map<string | null, EnvironmentMembersResponseV11> {
+function fortyPages(): Map<string | null, EnvironmentMembersResponseV12> {
   return new Map(
     FORTY_USER_IDS.map((userId, index) => [
       index === 0 ? null : FORTY_USER_IDS[index - 1],
@@ -80,10 +81,10 @@ function fortyPages(): Map<string | null, EnvironmentMembersResponseV11> {
 const LAST_FORTY_USER_ID = FORTY_USER_IDS[FORTY_USER_IDS.length - 1];
 
 function mountMembers(
-  answerPage: (cursor: string | null) => EnvironmentMembersResponseV11,
+  answerPage: (cursor: string | null) => EnvironmentMembersResponseV12,
   enabled: boolean,
   /** Pages already in the cache when the hook mounts, by cursor. */
-  warm: ReadonlyMap<string | null, EnvironmentMembersResponseV11>,
+  warm: ReadonlyMap<string | null, EnvironmentMembersResponseV12>,
 ): {
   readonly resolver: () => BotMemberResolver;
   readonly cursorsAsked: () => ReadonlyArray<string | null>;
@@ -91,7 +92,7 @@ function mountMembers(
   readonly setEnabled: (next: boolean) => void;
   /** Writes pages into the cache, as answers landing elsewhere would. */
   readonly publish: (
-    pages: ReadonlyMap<string | null, EnvironmentMembersResponseV11>,
+    pages: ReadonlyMap<string | null, EnvironmentMembersResponseV12>,
   ) => Promise<void>;
   /** Refetches the first page, as an invalidation would. */
   readonly refetchFirstPage: () => Promise<void>;
@@ -105,7 +106,7 @@ function mountMembers(
     defaultOptions: { queries: { retry: false } },
   });
   const publish = (
-    pages: ReadonlyMap<string | null, EnvironmentMembersResponseV11>,
+    pages: ReadonlyMap<string | null, EnvironmentMembersResponseV12>,
   ): void => {
     for (const [cursor, cached] of pages) {
       queryClient.setQueryData(
@@ -278,7 +279,7 @@ describe("useEnvironmentMembers", () => {
   });
 
   it("names nobody from a warm cache while the host cannot answer the method", () => {
-    const warm = new Map<string | null, EnvironmentMembersResponseV11>([
+    const warm = new Map<string | null, EnvironmentMembersResponseV12>([
       [null, page("user-a", null)],
     ]);
 
