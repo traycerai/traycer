@@ -259,13 +259,13 @@ describe("PermissionsSettingsPanel", () => {
       });
     });
 
-    it("says what Personal's agents may do on every computer and sandbox running it", () => {
+    it("says what the person's agents may do across computers and sandboxes", () => {
       useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
       render(<PermissionsSettingsPanel />);
 
       expect(
         screen.getByText(
-          "What your agents may do without asking, on every computer and sandbox running Personal.",
+          "What your agents may do without asking, on every computer and sandbox.",
         ),
       ).not.toBeNull();
     });

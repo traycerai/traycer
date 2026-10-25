@@ -135,7 +135,7 @@ function PermissionsBrowserAgentAccess(): ReactNode {
 }
 
 const PERSONAL_PERMISSIONS_DESCRIPTION =
-  "What your agents may do without asking, on every computer and sandbox running Personal.";
+  "What your agents may do without asking, on every computer and sandbox.";
 
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();

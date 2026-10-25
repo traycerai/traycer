@@ -311,7 +311,7 @@ describe("RulesTab", () => {
       ).not.toBeNull();
       expect(
         within(dialog).getByText(
-          "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal.",
+          "This removes your custom rules and goes back to the default approval policy on every computer and sandbox.",
         ),
       ).not.toBeNull();
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));

@@ -61,12 +61,18 @@ export function useHostsRunningConfiguration(
   const scope = useHostScope();
   const computers = usePersonalComputers(personalTarget);
   const { refetch } = list;
+  const retryPersonal = personal.retry;
   const retry = useCallback(() => {
+    if (environmentId === null) {
+      if (personalTarget) retryPersonal();
+      return;
+    }
     void refetch();
-  }, [refetch]);
+  }, [environmentId, personalTarget, retryPersonal, refetch]);
   const reread = useCallback(() => {
+    if (environmentId === null) return;
     void refetch({ cancelRefetch: false });
-  }, [refetch]);
+  }, [environmentId, refetch]);
   const localHostIds = new Set(
     computers.computers
       .filter(

@@ -557,7 +557,7 @@ function RulesEditor(props: {
         open={resetConfirm}
         onOpenChange={setResetConfirm}
         title="Reset the approval policy?"
-        description="This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal."
+        description="This removes your custom rules and goes back to the default approval policy on every computer and sandbox."
         cascadeSummary={null}
         actionLabel="Reset to default"
         isPending={saving}
