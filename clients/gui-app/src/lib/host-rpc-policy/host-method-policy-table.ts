@@ -2638,6 +2638,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.sessionNames.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.sessionNames.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.simulator.get": { ...LATEST_SCHEDULING, poll: null },
   "config.simulator.set": {
     mode: "fifo",

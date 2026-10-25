@@ -38,6 +38,8 @@ import {
   SIMULATOR_CONFIG_DEFAULT,
   simulatorOnlyConfigSchema,
   type SimulatorConfig,
+  sessionNamesOnlyConfigSchema,
+  type SessionNamesConfig,
   catalogOnlyConfigSchema,
   catalogOverridesOnlyConfigSchema,
   catalogSettingsFrom,
@@ -1274,6 +1276,41 @@ export async function setAgentPages(enabled: boolean): Promise<void> {
       result: undefined,
     };
   });
+}
+
+/**
+ * The `sessionNames` block. Throws on a malformed block, like
+ * `readBrowserConfig`, so the Settings field shows an error rather than a
+ * template the file does not hold.
+ */
+export async function readSessionNamesConfig(): Promise<SessionNamesConfig> {
+  return sessionNamesOnlyConfigSchema.parse(await readCliConfig()).sessionNames;
+}
+
+/**
+ * Best-effort synchronous read for the launch that names a Claude session.
+ * Falls back to the default template: an unreadable config must not fail a
+ * launch over its name.
+ */
+export function readSessionNamesConfigSync(): SessionNamesConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = sessionNamesOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) return result.data.sessionNames;
+  } catch {
+    // An unreadable config names the session from the default.
+  }
+  return sessionNamesOnlyConfigSchema.parse({}).sessionNames;
+}
+
+/** Writes the Claude session name template, preserving the rest of the config. */
+export async function setClaudeSessionNameTemplate(
+  claudeTemplate: string,
+): Promise<void> {
+  await updateCliConfig((current) => ({
+    next: { ...current, sessionNames: { claudeTemplate } },
+    result: undefined,
+  }));
 }
 
 /**

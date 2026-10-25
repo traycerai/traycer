@@ -372,6 +372,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "config.logLevels.get": "target-host",
   "config.logLevels.set": "target-host",
   "config.shell.add": "target-host",
+  "config.sessionNames.get": "target-host",
+  "config.sessionNames.set": "target-host",
   "config.shell.get": "target-host",
   "config.shell.listDetected": "target-host",
   "config.shell.probe": "target-host",
