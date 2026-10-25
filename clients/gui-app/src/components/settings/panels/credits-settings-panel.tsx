@@ -1,9 +1,7 @@
 /**
  * Account ▸ Credits. E4 mounts this under the `credits` row. The balance is
  * the signed-in user's remaining credits, $0.00 included (a user with no
- * subscription has none); `Add credits ↗` opens the dashboard billing page;
- * the hourly line is the staged sandbox's awake price, or the default shape
- * when none is staged.
+ * subscription has none); `Add credits ↗` opens the dashboard billing page.
  */
 import { ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
@@ -16,7 +14,6 @@ import { Button } from "@/components/ui/button";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useRefreshCreditsOnTraycerTurn } from "@/hooks/auth/use-refresh-credits-on-traycer-turn";
-import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   formatCredits,
   formatCreditsPlain,
@@ -26,27 +23,18 @@ import { useOpenLink, type OpenLink } from "@/lib/links/open-link";
 import { isMobileApp } from "@/lib/mobile-app";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { sandboxBalanceMc } from "@/lib/sandboxes/sandbox-balance";
-import {
-  formatAwakeHourlyPrice,
-  sandboxHourlyQuote,
-  type SandboxHourlyQuote,
-} from "@/lib/sandboxes/sandbox-hourly-quote";
-import { useStagedSandboxInThisWindow } from "@/lib/sandboxes/staged-sandbox-in-window";
 
 const MC_PER_CREDIT = 1000;
 
 export function CreditsSettingsPanel(): ReactNode {
   const query = useAuthUser();
   useRefreshCreditsOnTraycerTurn();
-  const catalogue = useSandboxCatalogue(true);
-  const staged = useStagedSandboxInThisWindow();
   const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
   const installedApp = isMobileApp();
 
   const user = query.data ?? null;
   const remainingMc = sandboxBalanceMc(user);
-  const quote = sandboxHourlyQuote(catalogue.data, staged);
 
   return (
     <SettingsPanelShell
@@ -68,7 +56,6 @@ export function CreditsSettingsPanel(): ReactNode {
         error={query.isError}
         onRetry={() => void query.refetch()}
         remainingMc={remainingMc}
-        quote={quote}
         installedApp={installedApp}
         billingUrl={billingUrl}
         openLink={openLink}
@@ -82,7 +69,6 @@ function CreditsBody(props: {
   readonly error: boolean;
   readonly onRetry: () => void;
   readonly remainingMc: number | null;
-  readonly quote: SandboxHourlyQuote | null;
   readonly installedApp: boolean;
   readonly billingUrl: string;
   readonly openLink: OpenLink;
@@ -143,14 +129,6 @@ function CreditsBody(props: {
       >
         {remainingLabel}
       </p>
-      {props.quote !== null ? (
-        <p
-          className="text-ui-sm text-muted-foreground"
-          data-testid="credits-hourly-price"
-        >
-          {formatAwakeHourlyPrice(props.quote)}
-        </p>
-      ) : null}
       {props.installedApp ? null : (
         <AddCreditsButton
           billingUrl={props.billingUrl}
