@@ -121,6 +121,18 @@ describe("renderSessionName", () => {
 });
 
 describe("unknownSessionNamePlaceholders", () => {
+  it("counts a name with digits as a placeholder, so a misspelling is unknown", () => {
+    expect(
+      unknownSessionNamePlaceholders(
+        "{project1} {date}",
+        SESSION_NAME_PLACEHOLDERS,
+      ),
+    ).toEqual(["project1"]);
+    expect(renderSessionName("{project1}-{date}", VALUES)).toBe(
+      "{project1}-2026-10-24",
+    );
+  });
+
   it("lists each name outside the known list once", () => {
     expect(
       unknownSessionNamePlaceholders(

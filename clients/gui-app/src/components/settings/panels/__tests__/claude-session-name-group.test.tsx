@@ -99,6 +99,10 @@ interface Harness {
   readonly stored: () => string;
   /** Answers the held first `config.sessionNames.set`. */
   readonly releaseFirstSet: () => void;
+  /** Answers the held second `config.sessionNames.set`. */
+  readonly releaseSecondSet: () => void;
+  /** Answers the held read that followed the first write. */
+  readonly releaseHeldRead: () => void;
   readonly queryClient: QueryClient;
 }
 
@@ -112,14 +116,39 @@ interface HostBehaviour {
   readonly holdFirstSet: boolean;
   /** Refuses the first write; later writes succeed. */
   readonly failFirstSet: boolean;
+  /** Keeps the second write unanswered until `releaseSecondSet`. */
+  readonly holdSecondSet: boolean;
+  /** Refuses the second write. */
+  readonly failSecondSet: boolean;
+  /**
+   * Keeps the first read after the first write unanswered until
+   * `releaseHeldRead`, then answers what the host held when it was asked.
+   */
+  readonly holdReadAfterFirstSet: boolean;
   readonly failReads: boolean;
 }
 
 const ANSWERS_EVERYTHING: HostBehaviour = {
   holdFirstSet: false,
   failFirstSet: false,
+  holdSecondSet: false,
+  failSecondSet: false,
+  holdReadAfterFirstSet: false,
   failReads: false,
 };
+
+function held(hold: boolean): {
+  readonly settled: Promise<void>;
+  readonly release: () => void;
+} {
+  let release: () => void = () => undefined;
+  const settled = hold
+    ? new Promise<void>((settle) => {
+        release = settle;
+      })
+    : Promise.resolve();
+  return { settled, release: () => release() };
+}
 
 function mountHarness(
   initialTemplate: string,
@@ -130,12 +159,10 @@ function mountHarness(
   });
   let stored = initialTemplate;
   const sets: ConfigSessionNamesSetRequest[] = [];
-  let release: () => void = () => undefined;
-  const firstHeld = behaviour.holdFirstSet
-    ? new Promise<void>((settle) => {
-        release = settle;
-      })
-    : Promise.resolve();
+  const firstSet = held(behaviour.holdFirstSet);
+  const secondSet = held(behaviour.holdSecondSet);
+  const readAfterFirstSet = held(behaviour.holdReadAfterFirstSet);
+  let readHeld = false;
   const read = (): ConfigSessionNamesResponse => ({
     claudeTemplate: stored,
     defaultClaudeTemplate: DEFAULT_TEMPLATE,
@@ -146,14 +173,24 @@ function mountHarness(
       registry: hostRpcRegistry,
       requestId: () => `req-${Math.random().toString(36).slice(2)}`,
       handlers: {
-        "config.sessionNames.get": () =>
-          behaviour.failReads
-            ? Promise.reject(new Error("config.json is garbage"))
-            : Promise.resolve(read()),
+        "config.sessionNames.get": async () => {
+          if (behaviour.failReads) throw new Error("config.json is garbage");
+          const answer = read();
+          if (sets.length > 0 && !readHeld) {
+            readHeld = true;
+            await readAfterFirstSet.settled;
+          }
+          return answer;
+        },
         "config.sessionNames.set": async (params) => {
           sets.push(params);
-          if (sets.length === 1) await firstHeld;
-          if (sets.length === 1 && behaviour.failFirstSet) {
+          const index = sets.length;
+          if (index === 1) await firstSet.settled;
+          if (index === 2) await secondSet.settled;
+          if (
+            (index === 1 && behaviour.failFirstSet) ||
+            (index === 2 && behaviour.failSecondSet)
+          ) {
             throw new Error("config.json could not be written");
           }
           stored = params.claudeTemplate;
@@ -175,9 +212,9 @@ function mountHarness(
   return {
     sets,
     stored: () => stored,
-    releaseFirstSet: () => {
-      release();
-    },
+    releaseFirstSet: firstSet.release,
+    releaseSecondSet: secondSet.release,
+    releaseHeldRead: readAfterFirstSet.release,
     queryClient,
   };
 }
@@ -211,6 +248,14 @@ function templateInput(): HTMLInputElement {
     throw new Error("the session name template is not an input");
   }
   return input;
+}
+
+function resetButton(): HTMLButtonElement {
+  const button = screen.getByTestId("claude-session-name-reset");
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Reset is not a button");
+  }
+  return button;
 }
 
 beforeEach(() => {
@@ -260,6 +305,18 @@ describe("ClaudeSessionNameGroup", () => {
     expect(tracked).toHaveBeenCalledWith("providers", "claudeSessionName");
   });
 
+  it("flags a placeholder with digits as unknown", async () => {
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
+
+    fireEvent.change(templateInput(), { target: { value: "{project1}" } });
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "{project1}",
+    );
+    fireEvent.blur(templateInput());
+    expect(harness.sets).toEqual([]);
+  });
+
   it("flags an unknown placeholder and does not send it on blur", async () => {
     const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
 
@@ -290,7 +347,7 @@ describe("ClaudeSessionNameGroup", () => {
     expect(harness.sets).toEqual([]);
   });
 
-  it("saves an edit back to the old template while the first save is in flight", async () => {
+  it("keeps the field and Reset disabled while a save is in flight", async () => {
     const harness = await renderReady("{project}-x", {
       ...ANSWERS_EVERYTHING,
       holdFirstSet: true,
@@ -298,22 +355,85 @@ describe("ClaudeSessionNameGroup", () => {
 
     fireEvent.change(templateInput(), { target: { value: "{project}-y" } });
     fireEvent.blur(templateInput());
-    fireEvent.change(templateInput(), { target: { value: "{project}-x" } });
-    fireEvent.blur(templateInput());
+
+    await waitFor(() => {
+      expect(templateInput().disabled).toBe(true);
+    });
+    expect(resetButton().disabled).toBe(true);
     harness.releaseFirstSet();
 
-    // The edit back is sent, and only after the first save: the host ends on
-    // the user's last choice.
+    await waitFor(() => {
+      expect(templateInput().disabled).toBe(false);
+    });
+    expect(templateInput().value).toBe("{project}-y");
+    expect(harness.sets).toEqual([{ claudeTemplate: "{project}-y" }]);
+  });
+
+  it("keeps a later pending save's draft when an earlier save is read back, and retries it after a refusal", async () => {
+    const harness = await renderReady("{project}-x", {
+      ...ANSWERS_EVERYTHING,
+      holdReadAfterFirstSet: true,
+      holdSecondSet: true,
+      failSecondSet: true,
+    });
+
+    // Save B lands; its read-back is held.
+    fireEvent.change(templateInput(), { target: { value: "{project}-y" } });
+    fireEvent.blur(templateInput());
+    await waitFor(() => {
+      expect(templateInput().disabled).toBe(false);
+    });
+    // Save C is sent before B's read-back answers.
+    fireEvent.change(templateInput(), { target: { value: "{project}-z" } });
+    fireEvent.blur(templateInput());
+    await waitFor(() => {
+      expect(harness.sets).toHaveLength(2);
+    });
+    harness.releaseHeldRead();
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    // B's read-back does not replace the draft C is saving.
+    expect(templateInput().value).toBe("{project}-z");
+
+    harness.releaseSecondSet();
+    await waitFor(() => {
+      expect(toasted).toHaveBeenCalledTimes(1);
+    });
+    expect(templateInput().value).toBe("{project}-z");
+    await waitFor(() => {
+      fireEvent.blur(templateInput());
+      expect(harness.sets).toHaveLength(3);
+    });
+    expect(harness.sets[2]).toEqual({ claudeTemplate: "{project}-z" });
+  });
+
+  it("lets a keyboard user reach Reset without saving the draft, and saves it when focus leaves Reset elsewhere", async () => {
+    const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
+    const reset = screen.getByTestId("claude-session-name-reset");
+
+    fireEvent.change(templateInput(), { target: { value: "{project}-y" } });
+    fireEvent.blur(templateInput(), { relatedTarget: reset });
+    // A save is recorded and sent in one synchronous step.
+    expect(tracked).not.toHaveBeenCalled();
+    fireEvent.blur(reset, { relatedTarget: null });
+    await waitFor(() => {
+      expect(harness.sets).toEqual([{ claudeTemplate: "{project}-y" }]);
+    });
+    await waitFor(() => {
+      expect(templateInput().disabled).toBe(false);
+    });
+
+    fireEvent.change(templateInput(), { target: { value: "{project}-q" } });
+    fireEvent.blur(templateInput(), { relatedTarget: reset });
+    fireEvent.click(reset);
     await waitFor(() => {
       expect(harness.sets).toEqual([
         { claudeTemplate: "{project}-y" },
-        { claudeTemplate: "{project}-x" },
+        { claudeTemplate: DEFAULT_TEMPLATE },
       ]);
     });
-    await waitFor(() => {
-      expect(templateInput().value).toBe("{project}-x");
-    });
-    expect(harness.stored()).toBe("{project}-x");
+    expect(templateInput().value).toBe(DEFAULT_TEMPLATE);
   });
 
   it("retries a save that failed when the same draft is committed again", async () => {

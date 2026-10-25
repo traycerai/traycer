@@ -39,7 +39,7 @@ export const SESSION_NAME_TEMPLATE_MAX_LENGTH = 200;
 /** Longest rendered name, in code points. */
 const SESSION_NAME_MAX_LENGTH = 100;
 
-const PLACEHOLDER_PATTERN = /\{([A-Za-z_]+)\}/g;
+const PLACEHOLDER_PATTERN = /\{([A-Za-z0-9_]+)\}/g;
 const LEADING_SEPARATORS = /^[\s\u00b7\-_/]+/u;
 const TRAILING_SEPARATORS = /[\s\u00b7\-_/]+$/u;
 const EDGE_SEPARATORS = /^[\s\u00b7\-_/]+|[\s\u00b7\-_/]+$/gu;

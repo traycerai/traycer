@@ -2998,12 +2998,15 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     saved. A live preview renders the draft with `renderSessionName`
     (`@traycer/protocol/config/session-name-template`, the same renderer the
     host uses) against sample values. Reset writes the default and discards
-    the draft (its mousedown keeps focus, so the field's blur never saves
-    it), and is disabled while a save is in flight. Saves share one mutation
+    the draft (its mousedown keeps focus, and the field's blur does not save
+    when focus moves to Reset, so neither a click nor a Tab saves it; Reset's
+    own blur saves the draft when focus leaves elsewhere). The field and
+    Reset are disabled while a save is in flight. Saves share one mutation
     scope per host (`sessionNamesWriteScope`) and compare against the last
-    value sent, so an edit back to the stored value during a save still
-    lands, after it. A refused save clears that value unless a later save
-    was queued since, so committing the same draft again retries it.
+    value sent; a read-back that lands while a save is queued is of an
+    earlier save and does not replace the draft. A refused save clears that
+    value unless a later save was queued since, so committing the same draft
+    again retries it.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared

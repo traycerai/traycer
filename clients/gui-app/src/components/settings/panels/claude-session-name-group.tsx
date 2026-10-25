@@ -155,15 +155,24 @@ function ClaudeSessionNameField(props: {
   const saved = state.claudeTemplate;
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const resetRef = useRef<HTMLButtonElement | null>(null);
   const [draft, setDraft] = useState(saved);
+  // Read by the sync effect below without re-running it when a save settles;
+  // declared first, so it is current when that effect runs.
+  const savingRef = useRef(saving);
+  useEffect(() => {
+    savingRef.current = saving;
+  }, [saving]);
   // What this field last asked the host to hold. A write still in flight has
   // not reached `saved` yet, so an edit back to the stored value must be
   // compared against the write, not the read. `null` after a refused write:
   // the host still holds its old value, so any draft may be sent.
   const lastSent = useRef<string | null>(saved);
   // The host's value can change from outside this field (another window, a
-  // hand edit); follow it unless the user is mid-edit.
+  // hand edit); follow it unless the user is mid-edit. While a save is still
+  // queued, a read-back is of an earlier save and the queued draft stands.
   useEffect(() => {
+    if (savingRef.current) return;
     lastSent.current = saved;
     if (document.activeElement !== inputRef.current) setDraft(saved);
   }, [saved]);
@@ -221,8 +230,14 @@ function ClaudeSessionNameField(props: {
             className="w-full"
             placeholder={state.defaultClaudeTemplate}
             value={draft}
+            disabled={saving}
             onChange={(event) => setDraft(event.target.value)}
-            onBlur={() => commit(draft)}
+            onBlur={(event) => {
+              // Focus moving to Reset is on its way to discard the draft;
+              // Reset's own blur saves it if it goes elsewhere instead.
+              if (event.relatedTarget === resetRef.current) return;
+              commit(draft);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
             }}
@@ -232,11 +247,17 @@ function ClaudeSessionNameField(props: {
           {saving ? <MutedAgentSpinner /> : null}
           {draft !== state.defaultClaudeTemplate ? (
             <Button
+              ref={resetRef}
               type="button"
               variant="ghost"
               size="sm"
               data-testid="claude-session-name-reset"
               disabled={saving}
+              onBlur={(event) => {
+                if (event.relatedTarget !== inputRef.current) {
+                  commit(draft);
+                }
+              }}
               // Keeps focus in the field, so the draft Reset discards is not
               // saved by the field's blur on the way to the click.
               onMouseDown={(event) => event.preventDefault()}
