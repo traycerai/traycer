@@ -272,7 +272,9 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
 
   // A pin click (or any other activation) expands the card from outside the
   // sidebar's own scroll, so the list scrolls to the thread it just opened.
-  const wasExpanded = useRef(isExpanded);
+  // Starts false so a card that MOUNTS expanded scrolls too - a pin tap that
+  // opens a closed panel selects the thread before its card exists.
+  const wasExpanded = useRef(false);
   const scrollOnExpand = useCallback(
     (node: HTMLElement | null): void => {
       const appeared = isExpanded && !wasExpanded.current;
