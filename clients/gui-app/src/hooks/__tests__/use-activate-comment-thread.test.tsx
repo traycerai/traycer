@@ -166,12 +166,16 @@ describe("useActivateCommentThread", () => {
     );
 
     it.each(["html", "canvas"] as const)(
-      "expands the left panel instead of the sheet on a narrow viewport whose canvas is fullscreen, for a %s artifact",
+      "opens the sheet on a narrow viewport even while a board is fullscreen, for a %s artifact",
       (artifactType) => {
+        // The sheet is the only comments surface a narrow viewport mounts,
+        // so fullscreen must not route the activation to the unmounted
+        // desktop panel (the in-tile fullscreen pane that once covered this
+        // is gone).
         viewport.isMobile = true;
         activateAndReveal(artifactType, document.createElement("div"));
 
-        expect(useMobileSwitcherStore.getState().openTabId).toBeNull();
+        expect(useMobileSwitcherStore.getState().openTabId).toBe(TAB_ID);
         expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
           "comments",
         );

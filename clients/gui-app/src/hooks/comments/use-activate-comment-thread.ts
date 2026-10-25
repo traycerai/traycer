@@ -1,5 +1,4 @@
-import { FrameFullscreenContext } from "@/components/comments/frame-comment-surface-context";
-import { useCallback, useContext } from "react";
+import { useCallback } from "react";
 import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
@@ -68,14 +67,17 @@ function useOpenArtifactComments(
 ): () => void {
   const { epicId, artifactId, viewTabId } = target;
   const mobile = useIsMobileViewport();
-  const fullscreen = useContext(FrameFullscreenContext);
   return useCallback(() => {
     useCommentThreadsStore.getState().setCurrentArtifact(epicId, artifactId);
     const panels = useLeftPanelStore.getState();
     panels.revealCommentsPanel(viewTabId);
-    if (mobile && fullscreen === null) {
+    // The sheet layers over everything the tile shows, a fullscreen board
+    // included - the sidebar panel alone is not mounted on a narrow
+    // viewport, so selecting it without the sheet would look like nothing
+    // happened.
+    if (mobile) {
       panels.setActivePanelId(viewTabId, "comments");
       useMobileSwitcherStore.getState().setOpen(viewTabId, true);
     } else panels.setActivePanelIdAndExpand(viewTabId, "comments");
-  }, [epicId, artifactId, viewTabId, mobile, fullscreen]);
+  }, [epicId, artifactId, viewTabId, mobile]);
 }
