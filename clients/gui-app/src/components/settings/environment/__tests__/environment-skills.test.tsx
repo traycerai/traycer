@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -208,6 +209,53 @@ describe("The Skills page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add a skill" }));
 
     expect(await screen.findByText("Review a change.")).toBeTruthy();
+  });
+
+  it("shows an edited description in the list once the edit dialog closes", async () => {
+    negotiateMethods(BASE_METHODS);
+    let description = REVIEW.description;
+    const managed = hostSkill("review", "managed");
+    const base = handlers({ list: listed([REVIEW]), hostSkills: [managed] });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...base,
+      "environment.configuration.skills.list": () =>
+        listed([{ ...REVIEW, description }]),
+      "providers.nativeMutate": () => {
+        description = "Review every change.";
+        return { result: { ok: true, kind: "skills", skills: [managed] } };
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    const row = (await screen.findByText("review")).closest("li");
+    expect(row).not.toBeNull();
+    if (row === null) return;
+    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Edit" }));
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "When to use" }),
+      {
+        target: { value: "Review every change." },
+      },
+    );
+    await userEvent.click(
+      await within(dialog).findByRole("button", { name: "Save changes" }),
+    );
+    await waitFor(() => {
+      expect(harness.paramsOf("providers.nativeMutate")).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(
+        within(dialog).queryByRole("button", { name: "Save changes" }),
+      ).toBeNull();
+    });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    expect(await screen.findByText("Review every change.")).toBeTruthy();
   });
 
   it("reads each skill's name, description, source and providers as the serving host lists them", async () => {

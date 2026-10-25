@@ -352,7 +352,8 @@ function EnvironmentSkillDetail(props: {
       skill={row}
       removal={{ kind: "hidden" }}
       removePending={false}
-      removeDisabled
+      // The flag disables Edit too, and Remove is not offered here.
+      removeDisabled={false}
       actionError={error}
       lockedNote={null}
       canEdit={props.canEdit}

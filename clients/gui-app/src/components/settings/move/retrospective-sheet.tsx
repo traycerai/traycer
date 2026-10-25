@@ -142,7 +142,10 @@ export function RetrospectiveSheet(props: {
                 term={RETROSPECTIVE_SHARED_IN_USE}
                 testId="retrospective-shared-in-use"
               >
-                <SharedInUseList items={props.sharedInUse} />
+                <SharedInUseList
+                  items={props.sharedInUse}
+                  onClose={() => props.onOpenChange(false)}
+                />
               </InventoryRow>
             ) : null}
             {props.roomShared !== null ? (
@@ -262,20 +265,29 @@ function InventoryRow(props: {
 
 function SharedInUseList(props: {
   readonly items: readonly SharedInUseItem[];
+  readonly onClose: () => void;
 }): ReactNode {
   return (
     <span>
       {props.items.map((item, index) => (
         <span key={item.id}>
           {index > 0 ? " · " : null}
-          <SharedInUseLink item={item} />
+          <SharedInUseLink item={item} onClose={props.onClose} />
         </span>
       ))}
     </span>
   );
 }
 
-function SharedInUseLink(props: { readonly item: SharedInUseItem }): ReactNode {
+/**
+ * A link to the page an item lives on. The sheet is mounted app-wide and
+ * outlives navigation, so the link closes it first: the page it opens is
+ * otherwise left under the sheet.
+ */
+function SharedInUseLink(props: {
+  readonly item: SharedInUseItem;
+  readonly onClose: () => void;
+}): ReactNode {
   const names = props.item.names.join(" · ");
   return (
     <TooltipWrapper
@@ -290,6 +302,7 @@ function SharedInUseLink(props: { readonly item: SharedInUseItem }): ReactNode {
         size="inline-xs"
         data-testid={`retrospective-link-${props.item.id}`}
         onClick={() => {
+          props.onClose();
           navigateToSettingsSection(props.item.page);
         }}
       >

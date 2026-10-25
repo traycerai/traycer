@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -8,6 +15,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  EnvironmentItemStatus,
   EnvironmentReviewResponseV12,
   EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
@@ -19,6 +27,8 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import type { OpenSettingsModalOpts } from "@/stores/tabs/use-system-tab-modal";
 
 // The host directory is the boundary: which computer this is, and the client
 // that names a host id. The reads and the sheet stay real.
@@ -37,9 +47,6 @@ vi.mock("@/components/settings/move/this-computer", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (): HostClient<HostRpcRegistry> | null =>
     directory.client,
-}));
-vi.mock("@/lib/settings-navigation", () => ({
-  navigateToSettingsSection: vi.fn(),
 }));
 
 const SHARED = environmentStatusFixture({
@@ -118,6 +125,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setSystemTabModalApi(null);
   resetNegotiatedManifests();
   directory.computer = {
     hostId: null,
@@ -172,5 +180,60 @@ describe("<EnvironmentSheetsHost /> show-once", () => {
     );
     expect(screen.queryByTestId("retrospective-sheet")).toBeNull();
     expect(reads.recorded).toEqual([]);
+  });
+});
+
+describe("<EnvironmentSheetsHost /> inventory links", () => {
+  it("closes the sheet and asks Settings for the linked page", async () => {
+    const smtpPassword: EnvironmentItemStatus = {
+      kind: "secret",
+      key: "NOTIFICATION_SMTP_PASSWORD",
+      os: "macos",
+      desiredRevision: 1,
+      status: "applied",
+      code: "ok",
+      args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+      brokerEnforced: null,
+      minimumHostVersion: null,
+      appliedAs: null,
+    };
+    thisComputerAnswering(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "local",
+          room: "local",
+        },
+        items: [smtpPassword],
+      }),
+      Date.UTC(2026, 9, 15, 12),
+    );
+    const opened: OpenSettingsModalOpts[] = [];
+    setSystemTabModalApi({
+      active: null,
+      openSettings: (opts) => {
+        opened.push(opts);
+      },
+      openHistory: () => undefined,
+      close: () => undefined,
+      setSection: () => undefined,
+      promoteToTab: () => undefined,
+      isOverlayActive: () => false,
+    });
+    renderHost();
+    act(() => {
+      useRetrospectiveSheetStore
+        .getState()
+        .openSheet({ hostId: "old", hostName: "Old laptop" });
+    });
+
+    fireEvent.click(
+      await screen.findByTestId("retrospective-link-secrets:secret"),
+    );
+
+    expect(opened.map((opts) => opts.section)).toEqual(["secrets"]);
+    await waitFor(() => {
+      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+    });
   });
 });
