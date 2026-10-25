@@ -42,8 +42,8 @@ const PRIVATE_COLLECTION_DECISIONS = {
   noticesSuppressedAfterDispatch: "short timeout per in-flight refusal notice",
   stickySweptByAction:
     "bounded by in-flight actions; values reference recovery evidence",
-  steerSettingsByActionId:
-    "bounded by steers awaiting their ack; one settings tuple each",
+  steersAwaitingAck:
+    "bounded by steers awaiting their ack; a settings tuple and tile id each",
   taskIds: "temporary stop-all frame construction",
   next: "temporary copy of charged state collections",
   settledActionIds: "temporary snapshot reconciliation result",

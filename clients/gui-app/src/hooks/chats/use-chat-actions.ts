@@ -91,6 +91,7 @@ export interface ChatActions {
     queueItemId: string,
     newSettings: ChatRunSettings | null,
     restartConfirmed: boolean,
+    initiatorId: string,
   ) => string | null;
   readonly queueAbortSteer: (queueItemId: string) => string | null;
   readonly approvalDecision: (
@@ -258,11 +259,21 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
             );
           },
         ),
-      queueSteerNow: (queueItemId, newSettings, restartConfirmed) =>
+      queueSteerNow: (
+        queueItemId,
+        newSettings,
+        restartConfirmed,
+        initiatorId,
+      ) =>
         tracked(
           handle.store
             .getState()
-            .queueSteerNow(queueItemId, newSettings, restartConfirmed),
+            .queueSteerNow(
+              queueItemId,
+              newSettings,
+              restartConfirmed,
+              initiatorId,
+            ),
           () => {
             Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
               settings_changed: newSettings !== null,

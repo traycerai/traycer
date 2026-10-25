@@ -704,6 +704,7 @@ export function useChatComposerSubmit(
             content: liveContent,
             browserAnnotations: liveAnnotationRecords,
           },
+          restartConfirmed: false,
         };
         if (
           deliveryPolicy === "after_safe_point" &&
@@ -1108,6 +1109,7 @@ export function useChatComposerSubmit(
           settings: pendingConflict.settings,
           deliveryPolicy,
           restore: pendingConflict.restore,
+          restartConfirmed: true,
         })
       ) {
         setPendingConflict(null);

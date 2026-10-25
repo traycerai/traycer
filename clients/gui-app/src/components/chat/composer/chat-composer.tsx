@@ -267,6 +267,12 @@ export interface ChatComposerSubmitInput {
    * that left with the send.
    */
   readonly restore: ChatSendRestore;
+  /**
+   * True only when the person confirmed ending the running turn in the
+   * composer's settings dialog. A queue edit's steer passes it on as its
+   * restart confirmation; a settings difference alone never stands for one.
+   */
+  readonly restartConfirmed: boolean;
 }
 
 /** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */

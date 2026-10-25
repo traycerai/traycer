@@ -617,6 +617,8 @@ export interface SubmitQueueEditInput {
    * have to end the turn refuses the steer and the queue's dialog asks.
    */
   readonly steerRestartConfirmed: boolean;
+  /** The tile submitting the edit: a refusal of its steer opens its dialog. */
+  readonly steerInitiatorId: string;
 }
 
 /** A queued steer the host refused until the person confirms ending the turn. */
@@ -626,6 +628,11 @@ export interface SteerRestartRefusal {
   /** The settings the refused steer carried, sent again on confirm. */
   readonly newSettings: ChatRunSettings | null;
   readonly reasons: ReadonlyArray<ChatQueueSteerRestartReason>;
+  /**
+   * The tile that sent the steer. Only its dialog asks, so another pane on the
+   * same chat, focused or not, never takes the question from it.
+   */
+  readonly initiatorId: string;
 }
 
 export interface PendingUserMessage {
@@ -2137,10 +2144,11 @@ export interface ChatSessionState {
     queueItemId: string,
     newSettings: ChatRunSettings | null,
     restartConfirmed: boolean,
+    initiatorId: string,
   ) => string | null;
   /**
    * Clears and returns the steer refusal named, or `null` when it is no longer
-   * the current one - so of two tiles on one chat only the first asks.
+   * the current one. Its tile calls it once the person answers the dialog.
    */
   takeSteerRestartRefusal: (
     clientActionId: string,
@@ -3722,6 +3730,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly settings: ChatRunSettings;
     readonly intent: QueueEditIntent;
     readonly steerRestartConfirmed: boolean;
+    readonly steerInitiatorId: string;
   }): string | null =>
     input.intent === "steer"
       ? sendQueueSteerNowFrame({
@@ -3731,6 +3740,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueItemId: input.queueItemId,
           newSettings: input.settings,
           restartConfirmed: input.steerRestartConfirmed,
+          initiatorId: input.steerInitiatorId,
         })
       : sendQueueSettingsUpdateFrame({
           set: input.set,
@@ -3871,9 +3881,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessage: null,
     });
   };
-  // The settings each queued steer was sent with, until its ack: a steer the
-  // host refuses unconfirmed is sent again confirmed with the same tuple.
-  const steerSettingsByActionId = new Map<string, ChatRunSettings | null>();
+  // Each queued steer's settings and sending tile, until its ack: a steer the
+  // host refuses unconfirmed is asked about in that tile and sent again
+  // confirmed with the same tuple.
+  const steersAwaitingAck = new Map<
+    string,
+    {
+      readonly newSettings: ChatRunSettings | null;
+      readonly initiatorId: string;
+    }
+  >();
   const sendQueueSteerNowFrame = (input: {
     readonly set: SendActionInput["set"];
     readonly get: SendActionInput["get"];
@@ -3881,6 +3898,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly queueItemId: string;
     readonly newSettings: ChatRunSettings | null;
     readonly restartConfirmed: boolean;
+    readonly initiatorId: string;
   }): string | null => {
     const frame: ChatOwnerActionFrame = {
       kind: "queueSteerNow",
@@ -3892,7 +3910,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       newSettings: input.newSettings,
       restartConfirmed: input.restartConfirmed,
     };
-    steerSettingsByActionId.set(input.clientActionId, input.newSettings);
+    steersAwaitingAck.set(input.clientActionId, {
+      newSettings: input.newSettings,
+      initiatorId: input.initiatorId,
+    });
     return sendAction({
       set: input.set,
       get: input.get,
@@ -7854,8 +7875,8 @@ export function createChatSessionStoreWithNotificationDependencies(
      * already at this workspace's complexity ceiling.
      */
     const holdSteerRestartRefusal = (frame: ChatActionAckFrame): void => {
-      const steerSettings = steerSettingsByActionId.get(frame.clientActionId);
-      steerSettingsByActionId.delete(frame.clientActionId);
+      const steer = steersAwaitingAck.get(frame.clientActionId);
+      steersAwaitingAck.delete(frame.clientActionId);
       if (
         frame.status !== "rejected" ||
         frame.action !== "queueSteerNow" ||
@@ -7867,14 +7888,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         get().pendingActions,
         frame.clientActionId,
       );
-      if (refusedSteer === null || refusedSteer.queueItemId === null) return;
+      if (
+        steer === undefined ||
+        refusedSteer === null ||
+        refusedSteer.queueItemId === null
+      ) {
+        return;
+      }
       suppressNoticeAfterDispatch(frame.clientActionId);
       set({
         steerRestartRefusal: {
           clientActionId: frame.clientActionId,
           queueItemId: refusedSteer.queueItemId,
-          newSettings: steerSettings ?? null,
+          newSettings: steer.newSettings,
           reasons: frame.steerRestartReasons ?? [],
+          initiatorId: steer.initiatorId,
         },
       });
     };
@@ -11485,6 +11513,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 settings: input.settings,
                 intent: input.intent,
                 steerRestartConfirmed: input.steerRestartConfirmed,
+                steerInitiatorId: input.steerInitiatorId,
               });
         if (editSent === null || followUpSent === null) {
           // The submission did not go out whole, so the composer is not
@@ -11549,7 +11578,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
       },
-      queueSteerNow: (queueItemId, newSettings, restartConfirmed) =>
+      queueSteerNow: (
+        queueItemId,
+        newSettings,
+        restartConfirmed,
+        initiatorId,
+      ) =>
         sendQueueSteerNowFrame({
           set,
           get,
@@ -11557,6 +11591,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueItemId,
           newSettings,
           restartConfirmed,
+          initiatorId,
         }),
       takeSteerRestartRefusal: (clientActionId) => {
         const refusal = get().steerRestartRefusal;

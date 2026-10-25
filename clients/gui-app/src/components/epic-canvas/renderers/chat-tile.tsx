@@ -75,7 +75,6 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
-import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import {
   accumulatedChangeRows,
   hostAccumulatedChangeRows,
@@ -3097,15 +3096,14 @@ function useChatTileSessionViewModel(
           settings: input.settings,
           intent:
             input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
-          // A settings change reaches here only through the composer's
-          // confirm dialog; any other cause to end the turn is asked by the
-          // queue's dialog when the host refuses the steer.
+          // Confirmed only when the composer's settings dialog asked. Every
+          // other cause to end the turn, a settings change on a harness the
+          // composer does not ask for included, is asked by the queue's
+          // dialog when the host refuses the steer.
           steerRestartConfirmed:
             input.deliveryPolicy === "after_safe_point" &&
-            decideSteerSettings(
-              handle.store.getState().activeTurn,
-              input.settings,
-            ).kind === "interrupt_restart",
+            input.restartConfirmed,
+          steerInitiatorId: node.instanceId,
         });
         if (actionId === null) return false;
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
@@ -3123,7 +3121,7 @@ function useChatTileSessionViewModel(
       chatActions,
       dispatchUi,
       dispatchUserSend,
-      handle.store,
+      node.instanceId,
       profile,
       submitThroughRebindGate,
     ],
@@ -3269,6 +3267,7 @@ function useChatTileSessionViewModel(
           settings: nextStepSettings,
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
+          restartConfirmed: false,
         },
         dispatch: dispatchUserSend,
         refusal: nextStepSendRefusal,
@@ -3382,6 +3381,7 @@ function useChatTileSessionViewModel(
           // from live turn/queue state at actual dispatch.
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
+          restartConfirmed: false,
         },
         dispatch: dispatchCompactSend,
         refusal: nextStepSendRefusal,
@@ -3427,6 +3427,7 @@ function useChatTileSessionViewModel(
         settings: nextStepSettings,
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
+        restartConfirmed: false,
       },
       dispatch: dispatchUserSend,
       refusal: nextStepSendRefusal,

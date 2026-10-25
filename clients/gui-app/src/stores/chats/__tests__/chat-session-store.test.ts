@@ -8567,7 +8567,7 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", null, false);
+      .queueSteerNow("queue-1", null, false, "tile-1");
 
     expect(clientActionId).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
@@ -8591,7 +8591,7 @@ describe("createChatSessionStore", () => {
 
     const clientActionId = harness.handle.store
       .getState()
-      .queueSteerNow("queue-1", settings, false);
+      .queueSteerNow("queue-1", settings, false, "tile-1");
     if (clientActionId === null) throw new Error("Expected a steer");
     const frame = harness.sent.at(-1);
     if (frame?.kind !== "queueSteerNow") {
@@ -8632,6 +8632,7 @@ describe("createChatSessionStore", () => {
       queueItemId: "queue-1",
       newSettings: settings,
       reasons: ["images", "skills"],
+      initiatorId: "tile-1",
     });
     expect(
       harness.handle.store.getState().takeSteerRestartRefusal("other-action"),
@@ -8639,7 +8640,7 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),
     ).toMatchObject({ queueItemId: "queue-1" });
-    // Taken once: a second tile on the chat finds nothing to ask.
+    // Taken once, when the sending tile's dialog is answered.
     expect(harness.handle.store.getState().steerRestartRefusal).toBeNull();
     expect(
       harness.handle.store.getState().takeSteerRestartRefusal(clientActionId),

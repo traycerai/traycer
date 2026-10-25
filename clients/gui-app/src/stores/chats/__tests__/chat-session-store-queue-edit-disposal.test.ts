@@ -217,6 +217,7 @@ function submitEdit(
     settings,
     intent: "save",
     steerRestartConfirmed: false,
+    steerInitiatorId: "tile-1",
   });
   if (editActionId === null) throw new Error("expected the edit to dispatch");
   const followUp = harness.sent.at(-1);

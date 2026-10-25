@@ -556,6 +556,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "after_safe_point",
         restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
+        restartConfirmed: false,
       });
       expect(accepted).toBe(true);
     });
@@ -584,6 +585,51 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     expect(steerFrame.newSettings).toMatchObject({
       harnessId: "claude",
       model: "claude-sonnet",
+    });
+  });
+
+  it("leaves a queue-edit steer unconfirmed when the composer did not ask, settings changed or not", async () => {
+    // A harness that cannot steer mid-turn skips the composer's settings
+    // dialog, so a changed model reaches here unconfirmed: the steer must go
+    // out unconfirmed for the host to refuse it and the queue's dialog to ask.
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      queuedPromptItem("queue-steer-unasked", QUEUED_CONTENT),
+    ]);
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(submitCapture.onSubmitMessage).not.toBeNull();
+    });
+    const onSubmitMessage = submitCapture.onSubmitMessage;
+    if (onSubmitMessage === null) {
+      throw new Error("expected ChatTile to wire onSubmitMessage");
+    }
+
+    act(() => {
+      const accepted = onSubmitMessage({
+        content: QUEUED_CONTENT,
+        contentText: "edited queue item",
+        attachments: [],
+        settings: { ...QUEUED_SETTINGS, model: "claude-opus" },
+        deliveryPolicy: "after_safe_point",
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
+        restartConfirmed: false,
+      });
+      expect(accepted).toBe(true);
+    });
+
+    expect(
+      chatHarness.sent.find((frame) => frame.kind === "queueSteerNow"),
+    ).toMatchObject({
+      queueItemId: "queue-steer-unasked",
+      newSettings: { model: "claude-opus" },
+      restartConfirmed: false,
     });
   });
 
@@ -636,6 +682,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "auto",
         restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
+        restartConfirmed: false,
       });
       expect(accepted).toBe(true);
     });
