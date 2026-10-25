@@ -10,3 +10,10 @@ b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings
 5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:generic-api-key:524
 5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3475
 5b403e6c438ff700bd9ecc2b601b358be3df3e65:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:3583
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:stripe-access-token:913
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor.test.tsx:stripe-access-token:933
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/components/settings/panels/__tests__/provider-env-overrides-section.test.tsx:generic-api-key:743
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question.test.tsx:generic-api-key:783
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/components/settings/secrets/__tests__/replace-dialog-and-versions-edges.test.tsx:generic-api-key:274
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/components/settings/secrets/__tests__/secret-remove-preview-computers.test.tsx:generic-api-key:89
+ffb15f62d2cd713e7e76c86bf1cc37c1b4a593c6:clients/gui-app/src/providers/__tests__/support-environment-bridge.test.tsx:generic-api-key:75
