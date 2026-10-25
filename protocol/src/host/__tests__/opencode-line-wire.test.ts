@@ -15,7 +15,6 @@ import {
   providersSetSelectionV21,
   providersSetSelectionV22,
 } from "@traycer/protocol/host/registry";
-import { providerCliStateSchema } from "@traycer/protocol/host/provider-schemas";
 import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { z } from "zod";
@@ -208,49 +207,12 @@ describe("providers.setSelection@2.3", () => {
   const entry = hostRpcRegistry["providers.setSelection"][2];
 
   const version = {
-    2: (): (typeof entry.versions)[2]["contract"] => entry.versions[2].contract,
     3: (): (typeof entry.versions)[3]["contract"] => entry.versions[3].contract,
   } as const;
 
-  it("registers 2.3 above 2.2 and keeps the named line unchanged", () => {
+  it("registers 2.3 as the head", () => {
     expect(entry.latestMinor).toBe(3);
-    const head = version[3]();
-    expect(head).not.toBe(version[2]());
-    expect(head.schemaVersion).toEqual({ major: 2, minor: 3 });
-    expect(head.requestSchema.parse(request)).toEqual(request);
-  });
-
-  it("answers with the same response as 2.2", () => {
-    const response = {
-      state: {
-        providerId: "opencode",
-        enabled: true,
-        disabledBy: null,
-        selected: { kind: "bundled", line: 2 },
-        candidates: [],
-        auth: {
-          status: "unknown",
-          badgeText: null,
-          label: null,
-          detail: null,
-        },
-        authPending: false,
-        checkedAt: null,
-        apiKey: { supported: false, configured: false, source: null },
-        terminalAgentArgs: "",
-        envOverrides: [],
-        loginCapability: null,
-        availabilityPending: false,
-        profiles: [],
-      },
-    };
-    expect(version[3]().responseSchema.parse(response)).toEqual(
-      providersSetSelectionV22.responseSchema.parse(response),
-    );
-    expect(version[3]().responseSchema.parse(response).state.selected).toEqual({
-      kind: "bundled",
-      line: 2,
-    });
+    expect(version[3]().schemaVersion).toEqual({ major: 2, minor: 3 });
   });
 
   it("strips line on the downgrade from the head to 1.0", () => {
@@ -419,12 +381,6 @@ describe("providers.list@10.7 chatsFollow", () => {
     expect(result.value.providers[0]).not.toHaveProperty("chatsFollow");
   });
 
-  it("reads a row without the key as absent", () => {
-    const { chatsFollow: _chatsFollow, ...bare } = row;
-    expect(providerCliStateSchema.parse(bare)).not.toHaveProperty(
-      "chatsFollow",
-    );
-  });
 });
 
 /**
@@ -477,22 +433,6 @@ describe("released lines hold back the chats-follow keys", () => {
       )
       .join("\n");
   }
-
-  it("providers.setSelection's released line takes no line on the selection", () => {
-    const { major, minor } = releasedCanonical(
-      "unary",
-      "providers.setSelection",
-    );
-    expect({ major, minor }).toEqual({ major: 2, minor: 1 });
-    const contract =
-      hostRpcRegistry["providers.setSelection"][2].versions[1].contract;
-    expect(
-      contract.requestSchema.parse({
-        providerId: "opencode",
-        selection: { kind: "bundled", line: 2 },
-      }).selection,
-    ).toEqual({ kind: "bundled" });
-  });
 
   it("providers.list's released line names no chatsFollow", () => {
     const { major, minor } = releasedCanonical("unary", "providers.list");

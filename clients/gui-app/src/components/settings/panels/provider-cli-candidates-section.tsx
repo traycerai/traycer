@@ -349,8 +349,9 @@ function isManagedLineSelected(
 }
 
 /**
- * How a Managed pick behaves on this host: `linesMoveChats` where
- * `providers.setSelection` is at 2.3, and the row's `chatsFollow`.
+ * How a pick behaves on this provider's rows: `linesMoveChats` where the host's
+ * `providers.setSelection` is at 2.3 and the provider shows Managed lines
+ * (OpenCode), and the row's `chatsFollow`.
  */
 type ManagedPickMode = {
   readonly linesMoveChats: boolean;
@@ -358,33 +359,47 @@ type ManagedPickMode = {
 };
 
 /**
- * Whether existing chats follow the Managed `line`, which is what a checked
- * row means where a pick moves them (`providers.setSelection@2.3`): the
- * selection names that line and the host says chats follow it
- * (`chatsFollow`). A plain selection, or a line an older client saved, checks
- * neither row, so picking either one is a change that saves.
+ * Whether existing chats follow the saved selection: the host says they do
+ * (`chatsFollow`), and the selection names something to follow. A plain
+ * Managed selection names no line, so it is never followed.
  */
-function managedLineFollowed(
+function selectionFollowed(
   selection: ProviderSelection,
-  line: OpencodeLine,
   chatsFollow: boolean,
 ): boolean {
-  return chatsFollow && selection.kind === "bundled" && selection.line === line;
+  return (
+    chatsFollow && !(selection.kind === "bundled" && selection.line === undefined)
+  );
+}
+
+/** Whether `selection` is exactly what picking `row` saves. */
+function selectionIsRow(
+  selection: ProviderSelection,
+  row: ProviderSelection,
+): boolean {
+  switch (selection.kind) {
+    case "bundled":
+      return row.kind === "bundled" && row.line === selection.line;
+    case "path":
+      return row.kind === "path";
+    case "custom":
+      return row.kind === "custom" && row.path === selection.path;
+  }
 }
 
 /**
- * Whether a Managed row's radio is checked: the followed line where a pick
- * moves existing chats, and below that the line the selection runs, a plain
- * one checking the default row as it always has.
+ * Whether a row's radio is checked where a pick moves existing chats: only the
+ * followed selection's row. A plain selection, or one an older client saved,
+ * checks no row, so any pick is a change that saves a followed selection.
  */
-function isManagedLineChecked(
+function isFollowedRow(
   selection: ProviderSelection,
-  line: OpencodeLine,
-  managedPick: ManagedPickMode,
+  row: ProviderSelection,
+  chatsFollow: boolean,
 ): boolean {
-  return managedPick.linesMoveChats
-    ? managedLineFollowed(selection, line, managedPick.chatsFollow)
-    : isManagedLineSelected(selection, line);
+  return (
+    selectionFollowed(selection, chatsFollow) && selectionIsRow(selection, row)
+  );
 }
 
 /** The caption under the Managed rows. */
@@ -395,13 +410,17 @@ function managedLinesCaption(
   if (!managedPick.linesMoveChats) {
     return "New chats use the Managed line you pick; existing chats keep the line they started on.";
   }
-  const caption =
-    "Your chats use the line you pick, including existing ones from their next message.";
-  if (selection.kind !== "bundled") return caption;
-  const newChatLine = selection.line ?? DEFAULT_MANAGED_LINE;
-  return managedLineFollowed(selection, newChatLine, managedPick.chatsFollow)
-    ? caption
-    : `${caption} New chats use Managed ${String(newChatLine)}.x until you pick one.`;
+  if (selectionFollowed(selection, managedPick.chatsFollow)) {
+    return "Your chats use the line you pick, including existing ones from their next message.";
+  }
+  switch (selection.kind) {
+    case "bundled":
+      return `New chats use Managed ${String(selection.line ?? DEFAULT_MANAGED_LINE)}.x until you pick one.`;
+    case "path":
+      return "New chats use the OpenCode on your PATH until you pick one.";
+    case "custom":
+      return `New chats use ${selection.path} until you pick one.`;
+  }
 }
 
 /**
@@ -560,12 +579,9 @@ export function ProviderCliCandidatesSection({
   // perfectly capable host it is too old for the moments before its handshake
   // lands.
   const supportsVersionManager = useProviderPackVersionManagerSupport(hostId);
-  const managedPick: ManagedPickMode = {
-    linesMoveChats: providersSetSelectionMovesChats(
-      useHostMethodSchemaVersion(hostId, "providers.setSelection"),
-    ),
-    chatsFollow: state.chatsFollow === true,
-  };
+  const setSelectionMovesChats = providersSetSelectionMovesChats(
+    useHostMethodSchemaVersion(hostId, "providers.setSelection"),
+  );
   const focusDraftInput = useCallback((node: HTMLInputElement | null): void => {
     node?.focus();
   }, []);
@@ -636,6 +652,10 @@ export function ProviderCliCandidatesSection({
     hostId,
     supportsVersionManager,
   });
+  const managedPick: ManagedPickMode = {
+    linesMoveChats: setSelectionMovesChats && managedLines.length > 0,
+    chatsFollow: state.chatsFollow === true,
+  };
   const candidateArea = candidateAreaFor({
     adding,
     probePending: state.availabilityPending,
@@ -854,7 +874,15 @@ function CandidateTable({
           radioName={radioName}
           selection={selection}
           selected={isManagedLineSelected(selection, row.line)}
-          checked={isManagedLineChecked(selection, row.line, managedPick)}
+          checked={
+            managedPick.linesMoveChats
+              ? isFollowedRow(
+                  selection,
+                  { kind: "bundled", line: row.line },
+                  managedPick.chatsFollow,
+                )
+              : isManagedLineSelected(selection, row.line)
+          }
           busy={busy}
           onSelect={onSelect}
           onRetryPack={onRetryPack}
@@ -883,7 +911,15 @@ function CandidateTable({
             radioName={radioName}
             selection={selection}
             selected={isSelected(selection, candidate)}
-            checked={isSelected(selection, candidate)}
+            checked={
+              managedPick.linesMoveChats
+                ? isFollowedRow(
+                    selection,
+                    selectionFor(candidate),
+                    managedPick.chatsFollow,
+                  )
+                : isSelected(selection, candidate)
+            }
             busy={busy}
             onSelect={onSelect}
             onRetryPack={onRetryPack}

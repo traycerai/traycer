@@ -64,16 +64,20 @@ export function providersSetSelectionMovesChats(
   return version.major > 2 || (version.major === 2 && version.minor >= 3);
 }
 
-/** The composer's line for a chat the host holds on its current line. */
+/**
+ * The composer's line for a chat the host holds on its current line. Only
+ * `model_unavailable` names the other line: for it, the host compared the two
+ * lines. A binary that cannot be read may be a PATH or custom pick of either
+ * line, so that sentence names the pick rather than a line.
+ */
 export function opencodeLineHeldCopy(held: OpencodeLineHeld): string {
   const current = `OpenCode ${String(held.line)}.x`;
-  const target = `OpenCode ${String(held.line === 1 ? 2 : 1)}.x`;
   switch (held.reason) {
     case "background_work":
       return `Stays on ${current} until its background work ends.`;
     case "model_unavailable":
-      return `Stays on ${current} until you pick a model ${target} offers.`;
+      return `Stays on ${current} because OpenCode ${String(held.line === 1 ? 2 : 1)}.x can't run this message.`;
     case "binary_unavailable":
-      return `Stays on ${current} until ${target} is ready.`;
+      return `Stays on ${current} until the OpenCode you picked is ready.`;
   }
 }

@@ -13,13 +13,15 @@ export const opencodeLineSchema = lazySchema(() =>
 export type OpencodeLine = z.infer<typeof opencodeLineSchema>;
 
 /**
- * Why a chat stays on its recorded line although the saved selection names the
- * other one:
+ * Why a chat stays on its recorded line although the saved selection names
+ * another:
  *  - `background_work`: work the chat started could still resume the session
  *    on its current line;
- *  - `model_unavailable`: the other line cannot run this turn's model, images
- *    or slash command;
- *  - `binary_unavailable`: the other line's binary is not runnable yet.
+ *  - `model_unavailable`: the other line cannot run this message: it lacks the
+ *    turn's model, the target model cannot take its images, or the line lacks
+ *    its slash command or skill;
+ *  - `binary_unavailable`: the selected binary, or its catalog, cannot be read
+ *    yet.
  */
 export const opencodeLineHeldReasonSchema = lazySchema(() =>
   z.enum(["background_work", "model_unavailable", "binary_unavailable"]),

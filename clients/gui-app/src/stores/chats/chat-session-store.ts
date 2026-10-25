@@ -4928,6 +4928,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           // also the reconnect path - a chip the host still holds comes back
           // from here.
           suggestedPrompt: frame.snapshot.suggestedPrompt,
+          // Absent unless the caller's `extra` seats it: the full snapshot
+          // this fold reads carries no hold, and only a windowed snapshot on
+          // `1.38` does. So every other replacement - a legacy snapshot, or a
+          // downgrade onto the legacy line - clears a hold an earlier host
+          // reported, which the current one never said.
+          opencodeLineHeld: undefined,
           // Paired with the snapshot's OWN active turn, so a reconnect
           // mid-thought seats the number under the turn it measured.
           thinkingTokens: thinkingTokensFromSnapshot(
