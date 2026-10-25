@@ -203,6 +203,34 @@ describe("readClientTargetStamp", () => {
     ).toThrow("poolUrl");
   });
 
+  it("carries an optional cloud.iapAudience through when it is a non-empty string", () => {
+    const stamp = desktopStamp();
+    (stamp.cloud as Stamp).iapAudience = "audience-fixture.example";
+    expect(
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toMatchObject({ cloud: { iapAudience: "audience-fixture.example" } });
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["a number", 443],
+    ["null", null],
+  ])("refuses cloud.iapAudience when it is %s", (_label, iapAudience) => {
+    const stamp = desktopStamp();
+    (stamp.cloud as Stamp).iapAudience = iapAudience;
+    expect(() =>
+      stampModule.readClientTargetStamp(
+        writeStamp(stamp),
+        "staging",
+        "desktop",
+      ),
+    ).toThrow("iapAudience");
+  });
+
   it.each(["mac", "windows", "linux"])(
     "refuses a desktop stamp missing %s",
     (key) => {

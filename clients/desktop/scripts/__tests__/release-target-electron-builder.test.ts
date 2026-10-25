@@ -107,7 +107,15 @@ function desktopStamp(
   };
 }
 
-function createProject(target: "production" | "staging" | "unstamped"): {
+interface ProjectOptions {
+  readonly iapAudience?: string;
+  readonly iapKey?: boolean;
+}
+
+function createProject(
+  target: "production" | "staging" | "unstamped",
+  options: ProjectOptions = {},
+): {
   projectDir: string;
   configPath: string;
   generatedPath: string;
@@ -148,9 +156,20 @@ function createProject(target: "production" | "staging" | "unstamped"): {
     }),
   );
   if (target !== "unstamped") {
+    const stamp = desktopStamp(target) as { cloud: Record<string, unknown> };
+    if (options.iapAudience !== undefined) {
+      stamp.cloud.iapAudience = options.iapAudience;
+    }
     writeFileSync(
       join(projectDir, ".release-target-stamp.json"),
-      JSON.stringify(desktopStamp(target)),
+      JSON.stringify(stamp),
+    );
+  }
+  if (options.iapKey === true) {
+    mkdirSync(join(projectDir, "resources", "keys"), { recursive: true });
+    writeFileSync(
+      join(projectDir, "resources", "keys", "iap-service-account.json"),
+      "{}",
     );
   }
   return {
@@ -286,5 +305,53 @@ describe("release-target-electron-builder", () => {
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("TRAYCER_RELEASE_REPO");
+  });
+});
+
+describe("release-target-electron-builder IAP key packaging", () => {
+  const AUDIENCE = "audience-fixture.apps.googleusercontent.example";
+
+  it("packages the key as an extra resource for a staging target behind IAP", () => {
+    const fixture = createProject("staging", {
+      iapAudience: AUDIENCE,
+      iapKey: true,
+    });
+    expect(run(fixture.projectDir).extraResources).toEqual([
+      {
+        from: "resources/keys",
+        to: "keys",
+        filter: ["iap-service-account.json"],
+      },
+    ]);
+  });
+
+  it("packages no key for staging without an audience, or for production", () => {
+    for (const fixture of [
+      createProject("staging", { iapKey: true }),
+      createProject("production", { iapKey: true }),
+    ]) {
+      expect(run(fixture.projectDir).extraResources).toEqual([]);
+    }
+  });
+
+  it("refuses a staging target behind IAP whose key file is missing", () => {
+    const fixture = createProject("staging", { iapAudience: AUDIENCE });
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(
+          fixture.projectDir,
+          "scripts",
+          "release-target-electron-builder.cjs",
+        ),
+      ],
+      {
+        cwd: fixture.projectDir,
+        encoding: "utf8",
+        env: { ...process.env, TRAYCER_RELEASE_REPO: "acme/private-traycer" },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("iap-service-account.json");
   });
 });
