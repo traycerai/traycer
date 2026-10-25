@@ -408,6 +408,47 @@ describe("ClaudeSessionNameGroup", () => {
     expect(harness.sets[2]).toEqual({ claudeTemplate: "{project}-z" });
   });
 
+  it("keeps a refused save's draft when an earlier save's read-back lands after the refusal", async () => {
+    const harness = await renderReady("{project}-x", {
+      ...ANSWERS_EVERYTHING,
+      holdReadAfterFirstSet: true,
+      holdSecondSet: true,
+      failSecondSet: true,
+    });
+
+    // Save B lands; its read-back is held.
+    fireEvent.change(templateInput(), { target: { value: "{project}-y" } });
+    fireEvent.blur(templateInput());
+    await waitFor(() => {
+      expect(templateInput().disabled).toBe(false);
+    });
+    // Save C is refused before B's read-back answers.
+    fireEvent.change(templateInput(), { target: { value: "{project}-z" } });
+    fireEvent.blur(templateInput());
+    await waitFor(() => {
+      expect(harness.sets).toHaveLength(2);
+    });
+    harness.releaseSecondSet();
+    await waitFor(() => {
+      expect(toasted).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(templateInput().disabled).toBe(false);
+    });
+    harness.releaseHeldRead();
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+
+    // The refused draft stays for a retry, and the retry sends it.
+    expect(templateInput().value).toBe("{project}-z");
+    await waitFor(() => {
+      fireEvent.blur(templateInput());
+      expect(harness.sets).toHaveLength(3);
+    });
+    expect(harness.sets[2]).toEqual({ claudeTemplate: "{project}-z" });
+  });
+
   it("lets a keyboard user reach Reset without saving the draft, and saves it when focus leaves Reset elsewhere", async () => {
     const harness = await renderReady("{project}-x", ANSWERS_EVERYTHING);
     const reset = screen.getByTestId("claude-session-name-reset");

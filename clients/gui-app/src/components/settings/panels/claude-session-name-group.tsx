@@ -168,11 +168,14 @@ function ClaudeSessionNameField(props: {
   // compared against the write, not the read. `null` after a refused write:
   // the host still holds its old value, so any draft may be sent.
   const lastSent = useRef<string | null>(saved);
+  // Set by a refused write: the draft it carried stays for a retry, and no
+  // read-back replaces it until the next commit, Reset or edit.
+  const refusedDraft = useRef(false);
   // The host's value can change from outside this field (another window, a
   // hand edit); follow it unless the user is mid-edit. While a save is still
   // queued, a read-back is of an earlier save and the queued draft stands.
   useEffect(() => {
-    if (savingRef.current) return;
+    if (savingRef.current || refusedDraft.current) return;
     lastSent.current = saved;
     if (document.activeElement !== inputRef.current) setDraft(saved);
   }, [saved]);
@@ -188,11 +191,15 @@ function ClaudeSessionNameField(props: {
     if (trimmed !== next) setDraft(trimmed);
     if (templateProblem(trimmed, state.placeholders) !== null) return;
     if (trimmed === lastSent.current) return;
+    refusedDraft.current = false;
     lastSent.current = trimmed;
     onSave(trimmed, () => {
       // A save queued after this one owns `lastSent` now; its own outcome
       // decides what may be sent next.
-      if (lastSent.current === trimmed) lastSent.current = null;
+      if (lastSent.current === trimmed) {
+        lastSent.current = null;
+        refusedDraft.current = true;
+      }
     });
   };
 
@@ -231,7 +238,10 @@ function ClaudeSessionNameField(props: {
             placeholder={state.defaultClaudeTemplate}
             value={draft}
             disabled={saving}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              refusedDraft.current = false;
+              setDraft(event.target.value);
+            }}
             onBlur={(event) => {
               // Focus moving to Reset is on its way to discard the draft;
               // Reset's own blur saves it if it goes elsewhere instead. With

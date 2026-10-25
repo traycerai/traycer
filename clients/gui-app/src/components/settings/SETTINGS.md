@@ -3006,7 +3006,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     value sent; a read-back that lands while a save is queued is of an
     earlier save and does not replace the draft. A refused save clears that
     value unless a later save was queued since, so committing the same draft
-    again retries it.
+    again retries it, and its draft stays (no read-back replaces it) until the
+    next commit, Reset or edit.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared
