@@ -10,7 +10,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ChatOpencodeLineContext } from "@/hooks/harnesses/chat-opencode-line-context";
+import {
+  ChatOpencodeLineContext,
+  ChatOpencodeLineHeldContext,
+} from "@/hooks/harnesses/chat-opencode-line-context";
 import { chatOpencodeLine } from "@/lib/chat/opencode-line";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
@@ -1013,15 +1016,22 @@ function useComposerNavigationHighlight(): {
 /**
  * Provides the chat's OpenCode line above everything the tile renders, its
  * view model included, so every model and command catalog the tile reads (the
- * composer's and the transcript labels') is the line the chat runs.
+ * composer's and the transcript labels') is the line the chat runs. Beside it,
+ * why the host holds the chat on that line, for the composer's line.
  */
 export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const opencodeLine = useStore(props.handle.store, (s) =>
     s.chat === null ? null : chatOpencodeLine(s.chat),
   );
+  const opencodeLineHeld = useStore(
+    props.handle.store,
+    (s) => s.opencodeLineHeld ?? null,
+  );
   return (
     <ChatOpencodeLineContext.Provider value={opencodeLine}>
-      <ChatTileSessionViewBody {...props} />
+      <ChatOpencodeLineHeldContext.Provider value={opencodeLineHeld}>
+        <ChatTileSessionViewBody {...props} />
+      </ChatOpencodeLineHeldContext.Provider>
     </ChatOpencodeLineContext.Provider>
   );
 }

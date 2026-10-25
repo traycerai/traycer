@@ -311,6 +311,7 @@ import type {
 // receives is open (`OpenMessage` above).
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { OpenChatSnapshot } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpencodeLineHeld } from "@traycer/protocol/common/opencode-line";
 
 export type ChatStreamClientHandle = Pick<
   ChatStreamClient,
@@ -1583,6 +1584,14 @@ export interface ChatSessionState {
    * against a host below `1.20`, which never suggests anything.
    */
   readonly suggestedPrompt: string | undefined;
+  /**
+   * Why the host keeps this chat on its recorded OpenCode line although the
+   * saved selection names the other one (`chat.subscribe@1.38`), for the
+   * composer's one line. Snapshot-only, where an ABSENT key clears: the host
+   * re-sends the snapshot when the chat moves or the hold changes. `undefined`
+   * against a host below `1.38`.
+   */
+  readonly opencodeLineHeld: OpencodeLineHeld | undefined;
   /**
    * The active turn's thinking-token estimate (`chat.subscribe@1.20`), for the
    * streaming "Thinking" label. Seeded by the snapshot's
@@ -6844,6 +6853,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         {
           ...aux,
           transcriptRowContext: hydratedRowContext(window),
+          // Straight across: absent is "not held", and it is the value that
+          // clears the line.
+          opencodeLineHeld: frame.snapshot.opencodeLineHeld,
         },
         // The HOST's answer, not a scan of the adapted frame: those records are
         // the hydrated subset, and a failure several user rows back is exactly
@@ -10346,6 +10358,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       lastFailedAttempt: undefined,
       lastFallbackOutcome: undefined,
       suggestedPrompt: undefined,
+      opencodeLineHeld: undefined,
       thinkingTokens: null,
       managedCommands: [],
       heldUpdates: [],
