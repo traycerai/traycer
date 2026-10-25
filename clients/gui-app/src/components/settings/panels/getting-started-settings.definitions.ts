@@ -60,7 +60,7 @@ export const GETTING_STARTED = defineSettingsSection("getting-started", {
     group: null,
     search: { contributesTo: "page" },
     label: "Add credits",
-    description: "Credits pay for your sandboxes.",
+    description: "Credits pay for your sandboxes, awake or resting.",
     availableWhen: alwaysAvailable,
     keywords: ["credits", "billing", "sandbox"],
   },

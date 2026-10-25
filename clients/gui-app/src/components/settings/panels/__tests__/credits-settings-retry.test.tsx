@@ -28,15 +28,6 @@ vi.mock("@/hooks/auth/use-refresh-credits-on-traycer-turn", () => ({
 vi.mock("@/hooks/auth/use-platform-billing-url", () => ({
   usePlatformBillingUrl: () => "https://traycer.ai/billing",
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: { providers: [] } }),
-}));
-vi.mock("@/lib/sandboxes/staged-sandbox-in-window", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/lib/sandboxes/staged-sandbox-in-window")
-  >()),
-  useStagedSandboxInThisWindow: () => null,
-}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://traycer.ai/sign-in" }),
 }));
