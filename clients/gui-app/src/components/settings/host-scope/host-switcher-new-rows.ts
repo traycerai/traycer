@@ -1,3 +1,5 @@
+import type { SandboxConfigurationCopy } from "@/lib/sandboxes/sandbox-strings";
+
 /** One New sandbox row: a configuration a new sandbox can be staged in. */
 export interface HostSwitcherNewRow {
   /** `personal` or the team id. */
@@ -6,8 +8,8 @@ export interface HostSwitcherNewRow {
   readonly label: string;
   /** Shape · price · whose credits. */
   readonly subLine: string;
-  /** The configuration's name, for the collapsed group and the search. */
-  readonly configurationName: string;
+  /** The configuration, for the collapsed group's header and the search. */
+  readonly configuration: SandboxConfigurationCopy;
   /** Nothing can be created: the sub-line says why, and a pick stages nothing. */
   readonly disabled: boolean;
 }

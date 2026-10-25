@@ -26,16 +26,20 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   awakeSandboxCount,
+  composerComputerSubLine,
   groupComposerHostOptions,
   groupHostOptions,
+  hostOptionKindLabel,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
   type HostPickIntent,
+  type HostRowSurfaceState,
 } from "@/components/settings/host-scope/host-option-model";
 import { HOST_SWITCHER_LIST_ATTRIBUTE } from "@/components/settings/host-scope/host-switcher-portal";
 import {
@@ -58,8 +62,11 @@ import {
   MANAGE_SANDBOXES_IN_SETTINGS,
   NO_MATCH_ELSEWHERE_LINE,
   SANDBOXES_YOU_STARTED_LABEL,
+  SEARCH_HOSTS_PLACEHOLDER,
+  THIS_COMPUTER,
   YOURS_GROUP_LABEL,
-  moreConfigurationsLabel,
+  collapsedConfigurationsLabel,
+  configurationLabel,
   noHostMatchesLine,
   sandboxDefiningLine,
   sandboxesYouStartedCount,
@@ -68,7 +75,9 @@ import {
 /**
  * Search stops being decoration and starts being necessary somewhere around a
  * screenful of rows. Below this, a filter box is one more thing to skip past
- * on the way to a list you can already see whole.
+ * on the way to a list you can already see whole. The composer and in-task
+ * pickers carry it at any length: the person is mid-draft there, and the
+ * keys they type on opening belong to the picker, not the draft.
  */
 const SEARCH_THRESHOLD = 6;
 
@@ -78,13 +87,22 @@ const SEARCH_THRESHOLD = 6;
  */
 function hostSwitcherLabel(
   intent: HostPickIntent,
-  selected: HostScopeOption | null,
+  name: string | null,
   status: string | null,
 ): string {
   const subject = intent === "view" ? "Settings host" : "Host";
-  return selected === null
+  return name === null
     ? `${subject}: none selected`
-    : `${subject}: ${selected.name}${status === null ? "" : `, ${status}`}`;
+    : `${subject}: ${name}${status === null ? "" : `, ${status}`}`;
+}
+
+/**
+ * What a host is called on the chip and its row. The composer and in-task
+ * pickers call the machine this app runs on `This computer`, its own name
+ * moving to the row's sub-line; every other list names it.
+ */
+function hostRowTitle(host: HostScopeOption, composer: boolean): string {
+  return composer && host.isLocalMachine ? THIS_COMPUTER : host.name;
 }
 
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";
@@ -364,6 +382,7 @@ export function HostSwitcher(props: {
     props.composer,
   );
   const surface = HOST_SWITCHER_SURFACES[props.surface];
+  const showSearch = hostSwitcherShowsSearch(hosts, props.composer);
 
   // The empty state keys on the LIST, not on the selection.
   //
@@ -458,14 +477,17 @@ export function HostSwitcher(props: {
           // Only the search input is worth declining for; below the threshold
           // there is no input and Radix's default lands on a host row, which
           // summons nothing.
-          onOpenAutoFocus={
-            hosts.length >= SEARCH_THRESHOLD ? coarseOpenAutoFocus : undefined
-          }
+          onOpenAutoFocus={showSearch ? coarseOpenAutoFocus : undefined}
+          // The list is portalled, but React still bubbles its keys up the
+          // tree it was mounted from: a composer above this picker would
+          // take the search's keystrokes (an Enter that picks a row would
+          // also send the draft).
+          onKeyDown={(event) => event.stopPropagation()}
         >
           <Command>
-            {hosts.length >= SEARCH_THRESHOLD ? (
+            {showSearch ? (
               <CommandInput
-                placeholder="Search hosts…"
+                placeholder={SEARCH_HOSTS_PLACEHOLDER}
                 value={search}
                 onValueChange={setSearch}
               />
@@ -510,6 +532,7 @@ export function HostSwitcher(props: {
                     environmentLabel={
                       props.environmentLabelForHost?.(host.hostId) ?? null
                     }
+                    composer={props.composer !== null}
                     subLines={hostSubLines(props.composer, host.hostId)}
                     onSelect={() => {
                       pickHostRow(props.composer, props.intent, host);
@@ -521,8 +544,11 @@ export function HostSwitcher(props: {
                 selected={selected}
               />
               {trailingAction === null ? null : (
-                <CommandGroup>
+                // The composer's footer stays under a search that matched
+                // nothing: it is where the rest are.
+                <CommandGroup forceMount={props.composer !== null}>
                   <CommandItem
+                    forceMount={props.composer !== null}
                     value={trailingAction.commandValue}
                     keywords={[...trailingAction.keywords]}
                     onSelect={() => {
@@ -591,6 +617,14 @@ export function HostSwitcher(props: {
       />
     </>
   );
+}
+
+/** Whether the list opens with its search field: see `SEARCH_THRESHOLD`. */
+function hostSwitcherShowsSearch(
+  hosts: readonly HostScopeOption[],
+  composer: HostSwitcherComposerMode | null,
+): boolean {
+  return composer !== null || hosts.length >= SEARCH_THRESHOLD;
 }
 
 /** A picker's empty search: the composer says where the rest are. */
@@ -850,7 +884,8 @@ function HostSwitcherComposerGroups(props: {
 /**
  * The New sandbox group: one row per configuration while there are one or
  * two; past two, the remembered configuration's row and the rest behind a
- * `N more` collapsible, the same affordance as Sandboxes you started.
+ * collapsible that counts and names them (`4 teams: …`), the same affordance
+ * as Sandboxes you started.
  */
 function HostSwitcherNewGroup(props: {
   readonly rows: readonly HostSwitcherNewRow[];
@@ -882,8 +917,10 @@ function HostSwitcherNewGroup(props: {
       {head.map(renderNewRow)}
       {rest.length === 0 ? null : (
         <HostSwitcherCollapsible
-          title={rest.map((row) => row.configurationName).join(", ")}
-          countLabel={moreConfigurationsLabel(rest.length)}
+          title={collapsedConfigurationsLabel(
+            rest.map((row) => row.configuration),
+          )}
+          countLabel={null}
           defaultOpen={false}
           forceOpen={props.searching}
           testId="host-switcher-new-sandbox-more"
@@ -906,7 +943,11 @@ function HostSwitcherNewSandboxRow(props: {
   return (
     <CommandItem
       value={`new-sandbox:${row.configurationKey}`}
-      keywords={["new sandbox", row.configurationName, row.label]}
+      keywords={[
+        "new sandbox",
+        configurationLabel(row.configuration),
+        row.label,
+      ]}
       onSelect={() => props.onPick(row.configurationKey)}
       disabled={row.disabled}
       data-testid={`host-switcher-new-sandbox-${row.configurationKey}`}
@@ -967,7 +1008,8 @@ function HostSwitcherSandboxGroup(props: {
  */
 function HostSwitcherCollapsible(props: {
   readonly title: string;
-  readonly countLabel: string;
+  /** `null` where the title counts for itself. */
+  readonly countLabel: string | null;
   readonly defaultOpen: boolean;
   readonly forceOpen: boolean;
   readonly testId: string;
@@ -992,10 +1034,14 @@ function HostSwitcherCollapsible(props: {
         ) : (
           <ChevronRight className="size-3.5 shrink-0" aria-hidden />
         )}
-        <span className="min-w-0 flex-1 truncate text-start">
+        {/* Wraps rather than truncates: a cut list of names reads as more
+            of them than there are. */}
+        <span className="min-w-0 flex-1 text-start wrap-break-word">
           {props.title}
         </span>
-        <span className="shrink-0 tabular-nums">{props.countLabel}</span>
+        {props.countLabel === null ? null : (
+          <span className="shrink-0 tabular-nums">{props.countLabel}</span>
+        )}
       </CollapsibleTrigger>
       <CollapsibleContent>{props.children}</CollapsibleContent>
     </Collapsible>
@@ -1027,9 +1073,11 @@ function hostSwitcherTriggerText(
     selected === null
       ? null
       : hostOptionStatusWord(selected, AVAILABLE_HOST_ROW_SURFACE_STATE);
+  const name =
+    selected === null ? null : hostRowTitle(selected, composer !== null);
   return {
-    label: selected === null ? "Select a host" : selected.name,
-    ariaLabel: hostSwitcherLabel(intent, selected, status),
+    label: name ?? "Select a host",
+    ariaLabel: hostSwitcherLabel(intent, name, status),
     status,
   };
 }
@@ -1120,11 +1168,89 @@ function HostSwitcherTrigger(props: {
   );
 }
 
+/** The shared row, with any lines the surface puts under it. */
+function HostSwitcherOptionRow(props: {
+  readonly host: HostScopeOption;
+  readonly picked: boolean;
+  readonly active: boolean;
+  readonly intent: HostPickIntent;
+  readonly surfaceState: HostRowSurfaceState;
+  readonly updateView: FleetUpdateView | null;
+  readonly environmentLabel: string | null;
+  readonly subLines: readonly string[];
+}): ReactNode {
+  const row = (
+    <HostOptionRow
+      host={props.host}
+      picked={props.picked}
+      active={props.active}
+      intent={props.intent}
+      surfaceState={props.surfaceState}
+      updateView={props.updateView}
+      nameRef={null}
+      environmentLabel={props.environmentLabel}
+    />
+  );
+  if (props.subLines.length === 0) return row;
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-2">{row}</span>
+      {props.subLines.map((line) => (
+        <span
+          key={line}
+          className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
+        >
+          {line}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * A computer in the composer and in-task pickers: its title, then what it is
+ * and whether it answers on the line below, which is where its status is
+ * said (so the title carries no status word beside it).
+ */
+function ComposerComputerRow(props: {
+  readonly host: HostScopeOption;
+  readonly title: string;
+  readonly subLines: readonly string[];
+}): ReactNode {
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-2">
+        <HostGlyph
+          host={props.host}
+          className="size-4 shrink-0 text-muted-foreground"
+        />
+        {/* A title that already says what it is (`This computer`) is not
+            announced twice. */}
+        {props.title === hostOptionKindLabel(props.host) ? null : (
+          <span className="sr-only">{hostOptionKindLabel(props.host)}</span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-start">
+          {props.title}
+        </span>
+      </span>
+      {props.subLines.map((line) => (
+        <span
+          key={line}
+          className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
+        >
+          {line}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /**
  * The combobox's interaction shell around the shared row: a cmdk item, its
  * search keywords, and the assistive-tech mark for "this is the one you are
  * viewing". Everything the row SAYS lives in `HostOptionRow`, which the
- * embedded sections and the Select host dialog draw too.
+ * embedded sections and the Select host dialog draw too, except a computer's
+ * in the composer and in-task pickers (`ComposerComputerRow`).
  */
 function HostSwitcherRow(props: {
   readonly host: HostScopeOption;
@@ -1139,6 +1265,8 @@ function HostSwitcherRow(props: {
   readonly updateView: FleetUpdateView | null;
   /** This row's environment label, or `null` for a picker that does not say. */
   readonly environmentLabel: string | null;
+  /** The composer and in-task pickers: a computer row says what it is below its title. */
+  readonly composer: boolean;
   /** Lines under the row (the composer's Local sub-line, the reach sentence). */
   readonly subLines: readonly string[];
   readonly onSelect: () => void;
@@ -1150,14 +1278,17 @@ function HostSwitcherRow(props: {
     surfaceRefusal: props.surfaceRefusal,
     surfaceInert: props.surfaceInert,
   });
+  const selectable = isHostOptionSelectable(host, props.intent, surfaceState);
+  const title = hostRowTitle(host, props.composer);
   return (
     <CommandItem
       value={host.hostId}
       // One predicate, asked here exactly as the button list asks it, so a row
       // that explains why it cannot be picked is also a row that cannot be
       // picked — on both kinds of container.
-      disabled={!isHostOptionSelectable(host, props.intent, surfaceState)}
+      disabled={!selectable}
       keywords={[
+        title,
         host.name,
         formatPlatform(host.platform) ?? "",
         formatHostVersion(host.version) ?? "",
@@ -1171,40 +1302,26 @@ function HostSwitcherRow(props: {
       // and every other row as the same text.
       aria-current={props.scoped ? "true" : undefined}
     >
-      {props.subLines.length === 0 ? (
-        <HostOptionRow
+      {props.composer && host.sandbox === null ? (
+        <ComposerComputerRow
+          host={host}
+          title={title}
+          subLines={[
+            composerComputerSubLine(host, selectable),
+            ...props.subLines,
+          ]}
+        />
+      ) : (
+        <HostSwitcherOptionRow
           host={host}
           picked={props.scoped}
           active={props.active}
           intent={props.intent}
           surfaceState={surfaceState}
           updateView={props.updateView}
-          nameRef={null}
           environmentLabel={props.environmentLabel}
+          subLines={props.subLines}
         />
-      ) : (
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-2">
-            <HostOptionRow
-              host={host}
-              picked={props.scoped}
-              active={props.active}
-              intent={props.intent}
-              surfaceState={surfaceState}
-              updateView={props.updateView}
-              nameRef={null}
-              environmentLabel={props.environmentLabel}
-            />
-          </span>
-          {props.subLines.map((line) => (
-            <span
-              key={line}
-              className="ps-6 text-ui-xs whitespace-normal text-muted-foreground"
-            >
-              {line}
-            </span>
-          ))}
-        </span>
       )}
     </CommandItem>
   );
