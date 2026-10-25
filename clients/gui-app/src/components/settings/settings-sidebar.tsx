@@ -70,8 +70,8 @@ export interface SettingsSidebarProps {
 /**
  * The sidebar carries the scope model.
  *
- * Getting started leads, followed by Application and Account, and the
- * host group goes last, headed by ONE picker with its scoped sections beneath.
+ * Getting started leads, followed by Application, Account and Environment,
+ * and the host group goes last, headed by ONE picker with its scoped sections beneath.
  * The picker is deliberately NOT a level of navigation: Providers already
  * spends the app's nesting budget on a rail plus a tab bar, so a host tier
  * here would have made the deepest page four levels down. See

@@ -904,7 +904,10 @@ Personal; if it is about your account rather than your settings it sits under
 Account; the rest is the app itself.
 
 - **Application** - General, Appearance, Browser, Opening behavior, Sounds,
-  Keybindings, Diagnostics, Layout.
+  Keybindings, Layout, Diagnostics.
+- **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
+  and Delete account on mobile. Read through the window's own host, never
+  through the picker.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
   Permissions, Agents (id `agents`: tabs Selection guide and Definitions),
   Model routing, Variables & shells (id `shell`), Secrets, Sandboxes, and
@@ -916,8 +919,6 @@ Account; the rest is the app itself.
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
-- **Account** - Sessions, Link mobile app, Usage, Permissions, Notifications,
-  and Delete account on mobile. Read through the window's own host too.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Worktrees, Diagnostics - is scoped by that
   one selection.
@@ -1128,8 +1129,8 @@ host scopes on one screen, with the outer one unable to describe the number
 the inner one produced. It still reads through a host CLIENT, as every RPC
 does; that is a transport fact, not a scope one.
 
-Application, Personal and Account lead because none of them depends on a
-selection; the host group goes last because it is the only one whose contents
+Application, Account and Environment lead because none of them depends on
+a selection; the host group goes last because it is the only one whose contents
 do.
 
 **Scope is not a level.** Settings already spends its nesting budget inside
@@ -7243,12 +7244,9 @@ level`, `Host log level` and the host's log tails described the selected host.
     likewise explicit ("No log files on &lt;host&gt;.") rather than an empty card.
 - `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
   Sessions - see "Scope: the organising idea" above for why it is not under
-  the host picker. Groups must stay contiguous in `settings-sections.ts`, so
-  landing it there pushed Shell past `SINGLE_DIGIT_LEADER_INDEX_LIMIT` into the
-  digit-less tail. Adding Application -> Diagnostics later pushed **Agent
-  selection** out too, which runs against the rule that support surfaces are the
-  ones to lose digits - it is forced by position, since an Application entry
-  lands in the first four whatever it is. See that file's own note). All reading
+  the host picker. Groups stay contiguous in `settings-sections.ts`, and only
+  Getting started, the Application entries and Sessions carry a leader digit;
+  Usage is in the digit-less tail. See that file's own note). All reading
   `host.usage.summary` through `UsageSummaryPanel`
   (`components/usage-analytics/`), placement-agnostic. `host.usage.summary`
   is an OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol

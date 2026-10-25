@@ -714,8 +714,14 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["opening-behavior", "app"],
   ["app-notifications", "app"],
   ["keybindings", "app"],
-  ["app-diagnostics", "app"],
   ["layout", "app"],
+  ["app-diagnostics", "app"],
+  ["devices", "account"],
+  ["link-phone", "account"],
+  ["usage", "account"],
+  ["credits", "account"],
+  ["notifications", "account"],
+  ["delete-account", "account"],
   ["providers", "personal"],
   ["mcp-servers", "personal"],
   ["skills", "personal"],
@@ -733,12 +739,6 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   // is every vitest run, and withheld from production builds.
   ["dev-artifact-proof", "app"],
   ["dev-canvas-proof", "app"],
-  ["devices", "account"],
-  ["link-phone", "account"],
-  ["usage", "account"],
-  ["credits", "account"],
-  ["notifications", "account"],
-  ["delete-account", "account"],
   ["host", "host"],
   ["worktrees", "host"],
   ["diagnostics", "host"],
@@ -781,19 +781,19 @@ describe("<SettingsSidebar /> scope groups", () => {
     return aside;
   }
 
-  it("orders the groups Guide, Application, Environment, Account, Host", () => {
+  it("orders the groups Guide, Application, Account, Environment, Host", () => {
     expect(SETTINGS_SECTION_GROUPS.map((group) => group.id)).toEqual([
       "guide",
       "app",
-      "personal",
       "account",
+      "personal",
       "host",
     ]);
     expect(SETTINGS_SECTION_GROUPS.map((group) => group.label)).toEqual([
       "Guide",
       "Application",
-      "Environment",
       "Account",
+      "Environment",
       "Host",
     ]);
   });
@@ -819,7 +819,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     const headings = Array.from(aside.querySelectorAll("h2")).map(
       (heading) => heading.textContent,
     );
-    expect(headings).toEqual(["Application", "Environment", "Account", "Host"]);
+    expect(headings).toEqual(["Application", "Account", "Environment", "Host"]);
   });
 
   it("files each rendered row under its group's heading", async () => {
@@ -867,7 +867,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
   });
 
-  it("renders the host picker once, after Environment and Account and before the host rows", async () => {
+  it("renders the host picker once, after Account and Environment and before the host rows", async () => {
     const aside = await renderRail();
 
     const pickers = screen.getAllByTestId("settings-host-switcher");
@@ -973,7 +973,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
       (node) => node.textContent === "Environment",
     );
     const next = Array.from(document.querySelectorAll("h2")).find(
-      (node) => node.textContent === "Account",
+      (node) => node.textContent === "Host",
     );
     if (heading === undefined || next === undefined) {
       throw new Error("the Environment group did not render");

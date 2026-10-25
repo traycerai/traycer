@@ -112,8 +112,8 @@ export const FALLBACK_SETTINGS_SECTION_ID =
 export type SettingsSectionGroupId =
   | "guide"
   | "app"
-  | "personal"
   | "account"
+  | "personal"
   | "host";
 
 export interface SettingsSectionGroup {
@@ -122,19 +122,19 @@ export interface SettingsSectionGroup {
 }
 
 /**
- * Getting started leads in its own group, followed by Application,
- * Environment and Account. The host group goes last because it is the only one whose
+ * Getting started leads in its own group, followed by Application, Account
+ * and Environment. The host group goes last because it is the only one whose
  * contents are scoped — it carries the picker, and everything beneath the
  * picker belongs to whichever host that picker names.
  */
 export const SETTINGS_SECTION_GROUPS: ReadonlyArray<SettingsSectionGroup> = [
   { id: "guide", label: "Guide" },
   { id: "app", label: "Application" },
+  { id: "account", label: "Account" },
   // The id stays `personal` (ids are a compatibility surface); the group is
   // the Environment dropdown's: its picker names the configuration the pages
   // below it show, Personal, a team, or a computer that has not moved.
   { id: "personal", label: "Environment" },
-  { id: "account", label: "Account" },
   { id: "host", label: "Host" },
 ];
 
@@ -162,13 +162,11 @@ export interface SettingsSection {
  *
  * Only the first ten entries can carry a digit
  * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-four on
- * desktop (twenty-five with a team's Members). Getting started and the eight Application entries take 1 to 9, and
- * Providers, the first Environment entry, takes 0. Everything after it - the
- * rest of Environment, all of Account and the host group - goes without. That
- * cost Sessions the digit it held while Account came straight after
- * Application: Personal is the more frequent destination, and the groups must
- * stay contiguous, so the trade could only go one way without shortcut order
- * diverging from sidebar reading order and command-palette row order.
+ * desktop (twenty-five with a team's Members). Getting started and the eight
+ * Application entries take 1 to 9, and Sessions, the first Account entry,
+ * takes 0. Everything after it - the rest of Account, all of Environment and
+ * the host group - goes without. The groups follow the design's order, so
+ * shortcut order stays sidebar reading order and command-palette row order.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
@@ -231,16 +229,6 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Keyboard,
     group: "app",
   },
-  // Same kind of page as Host → Diagnostics, partitioned by scope, so the
-  // same word and icon. The split exists because this half never varied by
-  // host — the app's log verbosity, its log file and its heap describe one
-  // window — so under the picker it was drawn once per host in the account.
-  {
-    id: "app-diagnostics",
-    label: "Diagnostics",
-    icon: Activity,
-    group: "app",
-  },
   // Where the app's own chrome SITS and how much of it shows - the status bar
   // first, the composer and the sidebar's own layout beside it later. It is a
   // page rather than a group inside Appearance because the controls answer
@@ -251,6 +239,69 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Layout",
     icon: PanelBottom,
     group: "app",
+  },
+  // Same kind of page as Host → Diagnostics, partitioned by scope, so the
+  // same word and icon. The split exists because this half never varied by
+  // host — the app's log verbosity, its log file and its heap describe one
+  // window — so under the picker it was drawn once per host in the account.
+  {
+    id: "app-diagnostics",
+    label: "Diagnostics",
+    icon: Activity,
+    group: "app",
+  },
+  {
+    id: "devices",
+    label: "Sessions",
+    icon: ShieldCheck,
+    group: "account",
+  },
+  // Account, like Sessions: the code it mints signs the PHONE into the
+  // account, regardless of which host this window looks at.
+  {
+    id: "link-phone",
+    label: "Link mobile app",
+    icon: QrCode,
+    group: "account",
+  },
+  // Account, not Host: what this reports is the ACCOUNT's token and cost
+  // spend, with the host as one filter INSIDE the page (defaulting to all of
+  // them). Under the sidebar's host picker it would have put two competing
+  // host scopes on one screen, with the outer one unable to describe the
+  // number the inner one produced. It still reads through a host client -
+  // every RPC does - but that is a transport fact, not a scope one.
+  {
+    id: "usage",
+    label: "Usage",
+    icon: LineChart,
+    group: "account",
+  },
+  // Account, beside Usage: credits are the person's to add and spend. The
+  // page is E8's (`panels/credits-settings-panel`).
+  {
+    id: "credits",
+    label: "Credits",
+    icon: Coins,
+    group: "account",
+  },
+  // Event policy and automation for the account. Different controls than
+  // Application → Sounds, so it keeps the generic word and the bell.
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: Bell,
+    group: "account",
+  },
+  // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
+  // below). Last in its group because it is the group's one irreversible
+  // action, and because appending it keeps Account contiguous without moving
+  // a single desktop row: the desktop list does not contain it at all, so no
+  // existing leader digit shifts there.
+  {
+    id: "delete-account",
+    label: "Delete account",
+    icon: UserX,
+    group: "account",
   },
   // The Environment group (id `personal`): the configuration the Environment
   // dropdown picks. Personal's pages read through the window's own host and
@@ -383,59 +434,6 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Dev: canvas proof",
     icon: Activity,
     group: "app",
-  },
-  {
-    id: "devices",
-    label: "Sessions",
-    icon: ShieldCheck,
-    group: "account",
-  },
-  // Account, like Sessions: the code it mints signs the PHONE into the
-  // account, regardless of which host this window looks at.
-  {
-    id: "link-phone",
-    label: "Link mobile app",
-    icon: QrCode,
-    group: "account",
-  },
-  // Account, not Host: what this reports is the ACCOUNT's token and cost
-  // spend, with the host as one filter INSIDE the page (defaulting to all of
-  // them). Under the sidebar's host picker it would have put two competing
-  // host scopes on one screen, with the outer one unable to describe the
-  // number the inner one produced. It still reads through a host client -
-  // every RPC does - but that is a transport fact, not a scope one.
-  {
-    id: "usage",
-    label: "Usage",
-    icon: LineChart,
-    group: "account",
-  },
-  // Account, beside Usage: credits are the person's to add and spend. The
-  // page is E8's (`panels/credits-settings-panel`).
-  {
-    id: "credits",
-    label: "Credits",
-    icon: Coins,
-    group: "account",
-  },
-  // Event policy and automation for the account. Different controls than
-  // Application → Sounds, so it keeps the generic word and the bell.
-  {
-    id: "notifications",
-    label: "Notifications",
-    icon: Bell,
-    group: "account",
-  },
-  // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
-  // below). Last in its group because it is the group's one irreversible
-  // action, and because appending it keeps Account contiguous without moving
-  // a single desktop row: the desktop list does not contain it at all, so no
-  // existing leader digit shifts there.
-  {
-    id: "delete-account",
-    label: "Delete account",
-    icon: UserX,
-    group: "account",
   },
   // The host group. Everything here is scoped by the picker that heads it.
   {
