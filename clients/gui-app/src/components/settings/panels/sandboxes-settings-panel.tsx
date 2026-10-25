@@ -155,7 +155,12 @@ export function SandboxesSettingsPanel(): ReactNode {
         </div>
       }
     >
-      <SandboxDefaultsSection configuration={configuration} />
+      <SandboxDefaultsSection
+        // A configuration's form and save outcome are its own: two can share a
+        // revision, so the form's own key does not tell them apart.
+        key={`defaults:${configurationKey(configuration)}`}
+        configuration={configuration}
+      />
       <SandboxListSection
         // A configuration's filter and search are its own.
         key={configurationKey(configuration)}

@@ -214,6 +214,7 @@ vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
 }));
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
+import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
@@ -646,6 +647,83 @@ describe("<SandboxesSettingsPanel />", () => {
         ).toHaveProperty("value", "10");
       });
       expect(screen.getByText(/Changed by Grace/)).toBeTruthy();
+    });
+
+    it("reopens the form on the configuration switched to, and saves to it, at the same revision", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      const personal = {
+        ...SANDBOX_DEFAULTS_VALUE,
+        idleMinutes: 90,
+        restingMinutes: 60,
+      };
+      host.items[PERSONAL_ENV] = [defaultsItem(personal, 3)];
+      mocks.sandboxes = [];
+      // A composer keeps every configuration's defaults read, so a switch
+      // finds the other one's already answered.
+      function ComposerDefaultsReader(): null {
+        useSandboxDefaultsLookup(true);
+        return null;
+      }
+      renderUi(
+        <>
+          <SandboxesSettingsPanel />
+          <ComposerDefaultsReader />
+        </>,
+      );
+
+      expect(
+        await screen.findByTestId("sandboxes-defaults-idle-input"),
+      ).toHaveProperty("value", "45");
+      act(() => {
+        useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("sandboxes-defaults-idle-input"),
+        ).toHaveProperty("value", "90");
+      });
+      fireEvent.change(screen.getByTestId("sandboxes-defaults-idle-input"), {
+        target: { value: "91" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+      await waitFor(() => {
+        expect(
+          harness?.paramsOf("environment.configuration.items.put"),
+        ).toEqual([
+          {
+            environmentId: PERSONAL_ENV,
+            kind: "sandbox_defaults",
+            key: "sandbox",
+            os: null,
+            value: { ...personal, idleMinutes: 91 },
+            revision: 3,
+          },
+        ]);
+      });
+    });
+
+    it("keeps a configuration's save outcome to that configuration", async () => {
+      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+      host.put = () => ({
+        outcome: "conflict",
+        current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+      });
+      renderPanel([]);
+
+      const idle = await screen.findByTestId("sandboxes-defaults-idle-input");
+      fireEvent.change(idle, { target: { value: "2" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+      expect(await screen.findByText(/Changed by Grace/)).toBeTruthy();
+      act(() => {
+        useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+      });
+
+      expect(
+        await screen.findByText("Your defaults for new sandboxes"),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Changed by Grace/)).toBeNull();
     });
   });
   afterEach(() => {
