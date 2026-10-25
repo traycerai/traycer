@@ -745,9 +745,12 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
     const node = frameRef.current;
     if (node === null) return;
     // Start on the shared clock's current frame, so a spinner shown again
-    // resumes in phase with every other one instead of restarting.
+    // resumes in phase with every other one instead of restarting. A
+    // one-frame preset (`static`, interval 0) has no phase to divide by.
     const frameAt = (elapsedMs: number): number =>
-      Math.floor(elapsedMs / presetIntervalMs) % presetFrames.length;
+      presetFrames.length === 1 || presetIntervalMs <= 0
+        ? 0
+        : Math.floor(elapsedMs / presetIntervalMs) % presetFrames.length;
     let shownIndex = frameAt(statusAnimationElapsedMs());
     const text = document.createTextNode(presetFrames[shownIndex] ?? "");
     node.replaceChildren(text);

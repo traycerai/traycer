@@ -35,6 +35,18 @@ describe("AgentSpinningDots", () => {
     expect(node.textContent).toBe("⠙");
   });
 
+  it("renders the static preset's one glyph, which has no frame interval", () => {
+    render(
+      <AgentSpinningDots
+        className={undefined}
+        testId="spinner"
+        variant="static"
+      />,
+    );
+    // AGENT_SPINNER_PRESETS.static.frames[0], intervalMs 0.
+    expect(screen.getByTestId("spinner").textContent).toBe("⠿");
+  });
+
   it("keeps one stable text node across ticks instead of replacing it", () => {
     render(
       <AgentSpinningDots
