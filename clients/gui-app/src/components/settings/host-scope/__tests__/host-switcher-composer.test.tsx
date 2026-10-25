@@ -125,7 +125,8 @@ function renderPicker(input: {
   readonly composer: HostSwitcherComposerMode | null;
   readonly intent: HostPickIntent;
   readonly onAncestorKeyDown:
-    ((event: KeyboardEvent<HTMLElement>) => void) | null;
+    | ((event: KeyboardEvent<HTMLElement>) => void)
+    | null;
 }): void {
   render(
     <div role="presentation" onKeyDown={input.onAncestorKeyDown ?? undefined}>

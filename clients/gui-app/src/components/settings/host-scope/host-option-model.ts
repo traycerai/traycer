@@ -527,7 +527,10 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  * manages.
  */
 export type HostPickerGroup =
-  "personal" | "sandbox" | "agent-sandbox" | "hidden";
+  | "personal"
+  | "sandbox"
+  | "agent-sandbox"
+  | "hidden";
 
 export function hostOptionPickerGroup(
   host: HostScopeOption,
