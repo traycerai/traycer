@@ -129,6 +129,12 @@ vi.mock(
     useNotificationMarkEntityRead: () => mocks.markReadMutation,
   }),
 );
+// What the bot is doing reaches the view through one hook; these cases pin
+// the thread lines and the boxes with the bot idle
+// (`bot-channel-typing.test.tsx` drives it).
+vi.mock("@/hooks/bots/use-bot-activity", () => ({
+  useBotActivity: () => ({ trunk: null, threads: {} }),
+}));
 vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: {
     chatId: string;
@@ -239,10 +245,8 @@ function PostStub(props: {
   );
 }
 
-import {
-  BotChannelView,
-  type BotOpenThread,
-} from "@/components/bots/bot-channel-view";
+import { BotChannelView } from "@/components/bots/bot-channel-view";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -317,6 +321,7 @@ function mount(options: MountOptions): {
             botId={BOT_ID}
             hostId={HOST_ID}
             botTitle="Release Bot"
+            directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
             paused={currentPaused}
             resolveMember={resolveMember}

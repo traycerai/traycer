@@ -23,6 +23,7 @@ import {
 } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import {
   BotThreadPanel,
   type BotThreadPanelThread,
@@ -34,6 +35,11 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import {
+  useBotActivity,
+  type BotActivity,
+  type BotSessionActivity,
+} from "@/hooks/bots/use-bot-activity";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
@@ -46,6 +52,7 @@ import {
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -95,22 +102,6 @@ function channelConversation(
 }
 
 /**
- * The thread open beside the channel, by the message it hangs off: a
- * member's post, or one of the bot's questions or proposals. Held by the
- * tab above the views, so an announcement's thread nobody has started yet
- * still opens as the box that starts it after a switch between the tabs.
- */
-export type BotOpenThread = {
-  readonly anchorMessageId: string;
-  /**
-   * The thread opens with the first reply under its anchor, sent with the
-   * anchor's id: the bot's question or proposal, or a post the bot answered
-   * in the channel (reply mode `direct`). `false` for a post's own thread.
-   */
-  readonly announcement: boolean;
-};
-
-/**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
  * the top level, a line under each post that opens its thread, and the
@@ -128,6 +119,8 @@ export function BotChannelView(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly botTitle: string;
+  /** What the bot does, for the top of a channel nobody has written in. */
+  readonly directive: string | null;
   /**
    * The bot's channel: the app conversation `bot.create` made, as the bot
    * record names it. `null` from a host that predates the field.
@@ -150,6 +143,7 @@ export function BotChannelView(props: {
     botId,
     hostId,
     botTitle,
+    directive,
     appConversationChatId,
     paused,
     resolveMember,
@@ -175,6 +169,7 @@ export function BotChannelView(props: {
     threadsByPost,
     isUnread,
   } = useChannelThreads({ client, botId, hostId, paused });
+  const activity = useBotActivity(botId);
 
   // A direct reply's option, clicked, is the person's next post: offered
   // only while no earlier pick is still being sent.
@@ -220,6 +215,10 @@ export function BotChannelView(props: {
           replyCount: thread.replyCount,
           lastReplyAt: thread.lastReplyAt,
           unread: isUnread(thread.threadId),
+          // An open thread says it in its own panel, not under its post.
+          replying:
+            postMessageId !== openThreadPostId &&
+            activity.threads[thread.threadId]?.state === "replying",
         };
       },
       // A host without the thread list has no thread to open.
@@ -234,17 +233,24 @@ export function BotChannelView(props: {
         ? openAnnouncementThread
         : null,
       chooseOption: sending ? null : chooseOption,
+      intro: { botTitle, directive },
     }),
     [
+      botTitle,
+      activity.threads,
       chooseOption,
+      directive,
       isUnread,
       onOpenThread,
       openAnnouncementThread,
+      openThreadPostId,
       sending,
       threadListSupported,
       threadsByPost,
     ],
   );
+
+  const trunkReply = channelReply(activity);
 
   const threadOpen =
     openThreadPostId !== null && !paused && threadListSupported;
@@ -362,6 +368,11 @@ export function BotChannelView(props: {
               resolveMember={resolveMember}
             />
           )}
+          <BotReplyingStrip
+            botTitle={botTitle}
+            activity={trunkReply}
+            testId="bot-channel-replying"
+          />
           <BotMessageComposer
             botId={botId}
             conversationId={channel.conversationId}
@@ -390,6 +401,16 @@ export function BotChannelView(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * The trunk answers a direct post at the channel's top level; its running
+ * turn is the channel's typing line while it answers one, and its other work
+ * (a routine, a check-in) is not a reply.
+ */
+function channelReply(activity: BotActivity): BotSessionActivity | null {
+  const trunk = activity.trunk;
+  return trunk !== null && trunk.requestId !== null ? trunk : null;
 }
 
 /**

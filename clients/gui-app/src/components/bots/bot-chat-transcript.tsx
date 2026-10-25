@@ -23,6 +23,7 @@ import {
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -80,6 +81,11 @@ export type BotTranscriptSurface =
         | null;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** What the top of the channel says while nobody has written in it. */
+      readonly intro: {
+        readonly botTitle: string;
+        readonly directive: string | null;
+      };
     }
   | {
       readonly kind: "thread";
@@ -503,6 +509,16 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+  // A channel nobody has written in opens with what it is for, as Slack's
+  // does; a windowed one is empty only when the host counts no row.
+  const intro =
+    surface !== null &&
+    surface.kind === "channel" &&
+    state.snapshotLoaded &&
+    messages.length === 0 &&
+    (transcriptWindow === null || transcriptWindow.rowCount === 0)
+      ? surface.intro
+      : null;
 
   if (channelNotHereYet) {
     return (
@@ -526,29 +542,36 @@ function BotChatTranscriptBody(props: {
           data-testid="bot-chat-transcript"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <ChatMessages
-            taskTitle={title}
-            taskId={chatId}
-            epicId={botId}
-            hostId={hostId}
-            messages={messages}
-            transcriptWindow={transcriptWindow}
-            onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-            onFindReadOrdinalChange={state.requestFindReadOrdinal}
-            baselineEpoch={state.transcriptBaselineEpoch}
-            hydrationSequence={state.transcriptHydrationSequence}
-            coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-            backgroundItems={state.backgroundItems}
-            getMessageActions={getMessageActions}
-            nextStepActions={null}
-            instanceId={instanceId}
-            visible
-            systemOverlayActive={false}
-            scrollRequest={scrollRequest}
-            onScrollRequestSettled={onScrollRequestSettled}
-            composerOverlayHeight={0}
-            subagentDrillIn={subagentDrillIn}
-          />
+          {intro !== null ? (
+            <BotChannelIntro
+              botTitle={intro.botTitle}
+              directive={intro.directive}
+            />
+          ) : (
+            <ChatMessages
+              taskTitle={title}
+              taskId={chatId}
+              epicId={botId}
+              hostId={hostId}
+              messages={messages}
+              transcriptWindow={transcriptWindow}
+              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+              onFindReadOrdinalChange={state.requestFindReadOrdinal}
+              baselineEpoch={state.transcriptBaselineEpoch}
+              hydrationSequence={state.transcriptHydrationSequence}
+              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+              backgroundItems={state.backgroundItems}
+              getMessageActions={getMessageActions}
+              nextStepActions={null}
+              instanceId={instanceId}
+              visible
+              systemOverlayActive={false}
+              scrollRequest={scrollRequest}
+              onScrollRequestSettled={onScrollRequestSettled}
+              composerOverlayHeight={0}
+              subagentDrillIn={subagentDrillIn}
+            />
+          )}
         </div>
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>

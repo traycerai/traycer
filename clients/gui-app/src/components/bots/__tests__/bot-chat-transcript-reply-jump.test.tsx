@@ -427,6 +427,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       openThread: null,
       openAnnouncementThread,
       chooseOption,
+      intro: { botTitle: "Release Bot", directive: null },
     };
   }
 
@@ -500,6 +501,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openThread: vi.fn(),
       openAnnouncementThread: vi.fn(),
       chooseOption,
+      intro: { botTitle: "Release Bot", directive: null },
     };
   }
 

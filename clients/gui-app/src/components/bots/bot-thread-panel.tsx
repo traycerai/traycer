@@ -13,8 +13,10 @@ import { TextSegment } from "@/components/chat/segments/text-segment";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
@@ -198,6 +200,9 @@ function ListedThread(
     }),
     [botId, conversationId, send, sending, threadId],
   );
+  // The thread's own session answers in it; its running turn is the
+  // thread's typing line.
+  const activity = useBotActivity(botId).threads[threadId] ?? null;
   return (
     <>
       <div className="flex shrink-0 flex-col gap-2 px-2 pt-2">
@@ -233,6 +238,11 @@ function ListedThread(
         instanceId={`bot-thread:${thread.threadId}`}
         surface={surface}
         resolveMember={resolveMember}
+      />
+      <BotReplyingStrip
+        botTitle={botTitle}
+        activity={activity}
+        testId="bot-thread-replying-strip"
       />
       <BotMessageComposer
         botId={botId}
@@ -293,7 +303,7 @@ function ThreadAnchor(props: {
   if (anchor.senderUserId === null) {
     return (
       <BotMessageFrame
-        avatar={<BotAvatar />}
+        avatar={<BotAvatar size="lg" />}
         name={botTitle}
         app
         sentAt={anchor.sentAt}
