@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -29,6 +29,8 @@ export interface TeamBotSetupTarget {
   readonly environmentId: string;
   readonly teamName: string;
   readonly botCount: number;
+  /** The control that opened the setup; focus returns to it on dismissal. */
+  readonly opener: HTMLElement | null;
 }
 
 /**
@@ -36,7 +38,12 @@ export interface TeamBotSetupTarget {
  * sidebar (Tracy Bots T59). While the team's onboarding is open it walks it:
  * GitHub, then the bots the team starts with, then Create, with a back arrow
  * between the two. Otherwise it is the create form for one more bot. On
- * success the new channel opens and the dialog closes.
+ * success the new channel opens and the dialog closes, leaving focus to the
+ * channel; dismissed, it returns focus to its opener while that is still on
+ * the page.
+ *
+ * The body scrolls between the header and footer bands, so a long catalog or
+ * form stays inside the viewport.
  */
 export function TeamBotSetupDialog(props: {
   readonly team: TeamBotSetupTarget | null;
@@ -45,19 +52,36 @@ export function TeamBotSetupDialog(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const { team, onClose } = props;
+  // Only Escape, Close and an outside press reach `onOpenChange`; a success
+  // closes through `onClose` directly and keeps the destination's focus.
+  const dismissedRef = useRef(false);
   return (
     <Dialog
       open={team !== null}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (open) return;
+        dismissedRef.current = true;
+        onClose();
       }}
     >
       {team === null ? null : (
         <DialogContent
           layout="banded"
-          className="w-full min-w-0"
+          className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
           style={{ maxWidth: "min(92vw, 32rem)" }}
           data-testid="team-bot-setup-dialog"
+          onOpenAutoFocus={() => {
+            dismissedRef.current = false;
+          }}
+          onCloseAutoFocus={(event) => {
+            // Opened through state, not a `DialogTrigger`: the primitive has
+            // no trigger to return focus to.
+            const opener = team.opener;
+            if (!dismissedRef.current || opener === null) return;
+            if (!opener.isConnected) return;
+            event.preventDefault();
+            opener.focus();
+          }}
         >
           <TeamBotSetup
             team={team}
@@ -108,7 +132,7 @@ function TeamBotSetup(props: {
         <SetupHeader title={`Add a bot to ${team.teamName}`} back={null}>
           The bot gets its own channel.
         </SetupHeader>
-        <div className="flex min-w-0 flex-col px-5 py-4">
+        <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto px-5 py-4">
           <CreateBotForm
             environmentId={team.environmentId}
             environmentLabel={team.teamName}
@@ -159,7 +183,7 @@ function TeamOnboardingSetup(props: {
         <SetupHeader title={title} back={null}>
           Step 1 of 2: connect GitHub.
         </SetupHeader>
-        <div className="flex min-w-0 flex-col gap-3 px-5 py-4">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto px-5 py-4">
           <GithubStep github={data.github} teamName={team.teamName} />
         </div>
         <DialogFooter>

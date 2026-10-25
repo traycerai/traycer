@@ -9,18 +9,22 @@
  * onboarding mutations are scripted and record what they were sent, because
  * a request through a real host client cannot run where two zod copies are
  * installed; the model picker, the create-bot form and the toolbar store hook
- * are replaced, the toolbar store itself is the production one.
+ * are replaced, the toolbar store itself is the production one. Focus and
+ * height are read off the real dialog: where focus lands once it closes, and
+ * the classes that bound its height and make each branch's body the scroller
+ * (jsdom has no layout, as the sibling dialog suites read it).
  */
 import { useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotOnboardingChooseRequest,
@@ -285,20 +289,47 @@ function boundHere(): HostEnvironmentBindings {
 const BINDINGS = boundHere();
 const CONNECTABLE = [HOST_ID];
 
-/** What the sidebar does: the dialog is open for a team until it closes. */
-function Harness(props: { readonly botCount: number }): ReactNode {
-  const [team, setTeam] = useState<TeamBotSetupTarget | null>({
-    environmentId: ENV,
-    teamName: "acme",
-    botCount: props.botCount,
-  });
+/**
+ * What the sidebar does: the dialog is open for a team until it closes. A
+ * dialog not open at mount is opened by a control that passes itself as the
+ * opener, as the sidebar's + does.
+ */
+function Harness(props: {
+  readonly botCount: number;
+  readonly openAtMount: boolean;
+}): ReactNode {
+  const [team, setTeam] = useState<TeamBotSetupTarget | null>(
+    props.openAtMount
+      ? {
+          environmentId: ENV,
+          teamName: "acme",
+          botCount: props.botCount,
+          opener: null,
+        }
+      : null,
+  );
   return (
-    <TeamBotSetupDialog
-      team={team}
-      connectableHostIds={CONNECTABLE}
-      environmentBindings={BINDINGS}
-      onClose={() => setTeam(null)}
-    />
+    <>
+      <button
+        type="button"
+        onClick={(event) =>
+          setTeam({
+            environmentId: ENV,
+            teamName: "acme",
+            botCount: props.botCount,
+            opener: event.currentTarget,
+          })
+        }
+      >
+        Set up acme
+      </button>
+      <TeamBotSetupDialog
+        team={team}
+        connectableHostIds={CONNECTABLE}
+        environmentBindings={BINDINGS}
+        onClose={() => setTeam(null)}
+      />
+    </>
   );
 }
 
@@ -309,9 +340,23 @@ function mount(input: {
   mocks.read = input.read;
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <Harness botCount={input.botCount} />
+      <Harness botCount={input.botCount} openAtMount />
     </QueryClientProvider>,
   );
+}
+
+/** Mounts with the dialog shut; the returned control opens it. */
+function mountClosed(input: {
+  readonly read: BotOnboardingReadResponse | undefined;
+  readonly botCount: number;
+}): HTMLElement {
+  mocks.read = input.read;
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <Harness botCount={input.botCount} openAtMount={false} />
+    </QueryClientProvider>,
+  );
+  return screen.getByRole("button", { name: "Set up acme" });
 }
 
 function dialog(): HTMLElement {
@@ -485,4 +530,110 @@ describe("<TeamBotSetupDialog /> before the onboarding read answers", () => {
       expect(screen.queryByTestId("bot-onboarding-open")).toBeNull();
     },
   );
+});
+
+describe("<TeamBotSetupDialog /> bounding its height to the viewport", () => {
+  const completedChoice = {
+    areas: ["alerts"],
+    chosenAt: 1_000,
+    completedAt: 2_000,
+    pending: [],
+  };
+
+  it.each([
+    {
+      label: "the create-bot form",
+      read: { ...UNLOCKED, choice: completedChoice },
+      botCount: 3,
+      body: () => screen.getByTestId("stub-create-bot-form"),
+    },
+    {
+      label: "the GitHub step",
+      read: LOCKED,
+      botCount: 0,
+      body: () => screen.getByTestId("bot-onboarding-connect-github"),
+    },
+    {
+      label: "the bots step",
+      read: UNLOCKED,
+      botCount: 0,
+      body: () => screen.getAllByTestId("bot-onboarding-area")[0],
+    },
+  ])(
+    "caps the dialog at the viewport and scrolls $label between its header and footer",
+    ({ read, botCount, body }) => {
+      mount({ read, botCount });
+
+      expect(
+        dialog().classList.contains("max-h-[min(86dvh,calc(100dvh-2rem))]"),
+      ).toBe(true);
+      expect(dialog().classList.contains("overflow-hidden")).toBe(true);
+      const scroller = body().closest<HTMLElement>(".overflow-y-auto");
+      if (scroller === null || !dialog().contains(scroller)) {
+        throw new Error("The branch's body is not a scroller of the dialog");
+      }
+      // Shrinks inside the grid's flexible row instead of growing the box.
+      expect(scroller.classList.contains("min-h-0")).toBe(true);
+    },
+  );
+});
+
+describe("<TeamBotSetupDialog /> returning focus", () => {
+  const completedChoice = {
+    areas: ["alerts"],
+    chosenAt: 1_000,
+    completedAt: 2_000,
+    pending: [],
+  };
+
+  it.each([
+    {
+      label: "Escape",
+      dismiss: (user: UserEvent) => user.keyboard("{Escape}"),
+    },
+    {
+      label: "the Close button",
+      dismiss: (user: UserEvent) =>
+        user.click(screen.getByRole("button", { name: "Close" })),
+    },
+  ])(
+    "gives focus back to the control that opened it on $label",
+    async ({ dismiss }) => {
+      const user = userEvent.setup();
+      const opener = mountClosed({
+        read: { ...UNLOCKED, choice: completedChoice },
+        botCount: 3,
+      });
+      await user.click(opener);
+      await screen.findByTestId("team-bot-setup-dialog");
+
+      await dismiss(user);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
+      });
+      await waitFor(() => {
+        expect(document.activeElement).toBe(opener);
+      });
+    },
+  );
+
+  it("leaves focus off the opener when Create opens the first channel and closes", async () => {
+    const user = userEvent.setup();
+    const opener = mountClosed({ read: UNLOCKED, botCount: 0 });
+    await user.click(opener);
+    const focus = vi.spyOn(opener, "focus");
+
+    await user.click(await screen.findByTestId("bot-onboarding-open"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
+    });
+    // The dialog hands focus back one task after it unmounts: run past that.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(focus).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(opener);
+  });
 });

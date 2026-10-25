@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, Hash, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
@@ -148,11 +148,12 @@ function SidebarSection(props: {
     botCount: group.bots.length,
   });
   const locked = gate === "locked";
-  const setUp = (): void =>
+  const setUp = (event: MouseEvent<HTMLButtonElement>): void =>
     onSetUp({
       environmentId: group.environmentId,
       teamName: group.label,
       botCount: group.bots.length,
+      opener: event.currentTarget,
     });
   // A collapsed section still lists the channel in view and the unread ones,
   // as Slack's does.

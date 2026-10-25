@@ -4,12 +4,19 @@
  * sections list channels only; a team's header carries a + and an empty team
  * a call to action, both opening that team's setup (T59), and the gate that
  * locks a new team's chat until its GitHub set holds a repository still
- * disables its rows. The real sidebar and the real onboarding gate run over
- * mocked reads and the real bot-tabs store; the setup dialog, the onboarding
- * card and the navigation helper are stubs that record what they were given.
+ * disables its rows. The real sidebar, the real setup dialog and the real
+ * onboarding gate run over mocked reads and the real bot-tabs store; the
+ * onboarding steps, the create form and the navigation helper are stubs, so
+ * the dialog's focus on closing is read off the real thing.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
@@ -86,35 +93,27 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: mocks.state.epics, chats: {} }),
 }));
-vi.mock("@/components/bots/team-bot-setup-dialog", () => ({
-  TeamBotSetupDialog: (props: {
-    team: {
-      environmentId: string;
-      teamName: string;
-      botCount: number;
-    } | null;
-    onClose: () => void;
-  }) =>
-    props.team === null ? null : (
-      <div
-        data-testid="stub-team-bot-setup-dialog"
-        data-environment-id={props.team.environmentId}
-        data-team-name={props.team.teamName}
-        data-bot-count={String(props.team.botCount)}
-      >
-        <button type="button" onClick={props.onClose}>
-          Close setup
-        </button>
-      </div>
-    ),
-}));
-
 vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
   BotOnboardingCard: (props: { environmentId: string; teamName: string }) => (
     <div
       data-testid="stub-bot-onboarding-card"
       data-environment-id={props.environmentId}
       data-team-name={props.teamName}
+    />
+  ),
+  GithubStep: () => <div data-testid="stub-github-step" />,
+  BotsStep: () => <div data-testid="stub-bots-step" />,
+  OnboardingCreateControls: () => null,
+  OnboardingOpenButton: () => null,
+}));
+vi.mock("@/components/home/bots/use-team-onboarding-flow", () => ({
+  useTeamOnboardingFlow: () => ({}),
+}));
+vi.mock("@/components/home/bots/create-bot-form", () => ({
+  CreateBotForm: (props: { environmentId: string }) => (
+    <div
+      data-testid="stub-create-bot-form"
+      data-environment-id={props.environmentId}
     />
   ),
 }));
@@ -394,26 +393,61 @@ describe("<BotChannelSidebar /> team setup", () => {
   it("opens the setup for the team of the + or the call to action that was clicked", async () => {
     const user = userEvent.setup();
     mount("bot-release");
-    expect(screen.queryByTestId("stub-team-bot-setup-dialog")).toBeNull();
+    expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
 
     await user.click(
       within(section("env-team")).getByTestId("bot-channel-section-add"),
     );
-    const fromPlus = screen.getByTestId("stub-team-bot-setup-dialog");
-    expect(fromPlus.getAttribute("data-environment-id")).toBe("env-team");
-    expect(fromPlus.getAttribute("data-team-name")).toBe("Acme");
-    expect(fromPlus.getAttribute("data-bot-count")).toBe("2");
+    // A team with bots and no onboarding record gets the create form.
+    const fromPlus = screen.getByTestId("team-bot-setup-dialog");
+    expect(within(fromPlus).getByText("Add a bot to Acme")).toBeTruthy();
+    expect(
+      within(fromPlus)
+        .getByTestId("stub-create-bot-form")
+        .getAttribute("data-environment-id"),
+    ).toBe("env-team");
 
-    await user.click(screen.getByRole("button", { name: "Close setup" }));
-    expect(screen.queryByTestId("stub-team-bot-setup-dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
 
     await user.click(
       within(section("env-empty")).getByTestId("bot-channel-section-set-up"),
     );
-    const fromCta = screen.getByTestId("stub-team-bot-setup-dialog");
-    expect(fromCta.getAttribute("data-environment-id")).toBe("env-empty");
-    expect(fromCta.getAttribute("data-team-name")).toBe("Quiet team");
-    expect(fromCta.getAttribute("data-bot-count")).toBe("0");
+    // A team with no bots walks its onboarding.
+    const fromCta = screen.getByTestId("team-bot-setup-dialog");
+    expect(within(fromCta).getByText("Set up Quiet team's bots")).toBeTruthy();
+    expect(within(fromCta).getByTestId("stub-bots-step")).toBeTruthy();
+  });
+
+  it.each([
+    {
+      label: "the + on a team's header, on Escape",
+      opener: () =>
+        within(section("env-team")).getByTestId("bot-channel-section-add"),
+      dismiss: (user: UserEvent) => user.keyboard("{Escape}"),
+    },
+    {
+      label: "the empty team's call to action, on the Close button",
+      opener: () =>
+        within(section("env-empty")).getByTestId("bot-channel-section-set-up"),
+      dismiss: (user: UserEvent) =>
+        user.click(screen.getByRole("button", { name: "Close" })),
+    },
+  ])("gives focus back to $label", async ({ opener, dismiss }) => {
+    const user = userEvent.setup();
+    mount("bot-release");
+    const control = opener();
+    await user.click(control);
+    await screen.findByTestId("team-bot-setup-dialog");
+
+    await dismiss(user);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(control);
+    });
   });
 
   it("draws no onboarding card or form in any section, a new team's included", () => {
