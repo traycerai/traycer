@@ -31,7 +31,8 @@ export function SideTracyRow(props: {
     "aria-label": tab.name,
     "data-testid": "tab-tracy",
     "data-tab-kind": "tracy",
-    "data-unread": signals.unread,
+    // Present only while unread, as the header strip's entry marks it.
+    ...(signals.unread ? { "data-unread": "" } : {}),
     onClick: onActivate,
     onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
       if (event.key !== "Enter" && event.key !== " ") return;

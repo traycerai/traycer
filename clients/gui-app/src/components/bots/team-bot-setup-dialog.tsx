@@ -69,8 +69,7 @@ export function TeamBotSetupDialog(props: {
       {team === null ? null : (
         <DialogContent
           layout="banded"
-          className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
-          style={{ maxWidth: "min(92vw, 32rem)" }}
+          className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-full min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-lg"
           data-testid="team-bot-setup-dialog"
           onOpenAutoFocus={() => {
             dismissedRef.current = false;

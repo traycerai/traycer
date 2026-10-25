@@ -185,13 +185,14 @@ function SidebarSection(props: {
         </button>
         {isTeam ? (
           // Drawn on the header's hover and on keyboard focus, as the
-          // section's own control rather than a row of it.
+          // section's own control rather than a row of it; always drawn on a
+          // touch screen, which has no hover.
           <button
             type="button"
             aria-label={`Set up ${group.label}'s bots`}
             data-testid="bot-channel-section-add"
             onClick={setUp}
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100"
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100 pointer-coarse:opacity-100"
           >
             <Plus className="size-3.5" aria-hidden="true" />
           </button>

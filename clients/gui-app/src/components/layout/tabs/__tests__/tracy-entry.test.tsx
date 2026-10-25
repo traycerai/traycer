@@ -843,6 +843,23 @@ describe("the fixed Tracy entry - signals", () => {
       "font-semibold",
     );
   });
+
+  it.each([
+    { label: "unread while Tracy has news", unreadDone: true },
+    { label: "read once there is none", unreadDone: false },
+  ])(
+    "marks the side strip's entry $label, as the header strip does",
+    async ({ unreadDone }) => {
+      scripted.indicators = {
+        epics: { [TRACY]: { ...NO_FLAGS, unreadDone } },
+        chats: {},
+      };
+      mountSideStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(entry.hasAttribute("data-unread")).toBe(unreadDone);
+    },
+  );
 });
 
 describe("the fixed Tracy entry - Alt-digit", () => {
