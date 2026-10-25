@@ -21,7 +21,10 @@ import {
 } from "@/lib/home-bots/bots-model";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  rebindUnreachableBotTab,
+  useBotTabsStore,
+} from "@/stores/bots/bot-tabs-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
@@ -87,20 +90,14 @@ export function BotChannelSidebar(props: {
 
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
   const [setup, setSetup] = useState<TeamBotSetupTarget | null>(null);
   const openChannel = (bot: BotRecord): void => {
     if (bot.botId === activeBotId) return;
-    // An open tab keeps its host unless this client can no longer dial it,
-    // as Home's row decides.
-    const existing = lookupBotTab(useBotTabsStore.getState().tabs, bot.botId);
-    if (
-      existing !== null &&
-      connectable.resolved &&
-      !connectable.hostIds.includes(existing.hostId)
-    ) {
-      rebindBotTab(bot.botId, hostId);
-    }
+    rebindUnreachableBotTab(
+      bot.botId,
+      hostId,
+      connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
+    );
     openBotTab({ botId: bot.botId, hostId, title: bot.title });
     navigateToTabIntent(navigate, botTabIntent(bot.botId), undefined);
   };

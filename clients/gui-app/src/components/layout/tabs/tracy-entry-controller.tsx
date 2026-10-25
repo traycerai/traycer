@@ -4,6 +4,7 @@ import type {
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -41,6 +42,9 @@ export function TracyEntryController(): null {
   const enabled = show && supported;
   const personal = usePersonalEnvironment(client, enabled);
   const bots = useBotListQuery(client, enabled);
+  // The entry is often the only bots surface mounted: a main bot archived or
+  // seeded elsewhere refetches the list here too, not only on focus.
+  useBotListChangedSubscriptionForApp(enabled);
   const resolution = resolveTracy(
     personal.resolved ? personal.environmentId : null,
     bots.data,

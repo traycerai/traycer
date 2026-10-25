@@ -86,6 +86,8 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { layoutIndexOfStripPosition } from "@/stores/bots/tracy-entry";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   flattenStripItemRefs,
@@ -1331,11 +1333,18 @@ function commitHeaderStripDropAtIndex(
   source: EpicCanvasDragSourceData,
   headerStripIndex: number,
 ): HeaderStripDropResult | null {
+  // The strip's slots count its drawn tabs; the fixed Tracy entry is drawn
+  // beside Home, so the position is mapped back into the layout.
+  const layoutIndex = layoutIndexOfStripPosition(
+    useTabsStore.getState().items,
+    useBotTabsStore.getState().fixedBotId,
+    headerStripIndex,
+  );
   let dropped: HeaderStripDropResult | null = null;
   const placedRef = tabCommandCoordinator.createSourceRefAtStripIndex(
-    headerStripIndex,
+    layoutIndex,
     () => {
-      dropped = commitHeaderStripDrop(source, headerStripIndex);
+      dropped = commitHeaderStripDrop(source, layoutIndex);
       return dropped === null ? null : { kind: "epic", id: dropped.tabId };
     },
   );

@@ -44,7 +44,13 @@ import {
 } from "@/lib/tab-navigation";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  lookupBotTab,
+  rebindUnreachableBotTab,
+  useBotTabsStore,
+} from "@/stores/bots/bot-tabs-store";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
 import { cn } from "@/lib/utils";
@@ -323,25 +329,40 @@ export function MobileNavDrawer(): ReactNode {
   );
 }
 
-// Single source of a row's display label; raw epic titles can be empty, so
-// apply the source-aware "Untitled task" fallback (phases carry their own
-// baked fallback and render verbatim). Mirrors the landing list.
-/** The fixed Tracy entry, beneath Home, as the strip draws it beside Home. */
+/**
+ * The fixed Tracy entry, beneath Home, as the strip draws it beside Home. It
+ * opens as the strip's entry does: a restored tab whose host this client can
+ * no longer dial first moves to this window's host.
+ */
 function MobileNavTracyRow(props: {
   readonly onOpen: (botId: string) => void;
 }): ReactNode {
+  const { onOpen } = props;
   const itemId = useTracyEntryItemId();
   const record = useBotTabsStore((state) =>
     state.fixedBotId === null
       ? null
       : lookupBotTab(state.tabs, state.fixedBotId),
   );
+  const hostId = useEffectiveHostId();
+  const connectable = useConnectableHostIds();
   if (itemId === null || record === null) return null;
   return (
     <MobileNavTracyButton
       botId={record.botId}
       title={record.title}
-      onOpen={props.onOpen}
+      onOpen={(botId) => {
+        if (hostId !== null) {
+          rebindUnreachableBotTab(
+            botId,
+            hostId,
+            connectable.resolved
+              ? (id) => connectable.hostIds.includes(id)
+              : null,
+          );
+        }
+        onOpen(botId);
+      }}
     />
   );
 }
@@ -376,6 +397,9 @@ function MobileNavTracyButton(props: {
   );
 }
 
+// Single source of a row's display label; raw epic titles can be empty, so
+// apply the source-aware "Untitled task" fallback (phases carry their own
+// baked fallback and render verbatim). Mirrors the landing list.
 function drawerItemDisplayTitle(item: HistoryItem): string {
   return item.taskType === "phase"
     ? item.title

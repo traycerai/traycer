@@ -20,7 +20,12 @@ import {
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  rebindUnreachableBotTab,
+  useBotTabsStore,
+} from "@/stores/bots/bot-tabs-store";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { useHostClient } from "@/lib/host";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
@@ -325,7 +330,6 @@ function useStripWithoutTracy(): {
   readonly allTabs: ReadonlyArray<HeaderTab>;
   readonly tracy: TracyStripEntry | null;
 } {
-  const navigate = useNavigate();
   const headerItemIds = useHeaderStripItemIds();
   const layoutItems = useTabsStore((state) => state.items);
   const activeItemId = useTabsStore((state) => state.activeItemId);
@@ -342,11 +346,7 @@ function useStripWithoutTracy(): {
     [fixedBotId, headerTabs, tracyItemId],
   );
   const tracyIsActive = tracyItemId !== null && activeItemId === tracyItemId;
-  const onActivateTracy = useCallback(() => {
-    if (tracyTab !== null) {
-      navigateToTabIntent(navigate, tabResolveIntent(tracyTab), undefined);
-    }
-  }, [navigate, tracyTab]);
+  const onActivateTracy = useOpenTracyEntry(tracyTab);
   return useMemo(() => {
     if (tracyItemId === null || tracyTab === null) {
       return { headerItemIds, layoutItems, allTabs: headerTabs, tracy: null };
@@ -370,6 +370,27 @@ function useStripWithoutTracy(): {
     tracyItemId,
     tracyTab,
   ]);
+}
+
+/**
+ * Opens the entry's tab as Home's bots list opens a bot: a restored tab whose
+ * host this client can no longer dial first moves to this window's host.
+ */
+function useOpenTracyEntry(tab: HeaderTab | null): () => void {
+  const navigate = useNavigate();
+  const hostId = useEffectiveHostId();
+  const connectable = useConnectableHostIds();
+  return useCallback(() => {
+    if (tab === null) return;
+    if (hostId !== null) {
+      rebindUnreachableBotTab(
+        tab.id,
+        hostId,
+        connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
+      );
+    }
+    navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
+  }, [connectable.hostIds, connectable.resolved, hostId, navigate, tab]);
 }
 
 /** The one pin dispatch site for the whole tab tree, Undo included. */

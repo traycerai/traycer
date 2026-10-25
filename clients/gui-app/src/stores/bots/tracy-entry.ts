@@ -36,6 +36,26 @@ export function isTracyEntryItem(
   );
 }
 
+/**
+ * The layout index of an insertion position counted among the strip's drawn
+ * tabs, which leave the entry out: before the tab drawn at `position`, or
+ * after the last one. A drop that carries a position rather than a
+ * neighbour's id (a canvas tear-off) lands where it was drawn.
+ */
+export function layoutIndexOfStripPosition(
+  items: ReadonlyArray<StripItem>,
+  fixedBotId: string | null,
+  position: number,
+): number {
+  let drawn = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    if (isTracyEntryItem(items[index], fixedBotId)) continue;
+    if (drawn === position) return index;
+    drawn += 1;
+  }
+  return items.length;
+}
+
 /** The strip item id of the entry's tab, or `null` with no entry drawn. */
 export function useTracyEntryItemId(): string | null {
   const fixedBotId = useBotTabsStore((state) => state.fixedBotId);

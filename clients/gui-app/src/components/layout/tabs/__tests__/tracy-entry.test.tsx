@@ -3,9 +3,10 @@
  * `TracyEntryController`, the real top and vertical strips, the real
  * keybinding dispatch and the real General settings panel, over the real
  * settings, bot-tabs, tabs and layout stores. Only host boundaries are
- * scripted: the bot list, Personal's id, method support, the notification
- * indicators and the bot's activity (the real protocol schemas do not load in
- * this suite's jsdom).
+ * scripted: the bot list (a query over the real client cache, refetched by the
+ * real `bot.listChanged` subscription), Personal's id, method support, the
+ * connectable hosts, the notification indicators and the bot's activity (the
+ * real protocol schemas do not load in this suite's jsdom).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,7 +19,12 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -31,6 +37,9 @@ import type {
   BotListResponse,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
+import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
@@ -38,6 +47,8 @@ import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
+import { __resetBotListChangedSessionsForTesting } from "@/hooks/bots/use-bot-list-changed-subscription";
+import type { ConnectableHosts } from "@/hooks/host/use-connectable-host-ids";
 import {
   getLeaderScopesTopDown,
   LEADER_SCOPE_HEADER_TABS,
@@ -49,6 +60,7 @@ import {
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -60,7 +72,7 @@ import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { tabItemId } from "@/stores/tabs/layout";
+import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -86,15 +98,44 @@ const scripted = vi.hoisted(
     list: BotListResponse | undefined;
     activity: BotActivity | null;
     indicators: SurfaceNotificationIndicators;
+    connectable: ConnectableHosts;
+    stream: MockWsStreamClient<StreamFrameEnvelope> | null;
   } => ({
     list: undefined,
     activity: null,
     indicators: { epics: {}, chats: {} },
+    connectable: { hostIds: [], resolved: true },
+    stream: null,
   }),
 );
 
+// The list is a real query over the test's client cache, answering what the
+// test scripted, so a `bot.list` invalidation refetches it as it does in the
+// app.
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({ data: scripted.list }),
+  useBotListQuery: (_client: unknown, enabled: boolean) =>
+    useQuery(
+      queryOptions({
+        queryKey: hostQueryKeys.methodScope("host-a", "bot.list"),
+        queryFn: () => {
+          if (scripted.list === undefined) throw new Error("No scripted list");
+          return Promise.resolve(scripted.list);
+        },
+        initialData: scripted.list,
+        enabled,
+      }),
+    ),
+}));
+// The app-wide stream the `bot.listChanged` doorbell rides.
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/stream-runtime-context")
+  >()),
+  useStreamHostId: () => "host-a",
+  useWsStreamClient: () => scripted.stream,
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => scripted.connectable,
 }));
 vi.mock(
   "@/hooks/environment/use-addressed-environment",
@@ -201,6 +242,22 @@ vi.mock("@/components/auth/user-menu", async (importOriginal) => ({
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
+/** A stream client whose host serves every method, so a doorbell subscribes. */
+class ServingStreamClient extends MockWsStreamClient<StreamFrameEnvelope> {
+  override getMethodSupport(): StreamMethodSupport {
+    return "supported";
+  }
+
+  override subscribeMethodSupport(): () => void {
+    return () => undefined;
+  }
+}
+
+const CHANGED: StreamFrameEnvelope = {
+  kind: "changed",
+  hasBinaryPayload: false,
+};
+
 let queryClient: QueryClient;
 
 function bot(
@@ -281,9 +338,12 @@ function resetStores(): void {
     },
   });
   tabCommandCoordinator.resetReconciliationForTesting();
+  __resetBotListChangedSessionsForTesting();
   scripted.list = undefined;
   scripted.activity = null;
   scripted.indicators = { epics: {}, chats: {} };
+  scripted.connectable = { hostIds: ["host-a"], resolved: true };
+  scripted.stream = new ServingStreamClient();
 }
 
 /** Opens epic tabs in the layout, the first one active. */
@@ -552,6 +612,172 @@ describe("the fixed Tracy entry - top strip", () => {
     await screen.findByTestId("tab-epic-e-alpha");
     expect(screen.queryByTestId("tab-tracy")).toBeNull();
     expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+  });
+});
+
+describe("the fixed Tracy entry - a tab that was paired or grouped before it became the entry", () => {
+  beforeEach(tracyIsMainBot);
+
+  /** Tracy's tab is open and in the layout while Show Tracy is still off. */
+  async function openTracyTabWithEntryOff(): Promise<void> {
+    useSettingsStore.setState({ showTracy: false });
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: TRACY, hostId: "host-a", title: "Tracy" });
+    await waitFor(() => {
+      expect(layoutRefKeys()).toContain(TRACY);
+    });
+  }
+
+  it("takes the bot out of a split it was paired in, leaving the partner a tab of its own", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    await openTracyTabWithEntryOff();
+    expect(
+      tabCommandCoordinator.pairTabs({
+        left: { kind: "epic", id: "e-beta" },
+        right: TRACY_REF,
+        splitId: "split-beta-tracy",
+        leftRatio: 0.5,
+        focusedRef: TRACY_REF,
+      }),
+    ).toBe(true);
+    expect(useTabsStore.getState().items.map((item) => item.kind)).toEqual([
+      "tab",
+      "split",
+    ]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    act(() => {
+      useSettingsStore.getState().setShowTracy(true);
+    });
+
+    await waitFor(() => {
+      expect(layoutRefKeys()).toEqual([TRACY, "e-alpha", "e-beta"]);
+    });
+    expect(await screen.findByTestId("tab-tracy")).not.toBeNull();
+  });
+
+  it("takes the bot out of the group it was in, leaving the group to its other tabs", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    await openTracyTabWithEntryOff();
+    const tracyKey = tabRefKey(TRACY_REF);
+    const alphaKey = tabRefKey({ kind: "epic", id: "e-alpha" });
+    // The bot is first already, in the group with Alpha: only leaving the
+    // group moves it.
+    const alphaRef: TabRef = { kind: "epic", id: "e-alpha" };
+    const betaRef: TabRef = { kind: "epic", id: "e-beta" };
+    useTabsStore.setState({
+      items: [TRACY_REF, alphaRef, betaRef].map((ref) => ({
+        kind: "tab",
+        id: tabItemId(ref),
+        ref,
+      })),
+      stripOrder: [TRACY_REF, alphaRef, betaRef],
+      groups: {
+        g1: {
+          name: "Work",
+          color: "#336699",
+          collapsed: false,
+          organizationOwnerId: "user-1",
+        },
+      },
+      customizations: {
+        [tracyKey]: { groupId: "g1", color: null, icon: null },
+        [alphaKey]: { groupId: "g1", color: null, icon: null },
+      },
+    });
+    expect(layoutRefKeys()).toEqual([TRACY, "e-alpha", "e-beta"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    act(() => {
+      useSettingsStore.getState().setShowTracy(true);
+    });
+
+    await waitFor(() => {
+      expect(
+        useTabsStore.getState().customizations?.[tracyKey]?.groupId,
+      ).toBeNull();
+    });
+    expect(layoutRefKeys()).toEqual([TRACY, "e-alpha", "e-beta"]);
+    expect(useTabsStore.getState().customizations?.[alphaKey]?.groupId).toBe(
+      "g1",
+    );
+  });
+});
+
+describe("the fixed Tracy entry - opening its tab", () => {
+  beforeEach(tracyIsMainBot);
+
+  it.each([
+    {
+      label:
+        "moves a tab whose host this client can no longer dial onto this window's host",
+      bound: "host-gone",
+      connectable: { hostIds: ["host-a"], resolved: true },
+      expected: "host-a",
+    },
+    {
+      label: "keeps a tab on its own host while this client can still dial it",
+      bound: "host-b",
+      connectable: { hostIds: ["host-a", "host-b"], resolved: true },
+      expected: "host-b",
+    },
+    {
+      label: "keeps the tab's host while the host directory has not answered",
+      bound: "host-gone",
+      connectable: { hostIds: [], resolved: false },
+      expected: "host-gone",
+    },
+  ])("$label", async ({ bound, connectable, expected }) => {
+    scripted.connectable = connectable;
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: TRACY, hostId: bound, title: "Tracy" });
+    const view = mountTopStrip("/");
+    const entry = await screen.findByTestId("tab-tracy");
+    // A restored tab keeps the host it was bound to until it is opened.
+    expect(lookupBotTab(useBotTabsStore.getState().tabs, TRACY)?.hostId).toBe(
+      bound,
+    );
+
+    fireEvent.click(entry);
+
+    await waitFor(() => {
+      expect(view.pathname()).toBe(`/bot/${TRACY}`);
+    });
+    expect(lookupBotTab(useBotTabsStore.getState().tabs, TRACY)?.hostId).toBe(
+      expected,
+    );
+  });
+});
+
+describe("the fixed Tracy entry - the bot list", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("is refetched when the host announces a change, so an archived main bot leaves the entry with no other bots surface mounted", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await screen.findByTestId("tab-tracy");
+    expect(useBotTabsStore.getState().fixedBotId).toBe(TRACY);
+
+    scripted.list = {
+      bots: [
+        bot(TRACY, PERSONAL_ENV, "Tracy", 5_000),
+        bot(TEAM_BOT, TEAM_ENV, "Release Bot", null),
+      ],
+      mainBotIds: { [PERSONAL_ENV]: TRACY, [TEAM_ENV]: TEAM_BOT },
+    };
+    const doorbell = scripted.stream?.getSession("bot.listChanged", {});
+    if (doorbell === undefined) throw new Error("bot.listChanged not rung");
+    act(() => {
+      doorbell.emitFrame(CHANGED);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("tab-tracy")).toBeNull();
+    });
+    expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+    expect(lookupBotTab(useBotTabsStore.getState().tabs, TRACY)).toBeNull();
   });
 });
 

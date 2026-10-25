@@ -79,6 +79,7 @@ import {
 } from "@/stores/tabs/strip-motion";
 import type { TabRef } from "@/stores/tabs/types";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
+import { stripItemGroupId } from "@/stores/tabs/tab-groups";
 import {
   isTabCloseLocked,
   isTabStructurallyLocked,
@@ -785,16 +786,35 @@ export class TabCommandCoordinator {
   }
 
   /**
-   * Keeps a fixed entry's ungrouped tab first in the strip, where its owner
-   * draws it beside Home. The one move a structurally locked ref takes: the
-   * lock keeps every gesture from moving it, and this puts it back after a
-   * restore or a reconciliation appended it. Selection is untouched.
+   * Keeps a fixed entry's tab first in the strip, alone and in no group,
+   * where its owner draws it beside Home. The one move a structurally locked
+   * ref takes: the lock keeps every gesture from moving it, and this puts it
+   * back after a restore or a reconciliation appended it. A ref that was
+   * paired before it became the entry (a split made while the entry was off,
+   * or restored from before it) leaves the pair first, its partner staying as
+   * a tab of its own where the pair was, and the selection with whichever of
+   * the two was focused.
    */
   keepSourceRefFirst(ref: TabRef): boolean {
     const layout = currentLayout();
-    const item = findStripItemForRef(layout, ref);
-    if (item?.kind !== "tab" || layout.items[0]?.id === item.id) return false;
-    const next = reorderStripItem(layout, { itemId: item.id, targetIndex: 0 });
+    const found = findStripItemForRef(layout, ref);
+    if (found === null) return false;
+    const alone =
+      found.kind === "split" ? separateSplit(layout, found.id) : layout;
+    const item = findStripItemForRef(alone, ref);
+    if (item?.kind !== "tab") return false;
+    if (
+      alone === layout &&
+      layout.items[0]?.id === item.id &&
+      stripItemGroupId(item, layout.customizations) === null
+    ) {
+      return false;
+    }
+    const next = moveStripItem(alone, {
+      itemId: item.id,
+      targetIndex: 0,
+      groupId: null,
+    });
     if (next === layout) return false;
     this.execute({
       layout: next,

@@ -133,6 +133,26 @@ export function lookupBotTab(
   return Object.hasOwn(tabs, botId) ? tabs[botId] : null;
 }
 
+/**
+ * Before a bot's tab is opened again from a list or a fixed entry: an open
+ * tab keeps its host unless this client can no longer dial it (a restored
+ * tab, a host gone since), and then it moves to `hostId`, this window's host,
+ * which finds the one serving the bot. `isConnectable` is `null` while the
+ * directory has not answered, which says nothing about the tab's host, so
+ * the tab keeps it.
+ */
+export function rebindUnreachableBotTab(
+  botId: string,
+  hostId: string,
+  isConnectable: ((hostId: string) => boolean) | null,
+): void {
+  const state = useBotTabsStore.getState();
+  const existing = lookupBotTab(state.tabs, botId);
+  if (existing !== null && isConnectable !== null) {
+    if (!isConnectable(existing.hostId)) state.rebindBotTab(botId, hostId);
+  }
+}
+
 /** Every open bot tab, oldest first - the order a restore places them in. */
 export function botTabRecords(
   tabs: Readonly<Record<string, BotTabRecord>>,
