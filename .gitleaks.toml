@@ -144,4 +144,4 @@ paths = [
   '''^clients/gui-app/src/providers/__tests__/support-environment-bridge\.test\.tsx$''',
   '''^clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question\.test\.tsx$''',
 ]
-regexes = ['''^EnvironmentSecretV\d+$''']
+regexes = ['''^EnvironmentSecretV12$''']
