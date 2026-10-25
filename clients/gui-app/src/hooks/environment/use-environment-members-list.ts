@@ -105,7 +105,11 @@ export function useEnvironmentMembersList(
   enabled: boolean,
 ): EnvironmentMembersListResult {
   const queryClient = useQueryClient();
-  const hostId = useReactiveHostReadiness(client).hostId;
+  const servingClient = useMemo(
+    () => (client === null ? null : resolvePoolTierHostClient(client)),
+    [client],
+  );
+  const hostId = useReactiveHostReadiness(servingClient).hostId;
   const viewerUserId = useCloudChatViewerId();
   const [requested, setRequested] = useState<Requested>({
     environmentId,
@@ -159,7 +163,7 @@ export function useEnvironmentMembersList(
     typeof METHOD,
     CombinedPages
   >({
-    client,
+    client: servingClient,
     requests,
     cacheKeyIdentity: viewerUserId,
     requiredHostMethodVersion: () => ENVIRONMENT_MEMBERS_FLOOR,

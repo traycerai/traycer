@@ -17,6 +17,7 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
+import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
 import {
   useAuthIdentityTransition,
@@ -138,6 +139,9 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
+      // The move reminder survives navigation, but its host belongs to the
+      // outgoing identity. Retire the toast and any retained action callback.
+      retireOnboardingReminder();
       // Chat/artifact blob-cache keys omit the account. Drop in-memory
       // maps so remount grace cannot join the outgoing fetch, then drop
       // the outgoing IndexedDB partition.

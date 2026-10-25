@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +27,8 @@ import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-shee
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const toastState = vi.hoisted(() => {
   let onDismiss: (() => void) | undefined;
@@ -96,6 +98,38 @@ function mountGuide(): {
     </QueryClientProvider>,
   );
   return { view, queryClient };
+}
+
+function mountGuideWithLifecycleBridge(): {
+  readonly view: RenderResult;
+  readonly hideGuide: () => void;
+} {
+  let setGuideVisible: (visible: boolean) => void = () => undefined;
+  function LifecycleGuide(): ReactNode {
+    const [visible, setVisible] = useState(true);
+    setGuideVisible = setVisible;
+    return (
+      <EpicSessionLifecycleBridge>
+        {visible ? (
+          <FirstTaskLandingGuide
+            enabled
+            rootRef={{ current: null }}
+            workspaceFolders={null}
+          />
+        ) : null}
+      </EpicSessionLifecycleBridge>
+    );
+  }
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <LifecycleGuide />
+    </QueryClientProvider>,
+  );
+  return { view, hideGuide: () => setGuideVisible(false) };
 }
 
 /** This computer, with a fake host answering `environment.review` with `entries`. */
@@ -224,6 +258,11 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     toastState.reset();
     useOnboardingStore.getState().reset();
     useFirstTaskGuideStore.getState().prepare();
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
   });
 
   it("dismisses only when the toast is dismissed while mounted", () => {
@@ -387,6 +426,50 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       act(() => toastState.invokeDismiss());
 
       expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    });
+
+    it("retires the reminder and invalidates its retained action on sign-out after navigation", async () => {
+      computerWithStatus(NOT_MOVED_STATUS);
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "user-a",
+          userName: "alice@example.test",
+          email: "alice@example.test",
+        },
+        contextMetadata: {
+          userId: "user-a",
+          username: "alice@example.test",
+        },
+      });
+      const { view, hideGuide } = mountGuideWithLifecycleBridge();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(
+          "This computer's settings aren't in Personal.",
+          expect.anything(),
+        ),
+      );
+      act(() => hideGuide());
+      expect(toastState.dismiss).not.toHaveBeenCalled();
+
+      act(() => {
+        useAuthStore.setState({
+          status: "signed-out",
+          profile: null,
+          contextMetadata: null,
+        });
+      });
+      await waitFor(() =>
+        expect(toastState.dismiss).toHaveBeenCalledWith(
+          "traycer-getting-started",
+        ),
+      );
+
+      act(() => toastState.invokeAction());
+      expect(useMoveSheetStore.getState().target).toBeNull();
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+      view.unmount();
     });
   });
 });

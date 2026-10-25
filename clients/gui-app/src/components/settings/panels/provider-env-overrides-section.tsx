@@ -1,3 +1,4 @@
+import { useMutation } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
@@ -97,10 +98,44 @@ export function ProviderEnvOverridesSection({
     scope: { id: "config.env.localOverride" },
     invalidateMethods: ["environment.localOverrides", "providers.list"],
   });
+  const useEverywhere = useMutation({
+    mutationFn: async (entry: {
+      readonly key: string;
+      readonly value: string;
+    }) => {
+      await setOverride.mutateAsync({
+        providerId,
+        ...entry,
+        executableWriteGrant: null,
+      });
+      await clearOwnValue.mutateAsync({
+        target: { kind: "env_override", providerId, key: entry.key },
+      });
+    },
+  });
+  const commitOverride = useMutation({
+    mutationFn: async (entry: {
+      readonly oldKey: string;
+      readonly newKey: string;
+      readonly value: string | null;
+    }) => {
+      await setOverride.mutateAsync({
+        providerId,
+        key: entry.newKey,
+        value: entry.value,
+        executableWriteGrant: null,
+      });
+      if (entry.oldKey.length > 0 && entry.oldKey !== entry.newKey) {
+        await deleteOverride.mutateAsync({ providerId, key: entry.oldKey });
+      }
+    },
+  });
   const disabled =
     setOverride.isPending ||
     deleteOverride.isPending ||
     clearOwnValue.isPending ||
+    useEverywhere.isPending ||
+    commitOverride.isPending ||
     credentialRefusal !== null;
   const notes = usePersonalRowNotes({
     kind: "env_override",
@@ -116,17 +151,7 @@ export function ProviderEnvOverridesSection({
         name={key}
         note={note}
         disabled={disabled}
-        onUseEverywhere={(name, value) =>
-          setOverride.mutate(
-            { providerId, key: name, value, executableWriteGrant: null },
-            {
-              onSuccess: () =>
-                clearOwnValue.mutate({
-                  target: { kind: "env_override", providerId, key: name },
-                }),
-            },
-          )
-        }
+        onUseEverywhere={(key, value) => useEverywhere.mutate({ key, value })}
       />,
     );
   }
@@ -139,16 +164,7 @@ export function ProviderEnvOverridesSection({
     value: string | null,
   ): void => {
     if (credentialRefusal !== null) return;
-    setOverride.mutate(
-      { providerId, key: newKey, value, executableWriteGrant: null },
-      {
-        onSuccess: () => {
-          if (oldKey.length > 0 && oldKey !== newKey) {
-            deleteOverride.mutate({ providerId, key: oldKey });
-          }
-        },
-      },
-    );
+    commitOverride.mutate({ oldKey, newKey, value });
   };
 
   return (

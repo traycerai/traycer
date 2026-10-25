@@ -137,6 +137,7 @@ function renderShellPanelOverRpc(options: {
 }): ConfigHostFixture & {
   readonly queryClient: QueryClient;
   readonly rerenderPanel: () => void;
+  readonly unmountPanel: () => void;
 } {
   const hostId = options.hostId ?? "host-a";
   const isLocalMachine = options.isLocalMachine ?? true;
@@ -215,6 +216,7 @@ function renderShellPanelOverRpc(options: {
     ...fixture,
     queryClient,
     rerenderPanel: () => rendered.rerender(panel()),
+    unmountPanel: () => rendered.unmount(),
   };
 }
 
@@ -1576,6 +1578,81 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
     });
+  });
+
+  it("clears a host's own variable after its save resolves, even if the panel unmounts", async () => {
+    credentialRefusal.current = REFUSAL;
+    let releaseSave: (() => void) | undefined;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const set = vi.fn(
+      async (request: { key: string; value: string | null }) => {
+        await new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        });
+        return { key: request.key, value: request.value };
+      },
+    );
+    const clear = vi.fn(() =>
+      Promise.resolve({ outcome: "saved" as const, overrides: [] }),
+    );
+    const panel = renderShellPanelOverRpc({
+      cli,
+      localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.clear": clear,
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() => expect(set).toHaveBeenCalledOnce());
+    expect(clear).not.toHaveBeenCalled();
+
+    panel.unmountPanel();
+    if (releaseSave === undefined) throw new Error("save did not start");
+    act(() => releaseSave?.());
+
+    await waitFor(() => expect(clear).toHaveBeenCalledOnce());
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+    });
+  });
+
+  it("keeps a host's own variable when saving it for everyone fails", async () => {
+    credentialRefusal.current = REFUSAL;
+    let rejectSave: ((error: Error) => void) | undefined;
+    const failedSave = new Promise<never>((_resolve, reject) => {
+      rejectSave = reject;
+    });
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const set = vi.fn(() => failedSave);
+    const clear = vi.fn(() =>
+      Promise.resolve({ outcome: "saved" as const, overrides: [] }),
+    );
+    renderShellPanelOverRpc({
+      cli,
+      localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.clear": clear,
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() => expect(set).toHaveBeenCalledOnce());
+    if (rejectSave === undefined) throw new Error("save did not start");
+    await act(async () => {
+      rejectSave?.(new Error("save failed"));
+      await failedSave.catch(() => undefined);
+    });
+
+    expect(clear).not.toHaveBeenCalled();
   });
 });
 

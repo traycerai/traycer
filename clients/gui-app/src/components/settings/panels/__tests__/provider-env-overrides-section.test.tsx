@@ -26,7 +26,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -35,6 +35,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -63,28 +64,37 @@ import type { EnvOverrideValue } from "../env-override-editor";
 import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 
 const mocks = vi.hoisted(() => ({
-  setOverrideMutate:
-    vi.fn<
-      (variables: unknown, options: { readonly onSuccess: () => void }) => void
-    >(),
-  deleteOverrideMutate: vi.fn(),
+  setOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
+  deleteOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
   /** What `useHostCredentialRefusal` answers; `null` is a host that takes env overrides. */
   credentialRefusal: null as string | null,
 }));
 
-vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
-  useProvidersSetEnvOverride: () => ({
-    mutate: mocks.setOverrideMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-set-env-override-mutation",
+  async () => {
+    const { useMutation } = await import("@tanstack/react-query");
+    return {
+      useProvidersSetEnvOverride: () =>
+        useMutation({ mutationFn: mocks.setOverrideMutate }),
+    };
+  },
+);
 
-vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
-  useProvidersDeleteEnvOverride: () => ({
-    mutate: mocks.deleteOverrideMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-delete-env-override-mutation",
+  async () => {
+    const { useMutation } = await import("@tanstack/react-query");
+    return {
+      useProvidersDeleteEnvOverride: () =>
+        useMutation({ mutationFn: mocks.deleteOverrideMutate }),
+    };
+  },
+);
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -321,7 +331,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     review: readonly EnvironmentReviewEntry[],
     facts: HostFacts,
     section: ReactNode,
-  ): void {
+  ): RenderResult {
     const { client } = buildEnvironmentClient({
       hostId: HOST_ID,
       handlers: {
@@ -382,7 +392,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       client,
     };
     hostBindingMock.current = { hostClient: client };
-    render(
+    return render(
       <QueryClientProvider
         client={
           new QueryClient({
@@ -418,8 +428,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     providerId: ProviderCliState["providerId"],
     onOpenAccount: (() => void) | null,
     overrides: readonly EnvOverrideValue[],
-  ): void {
-    mountOnPersonalPage(
+  ): RenderResult {
+    return mountOnPersonalPage(
       [],
       NO_FACTS,
       <ProviderEnvOverridesSection
@@ -619,8 +629,10 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       await screen.findByRole("button", { name: "Remove KIRO_API_KEY" }),
     );
 
-    expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1);
-    expect(mocks.deleteOverrideMutate).toHaveBeenCalledWith({
+    await waitFor(() =>
+      expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.deleteOverrideMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "kiro",
       key: "KIRO_API_KEY",
     });
@@ -676,8 +688,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   function renderClaudeEnvTab(
     facts: HostFacts,
     overrides: readonly EnvOverrideValue[],
-  ): void {
-    mountOnPersonalPage(
+  ): RenderResult {
+    return mountOnPersonalPage(
       [],
       facts,
       <ProviderEnvOverridesSection
@@ -713,18 +725,50 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       await screen.findByRole("button", { name: "Use everywhere" }),
     );
 
-    expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1);
-    const [variables, options] = mocks.setOverrideMutate.mock.calls[0];
-    expect(variables).toEqual({
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "claude-code",
       key: "ANTHROPIC_BASE_URL",
       value: OWN_URL,
       executableWriteGrant: null,
     });
-    // Nothing is cleared until the save landed.
+    // The clear RPC follows the save's resolved promise.
+    await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
+    expect(clearOverride).toHaveBeenCalledWith({
+      target: {
+        kind: "env_override",
+        providerId: "claude-code",
+        key: "ANTHROPIC_BASE_URL",
+      },
+    });
+  });
+
+  it("clears a provider's own value after its save resolves, even if the section unmounts", async () => {
+    let resolveSave: (() => void) | undefined;
+    mocks.setOverrideMutate.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const view = renderClaudeEnvTab(
+      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      SHARED_URL,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
     expect(clearOverride).not.toHaveBeenCalled();
 
-    options.onSuccess();
+    view.unmount();
+    if (resolveSave === undefined) throw new Error("save did not start");
+    act(() => resolveSave?.());
 
     await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
     expect(clearOverride).toHaveBeenCalledWith({
@@ -733,6 +777,72 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         providerId: "claude-code",
         key: "ANTHROPIC_BASE_URL",
       },
+    });
+  });
+
+  it("keeps a provider's own value when saving it for everyone fails", async () => {
+    let rejectSave: ((error: Error) => void) | undefined;
+    const save = new Promise<void>((_resolve, reject) => {
+      rejectSave = reject;
+    });
+    mocks.setOverrideMutate.mockImplementationOnce(() => save);
+    renderClaudeEnvTab(
+      { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+      SHARED_URL,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    if (rejectSave === undefined) throw new Error("save did not start");
+    await act(async () => {
+      rejectSave?.(new Error("save failed"));
+      await save.catch(() => undefined);
+    });
+
+    expect(clearOverride).not.toHaveBeenCalled();
+  });
+
+  it("deletes the old provider variable after a renamed save resolves, even if the section unmounts", async () => {
+    let resolveSave: (() => void) | undefined;
+    mocks.setOverrideMutate.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const view = renderProviderEnvTab("cursor", null, [
+      { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
+    ]);
+    const nameField = await screen.findByLabelText("Name for CURSOR_BASE_URL");
+    fireEvent.change(nameField, {
+      target: { value: "CURSOR_PROXY_URL" },
+    });
+    fireEvent.blur(nameField);
+
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    // Reset the still-mounted draft so row cleanup doesn't submit the same
+    // rename a second time while the first save remains in flight.
+    fireEvent.change(nameField, {
+      target: { value: "CURSOR_BASE_URL" },
+    });
+
+    view.unmount();
+    expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
+    if (resolveSave === undefined) throw new Error("save did not start");
+    act(() => resolveSave?.());
+
+    await waitFor(() =>
+      expect(mocks.deleteOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.deleteOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "cursor",
+      key: "CURSOR_BASE_URL",
     });
   });
 

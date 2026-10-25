@@ -1,3 +1,4 @@
+import { useMutation } from "@tanstack/react-query";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Info, RotateCcw } from "lucide-react";
@@ -542,8 +543,19 @@ function ShellSettingsPanelBody(props: {
     scope: { id: "config.env.localOverride" },
     invalidateMethods: ["environment.localOverrides", "config.env.list"],
   });
+  const useEverywhere = useMutation({
+    mutationFn: async (entry: {
+      readonly key: string;
+      readonly value: string;
+    }) => {
+      await controller.setEnvAsync(entry);
+      await clearOwnValue.mutateAsync({
+        target: { kind: "variable", key: entry.key },
+      });
+    },
+  });
   const onUseEverywhere = (key: string, value: string): void => {
-    if (envPending || clearOwnValue.isPending) return;
+    if (envPending || useEverywhere.isPending) return;
     if (
       credentialRefusal !== null &&
       (isCredentialShapedEnvName(key) || urlCarriesCredentials(value))
@@ -551,16 +563,7 @@ function ShellSettingsPanelBody(props: {
       return;
     }
     beginEnvSave();
-    controller.setEnv(
-      { key, value },
-      {
-        onSuccess: () => {
-          finishEnvSave();
-          clearOwnValue.mutate({ target: { kind: "variable", key } });
-        },
-        onError: envSaveCallbacks(key).onError,
-      },
-    );
+    useEverywhere.mutate({ key, value }, envSaveCallbacks(key));
   };
 
   return (
@@ -599,7 +602,7 @@ function ShellSettingsPanelBody(props: {
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
         onUseEverywhere={onUseEverywhere}
-        useEverywherePending={clearOwnValue.isPending}
+        useEverywherePending={useEverywhere.isPending}
       />
       {keyShaped.dialog}
     </div>

@@ -1,5 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, type RefObject } from "react";
 import { toast } from "sonner";
+import {
+  captureOnboardingReminderIdentity,
+  ONBOARDING_REMINDER_TOAST_ID,
+} from "@/lib/toast/onboarding-reminder-toast";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   useOnboardingStore,
@@ -235,7 +239,8 @@ function SetupReminderToast(props: {
     // settings have not moved still has that to do with every guide done.
     if (remaining === 0 && moveHostId === null) return;
     let mounted = true;
-    const id = "traycer-getting-started";
+    const id = ONBOARDING_REMINDER_TOAST_ID;
+    const identityIsCurrent = captureOnboardingReminderIdentity();
     if (moveHostId !== null && moveHostName !== null) {
       toast("This computer's settings aren't in Personal.", {
         id,
@@ -245,11 +250,12 @@ function SetupReminderToast(props: {
         duration: Infinity,
         closeButton: true,
         onDismiss: () => {
-          if (mounted) dismiss();
+          if (mounted && identityIsCurrent()) dismiss();
         },
         action: {
           label: "Show me what moves",
           onClick: () => {
+            if (!identityIsCurrent()) return;
             dismiss();
             openMoveSheet({ hostId: moveHostId, hostName: moveHostName });
           },
@@ -273,11 +279,12 @@ function SetupReminderToast(props: {
       duration: Infinity,
       closeButton: true,
       onDismiss: () => {
-        if (mounted) dismiss();
+        if (mounted && identityIsCurrent()) dismiss();
       },
       action: {
         label: "Open",
         onClick: () => {
+          if (!identityIsCurrent()) return;
           dismiss();
           navigateToSettingsSection("getting-started");
         },
