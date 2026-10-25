@@ -519,6 +519,16 @@ describe.each(READ_PATHS)(
         "Summary Shown answer. After.",
       ],
       [
+        'a details whose open attribute is written as "false", which still opens it',
+        '<details open="false"><summary>First</summary><p>Body.</p></details>',
+        "First Body.",
+      ],
+      [
+        'a details whose open attribute is written as "true"',
+        '<details open="true"><summary>First</summary><p>Body.</p></details>',
+        "First Body.",
+      ],
+      [
         "a closed details hides an open one inside it",
         "<details><summary>Outer</summary><details open><summary>Inner</summary><p>Body.</p></details></details>",
         "Outer",

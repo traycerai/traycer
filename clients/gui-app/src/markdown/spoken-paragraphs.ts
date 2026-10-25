@@ -154,9 +154,11 @@ function spokenParagraphs(
  * The children the render shows: a `<details>` written without `open` shows
  * only its summary. The rows this path stands in for may be unmounted, and a
  * toggle there does not survive it, so the written state is what they draw.
+ * React decides `open` by truthiness, so a written value such as "false"
+ * still opens it; absent or false keeps it closed.
  */
 function shownChildren(node: Element): ReadonlyArray<ElementContent> {
-  if (node.tagName !== "details" || node.properties.open === true) {
+  if (node.tagName !== "details" || Boolean(node.properties.open)) {
     return node.children;
   }
   const summary = node.children.find(
