@@ -216,7 +216,8 @@ export const botOnboardingCompleteV10 = defineRpcContract({
 /**
  * `bot.subscribe@1.0` - the bot row, its task list with cadence and last
  * check-in, the open-request count and the bound host, as one snapshot
- * re-sent on change. Replaces polling for Home and the bot tab.
+ * re-sent on change, and what the bot's running chats are doing, one entry
+ * per change. Replaces polling for Home and the bot tab.
  */
 export const botSubscribeV10 = defineStreamRpcContract({
   method: "bot.subscribe",

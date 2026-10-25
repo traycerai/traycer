@@ -737,9 +737,59 @@ export type BotSubscribeOpenRequest = z.infer<
 >;
 
 /**
+ * What one of the bot's running chats (the trunk, or a thread's session) is
+ * doing, as the bound host sees it:
+ *
+ *  - `idle` - the session is open and no turn runs;
+ *  - `replying` - a turn runs; `startedAt` is when it started and `step` the
+ *    latest tool call or command it made, labelled as the transcript labels
+ *    it (`host/agent/gui/activity-step-label.ts`);
+ *  - `parked` - the session's queue is paused on a conversation message it
+ *    could not deliver;
+ *  - `failed` - the last turn ended in an error while the request it answered
+ *    is still open, until a later turn starts or the request resolves.
+ *
+ * `requestId` names the post being answered when the turn was started by one;
+ * `null` for any other turn (a check-in, a notice).
+ */
+export const botSessionActivitySchema = lazySchema(() =>
+  z.object({
+    state: z.enum(["idle", "replying", "parked", "failed"]),
+    startedAt: z.number().int().nullable(),
+    step: z.string().nullable(),
+    requestId: z.string().min(1).nullable(),
+  }),
+);
+export type BotSessionActivity = z.infer<typeof botSessionActivitySchema>;
+
+/**
+ * Every running chat of the bot on its bound host. A chat whose session is
+ * not open on the host (never started, gone cold, or its thread closed) is
+ * absent: absent reads as idle.
+ */
+export const botActivitySchema = lazySchema(() =>
+  z.object({
+    trunk: botSessionActivitySchema.nullable(),
+    /** Keyed by thread id, never the session's chat id. */
+    threads: z.record(z.string().min(1), botSessionActivitySchema),
+  }),
+);
+export type BotActivity = z.infer<typeof botActivitySchema>;
+
+/** Which entry of {@link botActivitySchema} an `activity` frame replaces. */
+export const botActivityTargetSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("trunk") }),
+    z.object({ kind: z.literal("thread"), threadId: z.string().min(1) }),
+  ]),
+);
+export type BotActivityTarget = z.infer<typeof botActivityTargetSchema>;
+
+/**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
  * re-sent whole whenever the bot row, its task list, a task's last check-in,
  * its open-request count or its conversations' rows change on this host;
+ * `activity` carries one changed entry of the bot's activity in between;
  * `deleted` ends it (the bot
  * was archived, or the caller lost it). The conversation rows stay
  * authoritative for open requests; `openRequestCount` is a hint, as the GUI
@@ -773,6 +823,23 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
         /** Whether the serving host is the bound one. */
         isThisHost: z.boolean(),
       }),
+      /**
+       * What the bot's running chats are doing, whole; later changes arrive
+       * as `activity` frames. `null` when the serving host is not the bound
+       * one.
+       */
+      activity: botActivitySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    /**
+     * One entry of the snapshot's `activity` changed: `entry` replaces it, and
+     * `null` removes it (the session is no longer open on the host). Sent
+     * only by the bound host, only after a snapshot.
+     */
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchema.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({
