@@ -43,7 +43,7 @@ const PRIVATE_COLLECTION_DECISIONS = {
   stickySweptByAction:
     "bounded by in-flight actions; values reference recovery evidence",
   steersAwaitingAck:
-    "bounded by steers awaiting their ack; a settings tuple and tile id each",
+    "one settings tuple and tile id per dispatched steer; retired by its ack, a refused dispatch, the reconnect sweep and disposal",
   taskIds: "temporary stop-all frame construction",
   next: "temporary copy of charged state collections",
   settledActionIds: "temporary snapshot reconciliation result",

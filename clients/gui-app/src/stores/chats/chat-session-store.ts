@@ -3881,9 +3881,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessage: null,
     });
   };
-  // Each queued steer's settings and sending tile, until its ack: a steer the
-  // host refuses unconfirmed is asked about in that tile and sent again
-  // confirmed with the same tuple.
+  // Each queued steer's settings and sending tile: a steer the host refuses
+  // unconfirmed is asked about in that tile and sent again confirmed with the
+  // same tuple. Held from before the frame goes out, since its ack can arrive
+  // synchronously, until the steer can no longer get one: its ack, a dispatch
+  // the store refused, the reconnect sweep that drops it with its connection,
+  // or disposal.
   const steersAwaitingAck = new Map<
     string,
     {
@@ -3914,7 +3917,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       newSettings: input.newSettings,
       initiatorId: input.initiatorId,
     });
-    return sendAction({
+    const clientActionId = sendAction({
       set: input.set,
       get: input.get,
       frame,
@@ -3924,6 +3927,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       pendingUserMessage: null,
     });
+    if (clientActionId === null) steersAwaitingAck.delete(input.clientActionId);
+    return clientActionId;
   };
   const sendQueueSettingsUpdateFrame = (input: {
     readonly set: SendActionInput["set"];
@@ -4630,6 +4635,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         get().pendingActions,
         connectionEpoch,
       );
+      // A swept steer will never get its ack, the only reader of its entry.
+      for (const sweptId of sweep.sweptActionIds) {
+        steersAwaitingAck.delete(sweptId);
+      }
       // Every swept id came from this same `pendingActions` snapshot, so the
       // lookup is always present. DEFERRED past the reconcile rather than
       // applied here: the slot holds one pick, and a swept edit is not the
@@ -12218,6 +12227,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         clearSuppressedNotices();
         unsubscribeSweptObserver();
         stickySweptByAction.clear();
+        steersAwaitingAck.clear();
         disposed = true;
         liveChatSessionStores.delete(store);
         unsubscribeLiveCompletionAcknowledgements();
