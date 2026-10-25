@@ -846,6 +846,7 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
         launch: { requiredMacos: "14.0" },
         refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
       },
+      chatsFollow: true,
     });
 
   it("has a non-empty obligation set, so nothing below can pass vacuously", () => {

@@ -1980,6 +1980,11 @@ const providerCliStateBaseShape = {
   managedLines: lazySchema(() =>
     z.array(providerManagedLineSchema).catch([]).optional(),
   ),
+  // Whether existing chats follow the stored selection's line: true when a
+  // caller on `providers.setSelection@2.3` saved the selection as it is now.
+  // A Settings Managed row is checked only when this is true. Absent reads as
+  // false, which is every host below `providers.list@10.7`.
+  chatsFollow: lazySchema(() => z.boolean().optional()),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2025,7 +2030,7 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.6). Mutation echoes use their
+ * Latest provider CLI state (providers.list@10.7). Mutation echoes use their
  * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
@@ -2044,13 +2049,22 @@ export const providerCliStateSchema = lazySchema(() =>
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * The provider row `providers.list@10.6` published: without `chatsFollow`,
+ * which 10.7 added. Every older row derives from this one, so the key reaches
+ * no older reader.
+ */
+const providerCliStateSchemaV106 = lazySchema(() =>
+  providerCliStateSchema.omit({ chatsFollow: true }),
+);
+
+/**
  * The provider row `providers.list@10.5` published: without `managedLines`,
  * and with the selection before its bundled arm carried `line`, which 10.6
  * added. Every older row derives from this one, so neither reaches a released
  * reader.
  */
 const providerCliStateSchemaV105 = lazySchema(() =>
-  providerCliStateSchema
+  providerCliStateSchemaV106
     .omit({ managedLines: true })
     .extend({ selected: providerSelectionSchemaV10 }),
 );
@@ -2469,6 +2483,28 @@ export const providersListResponseSchema = lazySchema(() =>
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+/**
+ * Frozen `providers.list@10.6` response: the live envelope over the 10.6 row
+ * (`providerCliStateSchemaV106`), before 10.7 added `chatsFollow`. A hand copy
+ * of the envelope for the reason the 10.4 one is.
+ */
+export const providersListResponseSchemaV106Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchemaV106),
+    native: nativeListResultSchema.nullable().default(null),
+    credentialsManagedInAccount: z.boolean().optional(),
+    scope: z.literal("personal").nullable().optional(),
+    onHostOnly: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+        }),
+      )
+      .optional(),
+  }),
+);
 
 /** The list@10.0 response before MCP remedies and notices were introduced. */
 export const providersListResponseSchemaV100Preimage = lazySchema(() =>
@@ -5178,6 +5214,8 @@ export type DowngradableToV10ProviderState = (
   nativeSubagents?: ProviderCliState["nativeSubagents"];
   // (v10.6) OpenCode's per-line managed packs, absent from earlier rows.
   managedLines?: ProviderCliState["managedLines"];
+  // (v10.7) whether existing chats follow the selection, absent from earlier rows.
+  chatsFollow?: ProviderCliState["chatsFollow"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -5211,6 +5249,7 @@ export function downgradeProviderCliStateToV10(
   // - `macosRequirement` (v10.2) — list-only host macOS requirements.
   // - `nativeSubagents` (v10.5) — the per-provider native subagent setting.
   // - `managedLines` (v10.6) — OpenCode's per-line managed packs.
+  // - `chatsFollow` (v10.7) — whether existing chats follow the selection.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -5252,6 +5291,8 @@ export function downgradeProviderCliStateToV10(
     // (v10.5) the per-provider native subagent setting.
     nativeSubagents: _nativeSubagents,
     managedLines: _managedLines,
+    // (v10.7) whether existing chats follow the selection.
+    chatsFollow: _chatsFollow,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

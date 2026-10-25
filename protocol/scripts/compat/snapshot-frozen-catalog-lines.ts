@@ -63,6 +63,7 @@ import {
   providersListResponseSchemaV103Preimage,
   providersListResponseSchemaV104Preimage,
   providersListResponseSchemaV105Preimage,
+  providersListResponseSchemaV106Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -236,11 +237,14 @@ const FIXTURES = {
   // 10.5 froze when `managedLines` and the selection's `line` opened 10.6. Its
   // dump did not change by the freeze.
   "providers.list@10.5": dump(providersListResponseSchemaV105Preimage),
+  // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
+  // freeze.
+  "providers.list@10.6": dump(providersListResponseSchemaV106Preimage),
   // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
   // live shape goes red on this row rather than on the release that ships the
   // growth. Same response then applies - freeze the line that stopped being
   // head, open the next one.
-  "providers.list@10.6": dump(providersListResponseSchema),
+  "providers.list@10.7": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

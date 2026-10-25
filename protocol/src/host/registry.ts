@@ -1430,6 +1430,7 @@ import {
   providersListResponseSchemaV103Preimage,
   providersListResponseSchemaV104Preimage,
   providersListResponseSchemaV105Preimage,
+  providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -2962,6 +2963,22 @@ export const providersListV106 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 6 } as const,
   requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchemaV106Preimage,
+});
+
+/**
+ * `providers.list@10.7` - the row's `chatsFollow`: whether existing chats
+ * follow the stored selection's line, because a caller on
+ * `providers.setSelection@2.3` saved it. A Managed row is checked in Settings
+ * only when it is true.
+ *
+ * A MINOR with no `responseGrowthProjectionGated`: a new KEY, stripped for an
+ * older peer by the within-major re-parse.
+ */
+export const providersListV107 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 7 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
 });
 
@@ -3048,6 +3065,18 @@ export const providersListUpgradeV105ToV106 = defineUpgradePath<
   upgradeRequest: (request) => request,
   // Nothing to fill: a host below 10.6 offers one Managed row, which is what an
   // absent `managedLines` and a line-less selection already say.
+  upgradeResponse: (response) => response,
+});
+
+export const providersListUpgradeV106ToV107 = defineUpgradePath<
+  typeof providersListV106,
+  typeof providersListV107
+>({
+  from: { major: 10, minor: 6 },
+  to: { major: 10, minor: 7 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: an absent `chatsFollow` reads as false, which is all a
+  // host below 10.7 can say.
   upgradeResponse: (response) => response,
 });
 
@@ -3645,10 +3674,10 @@ export function downgradeNativeListErrorForPublishedLines(
 }
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -3671,10 +3700,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3694,10 +3723,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3717,10 +3746,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3737,10 +3766,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3757,10 +3786,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3777,10 +3806,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3797,10 +3826,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -3817,10 +3846,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV106,
+  typeof providersListV107,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 6 },
+  from: { major: 10, minor: 7 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -13565,14 +13594,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its seven minors and nine bridges inline
+ * `providers.list` major 10, named. Its eight minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 6;
+  readonly latestMinor: 7;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -13604,6 +13633,10 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV106;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV105ToV106;
     };
+    readonly 7: {
+      readonly contract: typeof providersListV107;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV106ToV107;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -13619,7 +13652,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 6,
+  latestMinor: 7,
   versions: {
     0: {
       contract: providersListV100,
@@ -13655,6 +13688,11 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     6: {
       contract: providersListV106,
       upgradeFromPreviousVersion: providersListUpgradeV105ToV106,
+    },
+    // `chatsFollow` on the row: a new KEY again.
+    7: {
+      contract: providersListV107,
+      upgradeFromPreviousVersion: providersListUpgradeV106ToV107,
     },
   },
   downgradePathsFromLatest: {
