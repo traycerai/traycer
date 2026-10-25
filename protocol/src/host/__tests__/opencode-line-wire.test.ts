@@ -207,19 +207,15 @@ describe("providers.setSelection@2.3", () => {
   };
   const entry = hostRpcRegistry["providers.setSelection"][2];
 
-  function version(minor: number) {
-    const found: { contract: typeof providersSetSelectionV22 } | undefined =
-      Object.entries(entry.versions).find(
-        ([key]) => Number(key) === minor,
-      )?.[1];
-    if (found === undefined) throw new Error(`no setSelection@2.${minor}`);
-    return found.contract;
-  }
+  const version = {
+    2: (): (typeof entry.versions)[2]["contract"] => entry.versions[2].contract,
+    3: (): (typeof entry.versions)[3]["contract"] => entry.versions[3].contract,
+  } as const;
 
   it("registers 2.3 above 2.2 and keeps the named line unchanged", () => {
     expect(entry.latestMinor).toBe(3);
-    const head = version(3);
-    expect(head).not.toBe(version(2));
+    const head = version[3]();
+    expect(head).not.toBe(version[2]());
     expect(head.schemaVersion).toEqual({ major: 2, minor: 3 });
     expect(head.requestSchema.parse(request)).toEqual(request);
   });
@@ -248,10 +244,10 @@ describe("providers.setSelection@2.3", () => {
         profiles: [],
       },
     };
-    expect(version(3).responseSchema.parse(response)).toEqual(
+    expect(version[3]().responseSchema.parse(response)).toEqual(
       providersSetSelectionV22.responseSchema.parse(response),
     );
-    expect(version(3).responseSchema.parse(response).state.selected).toEqual({
+    expect(version[3]().responseSchema.parse(response).state.selected).toEqual({
       kind: "bundled",
       line: 2,
     });
@@ -260,7 +256,9 @@ describe("providers.setSelection@2.3", () => {
   it("strips line on the downgrade from the head to 1.0", () => {
     const downgrade = entry.downgradePathsFromLatest[1];
     expect(downgrade.from).toEqual({ major: 2, minor: 3 });
-    const result = downgrade.downgradeRequest(request);
+    const result = downgrade.downgradeRequest(
+      version[3]().requestSchema.parse(request),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.selection).toEqual({ kind: "bundled" });
@@ -391,27 +389,24 @@ describe("providers.list@10.7 chatsFollow", () => {
   };
   const entry = hostRpcRegistry["providers.list"][10];
 
-  function listContract(minor: number) {
-    const found = Object.entries(entry.versions).find(
-      ([key]) => Number(key) === minor,
-    )?.[1];
-    if (found === undefined) throw new Error(`no providers.list@10.${minor}`);
-    return found.contract;
-  }
+  const listContract = {
+    6: (): (typeof entry.versions)[6]["contract"] => entry.versions[6].contract,
+    7: (): (typeof entry.versions)[7]["contract"] => entry.versions[7].contract,
+  } as const;
 
   it("keeps the row's chatsFollow at 10.7 and strips it at 10.6", () => {
     expect(
-      listContract(7).responseSchema.parse({ providers: [row] }).providers[0]
+      listContract[7]().responseSchema.parse({ providers: [row] }).providers[0]
         ?.chatsFollow,
     ).toBe(true);
-    const older = listContract(6).responseSchema.parse({ providers: [row] })
+    const older = listContract[6]().responseSchema.parse({ providers: [row] })
       .providers[0];
     expect(older).toBeDefined();
     expect(older).not.toHaveProperty("chatsFollow");
   });
 
   it("keeps the row and drops the key on the 1.0 downgrade", () => {
-    const response = listContract(7).responseSchema.parse({
+    const response = listContract[7]().responseSchema.parse({
       providers: [row],
     });
     expect(response.providers[0]).toHaveProperty("chatsFollow", true);
@@ -489,8 +484,8 @@ describe("released lines hold back the chats-follow keys", () => {
       "providers.setSelection",
     );
     expect({ major, minor }).toEqual({ major: 2, minor: 1 });
-    const contract = hostRpcRegistry["providers.setSelection"][2].versions[1]
-      .contract;
+    const contract =
+      hostRpcRegistry["providers.setSelection"][2].versions[1].contract;
     expect(
       contract.requestSchema.parse({
         providerId: "opencode",
@@ -515,8 +510,7 @@ describe("released lines hold back the chats-follow keys", () => {
   it("chat.subscribe's released line names no opencodeLineHeld", () => {
     const { major, minor } = releasedCanonical("stream", "chat.subscribe");
     expect(major).toBe(1);
-    const version =
-      hostStreamRpcRegistry["chat.subscribe"][1].versions[minor];
+    const version = hostStreamRpcRegistry["chat.subscribe"][1].versions[minor];
     if (version === undefined) throw new Error(`no chat.subscribe@1.${minor}`);
     expect(
       schemaText([
