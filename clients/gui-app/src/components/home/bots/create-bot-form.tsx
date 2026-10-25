@@ -118,14 +118,17 @@ export function CreateBotForm(props: {
   readonly connectableHostIds: ReadonlyArray<string>;
   /** Each connectable host's environment (`useHostEnvironmentBindings`). */
   readonly environmentBindings: HostEnvironmentBindings;
-  readonly onDone: () => void;
+  /** Runs once the bot exists and its tab is open. */
+  readonly onCreated: () => void;
+  readonly onCancel: () => void;
 }): ReactNode {
   const {
     environmentId,
     environmentLabel,
     connectableHostIds,
     environmentBindings,
-    onDone,
+    onCreated,
+    onCancel,
   } = props;
   const [title, setTitle] = useState("");
   const [directive, setDirective] = useState("");
@@ -228,7 +231,7 @@ export function CreateBotForm(props: {
             hostId,
             title: response.bot.title,
           });
-          onDone();
+          onCreated();
           navigateToTabIntent(
             navigate,
             botTabIntent(response.bot.botId),
@@ -319,7 +322,7 @@ export function CreateBotForm(props: {
           variant="ghost"
           size="sm"
           disabled={create.isPending}
-          onClick={onDone}
+          onClick={onCancel}
         >
           Cancel
         </Button>

@@ -28,6 +28,10 @@ import "../../../../../__tests__/test-browser-apis";
  * `executeActivation` in `src/lib/tab-navigation.ts`), and the shared
  * `TestRouterProvider` only defines a root route - too thin to resolve a real
  * Home destination.
+ *
+ * The fixed Tracy row beneath Home is covered here too, over the same real
+ * pipeline: it opens as the desktop strip's entry does, first moving a tab
+ * whose host this client can no longer dial onto this window's host.
  */
 
 import type { UseNavigateResult } from "@tanstack/react-router";
@@ -42,6 +46,7 @@ import * as TabNav from "@/lib/tab-navigation";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { emptyTabStripLayout, tabItemId } from "@/stores/tabs/layout";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -50,6 +55,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 
 // One-time, real reconciliation install - mirrors `tab-navigation.test.ts`,
 // the only other suite that drives `activateTabIntent` against real stores.
@@ -72,6 +78,23 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
     await importOriginal<typeof import("@tanstack/react-router")>();
   return { ...actual, useNavigate: () => asNavigate(navigateMock) };
 });
+
+// The Tracy row reads this window's host and the hosts this client can dial;
+// the directory behind them needs a host runtime this suite does not mount.
+const directory = vi.hoisted(
+  (): { connectable: { hostIds: readonly string[]; resolved: boolean } } => ({
+    connectable: { hostIds: [], resolved: true },
+  }),
+);
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-a",
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => directory.connectable,
+}));
+vi.mock("@/hooks/bots/use-bot-activity", () => ({
+  useBotActivity: () => null,
+}));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
@@ -174,7 +197,9 @@ function setHomeTabEnabled(enabled: boolean): void {
     .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
 }
 
-describe("MobileNavDrawer Home row", () => {
+const TRACY: TabRef = { kind: "bot", id: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" };
+
+describe("MobileNavDrawer rows", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     navigateMock.mockClear();
@@ -193,6 +218,8 @@ describe("MobileNavDrawer Home row", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
     TabNav.__resetTabNavigationControllerForTesting();
+    directory.connectable = { hostIds: [], resolved: true };
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
   });
 
   afterEach(() => {
@@ -206,6 +233,7 @@ describe("MobileNavDrawer Home row", () => {
     setHomeTabEnabled(false);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
     setMobileApp(false);
   });
 
@@ -255,5 +283,27 @@ describe("MobileNavDrawer Home row", () => {
     // dropping it from the layout.
     expect(useTabsStore.getState().activeItemId).toBeNull();
     expect(useTabsStore.getState().items.length).toBe(1);
+  });
+
+  it("opens the Tracy row's tab on this window's host when its own host can no longer be dialled, and closes the drawer", async () => {
+    directory.connectable = { hostIds: ["host-a"], resolved: true };
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: TRACY.id, hostId: "host-gone", title: "Tracy" });
+    useBotTabsStore.getState().setFixedBotId(TRACY.id);
+    useTabsStore.setState({
+      ...emptyTabStripLayout(),
+      items: [{ kind: "tab", id: tabItemId(TRACY), ref: TRACY }],
+      stripOrder: [TRACY],
+    });
+    renderDrawer();
+
+    fireEvent.click(await screen.findByTestId("mobile-nav-tracy"));
+
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, TRACY.id)?.hostId,
+    ).toBe("host-a");
+    expect(useMobileNavStore.getState().open).toBe(false);
+    expect(useTabsStore.getState().activeItemId).toBe(tabItemId(TRACY));
   });
 });

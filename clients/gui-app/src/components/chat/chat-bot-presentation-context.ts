@@ -3,13 +3,14 @@ import type { ChatBotRepliedPost } from "@/lib/bots/reply-row";
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
- * shows it: how many replies, when the last one landed, and whether it has
- * a reply the viewer has not read.
+ * shows it: how many replies, when the last one landed, whether it has a
+ * reply the viewer has not read, and whether the bot is answering in it now.
  */
 export interface ChatBotThreadLine {
   readonly replyCount: number;
   readonly lastReplyAt: number | null;
   readonly unread: boolean;
+  readonly replying: boolean;
 }
 
 /**

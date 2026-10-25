@@ -226,6 +226,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           replyCount: 3,
           lastReplyAt: Date.now() - 5 * 60_000,
           unread: false,
+          replying: false,
         }),
         openThread,
       ),
@@ -246,7 +247,12 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 0, lastReplyAt: null, unread: false }),
+        () => ({
+          replyCount: 0,
+          lastReplyAt: null,
+          unread: false,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -272,7 +278,12 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 2, lastReplyAt: 1_000, unread: true }),
+        () => ({
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: true,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -285,7 +296,12 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 2, lastReplyAt: 1_000, unread: false }),
+        () => ({
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -539,7 +555,12 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       const user = userEvent.setup();
       const threadLine = vi.fn<
         (postMessageId: string) => ChatBotThreadLine | null
-      >(() => ({ replyCount: 2, lastReplyAt: 1_000, unread: false }));
+      >(() => ({
+        replyCount: 2,
+        lastReplyAt: 1_000,
+        unread: false,
+        replying: false,
+      }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
       renderRow(
         announcementRow(kind),

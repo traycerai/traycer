@@ -23,6 +23,7 @@ import {
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -80,6 +81,11 @@ export type BotTranscriptSurface =
         | null;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** What the top of the channel says while nobody has written in it. */
+      readonly intro: {
+        readonly botTitle: string;
+        readonly directive: string | null;
+      };
     }
   | {
       readonly kind: "thread";
@@ -261,6 +267,25 @@ export function BotChatTranscript(props: {
       />
     </TileErrorBoundary>
   );
+}
+
+type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
+
+/**
+ * A channel nobody has written in opens with what it is for, as Slack's
+ * does; a windowed one is empty only when the host counts no row. `null`
+ * on a thread, before the snapshot, and once the channel has a row.
+ */
+function channelIntro(
+  surface: BotTranscriptSurface | null,
+  snapshotLoaded: boolean,
+  renderedRows: number,
+  transcriptWindow: { readonly rowCount: number } | null,
+): ChannelIntro | null {
+  if (surface?.kind !== "channel" || !snapshotLoaded) return null;
+  if (renderedRows > 0) return null;
+  if (transcriptWindow !== null && transcriptWindow.rowCount > 0) return null;
+  return surface.intro;
 }
 
 function BotChatTranscriptBody(props: {
@@ -503,16 +528,25 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+  const intro = channelIntro(
+    surface,
+    state.snapshotLoaded,
+    messages.length,
+    transcriptWindow,
+  );
 
+  // The channel's first screen, as a created channel nobody has written in
+  // opens: the next post re-subscribes on its own, so nothing more is said.
   if (channelNotHereYet) {
     return (
       <div
         data-testid="bot-channel-not-here-yet"
-        className="flex min-h-0 flex-1 flex-col items-center justify-center p-4"
+        className="flex min-h-0 flex-1 flex-col"
       >
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          No messages yet. Your first message starts the channel.
-        </p>
+        <BotChannelIntro
+          botTitle={surface.intro.botTitle}
+          directive={surface.intro.directive}
+        />
       </div>
     );
   }
@@ -526,29 +560,36 @@ function BotChatTranscriptBody(props: {
           data-testid="bot-chat-transcript"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <ChatMessages
-            taskTitle={title}
-            taskId={chatId}
-            epicId={botId}
-            hostId={hostId}
-            messages={messages}
-            transcriptWindow={transcriptWindow}
-            onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-            onFindReadOrdinalChange={state.requestFindReadOrdinal}
-            baselineEpoch={state.transcriptBaselineEpoch}
-            hydrationSequence={state.transcriptHydrationSequence}
-            coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-            backgroundItems={state.backgroundItems}
-            getMessageActions={getMessageActions}
-            nextStepActions={null}
-            instanceId={instanceId}
-            visible
-            systemOverlayActive={false}
-            scrollRequest={scrollRequest}
-            onScrollRequestSettled={onScrollRequestSettled}
-            composerOverlayHeight={0}
-            subagentDrillIn={subagentDrillIn}
-          />
+          {intro !== null ? (
+            <BotChannelIntro
+              botTitle={intro.botTitle}
+              directive={intro.directive}
+            />
+          ) : (
+            <ChatMessages
+              taskTitle={title}
+              taskId={chatId}
+              epicId={botId}
+              hostId={hostId}
+              messages={messages}
+              transcriptWindow={transcriptWindow}
+              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+              onFindReadOrdinalChange={state.requestFindReadOrdinal}
+              baselineEpoch={state.transcriptBaselineEpoch}
+              hydrationSequence={state.transcriptHydrationSequence}
+              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+              backgroundItems={state.backgroundItems}
+              getMessageActions={getMessageActions}
+              nextStepActions={null}
+              instanceId={instanceId}
+              visible
+              systemOverlayActive={false}
+              scrollRequest={scrollRequest}
+              onScrollRequestSettled={onScrollRequestSettled}
+              composerOverlayHeight={0}
+              subagentDrillIn={subagentDrillIn}
+            />
+          )}
         </div>
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>

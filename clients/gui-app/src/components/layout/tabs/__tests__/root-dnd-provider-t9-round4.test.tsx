@@ -43,7 +43,9 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { TabRef } from "@/stores/tabs/types";
@@ -51,6 +53,7 @@ import type { TabRef } from "@/stores/tabs/types";
 const SOURCE: TabRef = { kind: "draft", id: "source" };
 const TARGET: TabRef = { kind: "epic", id: "target" };
 const UNRELATED: TabRef = { kind: "draft", id: "unrelated-x" };
+const TRACY: TabRef = { kind: "bot", id: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" };
 const SPLIT_ID = "split-source-target";
 const TILE: EpicNodeRef = {
   id: "spec-in-task",
@@ -92,17 +95,27 @@ function TestCanvasTabDragSource(props: {
   );
 }
 
-function TestSplitGroupHeaderDropTarget(): ReactNode {
+/** The strip's drop slot of one drawn item, `index` counting the drawn tabs. */
+interface HeaderDropSlot {
+  readonly itemId: string;
+  readonly index: number;
+}
+
+const SPLIT_SLOT: HeaderDropSlot = { itemId: SPLIT_ID, index: 0 };
+
+function TestHeaderSlotDropTarget(props: {
+  readonly slot: HeaderDropSlot;
+}): ReactNode {
   const data: HeaderTabSlotDropData = {
     kind: HEADER_TAB_SLOT_DND_TYPE,
-    index: 0,
+    index: props.slot.index,
     isTrailing: false,
   };
   const { setNodeRef } = useDroppable({
-    id: getHeaderStripItemSlotDropId(SPLIT_ID),
+    id: getHeaderStripItemSlotDropId(props.slot.itemId),
     data,
   });
-  return <div ref={setNodeRef} data-testid="split-group-header-drop-target" />;
+  return <div ref={setNodeRef} data-testid="header-slot-drop-target" />;
 }
 
 /**
@@ -114,6 +127,7 @@ const queryClient = new QueryClient();
 
 function CanvasTearOffHarness(props: {
   readonly source: EpicCanvasArtifactTabDragData;
+  readonly slot: HeaderDropSlot;
 }): ReactNode {
   return (
     <QueryClientProvider client={queryClient}>
@@ -124,7 +138,7 @@ function CanvasTearOffHarness(props: {
           data-strip-axis="x"
           data-strip-edge="top"
         >
-          <TestSplitGroupHeaderDropTarget />
+          <TestHeaderSlotDropTarget slot={props.slot} />
         </div>
       </RootDndProvider>
     </QueryClientProvider>
@@ -156,7 +170,8 @@ function buildRouterWithHarness(initialPath: string, harness: () => ReactNode) {
   });
 }
 
-function seedCanvasTearOffLayout(): EpicCanvasArtifactTabDragData {
+/** The canvas tab a tear-off drags, and the drafts the layouts below place. */
+function seedCanvasTearOffSource(): EpicCanvasArtifactTabDragData {
   useLandingDraftStore.getState().createDraftWithId(SOURCE.id, null);
   useLandingDraftStore.getState().createDraftWithId(UNRELATED.id, null);
   useEpicCanvasStore
@@ -166,6 +181,18 @@ function seedCanvasTearOffLayout(): EpicCanvasArtifactTabDragData {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[TARGET.id];
   const sourceGroupId = collectPanes(canvas?.root ?? null).at(0)?.id;
   if (sourceGroupId === undefined) throw new Error("Expected source pane");
+  return {
+    kind: ARTIFACT_TAB_DND_TYPE,
+    epicId: "target-epic",
+    viewTabId: TARGET.id,
+    sourceGroupId,
+    tabId: TILE.instanceId,
+    isPreview: false,
+  };
+}
+
+function seedCanvasTearOffLayout(): EpicCanvasArtifactTabDragData {
+  const dragData = seedCanvasTearOffSource();
   useTabsStore.setState({
     version: 2,
     items: [
@@ -188,14 +215,7 @@ function seedCanvasTearOffLayout(): EpicCanvasArtifactTabDragData {
     stripOrder: [SOURCE, TARGET, UNRELATED],
     systemTabs: { history: null, settings: null },
   });
-  return {
-    kind: ARTIFACT_TAB_DND_TYPE,
-    epicId: "target-epic",
-    viewTabId: TARGET.id,
-    sourceGroupId,
-    tabId: TILE.instanceId,
-    isPreview: false,
-  };
+  return dragData;
 }
 
 describe("T9 round-4: RootDndProvider real wiring", () => {
@@ -206,6 +226,7 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
   afterEach(() => {
     vi.useRealTimers();
     cleanup();
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -215,11 +236,11 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
     const dragData = seedCanvasTearOffLayout();
     const router = buildRouterWithHarness(
       `/epics/target-epic/${TARGET.id}`,
-      () => <CanvasTearOffHarness source={dragData} />,
+      () => <CanvasTearOffHarness source={dragData} slot={SPLIT_SLOT} />,
     );
     render(<RouterProvider router={router} />);
     const source = await screen.findByTestId("canvas-tab-drag-source");
-    const target = await screen.findByTestId("split-group-header-drop-target");
+    const target = await screen.findByTestId("header-slot-drop-target");
     vi.spyOn(target, "getBoundingClientRect").mockReturnValue(
       rect(200, 0, 400, 50),
     );
@@ -270,6 +291,95 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
     );
   });
 
+  it.each([
+    {
+      label: "after the last drawn tab",
+      slot: { itemId: tabItemId(UNRELATED), index: 1 },
+      pointerX: 350,
+      drawnPosition: 2,
+      expected: ["tracy", "target", "unrelated", "torn-off"],
+    },
+    {
+      label: "before the first drawn tab, which is after the entry",
+      slot: { itemId: tabItemId(TARGET), index: 0 },
+      pointerX: 250,
+      drawnPosition: 0,
+      expected: ["tracy", "torn-off", "target", "unrelated"],
+    },
+  ])(
+    "tears a canvas tab onto the strip $label, where the fixed Tracy entry is not among the drawn slots",
+    async ({ slot, pointerX, drawnPosition, expected }) => {
+      const dragData = seedCanvasTearOffSource();
+      useBotTabsStore
+        .getState()
+        .openBotTab({ botId: TRACY.id, hostId: "host-a", title: "Tracy" });
+      useBotTabsStore.getState().setFixedBotId(TRACY.id);
+      useTabsStore.setState({
+        version: 2,
+        items: [TRACY, TARGET, UNRELATED].map((ref) => ({
+          kind: "tab",
+          id: tabItemId(ref),
+          ref,
+        })),
+        activeItemId: tabItemId(TARGET),
+        stripOrder: [TRACY, TARGET, UNRELATED],
+        systemTabs: { history: null, settings: null },
+      });
+      const router = buildRouterWithHarness(
+        `/epics/target-epic/${TARGET.id}`,
+        () => <CanvasTearOffHarness source={dragData} slot={slot} />,
+      );
+      render(<RouterProvider router={router} />);
+      const source = await screen.findByTestId("canvas-tab-drag-source");
+      const target = await screen.findByTestId("header-slot-drop-target");
+      vi.spyOn(target, "getBoundingClientRect").mockReturnValue(
+        rect(200, 0, 400, 50),
+      );
+
+      act(() => {
+        fireEvent.pointerDown(source, {
+          pointerId: 4,
+          isPrimary: true,
+          button: 0,
+          clientX: 10,
+          clientY: 10,
+        });
+        fireEvent.pointerMove(source, {
+          pointerId: 4,
+          clientX: 30,
+          clientY: 10,
+        });
+        fireEvent.pointerMove(source, {
+          pointerId: 4,
+          clientX: pointerX,
+          clientY: 10,
+        });
+      });
+      // The line is drawn among the tabs the strip draws, Tracy not one.
+      expect(useEpicDndStore.getState().headerStripDropIndex).toBe(
+        drawnPosition,
+      );
+
+      act(() => {
+        fireEvent.pointerUp(source, {
+          pointerId: 4,
+          clientX: pointerX,
+          clientY: 10,
+        });
+      });
+
+      expect(
+        useTabsStore.getState().items.map((item) => {
+          if (item.kind !== "tab") return item.id;
+          if (item.ref.kind === "bot") return "tracy";
+          if (item.ref.id === TARGET.id) return "target";
+          if (item.ref.id === UNRELATED.id) return "unrelated";
+          return "torn-off";
+        }),
+      ).toEqual(expected);
+    },
+  );
+
   // KEEP LAST: `installSourceReconciliation` subscribes the module-singleton
   // coordinator to the source stores and cannot be uninstalled, so it must
   // not run before the tests above.
@@ -288,11 +398,11 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
 
     const router = buildRouterWithHarness(
       `/epics/target-epic/${TARGET.id}`,
-      () => <CanvasTearOffHarness source={dragData} />,
+      () => <CanvasTearOffHarness source={dragData} slot={SPLIT_SLOT} />,
     );
     render(<RouterProvider router={router} />);
     const source = await screen.findByTestId("canvas-tab-drag-source");
-    const target = await screen.findByTestId("split-group-header-drop-target");
+    const target = await screen.findByTestId("header-slot-drop-target");
     vi.spyOn(target, "getBoundingClientRect").mockReturnValue(
       rect(200, 0, 400, 50),
     );

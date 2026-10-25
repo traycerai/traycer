@@ -359,6 +359,7 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGreeting"
   | "showRecentHistory"
+  | "showTracy"
   | "startPageWallpaper"
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
@@ -1465,6 +1466,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     quoteReplyEnabled: true,
     showGreeting: true,
     showRecentHistory: true,
+    showTracy: true,
     startPageWallpaper: true,
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,
