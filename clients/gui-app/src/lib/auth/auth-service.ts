@@ -56,6 +56,14 @@ import type {
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import {
+  fetchEnvironmentInvitations,
+  acceptEnvironmentInvitation,
+} from "@traycer-clients/shared/auth/environment-invitations";
+import type {
+  EnvironmentInvitationsListResponse,
+  EnvironmentInvitationsAcceptResponse,
+} from "@traycer/protocol/host/environment/contracts";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -3206,6 +3214,31 @@ export class AuthService {
       throw new Error("Sign in to start Automations.");
     }
     return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /** Explicit invitation access when the serving tier predates the host methods. */
+  async listEnvironmentInvitations(
+    signal: AbortSignal | null,
+  ): Promise<EnvironmentInvitationsListResponse> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to review team invitations.");
+    return fetchEnvironmentInvitations(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      signal,
+    );
+  }
+
+  async acceptEnvironmentInvitation(
+    environmentId: string,
+  ): Promise<EnvironmentInvitationsAcceptResponse> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to accept this invitation.");
+    return acceptEnvironmentInvitation(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+    );
   }
 
   /**

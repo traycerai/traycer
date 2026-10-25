@@ -71,12 +71,12 @@ const USER_RECORD_MAJORS_REQUEST_HEADER = "x-traycer-user-record-majors";
 const USER_RECORD_VERSION_RESPONSE_HEADER = "x-traycer-user-record-version";
 
 /**
- * Asks authn not to accept the person's pending team invitations while it
- * reads them: this build accepts one only after its grant is shown, through
- * the host's `environment.invitations.accept`. A request without it (every
- * older client) still accepts them on the read. COPIED like the two above,
- * from authn-v3's `invite-acceptance.ts`. Sent on the negotiated route only:
- * the frozen route's request stays as it has always been.
+ * Explicit-Accept hint for older authn instances during rollout. Current
+ * identity routes leave invitations pending even without it. This client
+ * accepts one only after its grant is shown, through the serving tier or
+ * directly through authn when that tier predates the invitation methods.
+ * Copied from authn-v3's `invite-acceptance.ts`, like the headers above.
+ * The frozen recovery route keeps its existing request shape.
  */
 const INVITE_ACCEPTANCE_REQUEST_HEADER = "x-traycer-invite-acceptance";
 const EXPLICIT_INVITE_ACCEPTANCE = "explicit";
