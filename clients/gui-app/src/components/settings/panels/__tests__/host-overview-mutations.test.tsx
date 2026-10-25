@@ -837,7 +837,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     expect(restartHostIfIdle).not.toHaveBeenCalled();
     expect(toast.info).toHaveBeenCalledWith("Host changed", {
       description:
-        "This machine's host was replaced while this dialog was open, so " +
+        "This computer's host was replaced while this dialog was open, so " +
         "nothing was stopped. Restart again to check the new host.",
     });
     expect(toast.success).not.toHaveBeenCalled();

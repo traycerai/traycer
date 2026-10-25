@@ -44,7 +44,7 @@ export function HistoryScopedResults(props: {
   const { rowsScopeRef, scope, onScopeChange } = props;
   const [messageCount, setMessageCount] = useState<HistoryCount>(null);
   const hostEntry = useHostDirectoryEntry(props.hostId);
-  const hostLabel = hostEntry?.label ?? "this machine";
+  const hostLabel = hostEntry?.label ?? "this computer";
   const counts = { all: null, tasks: props.taskCount, messages: messageCount };
   const hasQuery = props.messageHits.query.trim().length > 0;
   return (

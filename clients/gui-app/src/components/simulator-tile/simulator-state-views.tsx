@@ -151,7 +151,7 @@ export function SimulatorSetupView(props: {
       testId="simulator-setup"
     >
       <p>
-        Turn them on to run {canRun} on that machine and work with them here.
+        Turn them on to run {canRun} on that computer and work with them here.
         The first time, {props.hostLabel} downloads the simulator tools (under
         60 MB) and keeps them until you remove them in the Host panel.
       </p>

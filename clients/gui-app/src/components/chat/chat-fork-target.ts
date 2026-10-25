@@ -83,7 +83,7 @@ export function chatForkTargetSupport(
       kind: "refused",
       word: CHAT_FORK_NEEDS_UPDATE_WORD,
       detail:
-        "This host's build can't receive a fork from another machine. Update it and try again.",
+        "This host's build can't receive a fork from another computer. Update it and try again.",
     };
   }
   return { kind: "supported" };
@@ -124,11 +124,11 @@ export function chatForkHostRefusals(input: {
  * asked for.
  */
 export const CROSS_HOST_CARRY_CHANGES_NOTICE =
-  "Uncommitted changes stay on the source machine, so this fork starts from the workspace you pick here.";
+  "Uncommitted changes stay on the source computer, so this fork starts from the workspace you pick here.";
 
 /** The workspace section's own explanation for the empty, unseeded state. */
 export const CROSS_HOST_WORKSPACE_NOTICE =
-  "Folder paths don't travel between machines - pick this host's workspace for the fork.";
+  "Folder paths don't travel between computers - pick this host's workspace for the fork.";
 
 /**
  * The fork also loses the provider's on-disk session cross-host (the target has
@@ -136,7 +136,7 @@ export const CROSS_HOST_WORKSPACE_NOTICE =
  * resuming it. Stated where the user chooses, not discovered afterwards.
  */
 export const CROSS_HOST_SHALLOW_FORK_NOTICE =
-  "The fork copies the transcript; the provider session stays on the source machine.";
+  "The fork copies the transcript; the provider session stays on the source computer.";
 
 /**
  * What the SOURCE host said about this chat's publication — or that it could
@@ -267,7 +267,7 @@ export type ChatForkTargetVerdict =
   | { readonly kind: "boundarySyncing"; readonly notice: string };
 
 export const CHAT_NOT_BACKED_UP_NOTICE =
-  "This chat hasn't been backed up yet, so another machine can't read its history. It backs up automatically — try again shortly.";
+  "This chat hasn't been backed up yet, so another computer can't read its history. It backs up automatically — try again shortly.";
 
 /**
  * Describes a WAIT, not a retry.
@@ -279,7 +279,7 @@ export const CHAT_NOT_BACKED_UP_NOTICE =
  * true, so the sentence says what will happen rather than what to press.
  */
 export const BOUNDARY_SYNCING_NOTICE =
-  "Still syncing this turn to the cloud — forking to another machine unlocks as soon as it lands.";
+  "Still syncing this turn to the cloud — forking to another computer unlocks as soon as it lands.";
 
 /**
  * The four terminal sentences, one per `definitive` reason.
@@ -291,10 +291,10 @@ export const BOUNDARY_SYNCING_NOTICE =
  * the one thing that COULD change it where such a thing exists.
  */
 export const CHAT_DELETED_NOTICE =
-  "This agent was deleted on its host, so its history can't be forked to another machine.";
+  "This agent was deleted on its host, so its history can't be forked to another computer.";
 
 export const CHAT_LINEAGE_SUPERSEDED_NOTICE =
-  "Another copy of this agent took over its cloud backup, so this one's history can't be forked to another machine. Fork from that copy instead.";
+  "Another copy of this agent took over its cloud backup, so this one's history can't be forked to another computer. Fork from that copy instead.";
 
 /**
  * Honest about the one recovery that exists. The publisher will not retry
@@ -303,7 +303,7 @@ export const CHAT_LINEAGE_SUPERSEDED_NOTICE =
  * that.
  */
 export const CHAT_BACKUP_HALTED_NOTICE =
-  "This agent's cloud backup has stopped, so this turn can't be forked to another machine. Waiting won't restart it — restarting the host might.";
+  "This agent's cloud backup has stopped, so this turn can't be forked to another computer. Waiting won't restart it — restarting the host might.";
 
 /**
  * A reason a newer host named that this build has no copy for. Says only what
@@ -311,7 +311,7 @@ export const CHAT_BACKUP_HALTED_NOTICE =
  * help — rather than guessing at a cause.
  */
 export const CHAT_BACKUP_UNAVAILABLE_NOTICE =
-  "This agent's cloud backup can't finish, so this turn can't be forked to another machine. Waiting won't change that.";
+  "This agent's cloud backup can't finish, so this turn can't be forked to another computer. Waiting won't change that.";
 
 export function chatPublicationDefinitiveNotice(
   reason: ChatPublicationDefinitiveReason,

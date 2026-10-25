@@ -314,7 +314,7 @@ const TANVEER_HOST: HostDirectoryEntry = {
 };
 
 const TANVEER_NAME = "Message matches Tanveer's MacBook";
-const THIS_MACHINE_NAME = "Message matches this machine";
+const THIS_MACHINE_NAME = "Message matches this computer";
 
 /** The header band: the heading's parent, a direct sibling of its region. */
 function headerBand(): HTMLElement {

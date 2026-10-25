@@ -115,7 +115,7 @@ export function RemoteFolderPickerDialog(): ReactNode {
       >
         <DialogTitle className="sr-only">Add folder</DialogTitle>
         <DialogDescription className="sr-only">
-          Browse the host machine and pick a folder to add.
+          Browse the host computer and pick a folder to add.
         </DialogDescription>
         {/* Mounted only while open, keyed per request: a second requestPick
             while already open must not inherit the first request's path or
@@ -1013,7 +1013,7 @@ function RemoteFolderPickerListingStatus(props: {
           role="alert"
         >
           This host app is too old for remote browsing - update Traycer on the
-          host machine.
+          host computer.
         </p>
       );
     }

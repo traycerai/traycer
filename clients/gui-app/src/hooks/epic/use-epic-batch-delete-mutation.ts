@@ -1178,7 +1178,7 @@ function skippedWorktreeCleanupCount(
 
 /** Why approved worktree removals were not run, for the toast's detail. */
 export const WORKTREE_CLEANUP_SKIPPED_DETAIL =
-  "Traycer can't reach the task's host, so its worktrees and their files stay on that machine. Remove them in Settings ▸ Worktrees once that host is reachable.";
+  "Traycer can't reach the task's host, so its worktrees and their files stay on that computer. Remove them in Settings ▸ Worktrees once that host is reachable.";
 
 /**
  * The Task half of the toast, with the approved worktree removals that were

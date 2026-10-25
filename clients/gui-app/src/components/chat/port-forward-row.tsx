@@ -205,8 +205,8 @@ function PortForwardDetail(props: { readonly forward: ChatPortForward }) {
   const directory = useHostDirectoryList().data;
   const machine = (hostId: string): string => {
     const entry = directory?.find((candidate) => candidate.hostId === hostId);
-    if (entry === undefined) return "another machine";
-    return entry.kind === "local" ? "this machine" : entry.label;
+    if (entry === undefined) return "another computer";
+    return entry.kind === "local" ? "this computer" : entry.label;
   };
   const events = keyedPortForwardEventsNewestFirst(forward.recentEvents);
 
