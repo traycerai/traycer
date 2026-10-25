@@ -110,6 +110,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   openThread: null,
   openAnnouncementThread: null,
   chooseOption: null,
+  intro: { botTitle: "Release Bot", directive: null },
 };
 
 let retry: Mock<() => void>;
@@ -229,7 +230,9 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       store.setState({ fatalClose: null, snapshotLoaded: true });
     });
     expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.getByTestId("chat-messages-stub")).toBeTruthy();
+    // The landed snapshot has no rows yet: an empty channel opens with its
+    // intro.
+    expect(screen.getByTestId("bot-channel-intro")).toBeTruthy();
   });
 
   it("re-subscribes again on a later send when the first re-subscribe still found no chat", async () => {

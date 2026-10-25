@@ -269,6 +269,25 @@ export function BotChatTranscript(props: {
   );
 }
 
+type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
+
+/**
+ * A channel nobody has written in opens with what it is for, as Slack's
+ * does; a windowed one is empty only when the host counts no row. `null`
+ * on a thread, before the snapshot, and once the channel has a row.
+ */
+function channelIntro(
+  surface: BotTranscriptSurface | null,
+  snapshotLoaded: boolean,
+  renderedRows: number,
+  transcriptWindow: { readonly rowCount: number } | null,
+): ChannelIntro | null {
+  if (surface?.kind !== "channel" || !snapshotLoaded) return null;
+  if (renderedRows > 0) return null;
+  if (transcriptWindow !== null && transcriptWindow.rowCount > 0) return null;
+  return surface.intro;
+}
+
 function BotChatTranscriptBody(props: {
   readonly handle: ChatSessionStoreHandle;
   readonly botId: string;
@@ -509,16 +528,12 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
-  // A channel nobody has written in opens with what it is for, as Slack's
-  // does; a windowed one is empty only when the host counts no row.
-  const intro =
-    surface !== null &&
-    surface.kind === "channel" &&
-    state.snapshotLoaded &&
-    messages.length === 0 &&
-    (transcriptWindow === null || transcriptWindow.rowCount === 0)
-      ? surface.intro
-      : null;
+  const intro = channelIntro(
+    surface,
+    state.snapshotLoaded,
+    messages.length,
+    transcriptWindow,
+  );
 
   if (channelNotHereYet) {
     return (
