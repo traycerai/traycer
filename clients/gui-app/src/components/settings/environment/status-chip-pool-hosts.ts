@@ -2,6 +2,7 @@ import type { DetailsHostStatus } from "@/lib/settings-details-entry";
 import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
 import { recoveryForHost } from "@/components/settings/details/details-copy";
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
+import { chipReportsKind } from "@/components/settings/environment/status-chip-page-kinds";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { statusVersionNeedsUpdate } from "@/components/settings/environment/status-chip-hosts";
 
@@ -27,7 +28,7 @@ function reportRows(
     const separator = item.itemKey.indexOf(":");
     if (separator < 1) continue;
     const kind = item.itemKey.slice(0, separator);
-    if (kinds !== null && !kinds.has(kind)) continue;
+    if (!chipReportsKind(kinds, kind)) continue;
     rows.push({
       hostId: host.hostId,
       name: host.hostLabel ?? "your hosts",

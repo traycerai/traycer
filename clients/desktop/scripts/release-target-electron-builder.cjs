@@ -79,11 +79,31 @@ function writeTargetNsisInclude() {
 
 writeTargetNsisInclude();
 
+// A staging target behind IAP packages the key `set-deploy-target.cjs` wrote,
+// as `<resources>/keys/iap-service-account.json`, where the main process looks
+// for it. Refused when the key is missing rather than packaging a desktop whose
+// every sandbox call IAP turns away. Production packages from package.json's
+// `build` block, which has no such entry, so no production build can carry it.
+const IAP_KEY_FILENAME = "iap-service-account.json";
+const iapKeyResources =
+  target.target === "staging" && (target.cloud.iapAudience ?? "").length > 0
+    ? [{ from: "resources/keys", to: "keys", filter: [IAP_KEY_FILENAME] }]
+    : [];
+if (
+  iapKeyResources.length > 0 &&
+  !fs.existsSync(path.join(projectDir, "resources", "keys", IAP_KEY_FILENAME))
+) {
+  throw new Error(
+    "release-target-electron-builder: this staging target is behind IAP and resources/keys/iap-service-account.json is missing; set-deploy-target.cjs writes it from TRAYCER_IAP_SA_KEY",
+  );
+}
+
 const config = {
   ...base,
   appId: target.appId,
   productName: target.productName,
   protocols: [{ name: target.productName, schemes: [target.protocolScheme] }],
+  extraResources: [...(base.extraResources ?? []), ...iapKeyResources],
   mac: {
     ...base.mac,
     executableName: target.mac.bundleName,

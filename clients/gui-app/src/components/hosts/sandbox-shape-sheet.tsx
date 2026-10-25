@@ -3,6 +3,7 @@ import type {
   SandboxCatalogue,
   SandboxCatalogueProvider,
   SandboxOs,
+  SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -26,18 +27,22 @@ import {
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
+  formatMemory,
   roundSandboxShape,
   sandboxShapeProblem,
 } from "@/lib/sandboxes/sandbox-pricing";
 import {
   consequenceClauses,
-  rememberedOrDefaultStageShape,
+  defaultShapeRung,
+  rememberedOrConfigurationStageShape,
   stageBalanceMc,
   stageConfigurationCopy,
   stageNeedsCredits,
   stagePrice,
   stageProviderFor,
+  stageSizeIsRung,
   type ConsequencesInput,
+  type SandboxConfigurationDefaults,
   type StageConfiguration,
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
@@ -48,7 +53,9 @@ import {
   USE_THIS_SHAPE,
   idleAndRestingLine,
   newSandboxRowLabel,
+  sandboxShapeLabel,
   shapeSheetDescription,
+  shortPriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -87,7 +94,12 @@ export function SandboxShapeSheet(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly configuration: StageConfiguration;
-  /** The staged shape, else the remembered one; `null` opens on the default. */
+  /** The configuration's defaults, `null` for none: what an unset gear opens on. */
+  readonly defaults: SandboxConfigurationDefaults | null;
+  /**
+   * The staged shape, else the person's remembered one; `null`, or one the
+   * catalogue no longer offers, opens on the configuration's defaults.
+   */
   readonly initialShape: StageShape | null;
   readonly initialName: string;
   readonly context: ShapeSheetContext;
@@ -117,6 +129,7 @@ export function SandboxShapeSheet(props: {
 function ShapeSheetBody(props: {
   readonly onOpenChange: (open: boolean) => void;
   readonly configuration: StageConfiguration;
+  readonly defaults: SandboxConfigurationDefaults | null;
   readonly initialShape: StageShape | null;
   readonly initialName: string;
   readonly context: ShapeSheetContext;
@@ -156,9 +169,10 @@ function ShapeSheetBody(props: {
       </div>
     );
   }
-  const shape = rememberedOrDefaultStageShape(
+  const shape = rememberedOrConfigurationStageShape(
     catalogue.data,
     props.initialShape,
+    props.defaults,
   );
   if (shape === null) {
     return (
@@ -232,11 +246,52 @@ function formOf(
   };
 }
 
-/** The form's shape, or why it is not one the catalogue offers. */
-function shapeOfForm(
+/** The size fields of a listed shape. */
+function rungFields(
+  rung: SandboxShapeRung,
+): Pick<ShapeForm, "cpus" | "memoryGb" | "diskGb"> {
+  return {
+    cpus: String(rung.cpus),
+    memoryGb: String(rung.memoryMb / MB_PER_GIB),
+    diskGb: String(rung.diskMb / MB_PER_GIB),
+  };
+}
+
+function rungKey(rung: SandboxShapeRung): string {
+  return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}`;
+}
+
+/** The listed shape the form's size fields name, or `null`. */
+function rungOfForm(
+  form: ShapeForm,
+  shapes: readonly SandboxShapeRung[],
+  provider: SandboxCatalogueProvider,
+): SandboxShapeRung | null {
+  const size = {
+    cpus: Number(form.cpus),
+    memoryMb: Math.round(Number(form.memoryGb) * MB_PER_GIB),
+    diskMb: Math.round(Number(form.diskGb) * MB_PER_GIB),
+  };
+  return shapes.find((rung) => stageSizeIsRung(provider, rung, size)) ?? null;
+}
+
+type FormSize = Pick<StageShape, "cpus" | "memoryMb" | "diskMb">;
+
+/**
+ * The form's size: the listed shape it names, or inside the bounds of a
+ * provider that lists none, rounded as the server rounds it.
+ */
+function sizeOfForm(
   form: ShapeForm,
   provider: SandboxCatalogueProvider,
-): { readonly shape: StageShape } | { readonly problem: string } {
+): { readonly size: FormSize } | { readonly problem: string } {
+  if (provider.shapes !== null) {
+    const rung = rungOfForm(form, provider.shapes, provider);
+    if (rung === null) return { problem: "Pick a size." };
+    return {
+      size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
+    };
+  }
   const requested = {
     cpus: Number(form.cpus),
     memoryMb: Math.round(Number(form.memoryGb) * MB_PER_GIB),
@@ -253,6 +308,23 @@ function shapeOfForm(
       problem: `Disk must be between ${provider.shape.diskMinMb / MB_PER_GIB} and ${provider.shape.diskMaxMb / MB_PER_GIB} GB.`,
     };
   }
+  const rounded = roundSandboxShape(provider.shape, requested);
+  return {
+    size: {
+      cpus: rounded.cpus,
+      memoryMb: rounded.memoryMb,
+      diskMb: diskMb === provider.shape.diskDefaultMb ? null : diskMb,
+    },
+  };
+}
+
+/** The form's shape, or why it is not one the catalogue offers. */
+function shapeOfForm(
+  form: ShapeForm,
+  provider: SandboxCatalogueProvider,
+): { readonly shape: StageShape } | { readonly problem: string } {
+  const sized = sizeOfForm(form, provider);
+  if ("problem" in sized) return sized;
   const idleMinutes = Number(form.idleMinutes);
   if (!Number.isInteger(idleMinutes) || idleMinutes < IDLE_FLOOR_MINUTES) {
     return {
@@ -267,13 +339,10 @@ function shapeOfForm(
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
   }
-  const rounded = roundSandboxShape(provider.shape, requested);
   return {
     shape: {
       os: form.os,
-      cpus: rounded.cpus,
-      memoryMb: rounded.memoryMb,
-      diskMb: diskMb === provider.shape.diskDefaultMb ? null : diskMb,
+      ...sized.size,
       region: form.region,
       idleMinutes,
       destroyAfterRestingMinutes,
@@ -361,11 +430,14 @@ function ShapeSheetForm(props: {
             if (os === undefined) return;
             const next = stageProviderFor(props.catalogue, os);
             if (next === null) return;
+            const rung = defaultShapeRung(next);
             setForm({
               ...form,
               os,
               region: next.regions[0].id,
-              diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB),
+              ...(rung === null
+                ? { diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB) }
+                : rungFields(rung)),
             });
           }}
         />
@@ -379,36 +451,59 @@ function ShapeSheetForm(props: {
           }))}
           onChange={(value) => setForm({ ...form, region: value })}
         />
-        <ShapeNumber
-          id={`${ids}-cpus`}
-          label="vCPU"
-          value={form.cpus}
-          min={provider.shape.cpuMin}
-          max={provider.shape.cpuMax}
-          step={provider.shape.cpuStep}
-          testId="sandbox-shape-sheet-cpus"
-          onChange={(value) => setForm({ ...form, cpus: value })}
-        />
-        <ShapeNumber
-          id={`${ids}-memory`}
-          label="Memory (GB)"
-          value={form.memoryGb}
-          min={provider.shape.memoryMinMb / MB_PER_GIB}
-          max={provider.shape.memoryMaxMb / MB_PER_GIB}
-          step={provider.shape.memoryStepMb / MB_PER_GIB}
-          testId="sandbox-shape-sheet-memory"
-          onChange={(value) => setForm({ ...form, memoryGb: value })}
-        />
-        <ShapeNumber
-          id={`${ids}-disk`}
-          label="Disk (GB)"
-          value={form.diskGb}
-          min={provider.shape.diskMinMb / MB_PER_GIB}
-          max={provider.shape.diskMaxMb / MB_PER_GIB}
-          step={1}
-          testId="sandbox-shape-sheet-disk"
-          onChange={(value) => setForm({ ...form, diskGb: value })}
-        />
+        {provider.shapes === null ? (
+          <>
+            <ShapeNumber
+              id={`${ids}-cpus`}
+              label="vCPU"
+              value={form.cpus}
+              min={provider.shape.cpuMin}
+              max={provider.shape.cpuMax}
+              step={provider.shape.cpuStep}
+              testId="sandbox-shape-sheet-cpus"
+              onChange={(value) => setForm({ ...form, cpus: value })}
+            />
+            <ShapeNumber
+              id={`${ids}-memory`}
+              label="Memory (GB)"
+              value={form.memoryGb}
+              min={provider.shape.memoryMinMb / MB_PER_GIB}
+              max={provider.shape.memoryMaxMb / MB_PER_GIB}
+              step={provider.shape.memoryStepMb / MB_PER_GIB}
+              testId="sandbox-shape-sheet-memory"
+              onChange={(value) => setForm({ ...form, memoryGb: value })}
+            />
+            <ShapeNumber
+              id={`${ids}-disk`}
+              label="Disk (GB)"
+              value={form.diskGb}
+              min={provider.shape.diskMinMb / MB_PER_GIB}
+              max={provider.shape.diskMaxMb / MB_PER_GIB}
+              step={1}
+              testId="sandbox-shape-sheet-disk"
+              onChange={(value) => setForm({ ...form, diskGb: value })}
+            />
+          </>
+        ) : (
+          <div className="sm:col-span-2">
+            <ShapeSelect
+              id={`${ids}-size`}
+              label="Size"
+              value={sizeValue(form, provider.shapes, provider)}
+              options={provider.shapes.map((rung) => ({
+                value: rungKey(rung),
+                label: rungLabel(props.catalogue, form, rung),
+              }))}
+              onChange={(value) => {
+                const rung = provider.shapes?.find(
+                  (candidate) => rungKey(candidate) === value,
+                );
+                if (rung === undefined) return;
+                setForm({ ...form, ...rungFields(rung) });
+              }}
+            />
+          </div>
+        )}
       </div>
       {wake === null ? null : (
         <p className="m-0 text-ui-xs text-muted-foreground">{wake}</p>
@@ -524,6 +619,34 @@ function ShapeSheetForm(props: {
       </DialogFooter>
     </form>
   );
+}
+
+function sizeValue(
+  form: ShapeForm,
+  shapes: readonly SandboxShapeRung[],
+  provider: SandboxCatalogueProvider,
+): string {
+  const rung = rungOfForm(form, shapes, provider);
+  return rung === null ? "" : rungKey(rung);
+}
+
+/** `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region. */
+function rungLabel(
+  catalogue: SandboxCatalogue,
+  form: ShapeForm,
+  rung: SandboxShapeRung,
+): string {
+  const size = `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`;
+  const price = stagePrice(catalogue, {
+    os: form.os,
+    region: form.region,
+    cpus: rung.cpus,
+    memoryMb: rung.memoryMb,
+    diskMb: rung.diskMb,
+  });
+  if (price === null) return size;
+  const label = shortPriceLabel(price.awakeMcPerHour);
+  return `${size} · ${price.exact ? label : `from ${label}`}`;
 }
 
 function ShapeNumber(props: {

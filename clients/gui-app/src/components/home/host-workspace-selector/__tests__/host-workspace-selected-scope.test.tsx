@@ -140,6 +140,8 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
 
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: () => [],
+  // The composer's sandbox defaults, combined by environment: none read yet.
+  useHostQueriesWithResponseMap: () => new Map(),
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({

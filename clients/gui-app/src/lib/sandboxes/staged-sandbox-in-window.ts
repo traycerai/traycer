@@ -33,6 +33,8 @@ export interface StagedNewShape {
   readonly region: string;
   readonly cpus: number;
   readonly memoryMb: number;
+  /** `null`: the provider's default disk. */
+  readonly diskMb: number | null;
 }
 
 function stagedSandboxStore(): StagedSandboxStoreApi | null {
@@ -96,6 +98,7 @@ export function stagedNewShape(staged: unknown): StagedNewShape | null {
     region: shape.region,
     cpus: shape.cpus,
     memoryMb: shape.memoryMb,
+    diskMb: typeof shape.diskMb === "number" ? shape.diskMb : null,
   };
 }
 

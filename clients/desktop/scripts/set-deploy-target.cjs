@@ -66,15 +66,80 @@ try {
   process.exit(2);
 }
 
+// The staging IAP service-account key, packaged under `resources/keys/` by
+// `release-target-electron-builder.cjs` for a staging build only; the main
+// process mints its `Proxy-Authorization` token from it
+// (`src/electron-main/auth/iap-proxy-token.ts`, which looks for this name).
+const IAP_KEY_FILENAME = "iap-service-account.json";
+const iapKeyPath = path.resolve(
+  __dirname,
+  "..",
+  "resources",
+  "keys",
+  IAP_KEY_FILENAME,
+);
+const iapAudience =
+  targetInput === null ? "" : (targetInput.cloud.iapAudience ?? "");
+
+// Written from `TRAYCER_IAP_SA_KEY` (the service-account JSON) and never
+// committed, as the host build writes its own. A staging target that names an
+// IAP audience fails here without the key rather than shipping a desktop whose
+// every sandbox call IAP refuses. The value is a secret: no message here
+// prints it or the parser's error, which quotes the input.
+function writeStagingIapKey() {
+  const raw = process.env.TRAYCER_IAP_SA_KEY;
+  if (raw === undefined || raw.trim().length === 0) {
+    console.error(
+      "[set-deploy-target] this staging target is behind IAP and needs the IAP service-account key in TRAYCER_IAP_SA_KEY. Never commit the key.",
+    );
+    process.exit(2);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error(
+      `[set-deploy-target] TRAYCER_IAP_SA_KEY is not valid JSON (length ${raw.length}); expected a GCP service-account key.`,
+    );
+    process.exit(2);
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    typeof parsed.private_key !== "string" ||
+    typeof parsed.client_email !== "string"
+  ) {
+    console.error(
+      "[set-deploy-target] TRAYCER_IAP_SA_KEY parsed as JSON but is not a service-account key: it needs private_key and client_email.",
+    );
+    process.exit(2);
+  }
+  fs.mkdirSync(path.dirname(iapKeyPath), { recursive: true });
+  // World-readable on purpose: electron-builder keeps this mode in the copy
+  // it packages, and a deb or rpm installs that copy as root, so 0600 would
+  // leave the app's own user unable to read it and every staging sandbox call
+  // refused. File mode is not what keeps the key; packaging it only into a
+  // staging build is.
+  fs.writeFileSync(iapKeyPath, raw, { mode: 0o644 });
+  // The creation mode is masked by the umask; set it outright.
+  fs.chmodSync(iapKeyPath, 0o644);
+}
+
 // The stamp file is what `release-target-electron-builder.cjs` and the
 // `afterPack` hook read to package under the target's identity; `--restore`
-// removes it together with the generated NSIS include so a later local
-// `bun run package` builds the unstamped dev app again.
+// removes it together with the generated NSIS include and the IAP key so a
+// later local `bun run package` builds the unstamped dev app again. Every
+// stamp removes a key a previous one left, so only a staging stamp with an
+// IAP audience leaves one behind.
+fs.rmSync(iapKeyPath, { force: true });
 if (process.argv.includes("--restore")) {
   fs.rmSync(stampPath, { force: true });
   fs.rmSync(generatedNsisIncludePath, { force: true });
 } else if (targetInput !== null) {
   fs.writeFileSync(stampPath, `${JSON.stringify(targetInput)}\n`, "utf8");
+  if (target === "staging" && iapAudience.length > 0) {
+    writeStagingIapKey();
+  }
 }
 
 const production = {
@@ -121,6 +186,12 @@ runConfigTargetCli({
       staging:
         targetInput === null ? "" : targetInput.cloud.traycerServerBaseUrl,
       production: production.cloud.traycerServerBaseUrl,
+    },
+    // Empty for a target not behind IAP; see `config.ts`.
+    iapAudience: {
+      dev: "",
+      staging: iapAudience,
+      production: "",
     },
     cloudUiBaseUrl: {
       dev: production.cloud.cloudUiBaseUrl,
