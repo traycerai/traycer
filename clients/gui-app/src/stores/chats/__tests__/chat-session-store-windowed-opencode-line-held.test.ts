@@ -62,6 +62,25 @@ const WINDOWED_DERIVED: ChatTranscriptDerived = {
   setupCardWindows: [],
 };
 
+function windowedChat() {
+  return {
+    id: CHAT_ID,
+    parentId: null,
+    userId: OWNER_ID,
+    hostId: "host-a",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser: false,
+    settings: null,
+    archivedAt: null,
+    lastDeliveredRolesDigest: null,
+    activeSessionChain: null,
+    claudePendingWakes: [],
+    pinnedUserProviderHandle: null,
+  };
+}
+
 function windowedSnapshot(
   held: OpencodeLineHeld | undefined,
 ): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
@@ -71,22 +90,7 @@ function windowedSnapshot(
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "host-a",
-        title: "Chat",
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: null,
-        archivedAt: null,
-        lastDeliveredRolesDigest: null,
-        activeSessionChain: null,
-        claudePendingWakes: [],
-        pinnedUserProviderHandle: null,
-      },
+      chat: windowedChat(),
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
       runStatus: "idle",
@@ -135,6 +139,50 @@ describe("chat-session-store opencodeLineHeld through the windowed snapshot adap
       });
 
       callbacks.onWindowedSnapshot(windowedSnapshot(undefined));
+      expect(harness.handle.store.getState().opencodeLineHeld).toBeUndefined();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("clears a seated hold when a legacy snapshot replaces the windowed one", () => {
+    const harness = createWindowedHarness();
+    try {
+      const callbacks = harness.callbacks();
+      callbacks.onWindowedSnapshot(
+        windowedSnapshot({ line: 1, reason: "model_unavailable" }),
+      );
+      expect(harness.handle.store.getState().opencodeLineHeld).toEqual({
+        line: 1,
+        reason: "model_unavailable",
+      });
+
+      callbacks.onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        snapshot: {
+          chat: { ...windowedChat(), messages: [], events: [] },
+          access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "idle",
+          activeTurn: null,
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+          pendingFallback: undefined,
+          pendingReturn: undefined,
+          suggestedPrompt: undefined,
+          thinkingTokensEstimate: undefined,
+        },
+      });
       expect(harness.handle.store.getState().opencodeLineHeld).toBeUndefined();
     } finally {
       harness.handle.dispose();

@@ -1896,14 +1896,35 @@ describe("ProviderCliCandidatesSection: chats follow the Managed line", () => {
     };
   }
 
+  const PATH_ROW = "Select /usr/local/bin/opencode";
+  const CUSTOM_ROW = "Select /opt/oc";
+  const EXTRA_ROWS: readonly ProviderCliCandidate[] = [
+    pathCandidate({ path: "/usr/local/bin/opencode", version: "1.14.0" }),
+    {
+      kind: "custom",
+      path: "/opt/oc",
+      version: "1.14.0",
+      available: true,
+      versionPending: false,
+    },
+  ];
+
   function renderOpencode(
     selected: ProviderSelection,
     chatsFollow: boolean | undefined,
   ): void {
+    renderOpencodeWith(selected, chatsFollow, []);
+  }
+
+  function renderOpencodeWith(
+    selected: ProviderSelection,
+    chatsFollow: boolean | undefined,
+    extra: readonly ProviderCliCandidate[],
+  ): void {
     const base = providerState({
       providerId: "opencode",
       selected,
-      candidates: [bundledCandidate({ available: true })],
+      candidates: [bundledCandidate({ available: true }), ...extra],
     });
     renderSection({
       ...base,
@@ -1929,10 +1950,9 @@ describe("ProviderCliCandidatesSection: chats follow the Managed line", () => {
       renderOpencode({ kind: "bundled" }, undefined);
       expect(checked()).toEqual([false, false]);
       expect(
-        screen.getByText(
-          `${FOLLOW} New chats use Managed 2.x until you pick one.`,
-        ),
+        screen.getByText("New chats use Managed 2.x until you pick one."),
       ).toBeDefined();
+      expect(screen.queryByText(FOLLOW)).toBeNull();
       expect(screen.queryByText(NEW_CHATS_ONLY)).toBeNull();
     });
 
@@ -1953,15 +1973,62 @@ describe("ProviderCliCandidatesSection: chats follow the Managed line", () => {
       renderOpencode({ kind: "bundled", line: 1 }, undefined);
       expect(checked()).toEqual([false, false]);
       expect(
-        screen.getByText(
-          `${FOLLOW} New chats use Managed 1.x until you pick one.`,
-        ),
+        screen.getByText("New chats use Managed 1.x until you pick one."),
       ).toBeDefined();
+      expect(screen.queryByText(FOLLOW)).toBeNull();
     });
 
     it("reads an explicit chatsFollow false like an absent one", () => {
       renderOpencode({ kind: "bundled", line: 1 }, false);
       expect(checked()).toEqual([false, false]);
+    });
+
+    describe("with a PATH and a custom candidate", () => {
+      it("checks only the PATH row when it is saved and followed", () => {
+        renderOpencodeWith({ kind: "path" }, true, EXTRA_ROWS);
+        expect(checked()).toEqual([false, false, true, false]);
+        expect(screen.getByText(FOLLOW)).toBeDefined();
+      });
+
+      it("checks no row for a PATH selection chats do not follow, and a click saves it", () => {
+        renderOpencodeWith({ kind: "path" }, undefined, EXTRA_ROWS);
+        expect(checked()).toEqual([false, false, false, false]);
+        expect(
+          screen.getByText(
+            "New chats use the OpenCode on your PATH until you pick one.",
+          ),
+        ).toBeDefined();
+        expect(screen.queryByText(FOLLOW)).toBeNull();
+        fireEvent.click(screen.getByLabelText(PATH_ROW));
+        expect(mocks.setSelectionMutate).toHaveBeenCalledTimes(1);
+        expect(mocks.setSelectionMutate.mock.calls[0]?.[0]).toEqual({
+          providerId: "opencode",
+          selection: { kind: "path" },
+        });
+      });
+
+      it("checks only the custom row when it is saved and followed", () => {
+        renderOpencodeWith(
+          { kind: "custom", path: "/opt/oc" },
+          true,
+          EXTRA_ROWS,
+        );
+        expect(checked()).toEqual([false, false, false, true]);
+        expect(screen.getByText(FOLLOW)).toBeDefined();
+      });
+
+      it("checks no row for a custom selection chats do not follow, and names its path", () => {
+        renderOpencodeWith(
+          { kind: "custom", path: "/opt/oc" },
+          undefined,
+          EXTRA_ROWS,
+        );
+        expect(checked()).toEqual([false, false, false, false]);
+        expect(
+          screen.getByText("New chats use /opt/oc until you pick one."),
+        ).toBeDefined();
+        expect(screen.queryByLabelText(CUSTOM_ROW)).not.toBeNull();
+      });
     });
 
     it("saves line 2 when the default row is clicked under a plain selection", () => {

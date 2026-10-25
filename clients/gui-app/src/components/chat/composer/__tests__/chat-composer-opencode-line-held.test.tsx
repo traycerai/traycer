@@ -22,11 +22,11 @@ describe("ChatComposerOpencodeLineHeld", () => {
     ],
     [
       { line: 1, reason: "model_unavailable" },
-      "Stays on OpenCode 1.x until you pick a model OpenCode 2.x offers.",
+      "Stays on OpenCode 1.x because OpenCode 2.x can't run this message.",
     ],
     [
       { line: 1, reason: "binary_unavailable" },
-      "Stays on OpenCode 1.x until OpenCode 2.x is ready.",
+      "Stays on OpenCode 1.x until the OpenCode you picked is ready.",
     ],
     [
       { line: 2, reason: "background_work" },
@@ -34,11 +34,11 @@ describe("ChatComposerOpencodeLineHeld", () => {
     ],
     [
       { line: 2, reason: "model_unavailable" },
-      "Stays on OpenCode 2.x until you pick a model OpenCode 1.x offers.",
+      "Stays on OpenCode 2.x because OpenCode 1.x can't run this message.",
     ],
     [
       { line: 2, reason: "binary_unavailable" },
-      "Stays on OpenCode 2.x until OpenCode 1.x is ready.",
+      "Stays on OpenCode 2.x until the OpenCode you picked is ready.",
     ],
   ] as const)("says why a chat held as %o stays put", (held, copy) => {
     renderHeld(held);
