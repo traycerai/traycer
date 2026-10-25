@@ -116,7 +116,15 @@ let retry: Mock<() => void>;
 let store: UseBoundStore<StoreApi<TranscriptState>>;
 let queryClient: QueryClient;
 
-function mountTranscript(surface: BotTranscriptSurface): void {
+/**
+ * The transcript over a fresh session handle. `unmount` takes the view away
+ * as switching the tab's panel does, and `remount` brings it back over the
+ * same handle, which the session registry retains in between.
+ */
+function mountTranscript(surface: BotTranscriptSurface): {
+  readonly unmount: () => void;
+  readonly remount: () => void;
+} {
   store = create<TranscriptState>()(() => ({
     snapshotLoaded: false,
     messages: [],
@@ -158,7 +166,13 @@ function mountTranscript(surface: BotTranscriptSurface): void {
       />
     </QueryClientProvider>
   );
-  render(tree);
+  let view = render(tree);
+  return {
+    unmount: () => view.unmount(),
+    remount: () => {
+      view = render(tree);
+    },
+  };
 }
 
 /** A `bot.conversation.send` to `conversationId` that succeeds, through the mutation cache. */
@@ -273,6 +287,20 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     act(() => second.evict());
     act(() => first.evict());
     expect(retry).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-subscribes once on coming back to the closed channel for a send that succeeded while it was away", async () => {
+    const view = mountTranscript(CHANNEL_SURFACE);
+    act(() => view.unmount());
+
+    await sendSucceeded(CHAT_ID);
+    expect(retry).not.toHaveBeenCalled();
+
+    act(() => view.remount());
+    expect(retry).toHaveBeenCalledTimes(1);
+    act(() => view.unmount());
+    act(() => view.remount());
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("leaves a thread's close to the thread's own view", () => {

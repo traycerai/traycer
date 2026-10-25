@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -116,39 +115,57 @@ function useNewestSendTo(chatId: string): number | null {
   );
 }
 
+/** The sends one session handle has counted, and whether one is still owed. */
+interface SendMarker {
+  counted: number | null;
+  owed: boolean;
+}
+
+/**
+ * Kept with the session handle the registry retains, not with the view: a
+ * send that succeeds while the transcript is unmounted (the tab showing
+ * another panel) is still owed when it comes back to the same closed session.
+ */
+const sendMarkers = new WeakMap<ChatSessionStoreHandle, SendMarker>();
+
 /**
  * Re-subscribes once a send to `chatId` succeeds while the view `waiting`
  * on a chat the host had not created: the send is the write that creates it.
- * A send that lands while the subscription is still connecting is owed to
- * the first close after it; one the live view has caught up with is owed
- * nothing. Sends from before mount are not counted.
+ * A send that lands while the subscription is still connecting, or while the
+ * view is unmounted, is owed to the first close after it; one the live view
+ * has caught up with is owed nothing. Sends from before the session handle
+ * was first shown are not counted.
  */
 function useResubscribeOnNextSend(input: {
+  readonly handle: ChatSessionStoreHandle;
   readonly chatId: string;
   readonly waiting: boolean;
   readonly caughtUp: boolean;
   readonly retry: () => void;
 }): void {
-  const { chatId, waiting, caughtUp, retry } = input;
+  const { handle, chatId, waiting, caughtUp, retry } = input;
   const newestSend = useNewestSendTo(chatId);
-  const countedSend = useRef(newestSend);
-  const sendOwed = useRef(false);
   useEffect(() => {
+    let marker = sendMarkers.get(handle);
+    if (marker === undefined) {
+      marker = { counted: newestSend, owed: false };
+      sendMarkers.set(handle, marker);
+    }
     if (
       newestSend !== null &&
-      (countedSend.current === null || newestSend > countedSend.current)
+      (marker.counted === null || newestSend > marker.counted)
     ) {
-      countedSend.current = newestSend;
-      sendOwed.current = true;
+      marker.counted = newestSend;
+      marker.owed = true;
     }
     if (caughtUp) {
-      sendOwed.current = false;
+      marker.owed = false;
       return;
     }
-    if (!waiting || !sendOwed.current) return;
-    sendOwed.current = false;
+    if (!waiting || !marker.owed) return;
+    marker.owed = false;
     retry();
-  }, [caughtUp, newestSend, retry, waiting]);
+  }, [caughtUp, handle, newestSend, retry, waiting]);
 }
 
 /**
@@ -272,6 +289,7 @@ function BotChatTranscriptBody(props: {
     surface?.kind === "channel" &&
     state.fatalClose?.code === CHAT_NOT_VISIBLE_CODE;
   useResubscribeOnNextSend({
+    handle,
     chatId,
     waiting: channelNotHereYet,
     caughtUp: state.snapshotLoaded && state.fatalClose === null,
