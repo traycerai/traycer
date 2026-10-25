@@ -5,7 +5,8 @@ import {
   consequencesShownSubject,
   defaultStageShape,
   priceClause,
-  rememberedOrDefaultStageShape,
+  configurationStageShape,
+  rememberedOrConfigurationStageShape,
   stagePrice,
   stageSmallestShape,
   type ConsequencesInput,
@@ -293,17 +294,70 @@ describe("listed shapes", () => {
   // The bounds (3 vCPU, 6 GB, 30 GB) admit the unlisted size, so only the list rejects it.
   it("keeps a remembered listed shape and drops an unlisted one inside the bounds", () => {
     const remembered = { ...STAGED, cpus: 4, memoryMb: 8192, diskMb: 40960 };
-    expect(rememberedOrDefaultStageShape(listed(null), remembered)).toBe(
-      remembered,
-    );
     expect(
-      rememberedOrDefaultStageShape(listed(null), {
-        ...STAGED,
+      rememberedOrConfigurationStageShape(listed(null), remembered, null),
+    ).toBe(remembered);
+    expect(
+      rememberedOrConfigurationStageShape(
+        listed(null),
+        { ...STAGED, cpus: 3, memoryMb: 6144, diskMb: 30720 },
+        null,
+      ),
+    ).toMatchObject({ cpus: 2, memoryMb: 4096, diskMb: 20480 });
+  });
+
+  it("falls back to the configuration's defaults, not the spec's, when the remembered shape is withdrawn", () => {
+    const defaults = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      idleMinutes: 2,
+      restingMinutes: 120,
+    } as const;
+    expect(
+      rememberedOrConfigurationStageShape(
+        listed(null),
+        { ...STAGED, cpus: 3, memoryMb: 6144, diskMb: 30720 },
+        defaults,
+      ),
+    ).toMatchObject({
+      cpus: 4,
+      memoryMb: 8192,
+      idleMinutes: 2,
+      destroyAfterRestingMinutes: 120,
+    });
+  });
+
+  it("stages the configuration's shape and periods while offered, the spec's shape under its periods once withdrawn", () => {
+    const defaults = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      idleMinutes: 2,
+      restingMinutes: null,
+    } as const;
+    expect(configurationStageShape(listed(null), defaults)).toMatchObject({
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      region: "us-east",
+      idleMinutes: 2,
+      destroyAfterRestingMinutes: null,
+    });
+    expect(
+      configurationStageShape(listed(null), {
+        ...defaults,
         cpus: 3,
         memoryMb: 6144,
         diskMb: 30720,
       }),
-    ).toMatchObject({ cpus: 2, memoryMb: 4096, diskMb: 20480 });
+    ).toMatchObject({ cpus: 2, memoryMb: 4096, idleMinutes: 2 });
+    expect(configurationStageShape(listed(null), null)).toEqual(
+      defaultStageShape(listed(null)),
+    );
   });
 
   it("prices the smallest listed shape from the region's rates, else its from price", () => {
