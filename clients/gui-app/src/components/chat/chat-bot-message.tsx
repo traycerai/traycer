@@ -79,7 +79,7 @@ export function ChatBotMessage(props: {
     <BotMessageFrame
       avatar={
         <MemberAvatar
-          userId={null}
+          userId={message.senderUserId ?? null}
           name={name}
           avatarUrl={message.senderAvatarUrl ?? null}
           size="lg"

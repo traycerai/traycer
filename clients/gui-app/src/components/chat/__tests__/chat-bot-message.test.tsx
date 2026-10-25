@@ -314,6 +314,43 @@ describe("<ChatMessage /> in a bot channel", () => {
     ).toBeNull();
   });
 
+  it("draws the post's writer in one colour in its row and in its thread's stack", () => {
+    renderRow(
+      { ...memberPost(undefined), senderUserId: "user-teammate" },
+      channelPresentation(
+        () => ({
+          participants: [
+            {
+              kind: "person",
+              userId: "user-teammate",
+              name: "Tess Teammate",
+              avatarUrl: null,
+            },
+          ],
+          replyCount: 1,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    const swatchIn = (scope: HTMLElement): string | undefined =>
+      scope
+        .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
+        ?.style.getPropertyValue("--swatch");
+    const row = screen.getByTestId("bot-member-row");
+    const stack = within(row).getByTestId("bot-thread-participants");
+    const rowAvatar = within(row)
+      .getAllByTestId("chat-sender-avatar")
+      .find((avatar) => !stack.contains(avatar));
+    expect(rowAvatar).toBeDefined();
+    if (rowAvatar === undefined) return;
+    expect(swatchIn(rowAvatar)).toBeTruthy();
+    expect(swatchIn(rowAvatar)).toBe(swatchIn(stack));
+  });
+
   it("marks a thread line unread with a dot, and a read one with none", () => {
     renderRow(
       memberPost(undefined),

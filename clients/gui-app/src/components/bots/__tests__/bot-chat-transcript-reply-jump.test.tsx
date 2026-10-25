@@ -134,7 +134,11 @@ import {
   BotChatTranscript,
   type BotTranscriptSurface,
 } from "@/components/bots/bot-chat-transcript";
-import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import {
+  UNRESOLVED_BOT_MEMBERS,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
+import { MemberAvatar } from "@/components/bots/bot-avatars";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CHAT_ID = "conversation-app";
@@ -252,6 +256,9 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   chooseOption: vi.fn(),
 };
 
+/** The member directory a mounted transcript reads; none by default. */
+let members: BotMemberResolver = UNRESOLVED_BOT_MEMBERS;
+
 function mountTranscript(
   messages: ReadonlyArray<Message>,
   surface: BotTranscriptSurface,
@@ -271,7 +278,7 @@ function mountTranscript(
           title="Release Bot"
           instanceId="bot-thread:test"
           surface={surface}
-          resolveMember={UNRESOLVED_BOT_MEMBERS}
+          resolveMember={members}
         />
       </QueryClientProvider>
     </StrictMode>
@@ -286,6 +293,7 @@ function scrollStub(): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  members = UNRESOLVED_BOT_MEMBERS;
   requestTranscriptOrdinal = vi.fn<(ordinal: number | null) => void>();
   mocks.state.locatedOrdinal = null;
 });
@@ -526,6 +534,40 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(scrollStub().getAttribute("data-scroll-row-id")).toBe(
       postRow?.getAttribute("data-row-id"),
     );
+  });
+
+  it("draws a member's post in the colour its sender's id hashes to, as every other picture of that member is", () => {
+    // The directory names the member, so the row's name is not its id.
+    members = (userId) =>
+      userId === "owner-1"
+        ? { displayName: "Olive Owner", avatarUrl: null }
+        : null;
+    mountTranscript([directPost(DIRECT_REQUEST)], channel(null));
+    const rowSwatch = within(
+      scrollStub().querySelector<HTMLElement>(
+        '[data-testid="bot-member-row"]',
+      ) ?? document.body,
+    )
+      .getByTestId("chat-sender-avatar")
+      .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
+      ?.style.getPropertyValue("--swatch");
+    cleanup();
+
+    // The thread line's stack and the thread's anchor draw the member by id.
+    render(
+      <MemberAvatar
+        userId="owner-1"
+        name="Someone"
+        avatarUrl={null}
+        size="lg"
+      />,
+    );
+    const byId = screen
+      .getByTestId("chat-sender-avatar")
+      .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
+      ?.style.getPropertyValue("--swatch");
+    expect(rowSwatch).toBeTruthy();
+    expect(rowSwatch).toBe(byId);
   });
 
   it("lands the list on the reply in the channel from a direct post's See reply", async () => {

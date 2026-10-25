@@ -372,6 +372,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // A case that signs a viewer in leaves no one signed in for the next.
+  useAuthStore.setState({ profile: null });
 });
 
 describe("<BotTabSurface /> on a host without bot.open", () => {
@@ -834,7 +836,6 @@ describe("<BotTabSurface /> paused", () => {
           .getByTestId("bot-tab-view-under-the-hood")
           .getAttribute("aria-selected"),
       ).toBe("true");
-      useAuthStore.setState({ profile: null });
     },
   );
 

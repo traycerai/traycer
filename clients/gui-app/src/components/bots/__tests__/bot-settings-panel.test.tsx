@@ -59,6 +59,11 @@ const mocks = vi.hoisted(() => ({
   notificationLevels: {} as Record<string, string> | undefined,
   // What it answers for the notification-level methods.
   notificationSupport: true as boolean | null,
+  // What the levels read and the level write report as their error.
+  notificationReadError: null as string | null,
+  notificationWriteError: null as string | null,
+  // Whether the level write is in flight.
+  notificationPending: false,
   // What `useHostMethodSupport` answers for `environment.setMainBot`.
   setMainBotSupport: true as boolean | null,
   // What it answers for `bot.updateReplyMode`.
@@ -142,11 +147,11 @@ vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
       enabled && mocks.notificationLevels !== undefined
         ? { levels: mocks.notificationLevels }
         : undefined,
-    error: null,
+    error: refusalOf(mocks.notificationReadError),
   }),
   useBotNotificationLevelSetMutation: () => ({
-    isPending: false,
-    error: null,
+    isPending: mocks.notificationPending,
+    error: refusalOf(mocks.notificationWriteError),
     mutate: mocks.setNotificationLevel,
   }),
 }));
@@ -267,6 +272,9 @@ beforeEach(() => {
   mocks.supportQueries.length = 0;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
+  mocks.notificationReadError = null;
+  mocks.notificationWriteError = null;
+  mocks.notificationPending = false;
 });
 
 afterEach(() => {
@@ -872,6 +880,40 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       expect(radio.getAttribute("aria-checked")).toBe("false");
       expect(radio.hasAttribute("disabled")).toBe(true);
     }
+  });
+
+  it("keeps the choice locked while a level is being written", () => {
+    mocks.notificationPending = true;
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    const off = screen.getByRole("radio", { name: "Off" });
+    expect(off.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen
+        .getByRole("radio", { name: "Mentions and answers to me" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("says in the group when the levels cannot be read, and the write's own refusal when it is refused", () => {
+    mocks.notificationReadError = "host unreachable";
+    mocks.notificationLevels = undefined;
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    const group = screen.getByTestId("bot-settings-notifications");
+    expect(within(group).getByRole("alert").textContent).toBe(
+      "Couldn't read this channel's notifications.",
+    );
+
+    cleanup();
+    mocks.notificationReadError = null;
+    mocks.notificationLevels = {};
+    mocks.notificationWriteError = "The bot was not found.";
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    expect(
+      within(screen.getByTestId("bot-settings-notifications")).getByRole(
+        "alert",
+      ).textContent,
+    ).toBe("The bot was not found.");
   });
 
   it.each([false, null])(
