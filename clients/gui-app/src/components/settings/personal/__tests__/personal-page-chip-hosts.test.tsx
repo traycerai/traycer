@@ -94,7 +94,7 @@ describe("the Personal page chip's hosts", () => {
     expect(screen.getByRole("button").textContent).toBe("✓ On MacBook Pro");
   });
 
-  it("says Not on any computer or sandbox yet while no computer runs Personal", () => {
+  it("says Not on any computer or sandbox while no computer runs Personal", () => {
     const hosts = [
       hostScopeOptionFixture({
         hostId: "mac",
@@ -119,7 +119,7 @@ describe("the Personal page chip's hosts", () => {
     );
 
     expect(screen.getByRole("button").textContent).toBe(
-      "Not on any computer or sandbox yet",
+      "Not on any computer or sandbox",
     );
   });
 });

@@ -182,6 +182,21 @@ export interface ServerRefusalContext {
   } | null;
 }
 
+/**
+ * Why a server's switch was refused: a taken name as a save words it, any
+ * other code as the switch failing.
+ */
+export function serverSwitchRefusal(
+  reason: string | null,
+  configuration: string,
+  server: string,
+  enabled: boolean,
+): string {
+  if (reason === "name_taken")
+    return serverRefusal(reason, { configuration, server, secret: null });
+  return serverSwitchFailed(server, enabled);
+}
+
 /** Why a server write was refused, by the host's or authn's code. */
 export function serverRefusal(
   reason: string | null,

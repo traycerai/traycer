@@ -68,6 +68,7 @@ function rowFor(input: {
     localService: undefined,
     hasLiveSession: () => false,
     localHostSettingUp: false,
+    localHostTerminalRunNote: null,
     sandboxes: [input.summary],
     nowMs: 0,
   });

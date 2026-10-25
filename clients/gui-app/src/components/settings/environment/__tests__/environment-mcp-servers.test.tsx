@@ -326,6 +326,42 @@ describe("The MCP servers page", () => {
     },
   );
 
+  it.each([
+    {
+      reason: "name_taken",
+      line: "Acme already has a server named github. Pick another name.",
+    },
+    {
+      reason: "invalid_body",
+      line: "Couldn't turn github on. Try again.",
+    },
+  ])(
+    "says $line on the page when the host refuses the switch ($reason)",
+    async ({ reason, line }) => {
+      negotiateMethods(ALL_METHODS);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          servers: () => [
+            declaredServer({ serverId: "srv-1", name: "github", item: null }),
+          ],
+          hostServers: [],
+        }),
+        "environment.configuration.mcpServers.setEnabled": () => ({
+          outcome: "refused" as const,
+          reason,
+        }),
+      });
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("switch", { name: "github" }),
+      );
+
+      expect((await screen.findByRole("status")).textContent).toBe(line);
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps a tool's toggle through switching the server off and on again", async () => {
     negotiateMethods(ALL_METHODS);
     // Models the host's contract: setEnabled false takes the server out of

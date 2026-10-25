@@ -14,8 +14,17 @@ import {
   useThisComputer,
   type ThisComputer,
 } from "@/components/settings/move/this-computer";
-import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
+import { planesNotMoved } from "@/components/settings/move/cohort-rows";
+import { planesFromStatus } from "@/components/settings/move/status-planes";
+import {
+  useEnvironmentReviewRead,
+  useEnvironmentStatusRead,
+} from "@/hooks/environment/use-environment-reads";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import {
+  useMoveSheetStore,
+  type MoveSheetTarget,
+} from "@/stores/settings/move-sheet-store";
 
 export function FirstTaskImportBridge() {
   useEffect(() => {
@@ -87,11 +96,43 @@ function GettingStartedToast() {
   const computer = useThisComputer();
   const completedAt = useOnboardingStore((state) => state.completedAt);
   const held = useHeldOnThisComputer(computer, completedAt !== null);
-  // Neither toast until the review answers, so the reminder never shows for
-  // a moment before the held toast replaces it.
-  if (held === "pending") return null;
+  const notMoved = useNotMovedOnThisComputer(computer, completedAt !== null);
+  // Neither toast until the review and the status answer, so the reminder
+  // never shows for a moment before another toast replaces it.
+  if (held === "pending" || notMoved === "pending") return null;
   if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
-  return <SetupReminderToast completedAt={completedAt} />;
+  const moveTarget =
+    notMoved === "not_moved" && computer.hostId !== null
+      ? { hostId: computer.hostId, hostName: computer.hostName }
+      : null;
+  return (
+    <SetupReminderToast completedAt={completedAt} moveTarget={moveTarget} />
+  );
+}
+
+/**
+ * Whether nothing of this computer's settings has moved and the move still
+ * waits for the person: `pending` while its status is being read, `clear`
+ * with no local host, a host without the method or its planes, a failed
+ * read, an accepted move, or anything already in Personal.
+ */
+function useNotMovedOnThisComputer(
+  computer: ThisComputer,
+  enabled: boolean,
+): "not_moved" | "clear" | "pending" {
+  const status = useEnvironmentStatusRead(
+    computer.client,
+    computer.hostId,
+    enabled,
+  );
+  if (!enabled || computer.hostId === null) return "clear";
+  if (status.supported === false || status.isError) return "clear";
+  if (status.data === null) return "pending";
+  const planes = planesFromStatus(status.data);
+  if (planes === null || status.data.consent !== null) return "clear";
+  return planesNotMoved(planes, status.data.pendingUploads.length > 0)
+    ? "not_moved"
+    : "clear";
 }
 
 /**
@@ -150,10 +191,21 @@ function HeldOnThisComputerToast(props: { readonly computer: ThisComputer }) {
   return null;
 }
 
-function SetupReminderToast(props: { readonly completedAt: number | null }) {
+/**
+ * `moveTarget` names this computer when none of its settings are in Personal
+ * yet: the reminder then says so and opens its move sheet instead of
+ * Settings.
+ */
+function SetupReminderToast(props: {
+  readonly completedAt: number | null;
+  readonly moveTarget: MoveSheetTarget | null;
+}) {
   const { completedAt } = props;
+  const moveHostId = props.moveTarget?.hostId ?? null;
+  const moveHostName = props.moveTarget?.hostName ?? null;
   const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
   const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
+  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   // Availability, not just completion: a guide this build cannot offer would
   // otherwise leave a nudge that can never be satisfied, pointing at a card
   // that cannot be opened.
@@ -164,9 +216,36 @@ function SetupReminderToast(props: { readonly completedAt: number | null }) {
   );
   const remaining = onboardingGuideCount(shell) - complete;
   useEffect(() => {
-    if (completedAt === null || remaining === 0 || dismissed) return;
+    if (completedAt === null || dismissed) return;
+    // The setup count gates only the setup reminder: a computer whose
+    // settings have not moved still has that to do with every guide done.
+    if (remaining === 0 && moveHostId === null) return;
     let mounted = true;
     const id = "traycer-getting-started";
+    if (moveHostId !== null && moveHostName !== null) {
+      toast("This computer's settings aren't in Personal.", {
+        id,
+        description: (
+          <span className="text-pretty">Move them to use them everywhere</span>
+        ),
+        duration: Infinity,
+        closeButton: true,
+        onDismiss: () => {
+          if (mounted) dismiss();
+        },
+        action: {
+          label: "Show me what moves",
+          onClick: () => {
+            dismiss();
+            openMoveSheet({ hostId: moveHostId, hostName: moveHostName });
+          },
+        },
+      });
+      return () => {
+        mounted = false;
+        toast.dismiss(id);
+      };
+    }
     toast("You're all set", {
       id,
       // `text-pretty` rather than the default: on a phone this line wraps, and
@@ -193,6 +272,14 @@ function SetupReminderToast(props: { readonly completedAt: number | null }) {
       mounted = false;
       toast.dismiss(id);
     };
-  }, [completedAt, remaining, dismissed, dismiss]);
+  }, [
+    completedAt,
+    remaining,
+    dismissed,
+    dismiss,
+    moveHostId,
+    moveHostName,
+    openMoveSheet,
+  ]);
   return null;
 }

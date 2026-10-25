@@ -231,10 +231,11 @@ const VIEW_COPY: Readonly<
 
 /**
  * Providers on a Local row: the old page whole, about that one computer, so
- * its subtitle is the old one.
+ * its subtitle names it.
  */
-const LOCAL_PROVIDERS_DESCRIPTION =
-  "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent.";
+function localProvidersDescription(hostName: string): string {
+  return `Sign-ins, keys and tools for each coding agent on ${hostName}.`;
+}
 
 /**
  * Settings > Personal > MCP servers and Skills: the Providers rail and tab
@@ -523,10 +524,10 @@ function ProvidersSettingsPanelInner({
   const isMobile = useIsMobileViewport();
   const view = useContext(ProvidersPanelViewContext);
   const copy = VIEW_COPY[view];
-  const localRow = useEnvironmentPick().kind === "local";
+  const pick = useEnvironmentPick();
   const description =
-    view === "providers" && localRow
-      ? LOCAL_PROVIDERS_DESCRIPTION
+    view === "providers" && pick.kind === "local"
+      ? localProvidersDescription(pick.hostName)
       : copy.description;
   return (
     <SettingsPanelShell

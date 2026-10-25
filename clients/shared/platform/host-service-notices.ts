@@ -14,6 +14,13 @@
 export const SERVICE_TASK_NOT_OWNED_CODE = "E_SERVICE_TASK_NOT_OWNED";
 
 /**
+ * The refusal of any host start over a host a person started in a terminal:
+ * the app leaves that run alone. On `lastEnsureFailure` it says the ensure
+ * was refused over one that does not answer; main clears it once it does.
+ */
+export const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
+
+/**
  * Why the CLI treated the task as not this account's, as it sends it in
  * `details.reason` - on the `E_SERVICE_TASK_NOT_OWNED` refusal, and on a
  * `serviceWarning` or `postSwapWarning` of that code. `other-owner`: the

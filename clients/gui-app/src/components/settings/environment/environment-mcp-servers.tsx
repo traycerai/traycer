@@ -1,6 +1,7 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentConfigurationWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -47,6 +48,7 @@ import {
   removeTitle,
   serverSwitchFailed,
   serverSwitchLabel,
+  serverSwitchRefusal,
   toolCountPhrase,
 } from "./mcp-skills-copy";
 import { TeamMcpItems } from "./team-mcp-servers";
@@ -143,6 +145,21 @@ function McpServerList(): ReactNode {
   );
 }
 
+function switchIssue(
+  result: EnvironmentConfigurationWriteResponse,
+  configuration: string,
+  server: string,
+  enabled: boolean,
+): ConfigurationWriteIssue {
+  if (result.outcome === "forbidden") return { kind: "forbidden" };
+  if (result.outcome === "refused")
+    return {
+      kind: "refused",
+      line: serverSwitchRefusal(result.reason, configuration, server, enabled),
+    };
+  return null;
+}
+
 function McpServerRow(props: {
   readonly server: EnvironmentMcpServer;
   readonly providers: readonly ProviderId[];
@@ -152,6 +169,7 @@ function McpServerRow(props: {
 }): ReactNode {
   const { server } = props;
   const source = useConfigurationSource();
+  const name = useConfigurationName();
   const { remove, putItem, setEnabled } = useConfigurationMcpServerMutations();
   const client = useHostClient();
   const removable =
@@ -246,9 +264,7 @@ function McpServerRow(props: {
                       // write: it has no conflict to show.
                       onSuccess: (result) =>
                         props.onIssue(
-                          result.outcome === "forbidden"
-                            ? { kind: "forbidden" }
-                            : null,
+                          switchIssue(result, name, server.name, next),
                         ),
                       onError: (error) =>
                         toastFromHostError(

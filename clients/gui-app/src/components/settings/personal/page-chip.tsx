@@ -123,7 +123,7 @@ function PersonalPageChip(props: {
       section={props.section}
       environmentId={environmentId}
       hosts={chips}
-      emptyText="Not on any computer or sandbox yet"
+      emptyText="Not on any computer or sandbox"
     />
   );
 }

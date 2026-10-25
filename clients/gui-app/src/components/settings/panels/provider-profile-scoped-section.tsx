@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
@@ -28,6 +29,9 @@ import {
   providerSignInUnavailableReason,
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
+import { providersMutationKeys } from "@/lib/query-keys";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
@@ -277,8 +281,11 @@ export function ProviderProfileScopedSection(
     onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
-  const localRow = useEnvironmentPick().kind === "local";
-  const hostName = usePersonalHostName();
+  const pick = useEnvironmentPick();
+  const localRow = pick.kind === "local";
+  const personalHostName = usePersonalHostName();
+  // A Local row reads its own computer; Personal names the window's host.
+  const hostName = pick.kind === "local" ? pick.hostName : personalHostName;
   const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
@@ -398,6 +405,7 @@ export function ProviderProfileScopedSection(
         />
         {selectedProfile.kind === "ambient" ? (
           <OwnLoginSummary
+            ownLogin={ownLogin}
             profile={selectedProfile}
             addProfileDisabled={addProfileDisabled}
             addProfileDisabledReason={addProfileDisabledReason}
@@ -526,26 +534,73 @@ export function ProviderProfileScopedSection(
 }
 
 /**
- * The terminal login's row: where it works and whether it is signed in, with
- * one verb. `Sign in to use everywhere` opens the same sign-in `Add a profile`
- * does, so the tool's own login is never touched from here.
+ * What the terminal login's row says of its sign-in: `Signed in`, `Signed
+ * out`, or `null` when the host could not read it (`couldn't be checked`,
+ * with a Retry that probes again).
+ */
+function ownLoginStateText(profile: ProviderProfile): string | null {
+  switch (profile.auth.status) {
+    case "authenticated":
+    case "configured":
+      return "Signed in";
+    case "unauthenticated":
+      return "Signed out";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The terminal login's row: whose login it is, where it works and whether it
+ * is signed in, with one verb. `Sign in to use everywhere` opens the same
+ * sign-in `Add a profile` does, so the tool's own login is never touched from
+ * here.
  */
 function OwnLoginSummary(props: {
+  readonly ownLogin: string;
   readonly profile: ProviderProfile;
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
   readonly onAddProfile: () => void;
 }): ReactNode {
+  const refreshProviders = useRefreshProviders();
+  const refreshing =
+    useIsMutating({ mutationKey: providersMutationKeys.refresh() }) > 0;
+  const stateText = ownLoginStateText(props.profile);
   return (
     <div
       data-slot="profile-summary-actions"
       className="flex min-w-0 flex-wrap items-center justify-end gap-2"
     >
       <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-        <span className="min-w-0">works on this computer only</span>
-        <Badge variant="outline" className="h-5 shrink-0" size="xs">
-          {profileAuthStatusText(props.profile)}
-        </Badge>
+        <span className="min-w-0">
+          {props.ownLogin} · works on this computer only
+        </span>
+        {stateText === null ? (
+          <span className="inline-flex shrink-0 items-center gap-1">
+            couldn&apos;t be checked
+            <Button
+              type="button"
+              variant="link"
+              size="inline-xs"
+              disabled={refreshing}
+              onClick={() => void refreshProviders()}
+            >
+              Retry
+              {refreshing ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+            </Button>
+          </span>
+        ) : (
+          <Badge variant="outline" className="h-5 shrink-0" size="xs">
+            {stateText}
+          </Badge>
+        )}
       </div>
       <TooltipWrapper
         label={props.addProfileDisabledReason}

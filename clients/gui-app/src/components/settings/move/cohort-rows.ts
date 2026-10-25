@@ -163,6 +163,17 @@ function localRowSubtitle(input: {
   return LOCAL_ROW_NOT_MOVED;
 }
 
+/**
+ * Nothing of this computer's has moved: its Local row reads
+ * `its own settings, not in Personal yet` and offers `Move to Personal`.
+ */
+export function planesNotMoved(
+  planes: EnvironmentPlanes,
+  partlyMoved: boolean,
+): boolean {
+  return cohortFromPlanes(planes, partlyMoved).subtitle === LOCAL_ROW_NOT_MOVED;
+}
+
 export function planesHaveLocal(planes: EnvironmentPlanes): boolean {
   return planeValues(planes).some(isThisComputers);
 }

@@ -12,10 +12,17 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentReviewEntryV12 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentReviewEntryV12,
+  EnvironmentStatusResponseV11,
+} from "@traycer/protocol/host/environment-schemas";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
@@ -102,6 +109,27 @@ function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
 }
 
+/** This computer, with a fake host answering `environment.status` with `status`. */
+function computerWithStatus(status: EnvironmentStatusResponseV11): void {
+  const { client } = buildEnvironmentClient({
+    hostId: "old",
+    handlers: {
+      "environment.review": () => ({
+        entries: [],
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
+      "environment.status": () => status,
+    },
+  });
+  recordNegotiatedHostManifest("old", {
+    "environment.review": { major: 1, minor: 2 },
+    "environment.status": { major: 1, minor: 1 },
+  });
+  thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+}
+
 function held(
   overrides: Partial<EnvironmentReviewEntryV12>,
 ): EnvironmentReviewEntryV12 {
@@ -146,6 +174,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       open: false,
       heldToastDismissed: false,
     });
+    useMoveSheetStore.setState({ target: null });
     toastState.reset();
     useOnboardingStore.getState().reset();
     useFirstTaskGuideStore.getState().prepare();
@@ -213,6 +242,55 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     );
     expect(toastState).not.toHaveBeenCalledWith(
       "An earlier version shared this computer's settings",
+      expect.anything(),
+    );
+  });
+
+  it("says this computer's settings are not in Personal, and the action opens its move sheet", async () => {
+    computerWithStatus(
+      environmentStatusFixture({
+        planes: { records: "local", broker: "local", room: "local" },
+        consent: null,
+        pendingUploads: [],
+      }),
+    );
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "This computer's settings aren't in Personal.",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "You're all set",
+      expect.anything(),
+    );
+    const [, options] = toastState.mock.calls[toastState.mock.calls.length - 1];
+    expect(render(options.description).container.textContent).toBe(
+      "Move them to use them everywhere",
+    );
+    expect(options.action?.label).toBe("Show me what moves");
+
+    act(() => toastState.invokeAction());
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("keeps the setup reminder once this computer's settings are in Personal", async () => {
+    computerWithStatus(environmentStatusFixture({}));
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "This computer's settings aren't in Personal.",
       expect.anything(),
     );
   });

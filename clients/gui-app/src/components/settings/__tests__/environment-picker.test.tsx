@@ -334,6 +334,30 @@ describe("<EnvironmentPicker />", () => {
     );
   });
 
+  it("says Personal is not on any computer or sandbox while none runs it", () => {
+    const hosts = [
+      hostScopeOptionFixture({
+        hostId: "old",
+        name: "Old laptop",
+        isLocalMachine: true,
+        registered: false,
+        item: null,
+      }),
+    ];
+    answer("old", awaiting, V11);
+    render(
+      <EnvironmentPicker
+        scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "old" })}
+        activeSection="mcp-servers"
+      />,
+    );
+    openMenu();
+
+    expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
+      "Personalyour settings · not on any computer or sandbox",
+    );
+  });
+
   it("picking a row that hides the open page leaves it for Providers", () => {
     answer("old", awaiting, V11);
     renderPicker("mac");

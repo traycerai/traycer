@@ -2,6 +2,7 @@ import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protoco
 export type ConfigurationWriteIssue =
   | { readonly kind: "conflict"; readonly changedBy: string | null }
   | { readonly kind: "forbidden" }
+  | { readonly kind: "refused"; readonly line: string }
   | null;
 
 export function configurationWriteIssue(

@@ -177,10 +177,12 @@ function hasUploadPastAccept(status: EnvironmentStatusResponseV11): boolean {
 
 /**
  * `your settings · on MacBook Pro, dev-box`: the hosts running Personal,
- * two named, the rest counted. A computer with a Local row is not among them.
+ * two named, the rest counted, or `· not on any computer or sandbox` while
+ * none does. A computer with a Local row is not among them.
  */
 export function personalSubtitle(names: readonly string[]): string {
-  if (names.length === 0) return "your settings";
+  if (names.length === 0)
+    return "your settings · not on any computer or sandbox";
   const [first, second] = names;
   if (names.length === 1) return `your settings · on ${first}`;
   const rest = names.length - 2;

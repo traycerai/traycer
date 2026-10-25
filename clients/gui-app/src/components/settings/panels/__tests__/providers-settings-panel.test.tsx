@@ -290,6 +290,14 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
 }));
 
+// The own-login row reads whether a refresh is in flight through
+// `useIsMutating`, which needs a `QueryClientProvider` this suite does not
+// mount; the refresh itself is `useRefreshProviders`, stubbed below.
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return { ...actual, useIsMutating: () => 0 };
+});
+
 // The provider's Limits pick reads the watched host's usage through the layout
 // editor's own scope, which this suite does not stand up, so it is a marker
 // here: what is held is WHERE the page mounts it. Which providers it offers a
@@ -3256,7 +3264,7 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBe("codex");
   });
 
-  it("subtitles Providers with what it holds on Personal, and keeps the CLI-binary line on a Local row", () => {
+  it("subtitles Providers with what it holds on Personal, and names the computer on a Local row", () => {
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -3278,11 +3286,14 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
     expect(screen.getByText(personal)).toBeDefined();
-    expect(screen.queryByText(/Choose the CLI binary/)).toBeNull();
     unmount();
 
     useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "local", hostName: "Studio" },
+      pick: {
+        kind: "local",
+        hostId: "local",
+        hostName: "windows-test-machine",
+      },
     });
     try {
       render(
@@ -3290,7 +3301,11 @@ describe("<ProvidersSettingsPanel />", () => {
           <ProvidersSettingsPanel />
         </TooltipProvider>,
       );
-      expect(screen.getByText(/Choose the CLI binary/)).toBeDefined();
+      expect(
+        screen.getByText(
+          "Sign-ins, keys and tools for each coding agent on windows-test-machine.",
+        ),
+      ).toBeDefined();
       expect(screen.queryByText(personal)).toBeNull();
     } finally {
       useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -4199,11 +4214,11 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Codex profile: Codex's own login on this computer",
+        name: "Codex profile: Codex's own login on dev-box",
       }),
     ).toBeDefined();
     const ownLoginRow = screen
-      .getByText("works on this computer only")
+      .getByText("Codex's own login on dev-box · works on this computer only")
       .closest('[data-slot="profile-summary-actions"]');
     if (!(ownLoginRow instanceof HTMLElement)) {
       throw new Error("Expected own-login row");
@@ -4238,6 +4253,110 @@ describe("<ProvidersSettingsPanel />", () => {
     // The same Add-a-profile dialog opens; the login itself is never touched.
     expect(screen.getByRole("button", { name: "Link account" })).toBeDefined();
     expect(providerMocks.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  describe("the own-login row on a Local pick", () => {
+    function renderOwnLogin(
+      authStatus: ProviderProfile["auth"]["status"],
+    ): HTMLElement {
+      useSettingsEnvironmentPickStore.setState({
+        pick: {
+          kind: "local",
+          hostId: hostScopeMocks.hostId,
+          hostName: "windows-test-machine",
+        },
+      });
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "claude-code",
+              selected: { kind: "bundled" },
+              candidates: [
+                {
+                  kind: "bundled",
+                  path: "/opt/traycer/bin/claude",
+                  version: "1.0.0",
+                  available: true,
+                  versionPending: false,
+                },
+              ],
+              envOverrides: [],
+              profiles: [
+                profile({
+                  profileId: "ambient",
+                  kind: "ambient",
+                  label: "Terminal account",
+                  email: null,
+                  tier: null,
+                  authStatus,
+                  duplicateOfProfileId: null,
+                  ambientDriftNotice: null,
+                }),
+              ],
+            }),
+            loginCapability: {
+              oauthArgs: ["auth", "login"],
+              token: null,
+              codePaste: null,
+              terminalLogin: null,
+              remoteSafe: null,
+              selfOpensBrowser: null,
+            },
+          },
+        ],
+      };
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      openProfilesTab();
+      const row = screen
+        .getByText(
+          "Claude Code's own login on windows-test-machine · works on this computer only",
+        )
+        .closest('[data-slot="profile-summary-actions"]');
+      if (!(row instanceof HTMLElement))
+        throw new Error("Expected own-login row");
+      return row;
+    }
+
+    it("names the computer and badges an authenticated login Signed in", () => {
+      const row = renderOwnLogin("authenticated");
+
+      expect(
+        within(row).getByText("Signed in", { selector: '[data-slot="badge"]' }),
+      ).toBeDefined();
+      expect(within(row).queryByText(/couldn't be checked/)).toBeNull();
+    });
+
+    it("badges an unauthenticated login Signed out", () => {
+      const row = renderOwnLogin("unauthenticated");
+
+      expect(
+        within(row).getByText("Signed out", {
+          selector: '[data-slot="badge"]',
+        }),
+      ).toBeDefined();
+    });
+
+    it("says an unavailable login couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
+      const row = renderOwnLogin("unavailable");
+
+      expect(within(row).getByText(/couldn't be checked/)).toBeDefined();
+      expect(within(row).queryByText(/Unavailable/i)).toBeNull();
+      expect(
+        within(row).queryByText("Signed in", {
+          selector: '[data-slot="badge"]',
+        }),
+      ).toBeNull();
+      expect(providerMocks.refreshProviders).not.toHaveBeenCalled();
+
+      fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
+
+      expect(providerMocks.refreshProviders).toHaveBeenCalledOnce();
+    });
   });
 
   it("edits and switches a managed account", async () => {
@@ -4491,7 +4610,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // The terminal login has no editor to carry a draft from.
     fireEvent.click(
       screen.getByRole("menuitem", {
-        name: "Codex's own login on this computer",
+        name: "Codex's own login on dev-box",
       }),
     );
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
@@ -4734,9 +4853,13 @@ describe("<ProvidersSettingsPanel />", () => {
     // its host, with no email or plan. A leftover ambientDriftNotice on the
     // wire must not render.
     expect(
-      screen.getAllByText("Codex's own login on this computer").length,
+      screen.getAllByText("Codex's own login on dev-box").length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText("works on this computer only")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Codex's own login on dev-box · works on this computer only",
+      ),
+    ).toBeDefined();
     expect(screen.queryByText("Pro")).toBeNull();
     expect(screen.queryByText("c•••@e…")).toBeNull();
     expect(
@@ -6669,7 +6792,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen
         .getByRole("menuitem", {
-          name: "Claude Code's own login on this computer, Signed out",
+          name: "Claude Code's own login on dev-box, Signed out",
           hidden: true,
         })
         .getAttribute("aria-current"),
@@ -6750,7 +6873,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen
         .getByRole("menuitem", {
-          name: "Claude Code's own login on this computer",
+          name: "Claude Code's own login on dev-box",
         })
         .getAttribute("aria-current"),
     ).toBe("true");

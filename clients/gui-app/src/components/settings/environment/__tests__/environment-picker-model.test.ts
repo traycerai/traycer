@@ -119,7 +119,9 @@ describe("localPickerRow", () => {
 
 describe("personalSubtitle", () => {
   it("names up to two hosts and counts the rest", () => {
-    expect(personalSubtitle([])).toBe("your settings");
+    expect(personalSubtitle([])).toBe(
+      "your settings · not on any computer or sandbox",
+    );
     expect(personalSubtitle(["MacBook Pro"])).toBe(
       "your settings · on MacBook Pro",
     );

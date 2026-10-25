@@ -184,8 +184,9 @@ afterEach(() => {
 });
 
 /**
- * Renders and waits for Personal's id to arrive: a link started before it
- * has would name the host's own.
+ * Renders and waits for Continue to be enabled: it waits for Personal's id,
+ * since a link started before it has would name the host's own. A click on
+ * Continue before then does nothing.
  */
 async function renderDialog(children: ReactNode): Promise<void> {
   render(
@@ -199,13 +200,10 @@ async function renderDialog(children: ReactNode): Promise<void> {
     });
     return;
   }
-  if (useSettingsEnvironmentPickStore.getState().pick?.kind !== "local") {
-    await waitFor(() => {
-      expect(listMock).toHaveBeenCalled();
-    });
-  }
-  await act(async () => {
-    await Promise.resolve();
+  await waitFor(() => {
+    expect(
+      screen.getByTestId("provider-link-continue").hasAttribute("disabled"),
+    ).toBe(false);
   });
 }
 

@@ -50,6 +50,7 @@ function option(overrides: {
   return hostScopeOptionFixture({
     hostId: "host-a",
     settingUp: overrides.settingUp ?? false,
+    terminalRunNote: null,
     connectable: overrides.connectable ?? true,
     health: {
       state: overrides.state ?? "online",
