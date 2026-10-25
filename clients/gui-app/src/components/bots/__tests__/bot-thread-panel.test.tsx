@@ -78,6 +78,7 @@ type ThreadTranscriptState = Pick<
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
+  channelHandle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
   toastFromHostError: vi.fn<(error: Error, fallback: string) => void>(),
 }));
@@ -90,7 +91,13 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
   >()),
-  useChatSessionHandleForContainer: () => mocks.handle,
+  // The thread reads its own session; the post it answers comes from the
+  // channel's.
+  useChatSessionHandleForContainer: (
+    _botId: string,
+    chatId: string,
+  ): ChatSessionStoreHandle | null =>
+    chatId === CONVERSATION_ID ? mocks.channelHandle : mocks.handle,
 }));
 // The thread's typing line is `bot-channel-typing.test.tsx`'s; here the bot
 // is idle.
@@ -165,7 +172,6 @@ function threadSummary(anchorSenderUserId: string | null): BotThreadSummary {
       messageId: "anchor-1",
       requestId: "req-1",
       senderUserId: anchorSenderUserId,
-      text: "Ship the release today?",
       sentAt: 1_000,
       resolvedAt: null,
     },
@@ -240,6 +246,28 @@ const SEND_RESPONSE: BotConversationSendResponse = {
   threadId: THREAD_ID,
 };
 
+/** The channel's own rows, where the anchor's text is read from. */
+let channelMessages: ReadonlyArray<Message>;
+
+function announcement(messageId: string, text: string): Message {
+  const base = botReply(null);
+  if (base.role !== "assistant") throw new Error("botReply is the bot's row");
+  return {
+    ...base,
+    messageId,
+    blocks: [
+      {
+        type: "text",
+        blockId: `${messageId}:text`,
+        status: "completed",
+        timestamp: 1_000,
+        text,
+        providerNotice: null,
+      },
+    ],
+  };
+}
+
 let sent: ReadonlyArray<BotConversationSendRequest>;
 /** What the host answers the next `bot.conversation.send` with. */
 let sendAnswer: () => Promise<BotConversationSendResponse>;
@@ -278,6 +306,9 @@ function mountPanel(
   mocks.handle = {
     store: createThreadStore(messages),
   } as ChatSessionStoreHandle;
+  mocks.channelHandle = {
+    store: createThreadStore(channelMessages),
+  } as ChatSessionStoreHandle;
   render(
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
@@ -308,6 +339,7 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 
 beforeEach(() => {
   sent = [];
+  channelMessages = [];
   sendAnswer = () => Promise.resolve(SEND_RESPONSE);
   mocks.toastFromHostError.mockClear();
   mocks.client = hostClientRecordingSends();
@@ -316,6 +348,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.handle = null;
+  mocks.channelHandle = null;
   mocks.client = null;
 });
 
@@ -471,7 +504,24 @@ describe("<BotThreadPanel /> the anchor", () => {
     ).toBe("open");
   });
 
+  it("shows the anchor without text while the channel has no row for it, and its text once the channel's row is there", () => {
+    mountPanel(listed("user-teammate"), []);
+    const bare = screen.getByTestId("bot-thread-anchor");
+    expect(within(bare).queryByText("Ship the release today?")).toBeNull();
+    cleanup();
+
+    channelMessages = [
+      announcement("other-post", "Something else"),
+      announcement("anchor-1", "Ship the release today?"),
+    ];
+    mountPanel(listed("user-teammate"), []);
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
+    expect(within(anchor).queryByText("Something else")).toBeNull();
+  });
+
   it("draws a bot's own announcement in the bot's frame, with no request badge", () => {
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
     mountPanel(listed(null), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");

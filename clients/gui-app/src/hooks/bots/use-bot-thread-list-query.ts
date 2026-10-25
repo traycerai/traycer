@@ -8,9 +8,10 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
  * The threads of a bot's channel (`bot.thread.list`): each post's thread
- * with its reply count, last reply, open requests and cost. Only the bot's
- * bound host answers, so it is read only by a tab bound there. It is read
- * again when the bot's subscription says its conversations moved
+ * with its reply count, last reply, open requests and cost. Any host
+ * answers: the bot's own from its store, another from what the bot's host
+ * keeps in the environment room (T65). It is read again when the bot's
+ * subscription says its conversations moved
  * (`use-bot-subscription.ts`), never on a timer.
  */
 export function useBotThreadListQuery(

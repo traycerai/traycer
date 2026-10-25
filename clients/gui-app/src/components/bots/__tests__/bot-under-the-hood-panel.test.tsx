@@ -10,7 +10,14 @@ import { useState, type ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStore } from "zustand";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 interface ThreadListAnswer {
   readonly trunkCostUsd: number | null;
@@ -22,7 +29,13 @@ const mocks = vi.hoisted(() => {
   return {
     client: { stub: "tab-host-client" },
     refetchThreads: vi.fn<() => void>(),
+    /** Every chat id the panel asked the session registry for. */
+    sessionRequests: [] as string[],
     state: {
+      /** Post text by message id: the channel's rows. */
+      channelPosts: {},
+      channelHandle: null as ChatSessionStoreHandle | null,
+      connectable: { hostIds: [] as string[], resolved: true },
       usageSupported: true,
       answers,
       threads: [] as BotThreadSummary[],
@@ -84,7 +97,18 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
   >()),
-  useChatSessionHandleForContainer: () => null,
+  // Only the channel has rows here (the threads' post text); the trunk's
+  // session is never loaded, and every request is recorded.
+  useChatSessionHandleForContainer: (
+    _botId: string,
+    chatId: string,
+  ): ChatSessionStoreHandle | null => {
+    mocks.sessionRequests.push(chatId);
+    return chatId === CHANNEL_ID ? channelHandle() : null;
+  },
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => mocks.state.connectable,
 }));
 vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: { chatId: string }) => (
@@ -99,25 +123,74 @@ const SIBLING_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
 const OTHER_HOST_SIBLING_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
 const TRUNK_ID = "trunk-1";
 const HOST_ID = "host-bound";
+const OTHER_HOST_ID = "host-other";
+const CHANNEL_ID = "conversation-channel";
 const ENVIRONMENT_BOTS = [
   { botId: BOT_ID, boundHostId: HOST_ID },
   { botId: SIBLING_ID, boundHostId: HOST_ID },
 ];
 
+function channelRow(messageId: string, text: string): Message {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet-4",
+      displayName: "Claude Sonnet 4",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: `${messageId}:text`,
+        status: "completed",
+        timestamp: 1_000,
+        text,
+        providerNotice: null,
+      },
+    ],
+    startedAt: 1_000,
+    timestamp: 1_000,
+    turnId: null,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
+/** The channel's session, holding the rows `thread()` registered. */
+function channelHandle(): ChatSessionStoreHandle {
+  if (mocks.state.channelHandle === null) {
+    const store = createStore<Pick<ChatSessionState, "messages">>(() => ({
+      messages: Object.entries(mocks.state.channelPosts).map(([id, text]) =>
+        channelRow(id, text),
+      ),
+    }));
+    mocks.state.channelHandle = { store } as ChatSessionStoreHandle;
+  }
+  return mocks.state.channelHandle;
+}
+
+/** A thread answering a channel post whose text the channel's row carries. */
 function thread(
   threadId: string,
   text: string,
   overrides: Partial<BotThreadSummary>,
 ): BotThreadSummary {
+  mocks.state.channelPosts[`post-${threadId}`] = text;
   return {
     threadId,
-    conversationId: "conversation-channel",
+    conversationId: CHANNEL_ID,
     sessionChatId: `session-${threadId}`,
     anchor: {
       messageId: `post-${threadId}`,
       requestId: `req-${threadId}`,
       senderUserId: "user-1",
-      text,
       sentAt: 1_000,
       resolvedAt: null,
     },
@@ -128,6 +201,9 @@ function thread(
     ...overrides,
   };
 }
+
+/** The bound host the next panel renders with. */
+let boundHost: { hostId: string; isThisHost: boolean };
 
 function Panel(props: {
   readonly onSelectSession: (sessionChatId: string | null) => void;
@@ -145,7 +221,7 @@ function Panel(props: {
       trunkChatId={TRUNK_ID}
       tasks={[]}
       openRequestCount={null}
-      paused={false}
+      boundHost={boundHost}
       environmentLabel="Acme"
       environmentBots={props.environmentBots}
       sessionChatId={props.sessionChatId}
@@ -172,6 +248,12 @@ function cost(testId: string): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.sessionRequests.length = 0;
+  mocks.state.channelPosts = {};
+  mocks.state.channelHandle = null;
+  mocks.state.connectable = { hostIds: [], resolved: true };
+  boundHost = { hostId: HOST_ID, isThisHost: true };
+  useBotTabsStore.setState({ tabs: {} });
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
   mocks.state.threads = [];
@@ -412,5 +494,87 @@ describe("<BotUnderTheHoodPanel /> thread list unavailable", () => {
     const threads = screen.getByTestId("bot-threads");
     expect(within(threads).getByTestId("bot-threads-loading")).toBeTruthy();
     expect(within(threads).queryByText("No threads yet.")).toBeNull();
+  });
+});
+
+describe("<BotUnderTheHoodPanel /> on a host that does not run the bot", () => {
+  beforeEach(() => {
+    boundHost = { hostId: OTHER_HOST_ID, isThisHost: false };
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Release Bot" });
+  });
+
+  function renderPanel(): void {
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
+  }
+
+  it("lists the threads and says the sessions are elsewhere, instead of the trunk's transcript and check-ins", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    renderPanel();
+
+    expect(screen.getByTestId("bot-sessions-elsewhere")).toBeTruthy();
+    expect(screen.queryByTestId("stub-transcript")).toBeNull();
+    expect(mocks.sessionRequests).not.toContain(TRUNK_ID);
+    const [row] = screen.getAllByTestId("bot-thread-row");
+    expect(within(row).getByText("Please review the release")).toBeTruthy();
+  });
+
+  it("offers Open there only when this app can connect to the bot's host, and moves the tab there", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    expect(screen.queryByTestId("bot-sessions-open-there")).toBeNull();
+    cleanup();
+
+    mocks.state.connectable = { hostIds: [HOST_ID], resolved: true };
+    renderPanel();
+    expect(screen.queryByTestId("bot-sessions-open-there")).toBeNull();
+    cleanup();
+
+    mocks.state.connectable = { hostIds: [OTHER_HOST_ID], resolved: false };
+    renderPanel();
+    expect(screen.queryByTestId("bot-sessions-open-there")).toBeNull();
+    cleanup();
+
+    mocks.state.connectable = { hostIds: [OTHER_HOST_ID], resolved: true };
+    renderPanel();
+    await user.click(screen.getByTestId("bot-sessions-open-there"));
+
+    expect(useBotTabsStore.getState().tabs[BOT_ID]?.hostId).toBe(OTHER_HOST_ID);
+  });
+
+  it("shows the transcript and the trunk's session on the bot's own host", () => {
+    boundHost = { hostId: HOST_ID, isThisHost: true };
+    renderPanel();
+
+    expect(screen.queryByTestId("bot-sessions-elsewhere")).toBeNull();
+    expect(
+      screen.getByTestId("stub-transcript").getAttribute("data-chat-id"),
+    ).toBe(TRUNK_ID);
+    expect(mocks.sessionRequests).toContain(TRUNK_ID);
+  });
+});
+
+describe("<BotUnderTheHoodPanel /> the post a thread answers", () => {
+  it("names a thread by the channel's row, and by nothing while the channel has none", () => {
+    mocks.state.threads = [thread("thread-a", "Please review the release", {})];
+    mocks.state.channelPosts = {};
+    render(
+      <Panel
+        sessionChatId={null}
+        onSelectSession={vi.fn()}
+        environmentBots={ENVIRONMENT_BOTS}
+      />,
+    );
+
+    const [row] = screen.getAllByTestId("bot-thread-row");
+    expect(within(row).queryByText("Please review the release")).toBeNull();
+    expect(within(row).getByText("Thread")).toBeTruthy();
   });
 });

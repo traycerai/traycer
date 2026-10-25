@@ -16,7 +16,10 @@ import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-pa
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
-import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
+import { BotSessionsElsewhere } from "@/components/bots/bot-sessions-elsewhere";
+import { ChannelPostText } from "@/components/bots/bot-channel-post-text";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -61,6 +64,11 @@ const noStop = (): string | null => null;
  * background work its trunk is running, and the transcript of the trunk or
  * of a thread's session - the existing chat view, read-only, with no
  * composer: a person talks to the bot in its channel, never on a session.
+ *
+ * The trunk and the thread sessions are the bot's running chats, so only
+ * the host that runs the bot shows them and the trunk's check-ins; on any
+ * other host they say where they are, and offer to move the tab there when
+ * this app can connect to it (Tracy Bots T65). Every host lists the threads.
  */
 export function BotUnderTheHoodPanel(props: {
   readonly botId: string;
@@ -70,10 +78,11 @@ export function BotUnderTheHoodPanel(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The stream's open-request hint; `null` is unknown and renders nothing. */
   readonly openRequestCount: number | null;
-  /** The bot is paused from this tab: the sessions are the serving host's to
-   * show, so a placeholder stands in for them. The task list comes from the
-   * stream snapshot and keeps rendering. */
-  readonly paused: boolean;
+  /** The host that runs the bot, as the stream names it. */
+  readonly boundHost: {
+    readonly hostId: string | null;
+    readonly isThisHost: boolean;
+  };
   /** The bot's environment, named on its cost line, and every bot in it
    * (`null` while the bot list is not read). */
   readonly environmentLabel: string;
@@ -89,19 +98,18 @@ export function BotUnderTheHoodPanel(props: {
     trunkChatId,
     tasks,
     openRequestCount,
-    paused,
+    boundHost,
     environmentLabel,
     environmentBots,
     sessionChatId,
     onSelectSession,
   } = props;
   const client = useTabHostClient();
-  // Threads are listed by the bound host, and only by one that has the list.
+  // Any host with the list lists the threads.
   const threadListSupported =
     useHostMethodSupport(hostId, "bot.thread.list") === true;
-  const threadListEnabled = !paused && threadListSupported;
   const threadList = useBotThreadListQuery(client, botId, {
-    enabled: threadListEnabled,
+    enabled: threadListSupported,
   });
   const threads = threadList.data?.threads ?? EMPTY_THREADS;
   const shownThread =
@@ -124,15 +132,17 @@ export function BotUnderTheHoodPanel(props: {
           {usageSupported ? (
             <BotCostSection costs={costs} environmentLabel={environmentLabel} />
           ) : null}
-          {threadListEnabled ? (
+          {threadListSupported ? (
             <BotThreadsList
+              botId={botId}
+              hostId={hostId}
               threadList={threadList}
               sessionChatId={sessionChatId}
               onSelectSession={onSelectSession}
             />
           ) : null}
           <BotTasksList tasks={tasks} />
-          {paused ? null : (
+          {!boundHost.isThisHost ? null : (
             <BotTrunkState
               botId={botId}
               hostId={hostId}
@@ -147,9 +157,16 @@ export function BotUnderTheHoodPanel(props: {
               className="min-w-0 flex-1 truncate text-ui-xs tracking-[0.08em] text-muted-foreground uppercase"
               data-testid="bot-session-heading"
             >
-              {shownThread === null
-                ? "Trunk"
-                : `Thread: ${threadExcerpt(shownThread)}`}
+              {shownThread === null ? (
+                "Trunk"
+              ) : (
+                <ThreadExcerpt
+                  botId={botId}
+                  hostId={hostId}
+                  thread={shownThread}
+                  prefix="Thread: "
+                />
+              )}
             </h3>
             {sessionChatId === null ? null : (
               <Button
@@ -162,8 +179,8 @@ export function BotUnderTheHoodPanel(props: {
               </Button>
             )}
           </div>
-          {paused ? (
-            <BotTranscriptPaused />
+          {!boundHost.isThisHost ? (
+            <SessionsElsewhere botId={botId} boundHostId={boundHost.hostId} />
           ) : (
             <BotChatTranscript
               key={sessionChatId ?? undefined}
@@ -186,9 +203,54 @@ export function BotUnderTheHoodPanel(props: {
   );
 }
 
-/** A thread named by the start of the post it answers. */
-function threadExcerpt(thread: BotThreadSummary): string {
-  const text = thread.anchor?.text.trim() ?? "";
+/**
+ * Where the bot's running chats are, and a move of the tab there when this
+ * app can connect to that host.
+ */
+function SessionsElsewhere(props: {
+  readonly botId: string;
+  readonly boundHostId: string | null;
+}): ReactNode {
+  const { botId, boundHostId } = props;
+  const connectable = useConnectableHostIds();
+  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
+  const dialable =
+    boundHostId !== null &&
+    connectable.resolved &&
+    connectable.hostIds.includes(boundHostId);
+  return (
+    <BotSessionsElsewhere
+      onOpenThere={dialable ? () => rebindBotTab(botId, boundHostId) : null}
+    />
+  );
+}
+
+/**
+ * A thread named by the start of the post it answers, read from the
+ * channel's row: a summary carries no post text.
+ */
+function ThreadExcerpt(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly thread: BotThreadSummary;
+  readonly prefix: string;
+}): ReactNode {
+  const { botId, hostId, thread, prefix } = props;
+  if (thread.anchor === null) return `${prefix}Thread`;
+  return (
+    <ChannelPostText
+      botId={botId}
+      hostId={hostId}
+      conversationId={thread.conversationId}
+      messageId={thread.anchor.messageId}
+    >
+      {(text) => `${prefix}${threadExcerpt(text)}`}
+    </ChannelPostText>
+  );
+}
+
+function threadExcerpt(post: string | null): string {
+  const text = post?.trim() ?? "";
   if (text.length === 0) return "Thread";
   return text.length > 60 ? `${text.slice(0, 60)}…` : text;
 }
@@ -247,6 +309,8 @@ function CostRow(props: {
  * and its cost when known. Choosing one shows its session's transcript.
  */
 function BotThreadsList(props: {
+  readonly botId: string;
+  readonly hostId: string;
   readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
   readonly sessionChatId: string | null;
   readonly onSelectSession: (sessionChatId: string) => void;
@@ -267,11 +331,13 @@ function BotThreadsList(props: {
 
 /** The list once it has answered, and what stands in until it has. */
 function BotThreadsListBody(props: {
+  readonly botId: string;
+  readonly hostId: string;
   readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
   readonly sessionChatId: string | null;
   readonly onSelectSession: (sessionChatId: string) => void;
 }): ReactNode {
-  const { threadList, sessionChatId, onSelectSession } = props;
+  const { botId, hostId, threadList, sessionChatId, onSelectSession } = props;
   const threads = threadList.data?.threads;
   if (threads === undefined) {
     if (threadList.isError) {
@@ -320,7 +386,12 @@ function BotThreadsListBody(props: {
             )}
           >
             <span className="truncate text-ui-sm text-foreground">
-              {threadExcerpt(thread)}
+              <ThreadExcerpt
+                botId={botId}
+                hostId={hostId}
+                thread={thread}
+                prefix=""
+              />
             </span>
             <span className="flex flex-wrap gap-x-2 text-ui-xs text-muted-foreground">
               <span>

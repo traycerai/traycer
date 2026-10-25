@@ -6,33 +6,25 @@ import {
   findBot,
   formatBotTime,
   listBots,
-  refuseUnlessBoundHere,
+  refuseUnlessSomeHostRuns,
   toBotCliError,
 } from "../internal/bot-host";
-import {
-  callHostRpc,
-  parseCanonicalHostResponse,
-  resolveEndpoint,
-} from "../internal/host-rpc";
+import { callHostRpc, parseCanonicalHostResponse } from "../internal/host-rpc";
 import type { CommandFn } from "../runner/runner";
 
 /**
  * `traycer bot threads <bot>` - the threads of a bot's channel, most recent
- * activity first (`bot.thread.list`): the post each answers, its replies,
- * its open requests and its cost. Only the host the bot runs on holds its
- * threads, so on any other host the command is refused before it asks.
+ * activity first (`bot.thread.list`): when the post each answers was sent,
+ * its replies, its open requests and its cost. Any host lists a running
+ * bot's threads: another host than the bot's own lists what that host wrote
+ * to the bot's environment room.
  */
 export function buildBotThreadsCommand(opts: {
   readonly bot: string;
 }): CommandFn {
   return async () => {
     const bot = findBot(await listBots(), opts.bot);
-    const endpoint = await resolveEndpoint();
-    refuseUnlessBoundHere(
-      bot,
-      endpoint.hostId,
-      "its threads are listed only there.",
-    );
+    refuseUnlessSomeHostRuns(bot);
     const { threads } = parseCanonicalHostResponse(
       "bot.thread.list",
       botThreadListResponseSchema,
@@ -58,10 +50,10 @@ function renderThreads(
   return [title, ...lines].join("\n");
 }
 
-/** The post's first line, quoted. */
+/** When the post was sent; a summary names the post, not its text. */
 function describeAnchor(thread: BotThreadSummary): string {
   if (thread.anchor === null) return "(post removed)";
-  return JSON.stringify(thread.anchor.text.split("\n", 1)[0]);
+  return `post ${formatBotTime(thread.anchor.sentAt)}`;
 }
 
 function describeReplies(thread: BotThreadSummary): string {

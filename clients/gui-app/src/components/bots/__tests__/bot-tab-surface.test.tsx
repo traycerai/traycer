@@ -1,7 +1,7 @@
 /**
  * The bot tab's surface (Tracy Bots): the tab asks `bot.open` through its own
- * host and follows the answer - serving here, moving to a host this client can
- * dial, or paused with a reason - and never names the machine a bot runs on.
+ * host and follows the answer - serving, or paused with a reason - and never
+ * names the machine a bot runs on or moves to it (T65).
  * Also: the stream's states, the re-subscribe and re-open when the pane comes
  * back into view, the tab closing when the bot is gone from `bot.list`, and a
  * team whose onboarding locks its chat (the real gate, over a mocked read).
@@ -230,7 +230,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     hostId: string;
     botTitle: string;
     appConversationChatId: string | null;
-    paused: boolean;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -240,7 +239,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-host-id={props.hostId}
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-paused={String(props.paused)}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
       }
@@ -248,8 +246,14 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
   ),
 }));
 vi.mock("@/components/bots/bot-under-the-hood-panel", () => ({
-  BotUnderTheHoodPanel: (props: { paused: boolean }) => (
-    <div data-testid="stub-under-the-hood" data-paused={String(props.paused)} />
+  BotUnderTheHoodPanel: (props: {
+    boundHost: { hostId: string; isThisHost: boolean } | null;
+  }) => (
+    <div
+      data-testid="stub-under-the-hood"
+      data-bound-host-id={props.boundHost?.hostId ?? "none"}
+      data-is-this-host={String(props.boundHost?.isThisHost)}
+    />
   ),
 }));
 // The panel takes the bot, whether it is main, whether its environment is a
@@ -400,11 +404,11 @@ describe("<BotTabSurface /> on a host without bot.open", () => {
     expect(mocks.open).not.toHaveBeenCalled();
   });
 
-  it("draws nothing, and opens nothing, until the handshake has answered either way", () => {
+  it("shows the connecting state, never nothing, and opens nothing, until the handshake has answered either way", () => {
     mocks.state.support = null;
-    const { container } = render(surface());
+    render(surface());
 
-    expect(container.textContent).toBe("");
+    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(mocks.open).not.toHaveBeenCalled();
   });
@@ -539,13 +543,11 @@ describe("<BotTabSurface /> bot.open", () => {
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
   });
 
-  it("shows the full tab, unpaused and with no banner, when this host serves the bot", () => {
+  it("shows the full tab, with no banner, when this host serves the bot", () => {
     const { container } = render(surface());
 
     expect(screen.getByTestId("bot-tab-title").textContent).toBe("Release Bot");
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "false",
-    );
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
     expect(screen.queryByTestId("bot-tab-error")).toBeNull();
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
@@ -571,63 +573,37 @@ describe("<BotTabSurface /> bot.open", () => {
 });
 
 describe("<BotTabSurface /> another host serves the bot", () => {
-  const SERVED_ELSEWHERE = answer({
-    kind: "serve-on-bound-host",
-    hostId: BOUND_HOST,
-    why: "reachable",
-  });
+  it.each(["reachable", "claimed-concurrently"] as const)(
+    "keeps the tab on its own host and renders the channel there (%s)",
+    (why) => {
+      mocks.state.openResult = answer({
+        kind: "serve-on-bound-host",
+        hostId: BOUND_HOST,
+        why,
+      });
+      const { container } = render(surface());
 
-  it("moves the tab to that host silently when this client can dial it", () => {
-    mocks.state.openResult = SERVED_ELSEWHERE;
-    const { container } = render(surface());
+      expect(tabHostIdInStore()).toBe(TAB_HOST);
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-host-id"),
+      ).toBe(TAB_HOST);
+      expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
+      expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+      expectNoMachineWording(container);
+    },
+  );
 
-    expect(tabHostIdInStore()).toBe(BOUND_HOST);
-    // Until the surface remounts on the new host: a spinner, no banner.
-    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
-    expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-    expectNoMachineWording(container);
-  });
-
-  it("moves it as well when another host claimed the bot while this one was deciding", () => {
+  it("keeps the tab on its host while the directory has not answered", () => {
     mocks.state.openResult = answer({
       kind: "serve-on-bound-host",
       hostId: BOUND_HOST,
-      why: "claimed-concurrently",
+      why: "reachable",
     });
-    render(surface());
-
-    expect(tabHostIdInStore()).toBe(BOUND_HOST);
-  });
-
-  it("pauses on the opening host, with no move, when this client cannot dial that host", () => {
-    mocks.state.openResult = SERVED_ELSEWHERE;
-    mocks.state.connectable = { hostIds: [TAB_HOST], resolved: true };
-    const { container } = render(surface());
-
-    expect(tabHostIdInStore()).toBe(TAB_HOST);
-    const banner = screen.getByTestId("bot-tab-paused");
-    expect(banner.getAttribute("data-reason")).toBe("bound-host-not-dialable");
-    expect(banner.textContent).toContain("Acme");
-    expect(within(banner).queryByRole("button")).toBeNull();
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "true",
-    );
-    expect(
-      screen.getByTestId("stub-channel").getAttribute("data-host-id"),
-    ).toBe(TAB_HOST);
-    expectNoMachineWording(container);
-  });
-
-  it("neither calls the host undialable nor moves the tab before the directory has answered", () => {
-    mocks.state.openResult = SERVED_ELSEWHERE;
     mocks.state.connectable = { hostIds: [], resolved: false };
     render(surface());
 
-    expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
-    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
-    // Moving now could strand the tab on a host this client never reaches.
     expect(tabHostIdInStore()).toBe(TAB_HOST);
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
 });
 
@@ -644,12 +620,12 @@ describe("<BotTabSurface /> paused", () => {
     },
     {
       reason: "bound-to-sandbox",
-      text: "This bot's channel can't be shown here. Messages you send still reach it.",
+      text: "Couldn't check whether this bot is running. Messages you send still reach it.",
       retry: false,
     },
     {
       reason: "bound-host-not-observable",
-      text: "This bot's channel can't be shown here. Messages you send still reach it.",
+      text: "Couldn't check whether this bot is running. Messages you send still reach it.",
       retry: false,
     },
     {
@@ -681,16 +657,17 @@ describe("<BotTabSurface /> paused", () => {
     },
   );
 
-  it("hands the channel view the paused flag, whose placeholder names no machine", () => {
+  it("still renders the channel under the paused banner", () => {
     mocks.state.openResult = answer({
       kind: "paused",
       reason: "host-not-in-environment",
     });
     render(surface());
 
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "true",
-    );
+    expect(screen.getByTestId("bot-tab-paused")).toBeTruthy();
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-host-id"),
+    ).toBe(TAB_HOST);
   });
 
   it("hands the channel view the conversation the bot record names as its channel", () => {
@@ -729,7 +706,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("unresolved");
   });
 
-  it("hands the under-the-hood view the paused flag too", async () => {
+  it("hands the under-the-hood view the bound host, paused or not", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -738,9 +715,9 @@ describe("<BotTabSurface /> paused", () => {
     render(surface());
 
     await user.click(screen.getByTestId("bot-tab-view-under-the-hood"));
-    expect(
-      screen.getByTestId("stub-under-the-hood").getAttribute("data-paused"),
-    ).toBe("true");
+    const panel = screen.getByTestId("stub-under-the-hood");
+    expect(panel.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
+    expect(panel.getAttribute("data-is-this-host")).toBe("false");
   });
 
   it("keeps the channel settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
@@ -866,9 +843,7 @@ describe("<BotTabSurface /> paused", () => {
 
     expect(mocks.open).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId("bot-tab-paused")).toBeNull();
-    expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
-      "false",
-    );
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
 });
 
