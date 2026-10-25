@@ -684,4 +684,21 @@ describe("<MoveSheet />", () => {
     expect(useMoveSheetStore.getState().target).toBeNull();
     expect(accepts).toEqual([]);
   });
+
+  it("says nothing moved, and leaves the sheet open, when the host has no move waiting", async () => {
+    const { accepts } = mount({
+      plans: [FIRST_PLAN],
+      acceptAnswers: [{ outcome: "not_awaiting" }],
+    });
+    await settle();
+
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await settle();
+
+    expect(accepts).toHaveLength(1);
+    expect(screen.getByTestId("move-sheet-not-awaiting").textContent).toBe(
+      "Old laptop has no move waiting to start, so nothing moved.",
+    );
+    expect(useMoveSheetStore.getState().target).not.toBeNull();
+  });
 });

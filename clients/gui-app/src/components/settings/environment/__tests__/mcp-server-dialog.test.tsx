@@ -394,6 +394,43 @@ describe("The MCP server dialog", () => {
     });
   });
 
+  it("saves a disabled server's name-only edit with its id and no toggles or providers, and never switches it on", async () => {
+    negotiate(PUT_1_1);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: [
+          declaredServer({ serverId: "srv-1", name: "github", item: null }),
+        ],
+        secrets: [],
+        answer: SAVED,
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.put"),
+      ).toHaveLength(1);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.put")[0],
+    ).toMatchObject({
+      serverId: "srv-1",
+      name: "github2",
+      toolToggles: {},
+      offFor: [],
+    });
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.setEnabled"),
+    ).toHaveLength(0);
+  });
+
   it("saves an edit that leaves the sign-in unchanged, keeping the item's toggles and providers", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(

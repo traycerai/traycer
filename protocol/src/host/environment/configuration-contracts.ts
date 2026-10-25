@@ -402,8 +402,11 @@ export type EnvironmentMcpServerCredentialV11 = z.infer<
  * (`[]`: every provider). The host keeps the server's `mcp_server` item with
  * it: a create puts one under the server's name (a name already taken
  * refuses the create, `name_taken`, and leaves no server behind), an update
- * puts the new toggles and `offFor` at the item's revision, a rename moves
- * the item to the new name.
+ * of a server with an item puts the new toggles and `offFor` at the item's
+ * revision, a rename moves the item to the new name. An update of a server
+ * with no item (switched off by `setEnabled`) updates the server only: it
+ * writes no item, so the server stays off with the tool toggles it kept, and
+ * the request's `toolToggles` and `offFor` are ignored.
  */
 export const environmentConfigurationMcpServerPutRequestSchemaV11 = lazySchema(
   () =>

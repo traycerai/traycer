@@ -420,4 +420,53 @@ describe("TeamGuide", () => {
       expect(view?.state.doc.toString()).toBe("Prefer opus");
     });
   });
+
+  it("says the guide could not be saved when the host answers not_served", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...guideHandlers(
+        { text: "Prefer sonnet", revision: "rev-1" },
+        { onSet: () => ({ outcome: "not_served" }) },
+      ),
+    });
+    render(<TeamGuide />, { wrapper: harness.Wrapper });
+
+    await waitFor(() => {
+      expect(
+        document.querySelector("[data-testid='team-guide-input']"),
+      ).not.toBeNull();
+    });
+    replaceText("Mine");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Couldn't save the guide.",
+    );
+    expect(harness.paramsOf("environment.configuration.guide.set")).toEqual([
+      { environmentId: "env-a", text: "Mine", revision: "rev-1" },
+    ]);
+  });
+
+  it("says the guide could not be reset and closes the confirmation when the host answers not_served", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...guideHandlers({ text: "Prefer sonnet", revision: "rev-1" }, {}),
+      "environment.configuration.guide.reset": () => ({
+        outcome: "not_served",
+      }),
+    });
+    render(<TeamGuide />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByTestId("team-guide-revert"));
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Reset to default",
+      }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Couldn't reset the guide.",
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
 });

@@ -28,6 +28,7 @@ import {
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
 import {
   configurationWriteIssue,
+  typedWriteIssue,
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
 import { McpServerDialog } from "./mcp-server-dialog";
@@ -288,7 +289,14 @@ function McpServerRow(props: {
           if (source.kind !== "pool") return;
           remove.mutate(
             { environmentId: source.environmentId, serverId: server.serverId },
-            { onSettled: () => setConfirming(false) },
+            {
+              // A refusal leaves the server and its credential in place.
+              onSuccess: (result) =>
+                props.onIssue(
+                  typedWriteIssue(result, "Couldn't remove this server."),
+                ),
+              onSettled: () => setConfirming(false),
+            },
           );
         }}
       />

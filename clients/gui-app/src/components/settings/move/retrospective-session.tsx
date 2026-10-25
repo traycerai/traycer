@@ -1,5 +1,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentReviewHeldApplyResponse } from "@traycer/protocol/host/environment-schemas";
+import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import {
   stillLocalFromPlanes,
   type EnvironmentPlanes,
@@ -110,6 +112,7 @@ export function RetrospectiveSession(props: {
         held={held}
         stillLocal={stillLocal}
         heldPendingId={heldPendingId}
+        heldIssue={heldApplyIssue(heldApply.data)}
         onOpenChange={props.onOpenChange}
         onShown={onShown}
         onAcknowledged={() => {
@@ -158,6 +161,16 @@ export function RetrospectiveSession(props: {
       />
     </>
   );
+}
+
+/**
+ * A held-row choice's answer under the rows. `gone` was settled elsewhere,
+ * and the reread drops its row.
+ */
+function heldApplyIssue(
+  answer: EnvironmentReviewHeldApplyResponse | undefined,
+): ConfigurationWriteIssue {
+  return answer?.outcome === "forbidden" ? { kind: "forbidden" } : null;
 }
 
 /**

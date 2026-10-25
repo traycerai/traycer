@@ -183,7 +183,8 @@ function mcpServerTarget(
 /**
  * The put a save sends. An edit keeps the server's variables, tool toggles
  * and the providers it is off for, and every field the person left as it
- * was; a create starts every provider's.
+ * was; a create starts every provider's. A switched-off server has no item
+ * to read them from, and the host keeps the ones it holds for it.
  */
 export function mcpServerPutRequest(
   form: McpServerForm,

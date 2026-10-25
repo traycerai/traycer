@@ -12,6 +12,7 @@ import {
   movesSectionRows,
   guideDiffersNote,
   nothingToMoveLine,
+  notAwaitingLine,
   PLAN_CHANGED_TEXT,
   planMovesASecret,
   planMovesNothing,
@@ -112,6 +113,7 @@ function MoveSheetBody(props: {
     () => new Map(),
   );
   const [planChanged, setPlanChanged] = useState(false);
+  const [notAwaiting, setNotAwaiting] = useState(false);
   const accept = useHostScopedMutationForClient(client, {
     method: "environment.move.accept",
     mutationKey: environmentMutationKeys.moveAccept(),
@@ -129,6 +131,10 @@ function MoveSheetBody(props: {
           // re-reads the plan the sheet shows.
           setPlanChanged(true);
           setChoices(new Map());
+          return;
+        }
+        if (response.outcome === "not_awaiting") {
+          setNotAwaiting(true);
           return;
         }
         props.onClose();
@@ -190,6 +196,15 @@ function MoveSheetBody(props: {
             data-testid="move-sheet-plan-changed"
           >
             {PLAN_CHANGED_TEXT}
+          </p>
+        ) : null}
+        {notAwaiting ? (
+          <p
+            role="status"
+            className="rounded-md border border-info/30 bg-info/10 px-3 py-2 text-ui-sm text-info-foreground"
+            data-testid="move-sheet-not-awaiting"
+          >
+            {notAwaitingLine(target.hostName)}
           </p>
         ) : null}
         {plan.data === undefined ? null : (

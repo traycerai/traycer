@@ -27,6 +27,8 @@ import {
   type HeldChoiceAction,
   type ReviewEvidence,
 } from "@/components/settings/move/retrospective-copy";
+import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,6 +88,8 @@ export function RetrospectiveSheet(props: {
   readonly held: readonly HeldRow[];
   readonly stillLocal: readonly StillLocalRow[];
   readonly heldPendingId: string | null;
+  /** A held-row choice the configuration refused, said under the rows. */
+  readonly heldIssue: ConfigurationWriteIssue;
   readonly onOpenChange: (open: boolean) => void;
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
@@ -214,6 +218,7 @@ export function RetrospectiveSheet(props: {
               </InventoryRow>
             ) : null}
           </dl>
+          <ConfigurationWriteFeedback issue={props.heldIssue} />
           <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
             {RETROSPECTIVE_DISCLOSURE}
           </p>

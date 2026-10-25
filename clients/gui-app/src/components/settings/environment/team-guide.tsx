@@ -14,7 +14,11 @@ import {
   useConfigurationSource,
   useConfigurationIsPersonal,
 } from "./configuration-source";
-import { ConfigurationConflict } from "./configuration-conflict";
+import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import {
+  typedWriteIssue,
+  type ConfigurationWriteIssue,
+} from "./configuration-write-issue";
 import { usePickedTeamLabel, useConfigurationName } from "./team-pick-label";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
@@ -29,7 +33,7 @@ export function TeamGuide(): ReactNode {
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const [picking, setPicking] = useState(false);
-  const [conflict, setConflict] = useState(false);
+  const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const notServed = query.data?.outcome === "not_served";
   let body: ReactNode = <MutedAgentSpinner />;
   if (scope.client === null || notServed)
@@ -53,7 +57,7 @@ export function TeamGuide(): ReactNode {
         key={`${scope.viewingHost?.hostId}:${query.data.revision}`}
         text={query.data.text}
         revision={query.data.revision}
-        onConflict={() => setConflict(true)}
+        onIssue={setIssue}
       />
     ) : (
       <MarkdownEditPreview
@@ -70,7 +74,7 @@ export function TeamGuide(): ReactNode {
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 p-5">
       <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
-      {conflict ? <ConfigurationConflict changedBy={null} /> : null}
+      <ConfigurationWriteFeedback issue={issue} />
       {body}
     </section>
   );
@@ -79,7 +83,8 @@ export function TeamGuide(): ReactNode {
 function TeamGuideEditor(props: {
   readonly text: string;
   readonly revision: string;
-  readonly onConflict: () => void;
+  /** A save's or a reset's answer: a lost compare-and-set, or not saved. */
+  readonly onIssue: (issue: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const personal = useConfigurationIsPersonal();
   const teamName = useConfigurationName();
@@ -96,9 +101,8 @@ function TeamGuideEditor(props: {
         revision: props.revision,
       },
       {
-        onSuccess: (result) => {
-          if (result.outcome === "conflict") props.onConflict();
-        },
+        onSuccess: (result) =>
+          props.onIssue(typedWriteIssue(result, "Couldn't save the guide.")),
       },
     );
   };
@@ -146,7 +150,14 @@ function TeamGuideEditor(props: {
           if (source.kind === "pool")
             reset.mutate(
               { environmentId: source.environmentId },
-              { onSuccess: () => setConfirm(false) },
+              {
+                onSuccess: (result) => {
+                  setConfirm(false);
+                  props.onIssue(
+                    typedWriteIssue(result, "Couldn't reset the guide."),
+                  );
+                },
+              },
             );
         }}
       />

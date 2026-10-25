@@ -538,6 +538,47 @@ describe("The MCP servers page", () => {
     });
   });
 
+  it.each([
+    {
+      outcome: "forbidden" as const,
+      line: "You no longer have access to change these settings.",
+    },
+    { outcome: "refused" as const, line: "Couldn't remove this server." },
+  ])(
+    "says $line on the page when the host answers a removal $outcome, keeping the server listed",
+    async ({ outcome, line }) => {
+      negotiateMethods(ALL_METHODS);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({
+          servers: () => [
+            declaredServer({ serverId: "srv-1", name: "github" }),
+          ],
+          hostServers: [],
+        }),
+        "environment.configuration.mcpServers.delete": () => ({
+          outcome,
+          reason: null,
+        }),
+      });
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Remove" }),
+      );
+      await userEvent.click(
+        within(await screen.findByRole("dialog")).getByRole("button", {
+          name: "Remove server",
+        }),
+      );
+
+      expect((await screen.findByRole("status")).textContent).toBe(line);
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(screen.getByText("github")).toBeTruthy();
+    },
+  );
+
   it("gives a viewer the servers with no Add, Edit, Remove or switch", async () => {
     negotiateMethods(ALL_METHODS);
     const harness = mountTeamPage(

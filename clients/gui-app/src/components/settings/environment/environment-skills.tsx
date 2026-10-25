@@ -50,7 +50,7 @@ import { TeamSkills } from "./team-skills";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
-import { skillWriteIssue } from "./configuration-write-issue";
+import { typedWriteIssue } from "./configuration-write-issue";
 
 /**
  * The providers on the viewing host that list skills at global scope, in
@@ -207,7 +207,7 @@ function SkillsPageList(props: {
   const removeIssue =
     remove.data === undefined
       ? null
-      : skillWriteIssue(remove.data, "Couldn't remove this skill.");
+      : typedWriteIssue(remove.data, "Couldn't remove this skill.");
   if (props.skills.length === 0)
     return (
       <p className="text-ui-sm text-muted-foreground">
@@ -450,7 +450,7 @@ function ProviderSkillsList(props: {
   const switchIssue =
     setProviders.data === undefined
       ? null
-      : skillWriteIssue(setProviders.data, "Couldn't save these settings.");
+      : typedWriteIssue(setProviders.data, "Couldn't save these settings.");
   const label = providerDisplayName(props.providerId);
   const heading = skillsCardHeading(name, label);
   return (

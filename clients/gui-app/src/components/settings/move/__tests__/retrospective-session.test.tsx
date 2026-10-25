@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -69,6 +70,21 @@ function renderSession(
   entries: readonly EnvironmentReviewEntryV12[],
   recorded: string[],
 ): HostClient<HostRpcRegistry> {
+  return renderSessionWith(status, entries, recorded, {
+    extraHandlers: {},
+    onOpenChange: vi.fn(),
+  });
+}
+
+function renderSessionWith(
+  status: EnvironmentStatusResponseV11,
+  entries: readonly EnvironmentReviewEntryV12[],
+  recorded: string[],
+  session: {
+    readonly extraHandlers: MockHandlerMap<HostRpcRegistry>;
+    readonly onOpenChange: (open: boolean) => void;
+  },
+): HostClient<HostRpcRegistry> {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => status,
     "environment.review": () => reviewOf(entries),
@@ -76,12 +92,14 @@ function renderSession(
       recorded.push(request.event);
       return { outcome: "recorded" };
     },
+    ...session.extraHandlers,
   };
   const { client } = buildEnvironmentClient({ hostId: "old", handlers });
   recordNegotiatedHostManifest("old", {
     "environment.status": { major: 1, minor: 1 },
     "environment.review": { major: 1, minor: 2 },
     "environment.review.record": { major: 1, minor: 0 },
+    "environment.review.heldApply": { major: 1, minor: 0 },
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -96,7 +114,7 @@ function renderSession(
         hostName="Old laptop"
         open
         held={null}
-        onOpenChange={vi.fn()}
+        onOpenChange={session.onOpenChange}
       />
     </QueryClientProvider>,
   );
@@ -297,5 +315,45 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           .textContent,
       ).toContain(line);
     }
+  });
+});
+
+describe("<RetrospectiveSession /> a held choice the host refuses", () => {
+  it("says the person no longer has access, and keeps the sheet open", async () => {
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    renderSessionWith(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "local",
+          room: "local",
+        },
+      }),
+      [
+        entryOf({
+          entryId: "value-1",
+          reason: "credential_like_value",
+          key: "DATABASE_URL",
+        }),
+      ],
+      [],
+      {
+        extraHandlers: {
+          "environment.review.heldApply": () => ({ outcome: "forbidden" }),
+        },
+        onOpenChange,
+      },
+    );
+
+    const row = await screen.findByTestId("retrospective-held-value-1");
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Keep as a variable" }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "You no longer have access to change these settings.",
+    );
+    expect(screen.getByTestId("retrospective-sheet")).toBeTruthy();
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });

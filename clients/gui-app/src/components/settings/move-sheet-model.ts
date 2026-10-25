@@ -22,6 +22,11 @@ export const MOVE_ACCEPTS_AS_SHOWN =
 
 export const PLAN_CHANGED_TEXT = "This list changed. Read it again.";
 
+/** A move this computer is no longer waiting to start: nothing was moved. */
+export function notAwaitingLine(hostName: string): string {
+  return `${hostName} has no move waiting to start, so nothing moved.`;
+}
+
 /** `MacBook Pro`, `MacBook Pro and dev-box`, `A, B and C`. */
 function joinHostNames(hostNames: readonly string[]): string {
   const last = hostNames[hostNames.length - 1] ?? "";
