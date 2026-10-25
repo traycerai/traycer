@@ -88,6 +88,16 @@ import {
   makeMessageAt,
 } from "./chat-message-fixtures";
 import {
+  LOCAL_VOICE,
+  createSynth,
+  installSpeech,
+} from "./fake-speech-synthesis";
+import {
+  readingOwnerId,
+  startReadingAloud,
+  stopReadingAloud,
+} from "@/lib/speech/read-aloud";
+import {
   enableLegendListBrowserScrollEvents,
   installLegendListViewportMetrics,
   setLegendListScrollContainerScrollHeightOverride,
@@ -8154,6 +8164,86 @@ describe("ChatMessages scroll policy", () => {
         maxScrollTopFor(getScrollNode()),
       );
       second.unmount();
+    });
+  });
+
+  describe("reading a reply aloud", () => {
+    // `ChatMessage` is mocked in this file, so the reply's own Play control is
+    // not drawn; the reading starts through the store, owned by the reply row
+    // and scoped to the transcript's tile, as the control would start it.
+    function startReadingIn(conversation: string): void {
+      startReadingAloud({
+        ownerId: "reply-row-1",
+        conversation,
+        paragraphs: ["First reply.", "It has two paragraphs."],
+        preferredLanguage: "en-US",
+      });
+    }
+
+    function transcriptWithReply(): ChatMessageModel[] {
+      return [
+        { ...makeMessage(0, "user"), completedAt: null, runState: null },
+        { ...makeMessage(1, "assistant"), completedAt: 1_001, runState: null },
+      ];
+    }
+
+    afterEach(() => {
+      stopReadingAloud("reply-row-1");
+      installSpeech(null);
+    });
+
+    it("stops reading an earlier reply when a new reply arrives, without its Play being pressed", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      const messages = transcriptWithReply();
+      const { rerenderMessages, instanceId } = renderChatMessages({
+        messages,
+      });
+      startReadingIn(instanceId);
+      expect(readingOwnerId()).toBe("reply-row-1");
+      const cancelsBeforeNewReply = synth.cancelCount();
+
+      rerenderMessages(
+        appendAssistant(
+          [
+            ...messages,
+            { ...makeMessage(2, "user"), completedAt: null, runState: null },
+          ],
+          "message-3",
+          3,
+        ),
+      );
+
+      expect(synth.cancelCount()).toBe(cancelsBeforeNewReply + 1);
+      expect(readingOwnerId()).toBeNull();
+    });
+
+    it("keeps reading when the transcript re-renders with the same latest reply", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      const messages = transcriptWithReply();
+      const { rerenderMessages, instanceId } = renderChatMessages({
+        messages,
+      });
+      startReadingIn(instanceId);
+      const cancelsBeforeRerender = synth.cancelCount();
+
+      rerenderMessages([...messages]);
+
+      expect(synth.cancelCount()).toBe(cancelsBeforeRerender);
+      expect(readingOwnerId()).toBe("reply-row-1");
+    });
+
+    it("keeps reading a reply of another chat when this chat gets a new reply", () => {
+      const synth = createSynth([LOCAL_VOICE]);
+      installSpeech(synth);
+      const messages = transcriptWithReply();
+      const { rerenderMessages } = renderChatMessages({ messages });
+      startReadingIn("another-chat-tile");
+
+      rerenderMessages(appendAssistant(messages, "message-3", 3));
+
+      expect(readingOwnerId()).toBe("reply-row-1");
     });
   });
 });
