@@ -345,6 +345,27 @@ function scrolledThrough(editor: RulesEditorState | null): number {
   return editor?.scrollRequest?.nonce ?? 0;
 }
 
+/** A reset needs a fresh, checked policy and current write support. */
+function policyResetBlockedReason(input: {
+  readonly canWrite: boolean;
+  readonly record: AutoPolicyGetResponse | undefined;
+  readonly readFailed: boolean;
+  readonly openingRead: AutoPolicyOpeningRead;
+}): string | null {
+  if (!input.canWrite) return "This host can't change your rules.";
+  if (
+    input.record === undefined ||
+    input.readFailed ||
+    autoPolicyReadStateFor(input.record) !== "fresh"
+  ) {
+    return "Read your current rules before resetting them.";
+  }
+  if (input.openingRead !== "settled") {
+    return "Wait until your current rules have been checked.";
+  }
+  return null;
+}
+
 function RulesEditor(props: {
   readonly hostId: string | null;
   readonly active: boolean;
@@ -412,6 +433,16 @@ function RulesEditor(props: {
   }
 
   const saving = setPolicy.isPending;
+  // Use the live read even while the confirmation is open: the record or
+  // this host's write support may change after Reset was first offered.
+  const readState =
+    data === undefined ? editor.readState : autoPolicyReadStateFor(data);
+  const resetBlockedReason = policyResetBlockedReason({
+    canWrite,
+    record: data,
+    readFailed: query.isError,
+    openingRead,
+  });
   const commit = (): void => {
     const body = joinAutoPolicySections(editor.sections);
     setPolicy.mutate(
@@ -433,6 +464,7 @@ function RulesEditor(props: {
   // Reset saves the empty policy: the custom rules go, and the built-in ones
   // they sat on top of are the default.
   const reset = (): void => {
+    if (saving || resetBlockedReason !== null) return;
     setPolicy.mutate(
       { body: "" },
       {
@@ -461,11 +493,6 @@ function RulesEditor(props: {
       }),
     );
   };
-  // The LIVE record's state gates Save, not the one the edit started from: a
-  // read that turns unreadable or stale behind a dirty edit must stop a save
-  // over a policy this window can no longer see.
-  const readState =
-    data === undefined ? editor.readState : autoPolicyReadStateFor(data);
   const showNotes =
     editor.baseline.notes.length > 0 || editor.sections.notes.length > 0;
   const unrepresentable = unrepresentableLines(editor.sections);
@@ -561,7 +588,7 @@ function RulesEditor(props: {
         cascadeSummary={null}
         actionLabel="Reset to default"
         isPending={saving}
-        blockedReason={null}
+        blockedReason={resetBlockedReason}
         onConfirm={reset}
       />
     </div>

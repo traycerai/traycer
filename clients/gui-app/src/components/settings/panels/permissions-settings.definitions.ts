@@ -14,8 +14,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Permissions",
-    description:
-      "What your agents may do without asking, on every computer and sandbox.",
+    description: "What your agents may do without asking.",
     // Browser agent access is a region of this page, below the tabs.
     keywords: [
       "permissions",

@@ -4070,9 +4070,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
-  may do without asking, on every computer and sandbox running Personal."
+  may do without asking, on every computer and sandbox."
   Rules carries **Reset to default**, which saves the empty policy after a
-  confirm (the custom rules go; the built-in ones stay). Its own page, not rows on Agent selection: that
+  confirm (the custom rules go; the built-in ones stay). The confirmation
+  stays blocked if the current policy cannot be read freshly, its opening
+  read has not completed, or the host no longer supports the write. Shared
+  search metadata makes no scope claim. Its own page, not rows on Agent selection: that
   page is about which agent gets CHOSEN for a task, and permissions are a
   different question, asked at a different time (a user decision, 2026-09-12).
   Four tabs, one per question, in this order: **Modes**, **Judge**, **Rules**,

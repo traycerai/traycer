@@ -69,8 +69,9 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 // ---- queries --------------------------------------------------------------
 
 const policy = vi.hoisted(
-  (): { current: AutoPolicyGetResponse | undefined } => ({
+  (): { current: AutoPolicyGetResponse | undefined; readError: boolean } => ({
     current: undefined,
+    readError: false,
   }),
 );
 const refetchMock = vi.hoisted(() =>
@@ -83,7 +84,7 @@ const refetchMock = vi.hoisted(() =>
 vi.mock("@/hooks/auto-mode/use-auto-policy-query", () => ({
   useAutoPolicyQuery: () => ({
     data: policy.current,
-    isError: false,
+    isError: policy.readError,
     refetch: refetchMock,
   }),
 }));
@@ -206,6 +207,7 @@ beforeEach(() => {
   support.get = true;
   support.set = true;
   policy.current = record({});
+  policy.readError = false;
   setPolicyMutate.mockReset();
   setPolicyState.isPending = false;
   refetchMock.mockReset();
@@ -347,6 +349,76 @@ describe("RulesTab", () => {
       });
       expect(input("allow").value).toBe("");
       expect(button("auto-policy-reset").disabled).toBe(true);
+    });
+
+    it.each([
+      ["the live policy becomes stale", "stale-policy"],
+      ["the live policy becomes unreadable", "unreadable-policy"],
+      ["this host loses write support", "write-support"],
+    ] as const)(
+      "blocks an open confirmation when %s",
+      async (_description, change) => {
+        const { rerender } = render(tab({}));
+        await settledSave();
+        fireEvent.click(button("auto-policy-reset"));
+
+        const dialog = await screen.findByRole("dialog");
+        const confirm = within(dialog).getByRole<HTMLButtonElement>("button", {
+          name: "Reset to default",
+        });
+        expect(confirm.disabled).toBe(false);
+
+        if (change === "stale-policy") {
+          policy.current = record({ readState: "stale" });
+        } else if (change === "unreadable-policy") {
+          policy.current = undefined;
+          policy.readError = true;
+        } else {
+          support.set = false;
+        }
+        rerender(tab({}));
+
+        await waitFor(() => {
+          expect(confirm.disabled).toBe(true);
+        });
+        expect(
+          within(dialog).getByTestId("confirm-blocked-reason").textContent,
+        ).toBe(
+          change === "write-support"
+            ? "This host can't change your rules."
+            : "Read your current rules before resetting them.",
+        );
+        fireEvent.click(confirm);
+        expect(setPolicyMutate).not.toHaveBeenCalled();
+      },
+    );
+
+    it("re-enables Reset after a stale policy is read fresh again", async () => {
+      const { rerender } = render(tab({}));
+      await settledSave();
+      fireEvent.click(button("auto-policy-reset"));
+
+      const dialog = await screen.findByRole("dialog");
+      const confirm = within(dialog).getByRole<HTMLButtonElement>("button", {
+        name: "Reset to default",
+      });
+      policy.current = record({ readState: "stale" });
+      rerender(tab({}));
+
+      await waitFor(() => {
+        expect(confirm.disabled).toBe(true);
+      });
+      expect(setPolicyMutate).not.toHaveBeenCalled();
+
+      policy.current = record({});
+      rerender(tab({}));
+
+      await waitFor(() => {
+        expect(confirm.disabled).toBe(false);
+      });
+      fireEvent.click(confirm);
+      expect(setPolicyMutate).toHaveBeenCalledTimes(1);
+      expect(setPolicyMutate.mock.calls[0][0]).toEqual({ body: "" });
     });
   });
 
