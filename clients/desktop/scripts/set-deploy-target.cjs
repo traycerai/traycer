@@ -121,6 +121,8 @@ function writeStagingIapKey() {
   // refused. File mode is not what keeps the key; packaging it only into a
   // staging build is.
   fs.writeFileSync(iapKeyPath, raw, { mode: 0o644 });
+  // The creation mode is masked by the umask; set it outright.
+  fs.chmodSync(iapKeyPath, 0o644);
 }
 
 // The stamp file is what `release-target-electron-builder.cjs` and the

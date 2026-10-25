@@ -137,6 +137,10 @@ function runWithIapKey(
   args: readonly string[],
   key: string | undefined,
 ) {
+  return withIapKeyEnv(key, () => run(fixture, args));
+}
+
+function withIapKeyEnv<T>(key: string | undefined, body: () => T): T {
   const saved = process.env.TRAYCER_IAP_SA_KEY;
   if (key === undefined) {
     Reflect.deleteProperty(process.env, "TRAYCER_IAP_SA_KEY");
@@ -144,7 +148,7 @@ function runWithIapKey(
     process.env.TRAYCER_IAP_SA_KEY = key;
   }
   try {
-    return run(fixture, args);
+    return body();
   } finally {
     if (saved === undefined) {
       Reflect.deleteProperty(process.env, "TRAYCER_IAP_SA_KEY");
@@ -155,20 +159,34 @@ function runWithIapKey(
 }
 
 function run(fixture: Fixture, args: readonly string[]) {
-  return spawnSync(
+  return spawnStamper(fixture, args, null);
+}
+
+/** The stamper as CI runs it, under `umask` when one is given. */
+function spawnStamper(
+  fixture: Fixture,
+  args: readonly string[],
+  umask: string | null,
+) {
+  const command = [
     process.execPath,
-    [join(fixture.projectDir, "scripts", "set-deploy-target.cjs"), ...args],
-    {
-      cwd: fixture.projectDir,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        TRAYCER_RELEASE_REPO: "acme/private-traycer",
-        TRAYCER_DESKTOP_SENTRY_DSN: "https://sentry/staging",
-        TRAYCER_DESKTOP_SENTRY_RENDERER_DSN: "https://sentry-renderer/staging",
-      },
+    join(fixture.projectDir, "scripts", "set-deploy-target.cjs"),
+    ...args,
+  ];
+  const [file, ...argv] =
+    umask === null
+      ? command
+      : ["/bin/sh", "-c", 'umask "$0"; exec "$@"', umask, ...command];
+  return spawnSync(file, argv, {
+    cwd: fixture.projectDir,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TRAYCER_RELEASE_REPO: "acme/private-traycer",
+      TRAYCER_DESKTOP_SENTRY_DSN: "https://sentry/staging",
+      TRAYCER_DESKTOP_SENTRY_RENDERER_DSN: "https://sentry-renderer/staging",
     },
-  );
+  });
 }
 
 function runWithoutReleaseRepo(fixture: Fixture, args: readonly string[]) {
@@ -316,6 +334,18 @@ describe("set-deploy-target IAP service-account key", () => {
       `iapAudience: "${IAP_AUDIENCE}"`,
     );
     expect(readFileSync(iapKeyPath(fixture), "utf8")).toBe(IAP_KEY_FIXTURE);
+    expect(statSync(iapKeyPath(fixture)).mode & 0o777).toBe(0o644);
+  });
+
+  it("writes the key readable under a restrictive umask, which masks a creation mode", () => {
+    const fixture = createFixture("desktop");
+    withIapAudience(fixture);
+
+    const result = withIapKeyEnv(IAP_KEY_FIXTURE, () =>
+      spawnStamper(fixture, stagingArgs(fixture), "077"),
+    );
+
+    expect(result.status).toBe(0);
     expect(statSync(iapKeyPath(fixture)).mode & 0o777).toBe(0o644);
   });
 
