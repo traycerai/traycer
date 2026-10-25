@@ -309,7 +309,6 @@ function canvasCommentSurfaces(
 ) {
   return {
     draft: events?.renderCommentDraft?.(),
-    sidebar: fullscreen ? events?.renderCommentsSidebar?.() : null,
     // Point pins live outside every board, so a fullscreen board shows none.
     pointPins: fullscreen ? null : events?.renderCanvasPins?.(page, viewport),
   };
@@ -545,14 +544,17 @@ export function CanvasArtifactEditor({
     (path: string): void => {
       const board = snapshot.boards[path];
       if (!Object.hasOwn(snapshot.boards, path)) return;
-      setChosenPage(board.page ?? snapshot.pages.at(0)?.id ?? "");
+      const boardPage = board.page ?? snapshot.pages.at(0)?.id ?? "";
+      setChosenPage(boardPage);
       const frame = boardFrame(board);
+      // A move on the current page glides so the eye can follow it; a page
+      // switch remounts the boards, so there is nothing to animate through.
       void flow?.setCenter(frame.x + frame.w / 2, frame.y + frame.h / 2, {
         zoom: Math.min(1, viewport.zoom),
-        duration: 0,
+        duration: boardPage === page ? 300 : 0,
       });
     },
-    [snapshot, flow, viewport.zoom],
+    [snapshot, flow, viewport.zoom, page],
   );
   const stopPlay = useCallback((): void => {
     if (playingBoard === null) return;
@@ -1133,7 +1135,6 @@ export function CanvasArtifactEditor({
               container={presentation.container}
             />
             <div className="flex min-h-0 flex-1">
-              {commentSurfaces.sidebar}
               <div
                 ref={stageRef}
                 className={cn(

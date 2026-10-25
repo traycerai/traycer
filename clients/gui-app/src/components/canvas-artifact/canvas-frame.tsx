@@ -89,7 +89,6 @@ export interface CanvasFrameEvents {
     panel: CanvasPanelControls,
   ) => ReactNode;
   readonly renderCommentDraft?: () => ReactNode;
-  readonly renderCommentsSidebar?: () => ReactNode;
   /** The independent commenting-mode control. */
   readonly renderToolbarControls?: () => ReactNode;
 }

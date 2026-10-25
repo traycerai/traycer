@@ -270,8 +270,21 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
 
   const quotedText = threadQuotedText(artifactType, thread);
 
+  // A pin click (or any other activation) expands the card from outside the
+  // sidebar's own scroll, so the list scrolls to the thread it just opened.
+  const wasExpanded = useRef(isExpanded);
+  const scrollOnExpand = useCallback(
+    (node: HTMLElement | null): void => {
+      const appeared = isExpanded && !wasExpanded.current;
+      wasExpanded.current = isExpanded;
+      if (appeared) node?.scrollIntoView({ block: "nearest" });
+    },
+    [isExpanded],
+  );
+
   return (
     <article
+      ref={scrollOnExpand}
       data-slot="comment-thread-card"
       data-resolved={thread.resolved ? "true" : undefined}
       data-expanded={isExpanded ? "true" : undefined}
