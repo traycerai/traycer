@@ -592,9 +592,10 @@ export interface IRunnerHost {
 
   /**
    * Why this build cannot reach the sandbox control plane at all, or `null`
-   * when it can. Set on a staging build (`SANDBOXES_UNAVAILABLE_IN_STAGING`):
-   * every sandbox call is refused there before it is sent, and the sandbox
-   * surfaces show this line instead of failing one request at a time.
+   * when it can. Set on a staging mobile build
+   * (`SANDBOXES_UNAVAILABLE_IN_STAGING`): every sandbox call is refused there
+   * before it is sent, and the sandbox surfaces show this line instead of
+   * failing one request at a time.
    */
   readonly sandboxControlUnavailableReason: string | null;
 
