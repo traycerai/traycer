@@ -673,10 +673,11 @@ const carriedPlaceholderRowsByCarry = new WeakMap<
  * appears elsewhere; for an authoritative one it fires only in the
  * invalidated merge, whose live tail keeps rows the skeleton names.
  *
- * A carried id claims only the ordinal {@link skeletonOrdinalByRowId} gives it
- * in the carry. A restream merges into the array it replaces, so a chunk that
- * moves a row earlier leaves its old entry standing until the stream passes
- * it, and a void mid-stream carries both copies.
+ * An id claims only the ordinal {@link skeletonOrdinalByRowId} gives it in its
+ * own array, authoritative or carried; any other copy takes rule 3. A restream
+ * merges into the array it replaces, so a chunk that moves a row earlier
+ * leaves its old entry standing until the stream passes it, and a void
+ * mid-stream carries both copies.
  *
  * The id checks are O(1) per ordinal, so the `rowCount` loop stays the only
  * whole-chat pass per render, and it allocates no row an earlier render built.
@@ -702,7 +703,10 @@ function placeholderRowsFor(
   return (ordinal) => {
     const entry = window.skeleton[ordinal];
     if (entry !== undefined) {
-      if (!isDrawn(entry.rowId)) {
+      if (
+        skeletonOrdinals.get(entry.rowId) === ordinal &&
+        !isDrawn(entry.rowId)
+      ) {
         let row = indexed.get(ordinal);
         if (row === undefined) {
           row = {
