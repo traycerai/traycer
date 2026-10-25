@@ -33,6 +33,10 @@ const hoisted = vi.hoisted(() => ({
     (_args: { readonly intent: unknown }) => () => undefined,
   ),
   createChatVersion: null as { major: number; minor: number } | null,
+  setSelectionVersion: { major: 2, minor: 2 } as {
+    major: number;
+    minor: number;
+  } | null,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -42,8 +46,13 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSchemaVersion: (): SchemaVersion | null =>
-    hoisted.createChatVersion,
+  useHostMethodSchemaVersion: (
+    _hostId: string | null,
+    method: string,
+  ): SchemaVersion | null =>
+    method === "providers.setSelection"
+      ? hoisted.setSelectionVersion
+      : hoisted.createChatVersion,
 }));
 vi.mock("@/lib/commands/actions/new-chat", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/commands/actions/new-chat")>()),
@@ -149,6 +158,7 @@ describe("ContinueOnOpencodeTwoTabMenu", () => {
   beforeEach(() => {
     queryClient = new QueryClient();
     hoisted.createChatVersion = { major: 1, minor: 3 };
+    hoisted.setSelectionVersion = { major: 2, minor: 2 };
   });
   afterEach(() => {
     cleanup();
@@ -206,6 +216,13 @@ describe("ContinueOnOpencodeTwoTabMenu", () => {
   ])("is hidden for %s", async (_label, overrides, version) => {
     hoisted.createChatVersion = version;
     openSession(overrides);
+    await openMenu();
+    expect(screen.queryByText("Continue on OpenCode 2")).toBeNull();
+  });
+
+  it("is hidden on a host whose providers.setSelection moves existing chats", async () => {
+    hoisted.setSelectionVersion = { major: 2, minor: 3 };
+    openSession({ opencodeLine: 1 });
     await openMenu();
     expect(screen.queryByText("Continue on OpenCode 2")).toBeNull();
   });

@@ -27,6 +27,8 @@ import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-c
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
 import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detect-version-query";
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { providersSetSelectionMovesChats } from "@/lib/chat/opencode-line";
 import {
   providerPackBlocksExecution,
   providerPackPreparingForProvider,
@@ -347,6 +349,82 @@ function isManagedLineSelected(
 }
 
 /**
+ * How a pick behaves on this provider's rows: `linesMoveChats` where the host's
+ * `providers.setSelection` is at 2.3 and the provider shows Managed lines
+ * (OpenCode), and the row's `chatsFollow`.
+ */
+type ManagedPickMode = {
+  readonly linesMoveChats: boolean;
+  readonly chatsFollow: boolean;
+};
+
+/**
+ * Whether existing chats follow the saved selection: the host says they do
+ * (`chatsFollow`), and the selection names something to follow. A plain
+ * Managed selection names no line, so it is never followed.
+ */
+function selectionFollowed(
+  selection: ProviderSelection,
+  chatsFollow: boolean,
+): boolean {
+  return (
+    chatsFollow &&
+    !(selection.kind === "bundled" && selection.line === undefined)
+  );
+}
+
+/** Whether `selection` is exactly what picking `row` saves. */
+function selectionIsRow(
+  selection: ProviderSelection,
+  row: ProviderSelection,
+): boolean {
+  switch (selection.kind) {
+    case "bundled":
+      return row.kind === "bundled" && row.line === selection.line;
+    case "path":
+      return row.kind === "path";
+    case "custom":
+      return row.kind === "custom" && row.path === selection.path;
+  }
+}
+
+/**
+ * Whether a row's radio is checked where a pick moves existing chats: only the
+ * followed selection's row. A plain selection, or one an older client saved,
+ * checks no row, so any pick is a change that saves a followed selection.
+ */
+function isFollowedRow(
+  selection: ProviderSelection,
+  row: ProviderSelection,
+  chatsFollow: boolean,
+): boolean {
+  return (
+    selectionFollowed(selection, chatsFollow) && selectionIsRow(selection, row)
+  );
+}
+
+/** The caption under the Managed rows. */
+function managedLinesCaption(
+  selection: ProviderSelection,
+  managedPick: ManagedPickMode,
+): string {
+  if (!managedPick.linesMoveChats) {
+    return "New chats use the Managed line you pick; existing chats keep the line they started on.";
+  }
+  if (selectionFollowed(selection, managedPick.chatsFollow)) {
+    return "Your chats use the line you pick, including existing ones from their next message.";
+  }
+  switch (selection.kind) {
+    case "bundled":
+      return `New chats use Managed ${String(selection.line ?? DEFAULT_MANAGED_LINE)}.x until you pick one.`;
+    case "path":
+      return "New chats use the OpenCode on your PATH until you pick one.";
+    case "custom":
+      return `New chats use ${selection.path} until you pick one.`;
+  }
+}
+
+/**
  * An empty candidate list means "nothing runnable was found on this machine",
  * not "nothing detected yet": the host only omits the bundled row for the
  * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
@@ -502,6 +580,9 @@ export function ProviderCliCandidatesSection({
   // perfectly capable host it is too old for the moments before its handshake
   // lands.
   const supportsVersionManager = useProviderPackVersionManagerSupport(hostId);
+  const setSelectionMovesChats = providersSetSelectionMovesChats(
+    useHostMethodSchemaVersion(hostId, "providers.setSelection"),
+  );
   const focusDraftInput = useCallback((node: HTMLInputElement | null): void => {
     node?.focus();
   }, []);
@@ -572,6 +653,10 @@ export function ProviderCliCandidatesSection({
     hostId,
     supportsVersionManager,
   });
+  const managedPick: ManagedPickMode = {
+    linesMoveChats: setSelectionMovesChats && managedLines.length > 0,
+    chatsFollow: state.chatsFollow === true,
+  };
   const candidateArea = candidateAreaFor({
     adding,
     probePending: state.availabilityPending,
@@ -595,6 +680,7 @@ export function ProviderCliCandidatesSection({
             state.versionVisibility?.differingSessionCount ?? 0,
           radioName,
           selection: cliConfig.selected,
+          managedPick,
           busy: setSelection.isPending || removeCustom.isPending,
           onSelect,
           onRetryPack: () => ensurePack.mutate({ providerId }),
@@ -621,8 +707,7 @@ export function ProviderCliCandidatesSection({
       />
       {managedLines.length === 0 ? null : (
         <p className="mt-2 text-ui-xs text-muted-foreground">
-          New chats use the Managed line you pick; existing chats keep the line
-          they started on.
+          {managedLinesCaption(cliConfig.selected, managedPick)}
         </p>
       )}
       <AddCustomPathButton
@@ -645,6 +730,7 @@ type CandidateTableProps = {
   readonly differingSessionCount: number;
   readonly radioName: string;
   readonly selection: ProviderSelection;
+  readonly managedPick: ManagedPickMode;
   readonly busy: boolean;
   readonly onSelect: (selection: ProviderSelection) => void;
   readonly onRetryPack: () => void;
@@ -735,6 +821,7 @@ function CandidateTable({
   differingSessionCount,
   radioName,
   selection,
+  managedPick,
   busy,
   onSelect,
   onRetryPack,
@@ -788,6 +875,15 @@ function CandidateTable({
           radioName={radioName}
           selection={selection}
           selected={isManagedLineSelected(selection, row.line)}
+          checked={
+            managedPick.linesMoveChats
+              ? isFollowedRow(
+                  selection,
+                  { kind: "bundled", line: row.line },
+                  managedPick.chatsFollow,
+                )
+              : isManagedLineSelected(selection, row.line)
+          }
           busy={busy}
           onSelect={onSelect}
           onRetryPack={onRetryPack}
@@ -816,6 +912,15 @@ function CandidateTable({
             radioName={radioName}
             selection={selection}
             selected={isSelected(selection, candidate)}
+            checked={
+              managedPick.linesMoveChats
+                ? isFollowedRow(
+                    selection,
+                    selectionFor(candidate),
+                    managedPick.chatsFollow,
+                  )
+                : isSelected(selection, candidate)
+            }
             busy={busy}
             onSelect={onSelect}
             onRetryPack={onRetryPack}
@@ -959,6 +1064,7 @@ function CandidateRow({
   radioName,
   selection,
   selected,
+  checked,
   busy,
   onSelect,
   onRetryPack,
@@ -985,7 +1091,10 @@ function CandidateRow({
   readonly differingSessionCount: number;
   readonly radioName: string;
   readonly selection: ProviderSelection;
+  /** Whether this row is the one that runs, for its status line. */
   readonly selected: boolean;
+  /** Whether this row's radio is checked. */
+  readonly checked: boolean;
   readonly busy: boolean;
   readonly onSelect: (selection: ProviderSelection) => void;
   readonly onRetryPack: () => void;
@@ -1018,7 +1127,7 @@ function CandidateRow({
         managedLine={managedLine}
         rowSelection={rowSelection}
         radioName={radioName}
-        selected={selected}
+        checked={checked}
         busy={busy}
         onSelect={onSelect}
       />
@@ -1109,7 +1218,7 @@ function CandidateSelectionControl({
   managedLine,
   rowSelection,
   radioName,
-  selected,
+  checked,
   busy,
   onSelect,
 }: {
@@ -1117,7 +1226,7 @@ function CandidateSelectionControl({
   readonly managedLine: OpencodeLine | null;
   readonly rowSelection: ProviderSelection;
   readonly radioName: string;
-  readonly selected: boolean;
+  readonly checked: boolean;
   readonly busy: boolean;
   readonly onSelect: (selection: ProviderSelection) => void;
 }): ReactNode {
@@ -1136,7 +1245,7 @@ function CandidateSelectionControl({
         type="radio"
         aria-label={label}
         name={radioName}
-        checked={selected}
+        checked={checked}
         disabled={busy}
         onChange={() => onSelect(rowSelection)}
         className="size-3.5 cursor-pointer accent-primary"
