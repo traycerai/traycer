@@ -100,13 +100,16 @@ const hostClient: MockHostClient = {
   onChange: () => () => undefined,
 };
 
-// The picker's sandbox staging reads the account and the catalogue; this suite
-// stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+// The picker calls sandbox data hooks even when staging is null. These cases
+// exercise the draft id flip, so keep those reads inert.
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: undefined }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
+  useSandboxDefaultsLookup: () => () => null,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
