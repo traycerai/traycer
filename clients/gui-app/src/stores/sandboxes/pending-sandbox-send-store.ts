@@ -3,14 +3,25 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { CreateChatForkSourceV11 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import { PENDING_SEND_SURFACE_PREFIX } from "@/stores/composer/staged-sandbox-store";
 
 /** What a pending send makes on its sandbox once the requested agent is ready. */
 export type PendingSandboxSendRequest =
-  /** A new agent with the message as its first turn. */
-  | { readonly kind: "chat"; readonly parentId: string | null }
+  /**
+   * A new agent with the message as its first turn. `placement` is the pane
+   * the surface named for its tile (the in-pane New agent), or `null` for the
+   * conversation placement setting, as the ordinary create takes it.
+   */
+  | {
+      readonly kind: "chat";
+      readonly parentId: string | null;
+      readonly placement: ExplicitTilePlacement | null;
+    }
   /**
    * A terminal on the sandbox, in place of an agent (`Open terminal
    * instead`): no message, and no agent sign-in.
@@ -83,8 +94,8 @@ interface PendingSandboxSendStoreState {
   ) => void;
   /** Ends a send: it was withdrawn, or handed to another host. */
   readonly remove: (id: string) => void;
-  /** Drops every send: the account changed. */
-  readonly clearAll: () => void;
+  /** Drops the delivered sends, whose ready lines are the account's: it changed. */
+  readonly clearDelivered: () => void;
 }
 
 function withoutOldDeliveries(
@@ -133,7 +144,14 @@ export const usePendingSandboxSendStore =
             delete next[id];
             return { sends: next };
           }),
-        clearAll: () => set({ sends: {} }),
+        clearDelivered: () =>
+          set((state) => ({
+            sends: Object.fromEntries(
+              Object.entries(state.sends).filter(
+                ([, send]) => send.delivery === null,
+              ),
+            ),
+          })),
       }),
       {
         ...basePersistOptions(persistKey(STORE_KEYS.pendingSandboxSend)),
@@ -150,6 +168,17 @@ export const usePendingSandboxSendStore =
       },
     ),
   );
+
+// A send's message is the only copy of it once its draft is gone: its images
+// stay rooted against the landing GC until it is delivered, when its agent's
+// first-turn handoff roots them, or ends.
+registerExtraImageRootSource({
+  hashes: () =>
+    Object.values(usePendingSandboxSendStore.getState().sends).flatMap(
+      (send) =>
+        send.delivery === null ? blobHashesFromContent(send.content) : [],
+    ),
+});
 
 /** The stage key a pending send's create runs under. */
 export function pendingSendSurfaceKey(id: string): string {

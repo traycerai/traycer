@@ -121,9 +121,12 @@ export function EpicSessionLifecycleBridge(
       // create key and the host it made; account B would otherwise send into
       // A's team or resubmit A's create.
       useStagedSandboxStore.getState().clearAll();
-      // A message sent to a sandbox is the outgoing account's, waiting to be
-      // delivered under its sign-in.
-      usePendingSandboxSendStore.getState().clearAll();
+      // A message sent to a sandbox is the outgoing account's. Delivered, its
+      // ready line goes. Undelivered, it is the message's only copy: it stays
+      // for its own account, whose driver alone takes it up, and its next
+      // sign-in gives the message back (its stage went above). Handed to a
+      // composer here, the next account's drafts would carry it.
+      usePendingSandboxSendStore.getState().clearDelivered();
       // So does a terminal a sandbox row asked the landing panel for: account
       // B's panel would otherwise open one on A's sandbox.
       useLandingPanelStore.getState().clearTerminalRequest();

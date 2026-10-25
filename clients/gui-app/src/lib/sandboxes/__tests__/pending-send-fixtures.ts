@@ -96,7 +96,7 @@ export function pendingSend(
     id: "send-1",
     userId: "user-1",
     epicId: "epic-1",
-    request: { kind: "chat", parentId: null },
+    request: { kind: "chat", parentId: null, placement: null },
     content: MESSAGE_CONTENT,
     text: "fix the login bug",
     settings: PICKED_SETTINGS,

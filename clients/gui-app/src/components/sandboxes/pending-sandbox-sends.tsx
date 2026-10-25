@@ -66,6 +66,7 @@ import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   endPendingSandboxSend,
   pendingSandboxSendHandedHere,
+  returnPendingSandboxSend,
   requestedAgentReadiness,
   type RequestedAgentReadiness,
 } from "@/lib/sandboxes/pending-sandbox-send";
@@ -87,7 +88,6 @@ import {
 } from "@/stores/composer/staged-sandbox-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import {
@@ -149,8 +149,9 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
   const epicConfirmed = send?.epicConfirmed;
   const lostTask =
     send !== null && !epicConfirmed && !pendingSandboxSendHandedHere(props.id);
+  // Its message goes back to a start-task draft: the send held its only copy.
   useEffect(() => {
-    if (lostTask) endPendingSandboxSend(props.id);
+    if (lostTask) returnPendingSandboxSend(props.id);
   }, [lostTask, props.id]);
   useEffect(() => {
     if (epicId === null || !epicConfirmed) return;
@@ -169,11 +170,11 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
       runner(surfaceKey, false, { ...request, resume: true });
     }
   }, [epicConfirmed, epicId, failed, phase, runner, surfaceKey, text]);
-  // A send whose stage is gone (the account changed under it) has nothing
-  // left to deliver into.
+  // A send whose stage is gone has nothing left to deliver into: its message
+  // goes back to its composer.
   const orphaned = send !== null && stage === null;
   useEffect(() => {
-    if (orphaned) usePendingSandboxSendStore.getState().remove(props.id);
+    if (orphaned) returnPendingSandboxSend(props.id);
   }, [orphaned, props.id]);
   // A terminal asked for in place of an agent waits on no agent: the task's
   // strip opens it once the sandbox is up.
@@ -567,7 +568,8 @@ function deliverPendingSend(input: {
     content: send.content,
     settings,
     worktreeIntent: null,
-    placement: null,
+    // The pane the surface named for the agent's tile, as an ordinary create.
+    placement: send.request.placement,
     messageId,
     clientActionId,
     createdAt: now,
@@ -882,10 +884,11 @@ function endSendBackToComposer(input: {
   readonly restage: boolean;
 }): void {
   const { send } = input;
-  endPendingSandboxSend(send.id);
-  if (send.request.kind === "fork") return;
-  const modal = useNewConversationModalStore.getState();
-  modal.setContent(send.epicId, send.content);
+  const returned = returnPendingSandboxSend(send.id);
+  // A task that never came to be: its start-task draft holds the message.
+  if (send.request.kind === "fork" || returned.kind === "landing-draft") {
+    return;
+  }
   if (input.restage) {
     const key = newConversationSurfaceKey(send.epicId);
     useStagedSandboxStore.getState().stage(key, input.stage.target);
@@ -894,8 +897,8 @@ function endSendBackToComposer(input: {
   useNewConversationModalOpenStore.getState().open({
     epicId: send.epicId,
     tabId: input.tabId,
-    placement: null,
-    parentId: send.request.kind === "chat" ? send.request.parentId : null,
+    placement: returned.kind === "task" ? returned.placement : null,
+    parentId: returned.kind === "task" ? returned.parentId : null,
     hostId: null,
   });
 }

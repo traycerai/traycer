@@ -62,10 +62,24 @@ const testState = vi.hoisted(() => ({
    * The task a staged sandbox's send opens: hands the message to it, as the
    * real action does before it navigates, and refuses nothing.
    */
-  startTask: vi.fn((args: LandingStagedSandboxTaskArgs): null => {
-    args.hand("epic-new");
-    return null;
-  }),
+  startTask: vi.fn(
+    (
+      args: LandingStagedSandboxTaskArgs,
+    ): { readonly message: string } | null => {
+      // A placement that cannot take a task is refused, as the real action
+      // refuses it, before anything is handed.
+      if (!testState.placementAdmits) {
+        return {
+          message:
+            "No device is available right now. Connect a device before starting a task.",
+        };
+      }
+      args.hand("epic-new");
+      return null;
+    },
+  ),
+  /** Whether the composer's placement can take a task now. */
+  placementAdmits: true,
   /** What a sandbox host's agent gate says about the agent picked. */
   agentGate: {
     blocked: false,
@@ -359,6 +373,7 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
     submit: testState.submit,
     selectTerminalAgent: testState.selectTerminalAgent,
     startTaskOnStagedSandbox: testState.startTask,
+    placementAdmitsTask: () => testState.placementAdmits,
     // `isSubmitting` now reads `actions.isPending` (the real hook's
     // `createEpic.isPending || terminalAgentCreate.isPending`) rather than a
     // permanently-false placeholder - mirror `testState.createPending` here
@@ -593,6 +608,7 @@ afterEach(() => {
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
   testState.startTask.mockClear();
+  testState.placementAdmits = true;
   testState.pickHarness = "codex";
   testState.pickModel = "gpt-6.1-sol";
   testState.packGateCalls = [];
@@ -1130,7 +1146,7 @@ describe("LandingComposer direct submit gate", () => {
       expect(testState.startTask).toHaveBeenCalledTimes(1);
       expect(onlyPendingSend()).toMatchObject({
         epicId: "epic-new",
-        request: { kind: "chat", parentId: null },
+        request: { kind: "chat", parentId: null, placement: null },
         text: "dirty",
       });
     },
@@ -1229,6 +1245,50 @@ describe("LandingComposer direct submit gate", () => {
       ).toBe(
         "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere.",
       );
+    });
+  });
+
+  describe("a staged send where no host here can take a task", () => {
+    // No host at all, or only a resting sandbox: the placement refuses a
+    // task, and the stage is the host the send needs.
+    it("keeps the draft, takes the stage for its sandbox, and sends the draft on it once it is up", () => {
+      testState.placementAdmits = false;
+      testState.submit.mockReturnValueOnce(null);
+      useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+
+      sendFromComposer();
+
+      // Not refused for a host the stage is about to provide, and no task
+      // first: the stage carries the send, and the draft keeps the message.
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(testState.startTask).not.toHaveBeenCalled();
+      expect(testState.submit).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(readStagedSandbox("landing:window-test")).toMatchObject({
+        sendTaken: true,
+        ownerId: "pending-test",
+      });
+
+      // The sandbox is up and the composer's placement is on it: the draft
+      // is sent there, through the composer's ordinary submit.
+      act(() => {
+        testState.catalogHostId = "host-test";
+        testState.toolbarStore?.setState({
+          catalog: {
+            hostId: "host-test",
+            harnesses: [
+              { id: "codex", available: true, modes: ["gui", "tui"] },
+            ],
+            modelsLoaded: true,
+          },
+        });
+        useStagedSandboxStore.getState().report("landing:window-test", {
+          phase: "handoff",
+          createdHostId: "host-test",
+        });
+      });
+
+      expect(testState.submit).toHaveBeenCalledTimes(1);
     });
   });
 

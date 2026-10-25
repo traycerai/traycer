@@ -150,7 +150,7 @@ describe("handPendingSandboxSend", () => {
     return handPendingSandboxSend({
       fromSurfaceKey,
       epicId: "epic-1",
-      request: { kind: "chat", parentId: null },
+      request: { kind: "chat", parentId: null, placement: null },
       content: MESSAGE_CONTENT,
       text: "fix the login bug",
       settings: PICKED_SETTINGS,
@@ -188,7 +188,7 @@ describe("handPendingSandboxSend", () => {
       id,
       userId: "user-1",
       epicId: "epic-1",
-      request: { kind: "chat", parentId: null },
+      request: { kind: "chat", parentId: null, placement: null },
       content: MESSAGE_CONTENT,
       text: "fix the login bug",
       settings: PICKED_SETTINGS,

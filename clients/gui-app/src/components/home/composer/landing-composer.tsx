@@ -116,7 +116,7 @@ import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import {
   confirmPendingSandboxSendEpic,
-  endPendingSandboxSend,
+  returnPendingSandboxSend,
   handPendingSandboxSend,
   pickedRunSettings,
 } from "@/lib/sandboxes/pending-sandbox-send";
@@ -820,6 +820,13 @@ export function LandingComposer(props: LandingComposerProps) {
         pickerStore.getState().knownSlashCommands,
       );
       const text = composerDisplayPlainText(content);
+      // No host here can take the task (none at all, or only a resting
+      // sandbox): the sandbox the stage provides comes up first, and this
+      // draft is sent on it then, as the person left it.
+      if (!actions.placementAdmitsTask()) {
+        stagedSend.intercept(text, null);
+        return false;
+      }
       const settings = pickedRunSettings(toolbarStore.getState());
       const refusal = actions.startTaskOnStagedSandbox({
         draftId: draftId ?? createdUnboundDraftIdRef.current,
@@ -829,7 +836,7 @@ export function LandingComposer(props: LandingComposerProps) {
           const id = handPendingSandboxSend({
             fromSurfaceKey: composerSurfaceKey,
             epicId,
-            request: { kind: "chat", parentId: null },
+            request: { kind: "chat", parentId: null, placement: null },
             content,
             text,
             settings,
@@ -841,7 +848,12 @@ export function LandingComposer(props: LandingComposerProps) {
             ? null
             : {
                 confirm: () => confirmPendingSandboxSendEpic(id),
-                withdraw: () => endPendingSandboxSend(id),
+                giveBack: () => {
+                  const returned = returnPendingSandboxSend(id);
+                  return returned.kind === "landing-draft"
+                    ? returned.draftId
+                    : null;
+                },
               };
         },
       });
@@ -906,6 +918,7 @@ export function LandingComposer(props: LandingComposerProps) {
     raiseHostNotice,
     sandboxAgentGate.notice,
     setComposerExpanded,
+    stagedSend,
     stagedSignInCheck,
     teamSandboxHarnessBlockedFor,
     toolbarStore,
@@ -960,15 +973,18 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
-  // earlier) reads this render's submit, not the last one's. Only a terminal
-  // agent's Start is resubmitted on the sandbox: a send hands its message to
-  // its task instead (`startTaskOnStagedSandbox`). No launch on the new host
-  // is no agent there.
+  // earlier) reads this render's submit, not the last one's. A terminal
+  // agent's Start is resubmitted on the sandbox, and so is a send no host
+  // here could take a task for; any other send handed its message to its
+  // task (`startTaskOnStagedSandbox`). No launch on the new host is no agent
+  // there.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
-        ? () => false
+        ? () =>
+            readStagedSandbox(composerSurfaceKey)?.sendTaken === true &&
+            handleSubmit()
         : () => {
             const launch = stagedTerminalLaunchOnHost(
               stagedTerminalLaunch,
@@ -981,7 +997,9 @@ export function LandingComposer(props: LandingComposerProps) {
               : Promise.resolve(false);
           };
   }, [
+    composerSurfaceKey,
     dispatchStartTerminal,
+    handleSubmit,
     stagedProviders.data,
     stagedTerminalLaunch,
     toolbarStore,

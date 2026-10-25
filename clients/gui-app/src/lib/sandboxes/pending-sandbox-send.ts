@@ -25,6 +25,13 @@ import {
   type PendingSandboxSendRequest,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import { mintDraftId } from "@/lib/drafts/draft-ids";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
 
@@ -159,6 +166,70 @@ export function confirmPendingSandboxSendEpic(id: string): void {
 export function endPendingSandboxSend(id: string): void {
   useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(id));
   usePendingSandboxSendStore.getState().remove(id);
+}
+
+/** Where an undelivered send's message went back to. */
+export type ReturnedPendingSandboxSend =
+  /** Nothing to give back: a terminal ask, a fork (its chat is still there), or a send already gone. */
+  | { readonly kind: "none" }
+  /** Its task never came to be: a put-away start-task draft holds it now. */
+  | { readonly kind: "landing-draft"; readonly draftId: string }
+  /** Its task's new-agent composer holds it now, for the pane it named. */
+  | {
+      readonly kind: "task";
+      readonly epicId: string;
+      readonly parentId: string | null;
+      readonly placement: ExplicitTilePlacement | null;
+    };
+
+/**
+ * Ends a send that was not delivered and gives its whole message back, as
+ * the person wrote it: once handed, the send is the message's only copy, so
+ * no exit drops it. Its text, mentions and images, and the agent, model and
+ * mode it was sent with, go back to the task's new-agent composer when the
+ * task exists, and to a fresh start-task draft when it does not: put away,
+ * at the top of the Drafts list, so a give-back on a reload or a sign-in
+ * never takes over the composer; a caller with the person's attention opens
+ * it.
+ */
+export function returnPendingSandboxSend(
+  id: string,
+): ReturnedPendingSandboxSend {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return { kind: "none" };
+  const send = sends[id];
+  if (send.delivery !== null) return { kind: "none" };
+  const { request } = send;
+  // Written back before the record goes, so the images stay rooted throughout.
+  let returned: ReturnedPendingSandboxSend = { kind: "none" };
+  if (request.kind === "chat" && send.epicConfirmed) {
+    const modal = useNewConversationModalStore.getState();
+    modal.setContent(send.epicId, send.content);
+    modal.setSettings(send.epicId, send.settings);
+    returned = {
+      kind: "task",
+      epicId: send.epicId,
+      parentId: request.parentId,
+      placement: request.placement,
+    };
+  } else if (request.kind === "chat") {
+    // A fresh draft every time: never another draft's text written over.
+    const draftId = mintDraftId();
+    useLandingDraftStore.getState().installLandingDraft({
+      id: draftId,
+      content: send.content,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: send.settings,
+      composerMode: "chat",
+      // The task's sandbox started empty: the message named no folder here.
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: true,
+    });
+    returned = { kind: "landing-draft", draftId };
+  }
+  endPendingSandboxSend(id);
+  return returned;
 }
 
 /**

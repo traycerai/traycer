@@ -91,6 +91,7 @@ import {
 } from "@/lib/composer/image-atoms";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
 import {
   resolveDraftImageBytes,
   type DraftImageByteTarget,
@@ -219,13 +220,14 @@ export interface LandingStagedSandboxTaskArgs {
   readonly text: string;
   /**
    * Hands the message to the new task, before it opens: `confirm` once the
-   * task is created, which lets the sandbox start; `withdraw` ends it if the
-   * task is refused. `null` when there was nothing to hand, and nothing is
-   * created.
+   * task is created, which lets the sandbox start; `giveBack` ends it if the
+   * task is refused or fails, and returns the start-task draft that holds
+   * the message again (the task replaced the draft it came from). `null`
+   * when there was nothing to hand, and nothing is created.
    */
   readonly hand: (epicId: string) => {
     readonly confirm: () => void;
-    readonly withdraw: () => void;
+    readonly giveBack: () => string | null;
   } | null;
 }
 
@@ -255,6 +257,12 @@ export interface LandingComposerActions {
   readonly startTaskOnStagedSandbox: (
     args: LandingStagedSandboxTaskArgs,
   ) => LandingPlacementRefusal | null;
+  /**
+   * Whether the composer's placement can take a task now. A staged sandbox
+   * provides a host of its own, so a send staged where none can (no host, or
+   * only a resting one) starts the sandbox first and sends on it.
+   */
+  readonly placementAdmitsTask: () => boolean;
   /**
    * Whether a create started here is still running.
    *
@@ -1618,9 +1626,12 @@ export function useLandingComposerActions(
         epicTitle: "",
         draftId: args.draftId,
       });
+      // The task never came to be, and it replaced the draft the message
+      // came from: the message goes back to a draft, opened for a resend.
       const refused = (): void => {
         unmarkEpicCreatedThisSession(epicId);
-        handed.withdraw();
+        const draftId = handed.giveBack();
+        if (draftId !== null) openLandingDraft(navigate, draftId);
       };
       void createLandingEpic({
         epicId,
@@ -1658,11 +1669,17 @@ export function useLandingComposerActions(
     [createLandingEpic, navigate, resolveAdmittedPlacement],
   );
 
+  const placementAdmitsTask = useCallback(
+    (): boolean => resolveAdmittedPlacement().kind !== "refused",
+    [resolveAdmittedPlacement],
+  );
+
   return useMemo(
     () => ({
       submit,
       selectTerminalAgent,
       startTaskOnStagedSandbox,
+      placementAdmitsTask,
       // The upload phase counts. It runs BEFORE `epic.create` is dispatched, so
       // without it the composer would report itself idle for the whole of a
       // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
@@ -1677,6 +1694,7 @@ export function useLandingComposerActions(
     [
       attachmentUpload,
       createEpic.isPending,
+      placementAdmitsTask,
       selectTerminalAgent,
       startTaskOnStagedSandbox,
       submit,

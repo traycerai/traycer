@@ -817,7 +817,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
     expect(onlyPendingSend()).toMatchObject({
       epicId: "epic-1",
-      request: { kind: "chat", parentId: null },
+      request: { kind: "chat", parentId: null, placement: null },
     });
     // The stage went with it, under the send's own key.
     expect(readStagedSandbox(SANDBOX_SURFACE)).toBeNull();

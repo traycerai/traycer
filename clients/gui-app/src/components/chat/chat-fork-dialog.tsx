@@ -620,11 +620,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     harnessId: forkHarnessId,
     active: activeWorkspaceTarget !== null && forkStage === null,
   });
-  const teamSandboxHarnessBlocked = useTeamSandboxHarnessBlocked({
-    hostId: selectedHostId,
-    client: selectedHostClient,
-    harnessId: forkHarnessId,
-  });
+  // The selected host's own gate: a staged sandbox is not that host, and the
+  // fork runs on it under its own.
+  const teamSandboxHarnessBlocked =
+    useTeamSandboxHarnessBlocked({
+      hostId: selectedHostId,
+      client: selectedHostClient,
+      harnessId: forkHarnessId,
+    }) && forkStage === null;
   const modelResolved =
     modelSlugPresent &&
     (!isCrossHost || catalogConfirmed || catalogSubstituted);

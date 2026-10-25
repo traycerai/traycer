@@ -1718,16 +1718,6 @@ export function NewConversationModalBody(props: {
       raiseHostNotice(sandboxAgentRefusal);
       return;
     }
-    if (
-      teamSandboxHarnessBlocked(toolbarStore.getState().selection.harnessId)
-    ) {
-      raiseHostNotice({
-        kind: "refused",
-        message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
-        action: null,
-      });
-      return;
-    }
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
@@ -1752,7 +1742,8 @@ export function NewConversationModalBody(props: {
       const handed = handPendingSandboxSend({
         fromSurfaceKey: stagedKey,
         epicId,
-        request: { kind: "chat", parentId },
+        // The pane this modal was opened for, as the ordinary create takes it.
+        request: { kind: "chat", parentId, placement },
         content,
         text: composerDisplayPlainText(content),
         settings: pickedRunSettings(toolbarStore.getState()),
@@ -1760,6 +1751,18 @@ export function NewConversationModalBody(props: {
         now: Date.now(),
       });
       if (handed !== null) cleanupAfterSubmit();
+      return;
+    }
+    // This host's own gate, after the stage's: a staged sandbox is not this
+    // host, and the send runs on it under its own.
+    if (
+      teamSandboxHarnessBlocked(toolbarStore.getState().selection.harnessId)
+    ) {
+      raiseHostNotice({
+        kind: "refused",
+        message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+        action: null,
+      });
       return;
     }
     // The draft this submit is FOR. The editor stays editable across the reads
@@ -2051,6 +2054,7 @@ export function NewConversationModalBody(props: {
     epicId,
     parentId,
     pickerStore,
+    placement,
     raiseHostNotice,
     resolvedHostId,
     sandboxAgentRefusal,

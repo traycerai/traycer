@@ -60,6 +60,8 @@ import {
 } from "@/stores/composer/staged-sandbox-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
   pendingSendSurfaceKey,
@@ -413,6 +415,9 @@ interface SeedOptions {
   readonly elapsedSeconds: number;
 }
 
+/** The pane an in-pane New agent names for its tile. */
+const PANE = { kind: "tab", paneId: "pane-2", index: null } as const;
+
 const SEEDED: SeedOptions = {
   send: {},
   target: NEW_TARGET,
@@ -523,6 +528,7 @@ beforeEach(() => {
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalOpenStore.getState().close();
   useSettingsEnvironmentPickStore.setState({ pick: null });
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
 });
 
 afterEach(() => {
@@ -559,6 +565,20 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     });
     // The message left the strip with its delivery.
     expect(screen.queryByTestId("pending-sandbox-message")).toBeNull();
+  });
+
+  it("opens the agent in the pane its surface named, as an ordinary create does", async () => {
+    seed({
+      ...SEEDED,
+      send: { request: { kind: "chat", parentId: null, placement: PANE } },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    expect(
+      Object.values(useInitialChatHandoffStore.getState().handoffs),
+    ).toMatchObject([{ epicId: "epic-1", placement: PANE }]);
   });
 
   it("waits while the requested agent's availability is still being probed, then delivers once it is available", async () => {
@@ -1015,8 +1035,13 @@ describe("a send whose sandbox cannot take it", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("settles to the refusal in place when the create is refused, and Choose another host gives the message back to the composer", async () => {
-    seed({ ...SEEDED, phase: "creating", created: false });
+  it("settles to the refusal in place when the create is refused, and Choose another host gives the whole message back to the composer, for the pane it named", async () => {
+    seed({
+      ...SEEDED,
+      send: { request: { kind: "chat", parentId: null, placement: PANE } },
+      phase: "creating",
+      created: false,
+    });
     mocks.createSandbox.mockResolvedValue({
       kind: "refused",
       status: 402,
@@ -1045,12 +1070,12 @@ describe("a send whose sandbox cannot take it", () => {
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(readStagedSandbox(SURFACE)).toBeNull();
     expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-        ?.content,
-    ).toEqual(MESSAGE_CONTENT);
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
     expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
       epicId: "epic-1",
       tabId: "tab-1",
+      placement: PANE,
     });
   });
 
@@ -1174,7 +1199,7 @@ describe("a send whose task may not exist yet", () => {
     message: "refused",
   };
 
-  it("drops a record that came back from a reload without its task confirmed, creating and waking nothing", async () => {
+  it("gives a record that came back from a reload without its task confirmed back to a start-task draft, creating and waking nothing", async () => {
     // Seeded the way a rehydrated record is: this window never handed it.
     seed({
       ...SEEDED,
@@ -1191,6 +1216,37 @@ describe("a send whose task may not exist yet", () => {
     expect(readStagedSandbox(SURFACE)).toBeNull();
     expect(mocks.createSandbox).not.toHaveBeenCalled();
     expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+    // Its only copy is not dropped: the message is a draft again, put away
+    // in the Drafts list, with the composer left where it was.
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+    ]);
+    expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+  });
+
+  it("gives a confirmed send whose stage is gone back to its task's composer, and leaves another account's send alone", async () => {
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: SEND_ID, userId: "user-other" }));
+    mount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Another account's: this one's driver never takes it up.
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    cleanup();
+
+    usePendingSandboxSendStore.setState({ sends: {} });
+    usePendingSandboxSendStore.getState().add(pendingSend({ id: SEND_ID }));
+    mount();
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
     expect(createChatCalls()).toEqual([]);
   });
 
@@ -1216,7 +1272,7 @@ describe("a send whose task may not exist yet", () => {
     const id = handPendingSandboxSend({
       fromSurfaceKey: composerSurface,
       epicId: "epic-1",
-      request: { kind: "chat", parentId: null },
+      request: { kind: "chat", parentId: null, placement: null },
       content: MESSAGE_CONTENT,
       text: "fix the login bug",
       settings: PICKED_SETTINGS,
@@ -1392,6 +1448,37 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
   afterEach(() => {
     resetDraftBlobTransportForTests();
     resetNegotiatedManifests();
+  });
+
+  it("keeps the message's images rooted against the landing GC while it waits, and lets them go once it ends", () => {
+    const hash = "c".repeat(64);
+    seed({
+      ...SEEDED,
+      send: {
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "imageAttachment",
+              attrs: { id: "img-1", hash, mimeType: "image/png" },
+            },
+          ],
+        },
+      },
+      phase: "creating",
+      created: false,
+    });
+
+    expect(landingLiveImageRootHashes().has(hash)).toBe(true);
+
+    // Delivered: the agent's chat holds the message now, not the send.
+    usePendingSandboxSendStore.getState().markDelivered(SEND_ID, {
+      chatId: "chat-1",
+      hostId: SANDBOX_HOST,
+      sandboxId: SANDBOX_ID,
+      readySeconds: 24,
+    });
+    expect(landingLiveImageRootHashes().has(hash)).toBe(false);
   });
 
   it("inlines the bytes from this device when the sandbox does not take images by hash, leaving no hash-only node", async () => {

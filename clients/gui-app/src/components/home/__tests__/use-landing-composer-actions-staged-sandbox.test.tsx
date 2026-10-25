@@ -9,6 +9,8 @@
  */
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
@@ -36,8 +38,8 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   confirmPendingSandboxSendEpic,
-  endPendingSandboxSend,
   handPendingSandboxSend,
+  returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
   readStagedSandbox,
@@ -70,10 +72,10 @@ const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   createTerminalAgent: vi.fn<(input: unknown) => Promise<void>>(),
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
-  getActiveHostId: vi.fn(() => "host-landing"),
+  getActiveHostId: vi.fn<() => string | null>(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
-  getActiveHost: vi.fn(() => ({
+  getActiveHost: vi.fn<() => HostDirectoryEntry | null>(() => ({
     hostId: "host-landing",
     label: "Local",
     kind: "local",
@@ -365,7 +367,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     const id = handPendingSandboxSend({
       fromSurfaceKey: SURFACE,
       epicId,
-      request: { kind: "chat", parentId: null },
+      request: { kind: "chat", parentId: null, placement: null },
       content: MESSAGE_CONTENT,
       text: SUBMITTED_PROMPT,
       settings: PICKED_SETTINGS,
@@ -377,7 +379,10 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       ? null
       : {
           confirm: () => confirmPendingSandboxSendEpic(id),
-          withdraw: () => endPendingSandboxSend(id),
+          giveBack: () => {
+            const returned = returnPendingSandboxSend(id);
+            return returned.kind === "landing-draft" ? returned.draftId : null;
+          },
         };
   }
 
@@ -428,7 +433,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       const send = onlyPendingSend();
       expect(epicIdFromCreatePayload(payload)).toBe(send.epicId);
       expect(send).toMatchObject({
-        request: { kind: "chat", parentId: null },
+        request: { kind: "chat", parentId: null, placement: null },
         text: SUBMITTED_PROMPT,
         settings: PICKED_SETTINGS,
       });
@@ -454,39 +459,101 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     },
   );
 
-  it("ends the send and its stage when the host refuses the task", async () => {
-    useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
-    landingMocks.request.mockImplementation((method: string) =>
-      method === "epic.create"
-        ? Promise.resolve({
-            roomInfo: null,
-            refusal: {
-              kind: "local-store-unavailable",
-              message: "Traycer can't open this device's local store.",
-              remedy: "Quit the other Traycer on this machine, then rebind.",
-            },
-          })
-        : Promise.resolve({}),
-    );
+  it.each([
+    [
+      "refuses the task",
+      () =>
+        Promise.resolve({
+          roomInfo: null,
+          refusal: {
+            kind: "local-store-unavailable",
+            message: "Traycer can't open this device's local store.",
+            remedy: "Quit the other Traycer on this machine, then rebind.",
+          },
+        }),
+    ],
+    [
+      "fails the task's create",
+      () => Promise.reject(new Error("epic.create failed")),
+    ],
+  ] as const)(
+    "gives the whole message back to an opened start-task draft when the host %s",
+    async (_label, answer) => {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+      landingMocks.request.mockImplementation((method: string) =>
+        method === "epic.create" ? answer() : Promise.resolve({}),
+      );
+      const queryClient = newQueryClient();
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.startTaskOnStagedSandbox({
+          draftId: null,
+          owner: null,
+          text: SUBMITTED_PROMPT,
+          hand,
+        });
+      });
+
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+      // The send held the message's only copy: it is a draft again, with the
+      // agent and model it was sent with, and the window goes to that draft.
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({
+        content: MESSAGE_CONTENT,
+        settings: PICKED_SETTINGS,
+        closed: false,
+      });
+      expect(landingMocks.navigate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          to: "/draft/$draftId",
+          params: { draftId: drafts[0].id },
+        }),
+      );
+      queryClient.clear();
+    },
+  );
+
+  it.each([
+    ["no host at all", null, null],
+    [
+      "only a resting sandbox",
+      "host-resting-sbx",
+      {
+        ...sandboxHostEntry("host-resting-sbx", null),
+        // Suspended: nothing to dial until it is woken.
+        websocketUrl: null,
+      },
+    ],
+  ] as const)(
+    "says the placement cannot take a task with %s, so the staged send starts its sandbox first",
+    (_label, hostId, entry) => {
+      landingMocks.getActiveHostId.mockReturnValue(hostId);
+      landingMocks.getActiveHost.mockReturnValue(entry);
+      const queryClient = newQueryClient();
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+      expect(result.current.placementAdmitsTask()).toBe(false);
+      queryClient.clear();
+    },
+  );
+
+  it("says a usable placement can take a task", () => {
     const queryClient = newQueryClient();
     const { result } = renderHook(
       () => useLandingComposerActions(useTestPlacementTarget()),
       { wrapper: queryClientWrapper(queryClient) },
     );
-
-    act(() => {
-      result.current.startTaskOnStagedSandbox({
-        draftId: null,
-        owner: null,
-        text: SUBMITTED_PROMPT,
-        hand,
-      });
-    });
-
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+    expect(result.current.placementAdmitsTask()).toBe(true);
     queryClient.clear();
   });
 
