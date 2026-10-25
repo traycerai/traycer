@@ -1,3 +1,7 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -24,7 +28,12 @@ export function TeamProviderKeys(): ReactNode {
   const reread = (): void => {
     void queries.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(
-        client.getActiveHostId(),
+        hostRpcServingTierHostId(
+          "environment.secrets.list",
+          client.getActiveHostId(),
+          readProcessHostRpcTierPlan(),
+          null,
+        ),
         "environment.secrets.list",
       ),
     });

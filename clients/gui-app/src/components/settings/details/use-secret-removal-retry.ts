@@ -1,3 +1,7 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { DetailsItemRetry } from "@/components/settings/details/details-drawer";
@@ -58,7 +62,15 @@ export function useSecretRemovalRetry(
       await Promise.all([
         ...SECRET_READS.map((method) =>
           queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(captured.hostId, method),
+            queryKey: hostQueryKeys.methodScope(
+              hostRpcServingTierHostId(
+                method,
+                captured.hostId,
+                readProcessHostRpcTierPlan(),
+                null,
+              ),
+              method,
+            ),
           }),
         ),
         queryClient.invalidateQueries({

@@ -1,3 +1,8 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+  type HostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient, type Query } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { DELTA_FED_READS } from "@/lib/environment/delta-fed-reads";
@@ -12,10 +17,15 @@ const UNPOLLED: ReadonlySet<string> = new Set(
     .map(([method]) => method),
 );
 
-/** A read of `hostId` that only a reread brings up to date. */
-function rereadsOnFocus(query: Query, hostId: string): boolean {
+/** A read made through `hostId`, cached under the tier that serves it. */
+function rereadsOnFocus(
+  query: Query,
+  hostId: string,
+  plan: HostRpcTierPlan,
+): boolean {
   const [scope, host, method] = query.queryKey;
-  if (scope !== "host" || host !== hostId || typeof method !== "string")
+  if (scope !== "host" || typeof method !== "string") return false;
+  if (host !== hostRpcServingTierHostId(method, hostId, plan, null))
     return false;
   if (DELTA_FED.has(method)) return true;
   return query.getObserversCount() > 0 && UNPOLLED.has(method);
@@ -33,9 +43,10 @@ export function useRereadHostReadsOnFocus(hostId: string | null): void {
   const queryClient = useQueryClient();
   useEffect(() => {
     if (hostId === null) return undefined;
+    const plan = readProcessHostRpcTierPlan();
     const listener = (): void => {
       void queryClient.invalidateQueries({
-        predicate: (query) => rereadsOnFocus(query, hostId),
+        predicate: (query) => rereadsOnFocus(query, hostId, plan),
       });
     };
     window.addEventListener("focus", listener);

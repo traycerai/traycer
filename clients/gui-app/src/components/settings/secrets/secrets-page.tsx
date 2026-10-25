@@ -1,3 +1,7 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -102,7 +106,15 @@ export function SecretsPage(props: {
     for (const method of SECRET_READS) {
       void queryClient
         .invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(props.hostId, method),
+          queryKey: hostQueryKeys.methodScope(
+            hostRpcServingTierHostId(
+              method,
+              props.hostId,
+              readProcessHostRpcTierPlan(),
+              null,
+            ),
+            method,
+          ),
         })
         .catch(ignoreError);
     }

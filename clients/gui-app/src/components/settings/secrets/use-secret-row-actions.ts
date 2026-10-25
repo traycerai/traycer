@@ -1,3 +1,7 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
@@ -70,13 +74,23 @@ export function useSecretRowActions(props: {
         await Promise.all([
           queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
-              captured.hostId,
+              hostRpcServingTierHostId(
+                "environment.secrets.versions",
+                captured.hostId,
+                readProcessHostRpcTierPlan(),
+                null,
+              ),
               "environment.secrets.versions",
             ),
           }),
           queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
-              captured.hostId,
+              hostRpcServingTierHostId(
+                "environment.secrets.list",
+                captured.hostId,
+                readProcessHostRpcTierPlan(),
+                null,
+              ),
               "environment.secrets.list",
             ),
           }),
