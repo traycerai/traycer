@@ -29,7 +29,9 @@ import {
   useEnvironmentReviewRead,
   useEnvironmentStatusRead,
 } from "@/hooks/environment/use-environment-reads";
+import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   SETTINGS_SECTIONS,
@@ -300,13 +302,24 @@ function CloudPageFrame(props: {
   );
 }
 
-/** Cloud-read pages never read the window host's Personal notices or values. */
+/**
+ * Cloud-read pages never read the window host's Personal notices or values.
+ * Their configuration is reread when a save on the page loses to a newer
+ * change, and a team's when the window regains focus: no status here reports
+ * a team's revision.
+ */
 function TeamPageFrame(props: {
   readonly section: SettingsSectionId;
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
   const scope = useTeamViewingHost();
+  const source = useConfigurationSource();
+  const environmentId = source.kind === "pool" ? source.environmentId : null;
+  useRereadOnStaleWrite(null, environmentId);
+  useRereadConfigurationOnFocus(
+    props.pick.kind === "team" ? environmentId : null,
+  );
   return (
     <PersonalPageContext.Provider
       value={{
@@ -336,7 +349,7 @@ function PersonalPageFrameForKinds(props: {
   const environment = useWindowHostEnvironmentState(props.kinds);
   const { state, hostName } = environment;
   // A save on this page that lost to a change made elsewhere re-reads it.
-  useRereadOnStaleWrite(environment.hostId);
+  useRereadOnStaleWrite(environment.hostId, null);
   const line = personalPageStatusLine(state, props.kinds, hostName);
   // Read-only on a host whose version predates these settings, and on a
   // team's host, whose settings are the team's.

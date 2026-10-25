@@ -36,6 +36,9 @@ afterEach(() => {
 });
 
 const SUBTITLE = "Values and logins your agents use.";
+// The header's subtitle on a team's page names the team (copy ruling T4-c).
+const TEAM_SUBTITLE =
+  "Values and logins Acme's agents use, on its sandboxes without being seen.";
 
 function secret(name: string): EnvironmentSecret {
   return {
@@ -104,7 +107,7 @@ describe("the Secrets page header", () => {
     renderPanel([secret("OPENAI_API_KEY")], { current: null });
 
     await screen.findByText("OPENAI_API_KEY");
-    expect(screen.getAllByText(SUBTITLE)).toHaveLength(1);
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
@@ -118,7 +121,7 @@ describe("the Secrets page header", () => {
 
     await screen.findByTestId("secrets-page-error");
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
-    expect(screen.getAllByText(SUBTITLE)).toHaveLength(1);
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
   });
 
   it("puts Details in the header beside the chip, not in the page body", async () => {

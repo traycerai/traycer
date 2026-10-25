@@ -34,6 +34,19 @@ export function hostListEnvironmentId(
 }
 
 /**
+ * Every read a configuration's pages render. None of them polls, so a change
+ * made elsewhere (the dashboard, another computer, another person) reaches an
+ * open page only through a reread.
+ */
+export const CONFIGURATION_READS = [
+  "environment.configuration.items",
+  "environment.configuration.mcpServers.list",
+  "environment.configuration.skills.list",
+  "environment.configuration.guide.get",
+  "environment.plans.list",
+] as const;
+
+/**
  * A configuration write moves `reads` of that environment, and its delivery
  * reports, under EVERY requesting host. The configuration is one record, but
  * each host's answer to a read is cached apart and none of these reads polls:

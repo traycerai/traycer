@@ -823,3 +823,97 @@ describe("A provider's Skills tab on Personal or a team", () => {
     });
   });
 });
+
+describe("A refused skill write", () => {
+  const FORBIDDEN = "You no longer have access to change these settings.";
+
+  it.each([
+    {
+      outcome: "forbidden" as const,
+      line: FORBIDDEN,
+    },
+    {
+      outcome: "refused" as const,
+      line: "Couldn't save these settings.",
+    },
+  ])(
+    "says $line when a provider switch is answered $outcome",
+    async ({ outcome, line }) => {
+      negotiateMethods(SWITCHES);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+        "environment.configuration.skills.setProviders": () => ({
+          outcome,
+          revision: null,
+          reason: null,
+        }),
+      });
+      render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      await userEvent.click(
+        await screen.findByRole("switch", { name: "review for Claude Code" }),
+      );
+
+      expect((await screen.findByRole("status")).textContent).toBe(line);
+    },
+  );
+
+  it("shows the conflict line when a provider switch is answered stale", async () => {
+    negotiateMethods(SWITCHES);
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+      "environment.configuration.skills.setProviders": () => ({
+        outcome: "stale" as const,
+        revision: "rev-9",
+        reason: null,
+      }),
+    });
+    render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("switch", { name: "review for Claude Code" }),
+    );
+
+    expect(
+      await screen.findByText("Changed by another member a moment ago"),
+    ).toBeTruthy();
+  });
+
+  it.each([
+    { outcome: "forbidden" as const, line: FORBIDDEN },
+    { outcome: "refused" as const, line: "Couldn't remove this skill." },
+  ])(
+    "says $line when a removal is answered $outcome",
+    async ({ outcome, line }) => {
+      negotiateMethods(BASE_METHODS);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: listed([REVIEW]), hostSkills: [] }),
+        "environment.configuration.skills.remove": () => ({
+          outcome,
+          reason: null,
+        }),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Remove" }),
+      );
+      await userEvent.click(
+        within(await screen.findByRole("dialog")).getByRole("button", {
+          name: "Remove skill",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.remove"),
+        ).toHaveLength(1);
+      });
+      expect((await screen.findByRole("status")).textContent).toBe(line);
+    },
+  );
+});

@@ -183,7 +183,7 @@ function renderShellPanelOverRpc(options: {
  * only on a save refused as stale.
  */
 function StaleRereader(props: { readonly hostId: string }) {
-  useRereadOnStaleWrite(props.hostId);
+  useRereadOnStaleWrite(props.hostId, null);
   return null;
 }
 

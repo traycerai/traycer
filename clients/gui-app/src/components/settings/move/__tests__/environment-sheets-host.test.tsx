@@ -26,6 +26,7 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { OpenSettingsModalOpts } from "@/stores/tabs/use-system-tab-modal";
@@ -47,6 +48,12 @@ vi.mock("@/components/settings/move/this-computer", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (): HostClient<HostRpcRegistry> | null =>
     directory.client,
+}));
+
+// The move sheet reads the host runtime this suite does not mount; the target
+// the retrospective sheet hands it is what is asserted.
+vi.mock("@/components/settings/move-sheet", () => ({
+  MoveSheet: () => null,
 }));
 
 const SHARED = environmentStatusFixture({
@@ -121,6 +128,7 @@ beforeEach(() => {
     checkedHostIds: new Set(),
     heldToastDismissed: false,
   });
+  useMoveSheetStore.setState({ target: null });
 });
 
 afterEach(() => {
@@ -232,6 +240,45 @@ describe("<EnvironmentSheetsHost /> inventory links", () => {
     );
 
     expect(opened.map((opts) => opts.section)).toEqual(["secrets"]);
+    await waitFor(() => {
+      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+    });
+  });
+});
+
+describe("<EnvironmentSheetsHost /> hand-offs from the retrospective sheet", () => {
+  function openRetrospective(): void {
+    thisComputerAnswering(SHARED, Date.UTC(2026, 9, 15, 12));
+    renderHost();
+    act(() => {
+      useRetrospectiveSheetStore
+        .getState()
+        .openSheet({ hostId: "old", hostName: "Old laptop" });
+    });
+  }
+
+  it("Move to Personal closes the retrospective sheet and opens the move sheet", async () => {
+    openRetrospective();
+
+    fireEvent.click(
+      await screen.findByTestId("retrospective-move-to-personal"),
+    );
+
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+    await waitFor(() => {
+      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+    });
+  });
+
+  it("Stop using Personal closes the retrospective sheet and shows the stop sheet", async () => {
+    openRetrospective();
+
+    fireEvent.click(await screen.findByTestId("retrospective-stop-sharing"));
+
+    expect(await screen.findByTestId("stop-sharing-sheet")).toBeTruthy();
     await waitFor(() => {
       expect(useRetrospectiveSheetStore.getState().open).toBe(false);
     });

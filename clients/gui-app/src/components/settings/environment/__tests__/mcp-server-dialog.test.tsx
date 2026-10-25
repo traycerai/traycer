@@ -354,6 +354,46 @@ describe("The MCP server dialog", () => {
     },
   );
 
+  it("keeps the command and arguments a name-only edit did not touch", async () => {
+    negotiate(PUT_1_1);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: [
+          declaredServer({
+            serverId: "srv-2",
+            name: "local",
+            transport: "stdio",
+            url: null,
+            command: " /usr/bin/server ",
+            args: ["--label", " padded ", ""],
+          }),
+        ],
+        secrets: [],
+        answer: SAVED,
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.put"),
+      ).toHaveLength(1);
+    });
+    expect(
+      harness.paramsOf("environment.configuration.mcpServers.put")[0],
+    ).toMatchObject({
+      name: "local2",
+      command: " /usr/bin/server ",
+      args: ["--label", " padded ", ""],
+    });
+  });
+
   it("saves an edit that leaves the sign-in unchanged, keeping the item's toggles and providers", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(

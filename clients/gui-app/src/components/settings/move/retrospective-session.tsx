@@ -116,14 +116,24 @@ export function RetrospectiveSession(props: {
           recordMutate({ event: "acknowledged" });
         }}
         onHeldApply={onHeldApply}
+        // Each leads elsewhere, so the sheet closes first: what it says about
+        // this computer is out of date once the move or the stop is done.
         onMoveToPersonal={() => {
-          if (props.stopHostId !== null)
-            openMoveSheet({
-              hostId: props.stopHostId,
-              hostName: props.hostName,
-            });
+          if (props.stopHostId === null) return;
+          props.onOpenChange(false);
+          openMoveSheet({
+            hostId: props.stopHostId,
+            hostName: props.hostName,
+          });
         }}
-        onStopSharing={offerStop ? () => setStopOpen(true) : null}
+        onStopSharing={
+          offerStop
+            ? () => {
+                props.onOpenChange(false);
+                setStopOpen(true);
+              }
+            : null
+        }
       />
       <StopSharingSession
         client={props.stopClient}

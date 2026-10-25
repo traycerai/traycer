@@ -49,6 +49,8 @@ import { TeamSkillUpload } from "./team-skill-upload";
 import { TeamSkills } from "./team-skills";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import { skillWriteIssue } from "./configuration-write-issue";
 
 /**
  * The providers on the viewing host that list skills at global scope, in
@@ -202,6 +204,10 @@ function SkillsPageList(props: {
   const { remove } = useEnvironmentSkillMutations(scope.client);
   const [open, setOpen] = useState<EnvironmentSkill | null>(null);
   const [removing, setRemoving] = useState<EnvironmentSkill | null>(null);
+  const removeIssue =
+    remove.data === undefined
+      ? null
+      : skillWriteIssue(remove.data, "Couldn't remove this skill.");
   if (props.skills.length === 0)
     return (
       <p className="text-ui-sm text-muted-foreground">
@@ -266,6 +272,7 @@ function SkillsPageList(props: {
           );
         })}
       </ul>
+      <ConfigurationWriteFeedback issue={removeIssue} />
       {removing === null ? null : (
         <RemoveSkillDialog
           skill={removing}
@@ -440,6 +447,10 @@ function ProviderSkillsList(props: {
   const scope = useTeamViewingHost();
   const name = useConfigurationName();
   const { setProviders } = useEnvironmentSkillMutations(scope.client);
+  const switchIssue =
+    setProviders.data === undefined
+      ? null
+      : skillWriteIssue(setProviders.data, "Couldn't save these settings.");
   const label = providerDisplayName(props.providerId);
   const heading = skillsCardHeading(name, label);
   return (
@@ -509,6 +520,7 @@ function ProviderSkillsList(props: {
             );
           })}
         </ul>
+        <ConfigurationWriteFeedback issue={switchIssue} />
       </section>
       <OnHostOnlySkills
         providerId={props.providerId}
