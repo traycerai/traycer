@@ -9,6 +9,10 @@ import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automati
 import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
+import {
+  settledForStartingAccount,
+  signedInUserId,
+} from "@/lib/sandboxes/sandbox-account-fence";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -64,9 +68,13 @@ export function useOpenAutomationTerminal(input: {
       openTerminal(existing.hostId);
       return;
     }
+    const startingAccount = { userId: signedInUserId() };
     // A failed start is the open's own error toast; Settings stays open.
     void open.mutateAsync(target()).then(
-      (opened) => openTerminal(opened.sandbox.hostId),
+      (opened) => {
+        if (!settledForStartingAccount(startingAccount)) return;
+        openTerminal(opened.sandbox.hostId);
+      },
       () => undefined,
     );
   };

@@ -23,6 +23,7 @@ import {
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { ChatForkPublicationState } from "../chat-fork-target";
 
 const TAB_HOST_ID = "tab-host-id";
 
@@ -51,6 +52,11 @@ const dialogMocks = vi.hoisted(() => ({
   harnessAvailable: true,
   /** The harness's sign-in on the dialog's host. */
   authStatus: "authenticated" as "authenticated" | "unauthenticated",
+  publication: { kind: "unknown" } as ChatForkPublicationState,
+  publicationReads: [] as Array<{
+    readonly enabled: boolean;
+    readonly chatId: string | null;
+  }>,
   /** The configuration the dialog's host runs. */
   principal: { kind: "personal" } as
     | { readonly kind: "personal" }
@@ -122,6 +128,19 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 
 vi.mock("@/hooks/chats/use-clone-source-owner", () => ({
   useCloneSourceOwnerUserId: () => null,
+}));
+
+vi.mock("@/hooks/chats/use-chat-publication-state-query", () => ({
+  useChatPublicationState: (input: {
+    readonly enabled: boolean;
+    readonly chatId: string | null;
+  }): ChatForkPublicationState => {
+    dialogMocks.publicationReads.push({
+      enabled: input.enabled,
+      chatId: input.chatId,
+    });
+    return input.enabled ? dialogMocks.publication : { kind: "unknown" };
+  },
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -458,6 +477,8 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     dialogMocks.selectHost = null;
     dialogMocks.harnessAvailable = true;
     dialogMocks.authStatus = "authenticated";
+    dialogMocks.publication = { kind: "unknown" };
+    dialogMocks.publicationReads.length = 0;
     dialogMocks.principal = { kind: "personal" };
     dialogMocks.openProviders.mockReset();
     dialogMocks.blocked.current = false;
@@ -485,10 +506,13 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     expect(dialogMocks.stagingSeen.at(-1)).not.toBeNull();
   });
 
-  it("stages nothing when the chip picked no sandbox", () => {
+  it("stages nothing and skips the publication read for a single-host fork", () => {
     renderDialog();
 
     expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+    expect(dialogMocks.publicationReads.some((read) => read.enabled)).toBe(
+      false,
+    );
   });
 
   it("drops the stage when the dialog closes", () => {
@@ -509,6 +533,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
   });
 
   it("hands Fork to the task as a pending fork, and sends nothing on the tab's host", async () => {
+    dialogMocks.publication = { kind: "covered" };
     renderStaged(NEW_SANDBOX);
     fillTitle();
 
@@ -517,6 +542,9 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     await waitFor(() => {
       expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
     });
+    expect(dialogMocks.publicationReads.some((read) => read.enabled)).toBe(
+      true,
+    );
     expect(dialogMocks.createMutate).not.toHaveBeenCalled();
     const send = onlyPendingSend();
     expect(send.epicId).toBe("epic-test");
@@ -538,6 +566,29 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     expect(readStagedSandbox(pendingSendSurfaceKey(send.id))?.target).toEqual(
       NEW_SANDBOX,
     );
+  });
+
+  it("blocks a staged remote fork while its source boundary is still syncing", () => {
+    dialogMocks.publication = { kind: "boundaryUncovered" };
+    renderStaged(NEW_SANDBOX);
+    fillTitle();
+
+    expect(dialogMocks.publicationReads.some((read) => read.enabled)).toBe(
+      true,
+    );
+    expect(
+      screen.getByTestId("chat-fork-publication-notice").textContent,
+    ).toContain("Still syncing this turn to the cloud");
+    expect(forkButton().disabled).toBe(true);
+
+    fireEvent.click(forkButton());
+
+    expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+      [],
+    );
+    expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+    expect(readStagedSandbox(FORK_SURFACE)?.phase).toBe("staged");
   });
 
   it("attaches the task to a team's sandbox before handing the fork over", async () => {

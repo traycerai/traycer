@@ -421,13 +421,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     ? chatForkTargetSupport(createChatVersions.get(selectedHostId) ?? null)
     : { kind: "supported" };
 
-  // Is there any host this fork could go to OTHER than the source? Read from
-  // the same directory the version gate uses: a host with no directory entry
-  // has no route this client can dial, so it is not a fork target either.
-  const hasRemoteHostOption = useMemo(
-    () => directoryHostIds.some((hostId) => hostId !== tabHostId),
-    [directoryHostIds, tabHostId],
-  );
+  // A staged sandbox is a remote target before it joins the directory. Its
+  // source publication needs the same check as an existing remote host.
+  const hasRemoteHostOption =
+    isCrossHost || directoryHostIds.some((hostId) => hostId !== tabHostId);
   // Layer 1: does the SOURCE chat's publication let ANY remote host serve this
   // fork? Read through the TAB client, which addresses the owning host by
   // construction - the dialog lives inside the source chat's tile - so this is
@@ -454,9 +451,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     // knowable the moment the dialog opens and should be true on first paint,
     // so nobody reaches for a host that could never have worked.
     //
-    // Still not unconditional: an account with no remote host has no row this
-    // could gate, so asking would be pure waste for the single-host case. One
-    // RPC on a surface that already issues catalog and profile reads on open.
+    // With no remote host or staged sandbox, nothing needs this check: a
+    // source-only fork still asks for no publication read.
     enabled: activeWorkspaceTarget !== null && hasRemoteHostOption,
   });
   // ONE verdict from BOTH gates, so the nine (version x publication) cells and

@@ -403,6 +403,25 @@ function renderPanel(sandboxes: readonly SandboxSummary[]): void {
   renderUi(<SandboxesSettingsPanel />);
 }
 
+function deferredAutomationOpen(): {
+  readonly promise: Promise<SandboxAutomationOpened>;
+  readonly resolve: (value: SandboxAutomationOpened) => void;
+} {
+  let resolvePromise: ((value: SandboxAutomationOpened) => void) | null = null;
+  const promise = new Promise<SandboxAutomationOpened>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value) {
+      if (resolvePromise === null) {
+        throw new Error("the automation open promise has no resolver");
+      }
+      resolvePromise(value);
+    },
+  };
+}
+
 function rowOf(id: string): HTMLElement {
   const found = screen
     .getAllByTestId("sandboxes-row")
@@ -419,6 +438,7 @@ function names(): string[] {
 
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     mocks.sandboxes = [];
     mocks.listed = true;
     mocks.configurations = [{ kind: "personal" }];
@@ -800,6 +820,7 @@ describe("<SandboxesSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
     resetTeamPageHarness();
   });
 
@@ -1289,7 +1310,7 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toBe("Suspended");
       expect(
         within(automations).getByTestId("sandboxes-row-clock").textContent,
-      ).toBe("Released · comes back on the next shell");
+      ).toBe("Suspended · files kept · the next shell starts it");
       expect(
         within(automations).getByRole("button", { name: "Open terminal" }),
       ).toBeDefined();
@@ -1330,16 +1351,28 @@ describe("<SandboxesSettingsPanel />", () => {
 
     it("creates and starts it, then opens the terminal on the host it answers with, leaving the composer as it was", async () => {
       mocks.automation = NOT_CREATED;
-      mocks.openAutomation.mockResolvedValue({
-        sandbox: OPENED,
-        settled: true,
+      const pendingOpen = deferredAutomationOpen();
+      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "user-a", username: "Account A" },
       });
       await withSettingsTabSelected();
-      renderPanel([row("sbx-a", {})]);
+      const panel = renderUi(<SandboxesSettingsPanel />);
 
       fireEvent.click(
         within(unstarted()).getByRole("button", { name: "Open terminal" }),
       );
+
+      await waitFor(() => {
+        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
+      });
+      panel.unmount();
+
+      await act(async () => {
+        pendingOpen.resolve({ sandbox: OPENED, settled: true });
+        await pendingOpen.promise;
+      });
 
       await waitFor(() => {
         expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
@@ -1349,6 +1382,48 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(mocks.openAutomation).toHaveBeenCalledWith(null);
       expect(mocks.close).toHaveBeenCalledTimes(1);
       expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+    });
+
+    it("does not apply a previous account's start after its Settings panel unmounts", async () => {
+      mocks.automation = NOT_CREATED;
+      const pendingOpen = deferredAutomationOpen();
+      mocks.openAutomation.mockReturnValue(pendingOpen.promise);
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "user-a", username: "Account A" },
+      });
+      await withSettingsTabSelected();
+      const panel = renderUi(<SandboxesSettingsPanel />);
+
+      fireEvent.click(
+        within(unstarted()).getByRole("button", { name: "Open terminal" }),
+      );
+
+      await waitFor(() => {
+        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
+      });
+      panel.unmount();
+
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "user-b", username: "Account B" },
+      });
+      useLandingPanelStore
+        .getState()
+        .requestTerminal("landing:account-b", "host-account-b");
+      const accountBRequest = useLandingPanelStore.getState().terminalRequest;
+      const navigationsBeforeSettlement = [...navigations];
+
+      await act(async () => {
+        pendingOpen.resolve({ sandbox: OPENED, settled: true });
+        await pendingOpen.promise;
+      });
+
+      expect(useLandingPanelStore.getState().terminalRequest).toEqual(
+        accountBRequest,
+      );
+      expect(navigations).toEqual(navigationsBeforeSettlement);
+      expect(mocks.close).not.toHaveBeenCalled();
     });
 
     it("files no request and keeps Settings open when the start fails", async () => {
