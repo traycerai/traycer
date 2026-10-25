@@ -748,7 +748,7 @@ const WAKE_TIMED_OUT: SandboxWakeOutcome = {
  * {@link call}); a WebView cannot send one.
  */
 export const SANDBOXES_UNAVAILABLE_IN_STAGING =
-  "Sandboxes aren't available in staging builds: the staging server only accepts calls from hosts.";
+  "Sandboxes aren't available in staging builds.";
 
 export const SANDBOX_FROZEN_MESSAGE =
   "This sandbox is paused because your credits ran out. Add credits to wake it.";

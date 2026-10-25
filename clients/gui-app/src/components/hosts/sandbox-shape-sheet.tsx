@@ -50,11 +50,11 @@ import {
   SANDBOXES_CANT_BE_CREATED,
   CHANGE_LABEL,
   SANDBOX_REGION_LABEL,
+  SHAPE_SHEET_DESCRIPTION,
   USE_THIS_SHAPE,
   idleAndRestingLine,
   newSandboxRowLabel,
   sandboxShapeLabel,
-  shapeSheetDescription,
   shortPriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -118,7 +118,7 @@ export function SandboxShapeSheet(props: {
       >
         <DialogHeader>
           <DialogTitle>{newSandboxRowLabel(copy)}</DialogTitle>
-          <DialogDescription>{shapeSheetDescription(copy)}</DialogDescription>
+          <DialogDescription>{SHAPE_SHEET_DESCRIPTION}</DialogDescription>
         </DialogHeader>
         {props.open ? <ShapeSheetBody {...props} /> : null}
       </DialogContent>
