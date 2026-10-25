@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
@@ -107,7 +108,10 @@ import {
   newConversationSurfaceKey,
   subscribeFollowingSurfaceReset,
 } from "@/stores/host/surface-host-selection-store";
-import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import {
+  ComposerHostNotice,
+  type ComposerHostNoticeState,
+} from "@/components/home/composer/composer-host-notice";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { composerTopNotice } from "@/components/home/composer/composer-mirror-line-model";
 import { useComposerMirrorLine } from "@/hooks/composer/use-composer-mirror-line";
@@ -159,15 +163,24 @@ import {
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
   ownerGoneOnUnmount,
+  readStagedSandbox,
   useStagedSandboxStore,
   useStagedTerminalLaunch,
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 import {
+  handPendingSandboxSend,
+  pickedRunSettings,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import {
   stagedResubmitReady,
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
+import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
+import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
@@ -412,22 +425,10 @@ function closeRequestOwnedBy(epicId: string, tabId: string): void {
 }
 
 /**
- * Whether this tab's modal handed its send (or Start) to a staged sandbox that
- * has not settled yet. Phase 2 resubmits from the body, so the body is kept
- * while this holds; a failure, a cancel or a clear ends it.
+ * Whether this tab's modal handed a terminal agent's Start to a staged
+ * sandbox that has not settled yet. Phase 2 launches it from the body, so the
+ * body is kept while this holds; a failure, a cancel or a clear ends it.
  */
-type StagedAcceptance = (accepted: boolean) => void;
-
-/** Tells the waiting staged resubmit, once, whether its create went out. */
-function settleStagedAcceptance(
-  ref: { current: StagedAcceptance | null },
-  accepted: boolean,
-): void {
-  const settle = ref.current;
-  ref.current = null;
-  settle?.(accepted);
-}
-
 function modalHandoffPending(
   stage: StagedSandbox | undefined,
   tabId: string,
@@ -808,18 +809,6 @@ export function NewConversationModalBody(props: {
    * re-entry takes no argument, so the marker is the whole of it.
    */
   const submitReentryQueued = useRef(false);
-  /**
-   * The staged resubmit waiting to hear whether its create went out: told
-   * `true` where the create is dispatched and `false` wherever the send stops
-   * short. A preparation outlives this body, so its exit tells it either way.
-   */
-  const stagedAcceptanceRef = useRef<StagedAcceptance | null>(null);
-  // Stopped short unless a preparation is still running or queued to run
-  // again: that one settles it.
-  const settleStagedUnlessPreparing = useCallback((): void => {
-    if (draftImagePrepFlight.current || submitReentryQueued.current) return;
-    settleStagedAcceptance(stagedAcceptanceRef, false);
-  }, []);
   // The picker store is lifted onto the always-mounted dialog so it survives
   // this body's focus-driven unmount (see the transient context); the hook falls
   // back to a local store when rendered outside the dialog.
@@ -896,25 +885,11 @@ export function NewConversationModalBody(props: {
     resolvedHostId,
     latestWorkspaceSeed,
   );
-  // Subscribe to the NON-content draft fields only. `content` is rewritten on
-  // every keystroke (see `handleDocumentChange`); subscribing to the whole
-  // patch here would re-render the entire modal body per character. Live
-  // content is routed to an isolated subscriber
-  // (`NewConversationModalAttachmentStrip`) plus a boolean submit gate,
-  // mirroring the landing composer's isolation.
-  const draftFields = useNewConversationModalStore(
-    useShallow((state) => {
-      const patch = state.draftPatchesByEpicId[epicId];
-      return {
-        settings: patch?.settings ?? null,
-        composerMode: patch?.composerMode ?? null,
-        workspace: patch?.workspace ?? null,
-      };
-    }),
-  );
-  const draftSettings = draftFields.settings ?? seed.settings;
-  const draftComposerMode = draftFields.composerMode ?? seed.composerMode;
-  const draftWorkspace = draftFields.workspace ?? seed.workspace;
+  const {
+    settings: draftSettings,
+    composerMode: draftComposerMode,
+    workspace: draftWorkspace,
+  } = useNewConversationDraftFields(epicId, seed);
   const hasSubmittableContent = useNewConversationModalStore((state) =>
     contentIsSubmittable(
       state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
@@ -1007,6 +982,10 @@ export function NewConversationModalBody(props: {
       hostId: resolvedHostId,
       tuiOnly: draftComposerMode === "terminal",
       chatLineCarriesAutoMode: null,
+      // The key `useInTaskSandboxStagingSurface` stages under below; a named
+      // host stages nothing.
+      stagedSurfaceKey:
+        hostId === null ? newConversationSurfaceKey(epicId) : null,
     },
   );
   const harnessId = useStore(
@@ -1085,10 +1064,26 @@ export function NewConversationModalBody(props: {
   // A request that names its host stages nothing: naming the machine IS the
   // request. Otherwise the picker offers New sandbox rows keyed by this Epic's
   // placement pin.
+  // `Open terminal instead`: the staged sandbox opens a terminal in this
+  // task in place of an agent, and the modal closes with the draft kept.
+  const openTerminalInstead = useCallback((): void => {
+    const handed = handPendingSandboxSend({
+      fromSurfaceKey: newConversationSurfaceKey(epicId),
+      epicId,
+      request: { kind: "terminal" },
+      content: createEmptyNewConversationContent(),
+      text: "",
+      settings: pickedRunSettings(toolbarStore.getState()),
+      epicConfirmed: true,
+      now: Date.now(),
+    });
+    if (handed !== null) onSubmitted();
+  }, [epicId, onSubmitted, toolbarStore]);
   const sandboxStaging = useInTaskSandboxStagingSurface(
     epicId,
     newConversationSurfaceKey(epicId),
     hostId,
+    openTerminalInstead,
   );
   const workspaceGate = useStagedWorkspaceGate(
     stagingSurfaceKey(sandboxStaging),
@@ -1112,11 +1107,29 @@ export function NewConversationModalBody(props: {
     draftId: null,
   });
   const attachmentPending = isAttachmentIngestPending(paste);
+  const pickedHarnessId = useStore(
+    toolbarStore,
+    (state) => state.values.selection.harnessId,
+  );
+  const {
+    hint: agentHint,
+    blocked: agentBlocked,
+    refusal: sandboxAgentRefusal,
+    stagedSignInCheck,
+  } = usePlacementAgentGates({
+    client: hostClient,
+    hostId: resolvedHostId,
+    harnessId,
+    pickedHarnessId,
+    active: chatComposerActive,
+    stagedAhead: workspaceGate.stagedAhead,
+  });
   const canSubmit =
     canMutate &&
     !isSubmitting &&
     !attachmentPending &&
     workspaceCanStart &&
+    !agentBlocked &&
     hasSubmittableContent;
   // The staged sandbox's send (sandboxes plan D1). Its phase 2 resubmits from
   // this body, which `NewConversationModalHost` keeps mounted until the stage
@@ -1176,7 +1189,6 @@ export function NewConversationModalBody(props: {
     canSubmit: stagedResubmitReady({
       catalogSettled,
       launch: stagedTerminalLaunch,
-      harnessId,
       canSubmit,
       canStart: [canMutate, workspaceCanStart, !isSubmitting],
       providers: stagedProviders,
@@ -1198,7 +1210,8 @@ export function NewConversationModalBody(props: {
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
-    workspaceGate.disabledHint;
+    workspaceGate.disabledHint ??
+    agentHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();
   // Local partition OR epic replica, for the PASTE filter. On its own the epic
   // map strips a pasted hash-only node whose bytes are in this window's image
@@ -1381,7 +1394,11 @@ export function NewConversationModalBody(props: {
       // modal exactly as the user left them, with the reason inline.
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
-        raiseHostNotice({ kind: "refused", message: placementVerdict.message });
+        raiseHostNotice({
+          kind: "refused",
+          message: placementVerdict.message,
+          action: null,
+        });
         return;
       }
       // No render-vs-live drift check needed here (main's #1231 added one for
@@ -1592,7 +1609,6 @@ export function NewConversationModalBody(props: {
       // The toast (with the host's reason) is the shared create hook's, which
       // is mutation-level and so survives this close.
       cleanupAfterSubmit();
-      settleStagedAcceptance(stagedAcceptanceRef, true);
     },
     [
       canSubmit,
@@ -1698,21 +1714,54 @@ export function NewConversationModalBody(props: {
     // before resolution finished, the live check passed and the chat was
     // created from a keystroke the user had every reason to read as a no-op.
     if (!canSubmit) return;
+    if (sandboxAgentRefusal !== null) {
+      raiseHostNotice(sandboxAgentRefusal);
+      return;
+    }
     if (
       teamSandboxHarnessBlocked(toolbarStore.getState().selection.harnessId)
     ) {
       raiseHostNotice({
         kind: "refused",
         message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+        action: null,
       });
       return;
     }
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
-    // A staged sandbox takes the first send: it is created or woken, and
-    // this submit runs again on it once it is ready. The draft stays.
-    if (stagedSend.intercept(composerDisplayPlainText(captured), null)) return;
+    // A staged sandbox takes the send (sandboxes redesign Flow 1): the
+    // message waits in this task, behind the setup line, until the agent the
+    // person picked is ready on the sandbox, and the modal closes at once. It
+    // runs on that agent and model, never one this host would swap in.
+    const stagedKey = stagingSurfaceKey(sandboxStaging);
+    const staged = stagedKey === null ? null : readStagedSandbox(stagedKey);
+    if (stagedKey !== null && staged !== null && staged.phase !== "handoff") {
+      // An agent signed out on the staged configuration is refused here,
+      // before anything is created or woken; the draft and the chip stay.
+      const signedOut = stagedSignInCheck(staged);
+      if (signedOut !== null) {
+        raiseHostNotice(signedOut);
+        return;
+      }
+      const content = buildSubmittedChatJSONContent(
+        captured,
+        pickerStore.getState().knownSlashCommands,
+      );
+      const handed = handPendingSandboxSend({
+        fromSurfaceKey: stagedKey,
+        epicId,
+        request: { kind: "chat", parentId },
+        content,
+        text: composerDisplayPlainText(content),
+        settings: pickedRunSettings(toolbarStore.getState()),
+        epicConfirmed: true,
+        now: Date.now(),
+      });
+      if (handed !== null) cleanupAfterSubmit();
+      return;
+    }
     // The draft this submit is FOR. The editor stays editable across the reads
     // below and the create ends in `cleanupAfterSubmit`, which clears the draft
     // store and the editor - so without this, a sentence typed during the read
@@ -1954,7 +2003,6 @@ export function NewConversationModalBody(props: {
           // and the argument dies the day someone adds an await to the fast
           // path.
           if (!submitReentryQueued.current) submitReentryAttempt.current = 0;
-          settleStagedUnlessPreparing();
           return;
         }
         submitReentryRequested.current = false;
@@ -1994,22 +2042,26 @@ export function NewConversationModalBody(props: {
         kind: "refused",
         message:
           "The images in this prompt could not be prepared. The draft has been kept - try again.",
+        action: null,
       });
-      settleStagedUnlessPreparing();
     });
   }, [
     canSubmit,
+    cleanupAfterSubmit,
     epicId,
+    parentId,
+    pickerStore,
     raiseHostNotice,
     resolvedHostId,
-    settleStagedUnlessPreparing,
+    sandboxAgentRefusal,
+    sandboxStaging,
     // The client the by-hash upload dispatches on, and it must be the CURRENT
     // one: the host picker stays live while the upload runs, and bytes put on
     // the machine the chip stopped showing are bytes the create's host never
     // received.
     submitTarget,
     setSubmitReentryTick,
-    stagedSend,
+    stagedSignInCheck,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
     toolbarStore,
@@ -2035,8 +2087,7 @@ export function NewConversationModalBody(props: {
     handledSubmitReentryTick.current = submitReentryTick;
     submitReentryQueued.current = false;
     handleSubmit();
-    settleStagedUnlessPreparing();
-  }, [submitReentryTick, handleSubmit, settleStagedUnlessPreparing]);
+  }, [submitReentryTick, handleSubmit]);
   // Whether the create was sent: false on a refusal, which says why inline.
   const dispatchStartTerminal = useCallback(
     (launch: TerminalAgentLaunch): boolean => {
@@ -2045,6 +2096,7 @@ export function NewConversationModalBody(props: {
         raiseHostNotice({
           kind: "refused",
           message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+          action: null,
         });
         return false;
       }
@@ -2054,7 +2106,11 @@ export function NewConversationModalBody(props: {
       // anything reports the failure.
       const placementVerdict = resolveLandingPlacement(submitTarget);
       if (placementVerdict.kind === "refused") {
-        raiseHostNotice({ kind: "refused", message: placementVerdict.message });
+        raiseHostNotice({
+          kind: "refused",
+          message: placementVerdict.message,
+          action: null,
+        });
         return false;
       }
       // The staged key and this create both derive from the same captured
@@ -2120,35 +2176,15 @@ export function NewConversationModalBody(props: {
     [canMutate, dispatchStartTerminal, stagedSend, workspaceCanStart],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
-  // earlier) reads this render's resubmit, not the last one's. No model or no
-  // launch on the new host is no agent there; a Start is assembled again for
-  // it. Any other refusal, or a send that stops short while its images are
-  // read, is a send that did not go.
+  // earlier) reads this render's resubmit, not the last one's. Only a terminal
+  // agent's Start is resubmitted on the sandbox, assembled again for it: a
+  // send hands its message to the task instead. No launch on the new host is
+  // no agent there.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
-        ? () => {
-            if (toolbarStore.getState().selection.modelSlug.length === 0) {
-              return false;
-            }
-            // One left waiting from an earlier handoff is over.
-            settleStagedAcceptance(stagedAcceptanceRef, false);
-            // Its images may still be read and inlined: the stage holds the
-            // handoff, and this body, until the create goes out. The executor
-            // runs now, so a create that goes out in this call is sent
-            // already, and one still reading its images settles later.
-            const sent = { value: false };
-            const accepted = new Promise<boolean>((resolve) => {
-              stagedAcceptanceRef.current = (dispatched) => {
-                sent.value = dispatched;
-                resolve(dispatched);
-              };
-              handleSubmit();
-              settleStagedUnlessPreparing();
-            });
-            return sent.value ? true : accepted;
-          }
+        ? () => false
         : () => {
             const launch = stagedTerminalLaunchOnHost(
               stagedTerminalLaunch,
@@ -2162,8 +2198,6 @@ export function NewConversationModalBody(props: {
           };
   }, [
     dispatchStartTerminal,
-    handleSubmit,
-    settleStagedUnlessPreparing,
     stagedProviders.data,
     stagedTerminalLaunch,
     toolbarStore,
@@ -2192,75 +2226,79 @@ export function NewConversationModalBody(props: {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
   return (
-    <ComposerBody
-      pickerStore={pickerStore}
-      editorRef={editorRef}
-      toolbarStore={toolbarStore}
-      composerMode={draftComposerMode}
-      chatEditorIsActive={chatComposerActive}
-      editorClassName={COMPOSER_EDITOR_CLASSNAME}
-      initialContent={initialContent}
-      initialSelection={initialSelection}
-      canSubmit={canSubmit}
-      isSubmitting={isSubmitting}
-      editorReadOnly={false}
-      attachmentPending={attachmentPending}
-      workspaceDisabledHint={composerDisabledHint}
-      stagedAhead={workspaceGate.stagedAhead}
-      header={header}
-      topBanner={
-        <>
-          {stagedSend.line}
-          <ComposerHostNotice
-            notice={topNotice.notice}
-            onDismiss={topNotice.dismiss}
+    <ComposerStagedSurfaceKeyProvider
+      surfaceKey={stagingSurfaceKey(sandboxStaging)}
+    >
+      <ComposerBody
+        pickerStore={pickerStore}
+        editorRef={editorRef}
+        toolbarStore={toolbarStore}
+        composerMode={draftComposerMode}
+        chatEditorIsActive={chatComposerActive}
+        editorClassName={COMPOSER_EDITOR_CLASSNAME}
+        initialContent={initialContent}
+        initialSelection={initialSelection}
+        canSubmit={canSubmit}
+        isSubmitting={isSubmitting}
+        editorReadOnly={false}
+        attachmentPending={attachmentPending}
+        workspaceDisabledHint={composerDisabledHint}
+        stagedAhead={workspaceGate.stagedAhead}
+        header={header}
+        topBanner={
+          <>
+            {stagedSend.line}
+            <ComposerHostNotice
+              notice={topNotice.notice}
+              onDismiss={topNotice.dismiss}
+            />
+          </>
+        }
+        // Same rule as the landing composer's row (`landing-composer.tsx`): six
+        // pills do not fit a phone-width row, so below `md` the agent-mode pill
+        // moves into the options sheet behind the permission pill. This modal
+        // used to opt out and render the desktop row at any width, which made
+        // one composer look like two depending on where it was opened from.
+        toolbarLayout={isMobile ? "collapsed" : "full"}
+        // Already a sheet of its own; a second one over it would fight the
+        // dialog for the screen.
+        expansion={null}
+        draftsControl={null}
+        attachmentsStrip={
+          <NewConversationModalAttachmentStrip
+            epicId={epicId}
+            hostId={resolvedHostId}
+            seedContent={seed.content}
+            onRemoveImage={handleRemoveImage}
           />
-        </>
-      }
-      // Same rule as the landing composer's row (`landing-composer.tsx`): six
-      // pills do not fit a phone-width row, so below `md` the agent-mode pill
-      // moves into the options sheet behind the permission pill. This modal
-      // used to opt out and render the desktop row at any width, which made
-      // one composer look like two depending on where it was opened from.
-      toolbarLayout={isMobile ? "collapsed" : "full"}
-      // Already a sheet of its own; a second one over it would fight the
-      // dialog for the screen.
-      expansion={null}
-      draftsControl={null}
-      attachmentsStrip={
-        <NewConversationModalAttachmentStrip
-          epicId={epicId}
-          hostId={resolvedHostId}
-          seedContent={seed.content}
-          onRemoveImage={handleRemoveImage}
-        />
-      }
-      workspaceControls={workspaceControls}
-      dictationControl={dictationControl}
-      dictationPreparing={dictationPreparing}
-      paste={paste}
-      hasPastedImageBytes={hasPastedImageBytes}
-      ingestPastedComposerImages={ingestPastedComposerImages}
-      // A draft restored into this modal can already carry a pending b64 node
-      // (the editor is created with `initialContent` and fires no document
-      // change for it), so the sweep runs once the handle exists as well.
-      onEditorReady={reingestPendingImages}
-      // No terminal surface: a sign-in terminal tile is bound to the TAB's
-      // host, while this composer creates on a placement-resolved host that
-      // may be another machine, and this modal sits above the canvas the tile
-      // would open on. The picker's setup CTA shows its steps and names the
-      // chat picker instead.
-      terminalLoginSurface={null}
-      // The pinned host, else this composer's surface-pin resolution - the
-      // same id `hostClient` above resolves, so the toolbar's and terminal
-      // launcher's pickers offer this host's harnesses/models/profiles and
-      // create profiles on it.
-      hostId={resolvedHostId}
-      onSubmit={handleSubmit}
-      onStartTerminal={handleStartTerminal}
-      onDocumentChange={handleDocumentChange}
-      onSelectionChange={handleSelectionChange}
-    />
+        }
+        workspaceControls={workspaceControls}
+        dictationControl={dictationControl}
+        dictationPreparing={dictationPreparing}
+        paste={paste}
+        hasPastedImageBytes={hasPastedImageBytes}
+        ingestPastedComposerImages={ingestPastedComposerImages}
+        // A draft restored into this modal can already carry a pending b64 node
+        // (the editor is created with `initialContent` and fires no document
+        // change for it), so the sweep runs once the handle exists as well.
+        onEditorReady={reingestPendingImages}
+        // No terminal surface: a sign-in terminal tile is bound to the TAB's
+        // host, while this composer creates on a placement-resolved host that
+        // may be another machine, and this modal sits above the canvas the tile
+        // would open on. The picker's setup CTA shows its steps and names the
+        // chat picker instead.
+        terminalLoginSurface={null}
+        // The pinned host, else this composer's surface-pin resolution - the
+        // same id `hostClient` above resolves, so the toolbar's and terminal
+        // launcher's pickers offer this host's harnesses/models/profiles and
+        // create profiles on it.
+        hostId={resolvedHostId}
+        onSubmit={handleSubmit}
+        onStartTerminal={handleStartTerminal}
+        onDocumentChange={handleDocumentChange}
+        onSelectionChange={handleSelectionChange}
+      />
+    </ComposerStagedSurfaceKeyProvider>
   );
 }
 
@@ -2330,6 +2368,83 @@ function useModalWorkspaceSeed(args: {
     parentInheritance.seed,
     parentOwnerKind,
   ]);
+}
+
+/**
+ * The draft's NON-content fields, over the seed. `content` is rewritten on
+ * every keystroke (see `handleDocumentChange`); subscribing to the whole
+ * patch here would re-render the entire modal body per character. Live
+ * content is routed to an isolated subscriber
+ * (`NewConversationModalAttachmentStrip`) plus a boolean submit gate,
+ * mirroring the landing composer's isolation.
+ */
+function useNewConversationDraftFields(
+  epicId: string,
+  seed: NewConversationModalSeed,
+): Pick<NewConversationModalSeed, "settings" | "composerMode" | "workspace"> {
+  const draftFields = useNewConversationModalStore(
+    useShallow((state) => {
+      const patch = state.draftPatchesByEpicId[epicId];
+      return {
+        settings: patch?.settings ?? null,
+        composerMode: patch?.composerMode ?? null,
+        workspace: patch?.workspace ?? null,
+      };
+    }),
+  );
+  return {
+    settings: draftFields.settings ?? seed.settings,
+    composerMode: draftFields.composerMode ?? seed.composerMode,
+    workspace: draftFields.workspace ?? seed.workspace,
+  };
+}
+
+/**
+ * The placement host's own gates for an agent's first message, as the
+ * landing composer's: a managed pack still installing holds the send with
+ * its hint, and on a sandbox an agent that cannot run there is refused at
+ * Send, with the configuration's Providers, never swapped or held behind a
+ * disabled button. A staged sandbox's send (`stagedAhead`) waits for its own
+ * agent on the sandbox instead, checked by `stagedSignInCheck`.
+ */
+function usePlacementAgentGates(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly harnessId: GuiHarnessId | null;
+  readonly pickedHarnessId: GuiHarnessId | null;
+  readonly active: boolean;
+  readonly stagedAhead: boolean;
+}): {
+  readonly hint: string | null;
+  readonly blocked: boolean;
+  readonly refusal: ComposerHostNoticeState | null;
+  readonly stagedSignInCheck: (
+    stage: StagedSandbox,
+  ) => ComposerHostNoticeState | null;
+} {
+  const { client, hostId, harnessId, active, stagedAhead } = input;
+  const packGate = useProviderPackGateForClient(client, harnessId, active);
+  const sandboxAgentGate = useSandboxAgentGate({
+    hostId,
+    client,
+    harnessId,
+    active,
+  });
+  const stagedSignInCheck = useStagedSendSignInCheck({
+    client,
+    hostId,
+    harnessId: input.pickedHarnessId,
+    active: active && stagedAhead,
+  });
+  if (!active || stagedAhead) {
+    return { hint: null, blocked: false, refusal: null, stagedSignInCheck };
+  }
+  return {
+    hint: packGate.hint,
+    blocked: packGate.blocked,
+    refusal: sandboxAgentGate.notice,
+    stagedSignInCheck,
+  };
 }
 
 function useNewConversationModalSeed(

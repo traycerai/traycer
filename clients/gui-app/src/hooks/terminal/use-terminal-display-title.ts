@@ -7,6 +7,7 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 
 /** The identity a caller has for a terminal it is rendering. */
 export interface TerminalSessionIdentity {
@@ -57,17 +58,21 @@ export function useTerminalFindSessionRow(
 
 /**
  * Live display title for a terminal session: the host's explicit title, else
- * the live directory plus active process/default. `null` while there is no
- * row yet - the caller then falls back to the persisted tile-name snapshot.
+ * the live directory plus active process/default (the task's own directory
+ * named by `hostId`'s name). `null` while there is no row yet - the caller
+ * then falls back to the persisted tile-name snapshot.
  */
 export function useTerminalDisplayTitle(
   args: TerminalSessionIdentity,
+  hostId: string | null,
 ): string | null {
   const session = useTerminalFindSessionRow(args);
+  const taskHome = useTaskHomeDirectory(args.epicId, hostId);
   if (session === null) return null;
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
     currentCwd: session.currentCwd,
+    taskHome,
   });
 }

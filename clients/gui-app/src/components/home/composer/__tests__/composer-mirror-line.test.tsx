@@ -646,10 +646,12 @@ describe("ComposerHostNotice", () => {
   const MIRROR: ComposerHostNoticeState = {
     kind: "mirror",
     message: composerMirrorLineText("Acme sandbox"),
+    action: null,
   };
   const REFUSED: ComposerHostNoticeState = {
     kind: "refused",
     message: "Could not start on that host.",
+    action: null,
   };
 
   it("renders a mirror notice as a status, not an alert", () => {
@@ -679,10 +681,12 @@ describe("composerTopNotice", () => {
   const MIRROR: ComposerHostNoticeState = {
     kind: "mirror",
     message: composerMirrorLineText("Acme sandbox"),
+    action: null,
   };
   const REFUSED: ComposerHostNoticeState = {
     kind: "refused",
     message: "Could not start on that host.",
+    action: null,
   };
 
   it("lets a refusal outrank the mirror line, with the refusal's own dismiss", () => {
@@ -739,6 +743,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("Acme sandbox"),
+      action: null,
     });
   });
 
@@ -751,6 +756,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("My laptop"),
+      action: null,
     });
   });
 
@@ -772,6 +778,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("My laptop"),
+      action: null,
     });
   });
 
@@ -786,6 +793,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("Acme sandbox"),
+      action: null,
     });
   });
 
@@ -801,6 +809,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("MacBook Pro"),
+      action: null,
     });
   });
 
@@ -817,6 +826,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("Alice's host"),
+      action: null,
     });
   });
 
@@ -832,6 +842,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("a collaborator's host"),
+      action: null,
     });
   });
 
@@ -841,6 +852,7 @@ describe("useComposerMirrorLine", () => {
     expect(known.result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("acme host"),
+      action: null,
     });
 
     inputs.teams.current = [];
@@ -850,6 +862,7 @@ describe("useComposerMirrorLine", () => {
     expect(unknown.result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("a team host"),
+      action: null,
     });
   });
 
@@ -863,6 +876,7 @@ describe("useComposerMirrorLine", () => {
     expect(result.current.notice).toEqual({
       kind: "mirror",
       message: composerMirrorLineText("one of your hosts"),
+      action: null,
     });
   });
 
@@ -880,6 +894,7 @@ describe("useComposerMirrorLine", () => {
       kind: "mirror",
       message:
         "Agents here cannot work with the agents on one of your hosts; the task still shares its files and chats.",
+      action: null,
     });
     expect(result.current.notice?.message).not.toContain(rawHostId);
   });

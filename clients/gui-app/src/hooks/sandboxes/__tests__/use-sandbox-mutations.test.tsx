@@ -47,7 +47,14 @@ vi.mock("@/lib/auth-error-toast", () => ({
 }));
 
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
+import {
+  endedSandboxHost,
+  useEndedSandboxHostsStore,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
+import {
+  useSandboxAutomationOpen,
+  type SandboxAutomationOpened,
+} from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import { useSandboxDestroyBatch } from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
@@ -97,6 +104,7 @@ describe("useSandboxVerb", () => {
     expect(state.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "suspend",
+      null,
       SANDBOX_VERB_FETCH_TIMEOUT_MS,
     );
     expect(outcome).toEqual({ kind: "settled", state: null });
@@ -209,7 +217,7 @@ describe("useSandboxAutomationOpen", () => {
   });
   afterEach(cleanup);
 
-  it("opens through the auth service and resolves true when settled, refreshing the directory and the registered-hosts prefix", async () => {
+  it("opens through the auth service and resolves the row, settled,, refreshing the directory and the registered-hosts prefix", async () => {
     state.binding?.auth.openSandboxAutomation.mockResolvedValue({
       ...OPENED,
       settled: true,
@@ -219,12 +227,12 @@ describe("useSandboxAutomationOpen", () => {
       wrapper,
     });
 
-    let outcome: boolean | null = null;
+    let outcome: SandboxAutomationOpened | null = null;
     await act(async () => {
       outcome = await result.current.mutateAsync(null);
     });
 
-    expect(outcome).toBe(true);
+    expect(outcome).toEqual({ sandbox: OPENED.sandbox, settled: true });
     expect(state.binding?.auth.openSandboxAutomation).toHaveBeenCalledTimes(1);
     expect(state.binding?.auth.openSandboxAutomation).toHaveBeenCalledWith(
       null,
@@ -234,7 +242,7 @@ describe("useSandboxAutomationOpen", () => {
     expect(state.toastFromAuthError).not.toHaveBeenCalled();
   });
 
-  it("resolves false while the row is still moving (202)", async () => {
+  it("resolves the row, not settled, while it is still moving (202)", async () => {
     state.binding?.auth.openSandboxAutomation.mockResolvedValue({
       ...OPENED,
       settled: false,
@@ -244,11 +252,11 @@ describe("useSandboxAutomationOpen", () => {
       wrapper,
     });
 
-    let outcome: boolean | null = null;
+    let outcome: SandboxAutomationOpened | null = null;
     await act(async () => {
       outcome = await result.current.mutateAsync(null);
     });
-    expect(outcome).toBe(false);
+    expect(outcome).toEqual({ sandbox: OPENED.sandbox, settled: false });
   });
 
   it("toasts on a refusal and still refreshes", async () => {
@@ -283,11 +291,11 @@ describe("useSandboxAutomationOpen", () => {
       wrapper,
     });
 
-    let outcome: boolean | null = null;
+    let outcome: SandboxAutomationOpened | null = null;
     await act(async () => {
       outcome = await result.current.mutateAsync(target);
     });
-    expect(outcome).toBe(true);
+    expect(outcome).toEqual({ sandbox: OPENED.sandbox, settled: true });
     expect(state.binding?.auth.openSandboxAutomation).toHaveBeenCalledWith(
       target,
     );
@@ -542,6 +550,12 @@ describe("useSandboxKeep", () => {
   });
 });
 
+const DESTROYED_SANDBOX = {
+  id: "sbx_1",
+  hostId: "host-sbx-1",
+  displayName: "build-box",
+};
+
 describe("useSandboxDestroyBatch", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
@@ -624,7 +638,7 @@ describe("useSandboxDestroy", () => {
 
   it("resolves true when the row is gone on 200 and refreshes the lists", async () => {
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxDestroy("sbx_1"), {
+    const { result } = renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), {
       wrapper,
     });
 
@@ -646,7 +660,7 @@ describe("useSandboxDestroy", () => {
       settled: false,
     });
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxDestroy("sbx_1"), {
+    const { result } = renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), {
       wrapper,
     });
 
@@ -662,7 +676,7 @@ describe("useSandboxDestroy", () => {
       refusal(404, "sandbox_not_found"),
     );
     const { wrapper } = setup();
-    const { result } = renderHook(() => useSandboxDestroy("sbx_1"), {
+    const { result } = renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), {
       wrapper,
     });
 
@@ -679,7 +693,7 @@ describe("useSandboxDestroy", () => {
       refusal(409, "sandbox_transition_conflict"),
     );
     const { wrapper, invalidate } = setup();
-    const { result } = renderHook(() => useSandboxDestroy("sbx_1"), {
+    const { result } = renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), {
       wrapper,
     });
 
@@ -779,7 +793,9 @@ describe("settling under another account", () => {
       state.binding?.auth.destroySandbox.mockImplementation(
         () => pending.promise,
       );
-      const view = renderHook(() => useSandboxDestroy("sbx_1"), { wrapper });
+      const view = renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), {
+        wrapper,
+      });
       act(() => {
         view.result.current.mutate();
       });
@@ -819,7 +835,9 @@ describe("settling under another account", () => {
       state.binding?.auth.destroySandbox.mockImplementation(
         () => pending.promise,
       );
-      const view = renderHook(() => useSandboxDestroy("sbx_1"), { wrapper });
+      const view = renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), {
+        wrapper,
+      });
       const onSuccess = vi.fn<(settled: boolean) => void>();
       act(() => {
         view.result.current.mutate(undefined, { onSuccess });
@@ -1010,5 +1028,139 @@ describe("useSandboxDestroyBatch under another account", () => {
 
     expect(state.binding?.auth.listSandboxes).not.toHaveBeenCalled();
     expect(state.binding?.auth.destroySandbox).not.toHaveBeenCalled();
+  });
+});
+
+describe("a destroy records its host as ended", () => {
+  const VIEWER = { userId: "user-a", displayName: null };
+
+  beforeEach(() => {
+    state.binding = createFakeSandboxBinding();
+    useEndedSandboxHostsStore.setState({ byHostId: {} });
+    signInAs("user-a");
+  });
+  afterEach(() => {
+    cleanup();
+    signInAs(null);
+  });
+
+  function renderDestroy() {
+    const { wrapper } = setup();
+    return renderHook(() => useSandboxDestroy(DESTROYED_SANDBOX), { wrapper });
+  }
+
+  it("records the viewer's destroy before the request resolves", async () => {
+    const pending = deferred<{ kind: "ok"; settled: boolean }>();
+    state.binding?.auth.destroySandbox.mockImplementation(
+      () => pending.promise,
+    );
+    const view = renderDestroy();
+
+    act(() => {
+      view.result.current.mutate();
+    });
+
+    await waitFor(() => {
+      expect(state.binding?.auth.destroySandbox).toHaveBeenCalledTimes(1);
+    });
+    expect(endedSandboxHost("host-sbx-1")).toMatchObject({
+      name: "build-box",
+      actor: VIEWER,
+    });
+    await act(async () => {
+      pending.resolve({ kind: "ok", settled: true });
+      await pending.promise;
+    });
+  });
+
+  it("keeps the record on 200 and on a 404 sandbox_not_found", async () => {
+    const view = renderDestroy();
+    await act(async () => {
+      await view.result.current.mutateAsync();
+    });
+    expect(endedSandboxHost("host-sbx-1")).not.toBeNull();
+
+    useEndedSandboxHostsStore.setState({ byHostId: {} });
+    state.binding?.auth.destroySandbox.mockResolvedValue(
+      refusal(404, "sandbox_not_found"),
+    );
+    await act(async () => {
+      await view.result.current.mutateAsync();
+    });
+    expect(endedSandboxHost("host-sbx-1")).not.toBeNull();
+  });
+
+  it("forgets the record when the destroy is refused or never answered", async () => {
+    const view = renderDestroy();
+    state.binding?.auth.destroySandbox.mockResolvedValue(
+      refusal(409, "sandbox_transition_conflict"),
+    );
+    await act(async () => {
+      await view.result.current.mutateAsync().catch(() => undefined);
+    });
+    expect(endedSandboxHost("host-sbx-1")).toBeNull();
+
+    state.binding?.auth.destroySandbox.mockResolvedValue({
+      kind: "network-error",
+      detail: "offline",
+    });
+    await act(async () => {
+      await view.result.current.mutateAsync().catch(() => undefined);
+    });
+    expect(endedSandboxHost("host-sbx-1")).toBeNull();
+  });
+
+  describe("the batch, per row", () => {
+    const idle = (id: string, hostId: string) =>
+      sandboxSummaryFixture({
+        id,
+        hostId,
+        displayName: `name-${id}`,
+        burst: true,
+        state: "suspended",
+      });
+
+    it("records a row it destroys, forgets one refused, and records none it skips", async () => {
+      state.binding?.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            idle("sbx_1", "host-1"),
+            idle("sbx_2", "host-2"),
+            sandboxSummaryFixture({
+              id: "sbx_3",
+              hostId: "host-3",
+              burst: true,
+              state: "awake",
+            }),
+          ],
+        },
+      });
+      state.binding?.auth.destroySandbox
+        .mockResolvedValueOnce({ kind: "ok", settled: true })
+        .mockResolvedValueOnce(refusal(409, "sandbox_transition_conflict"));
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useSandboxDestroyBatch(), {
+        wrapper,
+      });
+
+      await act(async () => {
+        await result.current.mutateAsync({
+          targets: [
+            { sandboxId: "sbx_1", name: "one" },
+            { sandboxId: "sbx_2", name: "two" },
+            { sandboxId: "sbx_3", name: "three" },
+          ],
+          startedBy: "user-a",
+        });
+      });
+
+      expect(endedSandboxHost("host-1")).toMatchObject({
+        name: "name-sbx_1",
+        actor: VIEWER,
+      });
+      expect(endedSandboxHost("host-2")).toBeNull();
+      expect(endedSandboxHost("host-3")).toBeNull();
+    });
   });
 });

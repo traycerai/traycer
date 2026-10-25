@@ -241,7 +241,7 @@ function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
   return runStagedSandbox(
     surfaceKey,
     fresh,
-    { fallbackName: "fallback-box", taskId: null },
+    { fallbackName: "fallback-box", taskId: null, resume: false },
     deps,
   );
 }
@@ -314,7 +314,7 @@ describe("runStagedSandbox creating", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: "epic-1" },
+      { fallbackName: "fallback-box", taskId: "epic-1", resume: false },
       deps,
     );
 
@@ -535,7 +535,7 @@ describe("runStagedSandbox settling", () => {
     await runStagedSandbox(
       surfaceKey,
       false,
-      { fallbackName: "fallback-box", taskId: null },
+      { fallbackName: "fallback-box", taskId: null, resume: false },
       deps,
     );
 

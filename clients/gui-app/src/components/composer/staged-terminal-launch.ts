@@ -20,13 +20,12 @@ type HostProviders = ResponseOfMethod<
  * Whether phase 2 may resubmit on the new host: once its catalog has answered,
  * a send under its own gate, and a Start under its own gates once the host's
  * providers have answered too (they say whether its profile is offered) and
- * the selected harness's pack is not still being readied there. Until then
+ * the Start's own harness's pack is not still being readied there. Until then
  * the line stays on its last step.
  */
 export function stagedResubmitReady(input: {
   readonly catalogSettled: boolean;
   readonly launch: TerminalAgentLaunch | null;
-  readonly harnessId: GuiHarnessId;
   readonly canSubmit: boolean;
   readonly canStart: readonly boolean[];
   readonly providers: {
@@ -39,7 +38,7 @@ export function stagedResubmitReady(input: {
   const answered =
     input.providers.data !== undefined || input.providers.isError;
   if (!answered) return false;
-  if (packPreparing(input.harnessId, input.providers.data?.providers)) {
+  if (packPreparing(input.launch.harnessId, input.providers.data?.providers)) {
     return false;
   }
   return input.canStart.every(Boolean);
@@ -62,40 +61,29 @@ function packPreparing(
 
 /**
  * A terminal agent's Start that a staged sandbox took, assembled again on the
- * new host once its catalog and providers have answered. The toolbar's
- * selection is the person's harness and model where that catalog offers them
- * and the host's defaults where it does not. The captured profile and
- * arguments are kept for the same harness, the profile only where the host
- * offers it (else its own login). `null` when the host offers no terminal
- * agent: the selected harness is not in its catalog, is unavailable there, or
- * cannot run in a terminal, as the terminal panel's Start reads it.
+ * new host once its catalog and providers have answered: the person's own
+ * harness, model and arguments, never one the new host's toolbar would swap
+ * in. The captured profile is kept only where the host offers it (else its
+ * own login). `null` when that harness cannot run there: not in the host's
+ * catalog, unavailable there, or not a terminal agent, as the terminal
+ * panel's Start reads it. The line then says so, and offers a terminal.
  */
 export function stagedTerminalLaunchOnHost(
   captured: TerminalAgentLaunch,
-  toolbar: Pick<ComposerToolbarState, "selection" | "reasoning" | "catalog">,
+  toolbar: Pick<ComposerToolbarState, "catalog">,
   providers: HostProviders | undefined,
 ): TerminalAgentLaunch | null {
-  const { harnessId, modelSlug } = toolbar.selection;
-  if (!isTuiHarnessId(harnessId)) return null;
   const harness = toolbar.catalog.harnesses?.find(
-    (option) => option.id === harnessId,
+    (option) => option.id === captured.harnessId,
   );
   if (harness === undefined || !harness.available) return null;
   if (!harness.modes.includes("tui")) return null;
-  const sameHarness = harnessId === captured.harnessId;
-  const providerId = TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
+  const providerId = TUI_HARNESS_ID_TO_PROVIDER_ID[captured.harnessId];
   const profiles = providers?.find(
     (provider) => provider.providerId === providerId,
   )?.profiles;
   return {
-    harnessId,
-    model: modelSlug.length > 0 ? modelSlug : null,
-    reasoningEffort: toolbar.reasoning.length > 0 ? toolbar.reasoning : null,
-    terminalAgentArgs: sameHarness ? captured.terminalAgentArgs : null,
-    profileId: resolveSeededProfileId(
-      sameHarness ? captured.profileId : toolbar.selection.profileId,
-      profiles,
-      true,
-    ),
+    ...captured,
+    profileId: resolveSeededProfileId(captured.profileId, profiles, true),
   };
 }

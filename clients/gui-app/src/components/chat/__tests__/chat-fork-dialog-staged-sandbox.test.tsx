@@ -1,0 +1,738 @@
+/**
+ * A fork onto a New sandbox the chat host chip picked is handed to the task.
+ *
+ * The dialog opens with the sandbox staged; Fork neither creates a chat on the
+ * tab's host nor waits there: it moves the stage to a pending send of kind
+ * `fork`, which the pending-send driver creates, waits on and delivers.
+ */
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+
+const TAB_HOST_ID = "tab-host-id";
+
+interface BlockedInput {
+  readonly hostId: string | null;
+  readonly harnessId: string | null;
+}
+
+const dialogMocks = vi.hoisted(() => ({
+  createMutate: vi.fn<(input: unknown, options: unknown) => void>(),
+  blocked: { current: false },
+  blockedInputs: [] as Array<{
+    readonly hostId: string | null;
+    readonly harnessId: string | null;
+  }>,
+  clientsByHostId: new Map<string, unknown>(),
+  directoryHosts: [] as HostDirectoryEntry[],
+  onOpenChange: vi.fn<(open: boolean) => void>(),
+  needsOwnHostToast: vi.fn<() => void>(),
+  attachCalls: [] as Array<{ epicId: string; teamId: string }>,
+  attachAnswers: true,
+  stagingSeen: [] as Array<unknown>,
+  /** The dialog's own host pick, as its workspace controls call it. */
+  selectHost: null as ((hostId: string) => void) | null,
+  /** Whether the forked harness is available on the selected host. */
+  harnessAvailable: true,
+  /** The harness's sign-in on the dialog's host. */
+  authStatus: "authenticated" as "authenticated" | "unauthenticated",
+  /** The configuration the dialog's host runs. */
+  principal: { kind: "personal" } as
+    | { readonly kind: "personal" }
+    | { readonly kind: "team"; readonly teamName: string },
+  openProviders: vi.fn<() => void>(),
+}));
+
+vi.mock("@/hooks/environment/use-environment-reads", () => ({
+  useEnvironmentStatusRead: () => ({
+    supported: true,
+    data: { principal: dialogMocks.principal },
+    isError: false,
+  }),
+}));
+vi.mock("@/hooks/sandboxes/use-open-configuration-providers", () => ({
+  useConfigurationProvidersOpener: () => () => dialogMocks.openProviders,
+}));
+
+vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => ({
+  useTeamSandboxHarnessBlocked: (input: BlockedInput): boolean => {
+    dialogMocks.blockedInputs.push({
+      hostId: input.hostId,
+      harnessId: input.harnessId,
+    });
+    return dialogMocks.blocked.current;
+  },
+  // The toolbar store's palette controls ask too; the dialog's own Fork gate
+  // is what this suite is about.
+  useTeamSandboxHarnessGate: () => (): boolean => false,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicCreateChatForHostClient: () => ({
+    mutate: (input: unknown, options: unknown) => {
+      dialogMocks.createMutate(input, options);
+    },
+    isPending: false,
+    error: null,
+    variables: null,
+    reset: () => undefined,
+    data: null,
+    isError: false,
+    isSuccess: false,
+    status: "idle",
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId === null) return null;
+    return dialogMocks.clientsByHostId.get(hostId) ?? null;
+  },
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => dialogMocks.clientsByHostId.get(TAB_HOST_ID) ?? null,
+    useHostBinding: () => ({
+      directory: { selectById: vi.fn() },
+    }),
+  };
+});
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: dialogMocks.directoryHosts }),
+}));
+
+vi.mock("@/hooks/chats/use-clone-source-owner", () => ({
+  useCloneSourceOwnerUserId: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => TAB_HOST_ID,
+}));
+
+// The attachment before a fork onto a team's host: passed straight through,
+// so every fork here goes on to `epic.createChat` as it did before.
+vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
+  isAttachEnvironmentUnsupported: () => false,
+  toastAttachEnvironmentNeedsOwnHost: dialogMocks.needsOwnHostToast,
+  useEpicAttachEnvironment: () => ({
+    isPending: false,
+    mutate: (
+      input: { readonly epicId: string; readonly teamId: string },
+      options: { readonly onSuccess: () => void },
+    ) => {
+      dialogMocks.attachCalls.push(input);
+      if (dialogMocks.attachAnswers) options.onSuccess();
+    },
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: { readonly method?: string }) => {
+    if (args.method === "providers.list") {
+      return {
+        data: {
+          providers: [
+            {
+              providerId: "claude-code",
+              enabled: true,
+              disabledBy: null,
+              selected: { kind: "bundled" },
+              candidates: [],
+              auth: {
+                status: "authenticated",
+                badgeText: null,
+                label: null,
+                detail: null,
+              },
+              authPending: false,
+              checkedAt: null,
+              apiKey: { supported: false, configured: false, source: null },
+              terminalAgentArgs: "",
+              envOverrides: [],
+              loginCapability: null,
+              availabilityPending: false,
+              nativeCapabilities: {
+                supportedTabs: ["general", "env", "usage"],
+                mcp: null,
+                plugins: null,
+                skills: null,
+                modelProviders: null,
+              },
+              managedInstallState: null,
+              versionVisibility: null,
+              advisory: null,
+              profiles: [
+                {
+                  profileId: "ambient",
+                  kind: "ambient",
+                  authType: "oauth",
+                  label: "Terminal account",
+                  auth: {
+                    status: "authenticated",
+                    badgeText: null,
+                    label: null,
+                    detail: null,
+                  },
+                  identity: null,
+                  usageUpdatedAt: null,
+                  rateLimitStatus: "unknown",
+                  rateLimitLimitedScopes: null,
+                  duplicateOfProfileId: null,
+                  accentColor: null,
+                  ambientDriftNotice: null,
+                },
+              ],
+            },
+          ],
+        },
+      };
+    }
+    return { data: undefined };
+  },
+}));
+
+vi.mock("@/components/home/pickers/harness-model-picker", () => ({
+  HarnessModelPicker: () => (
+    <button type="button" aria-label="Harness picker">
+      Claude Opus
+    </button>
+  ),
+}));
+
+vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
+  AgentModeToggle: () => (
+    <button type="button" aria-label="Agent mode">
+      Regular
+    </button>
+  ),
+}));
+
+vi.mock(
+  "@/components/home/host-workspace-selector/host-workspace-selector",
+  () => ({
+    ActiveHostWorkspaceControls: (props: {
+      readonly sandboxStaging: unknown;
+      readonly hostScope: { readonly onSelect?: (hostId: string) => void };
+    }) => {
+      dialogMocks.stagingSeen.push(props.sandboxStaging);
+      dialogMocks.selectHost = props.hostScope.onSelect ?? null;
+      return <div data-testid="fork-workspace" />;
+    },
+  }),
+);
+
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessesQueryForClient: () => ({
+    data: {
+      harnesses: [
+        {
+          id: "claude",
+          label: "Claude Code",
+          enabled: true,
+          available: dialogMocks.harnessAvailable,
+          error: null,
+          authStatus: dialogMocks.authStatus,
+          modes: ["gui", "tui"],
+          requiresApiKey: false,
+          supportedPermissionModes: ["supervised"],
+        },
+      ],
+    },
+    isPending: false,
+  }),
+  useGuiHarnessModelsQueryForClient: () => ({
+    data: {
+      models: [
+        {
+          harnessId: "claude",
+          slug: "claude-opus-4-7",
+          label: "Claude Opus",
+          description: null,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: null,
+          supportedReasoningEfforts: [],
+          defaultServiceTier: null,
+          supportedServiceTiers: [],
+          metadata: {},
+        },
+      ],
+    },
+    isPending: false,
+  }),
+}));
+
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
+
+import {
+  useStagedSandboxStore,
+  readStagedSandbox,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+  type PendingSandboxSend,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+
+function directoryEntry(hostId: string, label: string): HostDirectoryEntry {
+  return {
+    hostId,
+    label,
+    kind: "local",
+    websocketUrl: `ws://127.0.0.1:0/${hostId}`,
+    version: "0.0.0-mock",
+    transportDialability: "dialable",
+  };
+}
+
+function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
+  const entry = directoryEntry(hostId, hostId);
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => {} },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${hostId}`,
+      handlers: {},
+    }),
+    findHostById: (id) => (id === hostId ? entry : null),
+  });
+  return spine.createRequester(entry);
+}
+
+const TAB_HOST_CLIENT = buildHostClient(TAB_HOST_ID);
+
+const SETTINGS_SEED: ChatRunSettings = {
+  harnessId: "claude",
+  model: "claude-opus-4-7",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+
+const SOURCE_FOLDER = {
+  path: "/repo/source",
+  name: "source",
+  repoIdentifier: null,
+  hostId: null,
+};
+
+function forkTarget(): ChatForkDialogTarget {
+  return {
+    sourceChatId: "source-chat",
+    sourceChatTitle: "Source chat",
+    assistantMessageId: "assistant-message-1",
+    interviewBlockId: null,
+    parentId: null,
+    settingsSeed: SETTINGS_SEED,
+    workspaceSeed: {
+      workspace: {
+        folders: [SOURCE_FOLDER.path],
+        folderInfoByPath: { [SOURCE_FOLDER.path]: SOURCE_FOLDER },
+        primaryPath: SOURCE_FOLDER.path,
+      },
+      intent: {
+        entries: [
+          {
+            kind: "local",
+            workspacePath: SOURCE_FOLDER.path,
+            repoIdentifier: null,
+            isPrimary: true,
+          },
+        ],
+      },
+    },
+    seedIntentOverride: null,
+    carriedInterviews: "settled",
+    forkMode: "plain",
+    initialHostId: null,
+    onlyHostIds: null,
+    stagedSandbox: null,
+  };
+}
+
+function renderDialog(): void {
+  render(
+    <ChatForkDialog
+      open
+      target={forkTarget()}
+      epicId="epic-test"
+      tabId="tab-test"
+      onOpenChange={() => undefined}
+    />,
+  );
+}
+
+function fillTitle(): void {
+  fireEvent.change(screen.getByRole("textbox", { name: "Fork agent title" }), {
+    target: { value: "Sibling fork" },
+  });
+}
+
+function forkButton(): HTMLButtonElement {
+  return screen.getByRole<HTMLButtonElement>("button", { name: "Fork" });
+}
+
+const FORK_SURFACE = "chat-fork:epic-test:tab-test";
+
+const NEW_SANDBOX: Extract<StagedSandboxTarget, { kind: "new" }> = {
+  kind: "new",
+  configuration: { kind: "personal" },
+  shape: {
+    os: "linux",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: null,
+    region: "us-east",
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  },
+  name: "",
+  wakeString: null,
+};
+
+function stagedForkTarget(
+  stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }>,
+): ChatForkDialogTarget {
+  return { ...forkTarget(), stagedSandbox };
+}
+
+function renderStaged(
+  stagedSandbox: Extract<StagedSandboxTarget, { kind: "new" }>,
+): void {
+  render(
+    <ChatForkDialog
+      open
+      target={stagedForkTarget(stagedSandbox)}
+      epicId="epic-test"
+      tabId="tab-test"
+      onOpenChange={dialogMocks.onOpenChange}
+    />,
+  );
+}
+
+function onlyPendingSend(): PendingSandboxSend {
+  const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+  expect(sends).toHaveLength(1);
+  return sends[0];
+}
+
+describe("ChatForkDialog on a New sandbox the chip picked", () => {
+  beforeEach(() => {
+    dialogMocks.createMutate.mockReset();
+    dialogMocks.onOpenChange.mockReset();
+    dialogMocks.needsOwnHostToast.mockReset();
+    dialogMocks.attachCalls.length = 0;
+    dialogMocks.attachAnswers = true;
+    dialogMocks.stagingSeen.length = 0;
+    dialogMocks.selectHost = null;
+    dialogMocks.harnessAvailable = true;
+    dialogMocks.authStatus = "authenticated";
+    dialogMocks.principal = { kind: "personal" };
+    dialogMocks.openProviders.mockReset();
+    dialogMocks.blocked.current = false;
+    dialogMocks.clientsByHostId.clear();
+    dialogMocks.clientsByHostId.set(TAB_HOST_ID, TAB_HOST_CLIENT);
+    dialogMocks.directoryHosts = [directoryEntry(TAB_HOST_ID, "Tab host")];
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useSeededWorkspaceSnapshotStore.getState().resetForTests();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    usePendingSandboxSendStore.setState({ sends: {} });
+  });
+
+  afterEach(() => {
+    resetHostDirectoryRows();
+    resetNegotiatedManifests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useSeededWorkspaceSnapshotStore.getState().resetForTests();
+    cleanup();
+  });
+
+  it("opens with the sandbox staged and the host list's staging surface handed to the controls", () => {
+    renderStaged(NEW_SANDBOX);
+
+    expect(readStagedSandbox(FORK_SURFACE)?.target).toEqual(NEW_SANDBOX);
+    expect(dialogMocks.stagingSeen.at(-1)).not.toBeNull();
+  });
+
+  it("stages nothing when the chip picked no sandbox", () => {
+    renderDialog();
+
+    expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+  });
+
+  it("drops the stage when the dialog closes", () => {
+    const { unmount } = render(
+      <ChatForkDialog
+        open
+        target={stagedForkTarget(NEW_SANDBOX)}
+        epicId="epic-test"
+        tabId="tab-test"
+        onOpenChange={() => undefined}
+      />,
+    );
+    expect(readStagedSandbox(FORK_SURFACE)).not.toBeNull();
+
+    unmount();
+
+    expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+  });
+
+  it("hands Fork to the task as a pending fork, and sends nothing on the tab's host", async () => {
+    renderStaged(NEW_SANDBOX);
+    fillTitle();
+
+    fireEvent.click(forkButton());
+
+    await waitFor(() => {
+      expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+    const send = onlyPendingSend();
+    expect(send.epicId).toBe("epic-test");
+    expect(send.request).toEqual({
+      kind: "fork",
+      parentId: null,
+      title: "Sibling fork",
+      forkSource: {
+        boundary: "assistantMessage",
+        sourceChatId: "source-chat",
+        assistantMessageId: "assistant-message-1",
+        interviewBlockId: null,
+        carriedInterviews: "settled",
+        sourceOwnerUserId: null,
+      },
+      tabId: "tab-test",
+    });
+    expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+    expect(readStagedSandbox(pendingSendSurfaceKey(send.id))?.target).toEqual(
+      NEW_SANDBOX,
+    );
+  });
+
+  it("attaches the task to a team's sandbox before handing the fork over", async () => {
+    renderStaged({
+      ...NEW_SANDBOX,
+      configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+    });
+    fillTitle();
+
+    fireEvent.click(forkButton());
+
+    await waitFor(() => {
+      expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(dialogMocks.attachCalls).toEqual([
+      { epicId: "epic-test", teamId: "team-9" },
+    ]);
+    expect(onlyPendingSend().request.kind).toBe("fork");
+  });
+
+  it("says a team's sandbox needs the person's own host to be attached from, and hands nothing over, when none can send it", () => {
+    // Neither the source tab's host nor the app-wide one can send the
+    // attachment: both are a team's sandbox, and a team's host would send it
+    // with a member's credential.
+    installHostDirectoryRows([
+      sandboxHostEntry(TAB_HOST_ID, { id: "team-1", name: "Other" }),
+    ]);
+    renderStaged({
+      ...NEW_SANDBOX,
+      configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+    });
+    fillTitle();
+
+    fireEvent.click(forkButton());
+
+    expect(dialogMocks.needsOwnHostToast).toHaveBeenCalledTimes(1);
+    expect(dialogMocks.attachCalls).toEqual([]);
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+      [],
+    );
+    expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("hands nothing over while the attach has not answered", () => {
+    dialogMocks.attachAnswers = false;
+    renderStaged({
+      ...NEW_SANDBOX,
+      configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+    });
+    fillTitle();
+
+    fireEvent.click(forkButton());
+
+    expect(dialogMocks.attachCalls).toHaveLength(1);
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+      [],
+    );
+    expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  describe("when the agent is signed out on the staged configuration", () => {
+    const SIGNED_OUT_PERSONAL =
+      "Sign in to a coding agent to run agents on Personal.";
+
+    it("refuses Fork in the dialog with the Providers link, handing nothing over, attaching nothing and keeping the stage and the title", () => {
+      dialogMocks.authStatus = "unauthenticated";
+      renderStaged(NEW_SANDBOX);
+      fillTitle();
+
+      fireEvent.click(forkButton());
+
+      const notice = screen.getByRole("alert");
+      expect(notice.textContent).toContain(SIGNED_OUT_PERSONAL);
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+        [],
+      );
+      expect(dialogMocks.attachCalls).toEqual([]);
+      expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+      expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+      expect(readStagedSandbox(FORK_SURFACE)?.phase).toBe("staged");
+      expect(
+        screen.getByRole<HTMLInputElement>("textbox", {
+          name: "Fork agent title",
+        }).value,
+      ).toBe("Sibling fork");
+
+      fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+      expect(dialogMocks.openProviders).toHaveBeenCalledTimes(1);
+    });
+
+    it("names the team and attaches nothing for a team's staged sandbox", () => {
+      dialogMocks.authStatus = "unauthenticated";
+      dialogMocks.principal = { kind: "team", teamName: "Acme" };
+      renderStaged({
+        ...NEW_SANDBOX,
+        configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+      });
+      fillTitle();
+
+      fireEvent.click(forkButton());
+
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Sign in to a coding agent to run agents on Acme.",
+      );
+      expect(dialogMocks.attachCalls).toEqual([]);
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+        [],
+      );
+    });
+
+    it("cannot say for a configuration the dialog's host does not run, and hands the fork over", async () => {
+      dialogMocks.authStatus = "unauthenticated";
+      dialogMocks.principal = { kind: "team", teamName: "Acme" };
+      renderStaged(NEW_SANDBOX);
+      fillTitle();
+
+      fireEvent.click(forkButton());
+
+      await waitFor(() => {
+        expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+      });
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(onlyPendingSend().request.kind).toBe("fork");
+    });
+  });
+
+  describe("on a sandbox host with nothing staged", () => {
+    const SENTENCE = "Sign in to a coding agent to run agents on Personal.";
+
+    beforeEach(() => {
+      installHostDirectoryRows([
+        sandboxHostEntry(TAB_HOST_ID, null),
+        plainHostEntry("laptop-host"),
+      ]);
+      dialogMocks.directoryHosts = [
+        directoryEntry(TAB_HOST_ID, "Tab host"),
+        directoryEntry("laptop-host", "Laptop"),
+      ];
+      dialogMocks.clientsByHostId.set(
+        "laptop-host",
+        buildHostClient("laptop-host"),
+      );
+    });
+
+    it("refuses Fork for an agent the sandbox cannot run, with the Providers link, creating, attaching and handing nothing, and keeping the dialog, title and chip", () => {
+      dialogMocks.harnessAvailable = false;
+      renderDialog();
+      fillTitle();
+
+      fireEvent.click(forkButton());
+
+      expect(screen.getByRole("alert").textContent).toContain(SENTENCE);
+      expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+      expect(dialogMocks.attachCalls).toEqual([]);
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+        [],
+      );
+      expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole<HTMLInputElement>("textbox", {
+          name: "Fork agent title",
+        }).value,
+      ).toBe("Sibling fork");
+      expect(
+        screen.getByRole("button", { name: "Harness picker" }),
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId("composer-host-notice-action"));
+      expect(dialogMocks.openProviders).toHaveBeenCalledTimes(1);
+    });
+
+    it("retires the notice when another host is picked", () => {
+      dialogMocks.harnessAvailable = false;
+      renderDialog();
+      fillTitle();
+      fireEvent.click(forkButton());
+      expect(screen.getByRole("alert")).toBeTruthy();
+
+      act(() => {
+        dialogMocks.selectHost?.("laptop-host");
+      });
+
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("forks as always when the agent can run on the sandbox", async () => {
+      renderDialog();
+      fillTitle();
+
+      fireEvent.click(forkButton());
+
+      await waitFor(() => {
+        expect(dialogMocks.createMutate).toHaveBeenCalledTimes(1);
+      });
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+});

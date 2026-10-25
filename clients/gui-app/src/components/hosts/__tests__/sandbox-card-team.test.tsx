@@ -18,10 +18,8 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import {
-  formatSandboxDay,
-  sandboxTeamFrozenStateLine,
-} from "@/components/hosts/sandbox-card-model";
+import { sandboxTeamFrozenStateLine } from "@/components/hosts/sandbox-card-model";
+import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -118,6 +116,11 @@ vi.mock(
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs, isError: false }),
 }));
+vi.mock("@/hooks/home-focus/use-focus-model", async () => {
+  const { EMPTY_FOCUS_MODEL } =
+    await import("@/lib/home-focus/build-focus-model");
+  return { useFocusModel: () => EMPTY_FOCUS_MODEL };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-runway-warning", () => ({
   useSandboxRunwayWarning: () => ({ kind: "none" }),
 }));
@@ -152,6 +155,7 @@ const COST: SandboxCost = {
   pendingMillicredits: 500,
   segments: [],
   todayMillicredits: 0,
+  history: [],
 };
 
 function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
@@ -296,7 +300,7 @@ describe("<SandboxCard /> frozen team destroy date", () => {
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
-      `${BASE} Destroyed on ${formatSandboxDay(frozenDestroyAt(FROZEN_AT))}.`,
+      `${BASE} Destroyed on ${formatSandboxDate(frozenDestroyAt(FROZEN_AT), true)}.`,
     );
   });
 
@@ -324,7 +328,7 @@ describe("<SandboxCard /> frozen team destroy date", () => {
   it("builds the line from the payer's name, the viewer's own bundle and a missing payer", () => {
     const frozen = (payer: SandboxSummary["wakePayer"]): SandboxSummary =>
       sandboxSummaryFixture({ frozenAt: FROZEN_AT, wakePayer: payer });
-    const day = formatSandboxDay(frozenDestroyAt(FROZEN_AT));
+    const day = formatSandboxDate(frozenDestroyAt(FROZEN_AT), true);
     expect(sandboxTeamFrozenStateLine(frozen(ADA), VIEWER)).toBe(
       `${BASE} Destroyed on ${day}.`,
     );
@@ -346,6 +350,7 @@ describe("<SandboxCard /> team cost view", () => {
       sandboxes: [COST],
       awakeBurnMillicreditsPerHour: 120,
       todayYoursMillicredits: 0,
+      todayByEnvironment: [],
     };
 
     renderCard(sandboxOf("awake", false, {}), true);
@@ -361,6 +366,7 @@ describe("<SandboxCard /> team cost view", () => {
       sandboxes: [COST],
       awakeBurnMillicreditsPerHour: 120,
       todayYoursMillicredits: 0,
+      todayByEnvironment: [],
     };
     renderCard(
       sandboxOf("awake", false, { kind: "automation", environmentId: ENV }),
@@ -568,6 +574,7 @@ describe("<SandboxCard /> waking a team sandbox", () => {
     expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "resume",
+      null,
       SANDBOX_VERB_FETCH_TIMEOUT_MS,
     );
     await waitFor(() => {
@@ -584,6 +591,7 @@ describe("<SandboxCard /> waking a team sandbox", () => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         "start",
+        null,
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
     });
@@ -598,6 +606,7 @@ describe("<SandboxCard /> waking a team sandbox", () => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         "suspend",
+        null,
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
     });

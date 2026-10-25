@@ -403,6 +403,7 @@ describe("<SandboxTileStateFrame />", () => {
       expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
         "sbx_1",
         "resume",
+        null,
         expect.any(Number),
       );
     });

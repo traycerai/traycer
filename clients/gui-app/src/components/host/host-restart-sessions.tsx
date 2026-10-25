@@ -21,6 +21,31 @@ interface HostRestartSessionsProps {
 
 /** Inspection only: the host's cooperative restart remains the busy authority. */
 export function HostRestartSessions(props: HostRestartSessionsProps) {
+  return (
+    <section
+      aria-label="Running sessions"
+      className="min-w-0 border-t border-border/60 px-5 py-3"
+    >
+      <p className="text-ui-sm font-medium">Running sessions</p>
+      <KnownHostSessionsList
+        hostId={props.hostId}
+        disabled={props.disabled}
+        onNavigate={props.onNavigate}
+      />
+      <p className="mt-1 text-ui-xs text-muted-foreground">
+        Known running agents and Task terminals open in this window. Other
+        sessions may also be interrupted.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * The host's running agents and the Task terminals open in this window,
+ * each named and a link to it. What this window knows, not the host's whole
+ * count: the caption beside it says so.
+ */
+export function KnownHostSessionsList(props: HostRestartSessionsProps) {
   const { hostId, onNavigate } = props;
   const model = useFocusModel();
   const navigate = useNavigate();
@@ -62,41 +87,34 @@ export function HostRestartSessions(props: HostRestartSessionsProps) {
     return [{ handle, key }];
   });
   return (
-    <section
-      aria-label="Running sessions"
-      className="min-w-0 border-t border-border/60 px-5 py-3"
+    <ul
+      className="mt-1 max-h-[30vh] list-none space-y-1 overflow-y-auto p-0"
+      data-testid="known-host-sessions"
     >
-      <p className="text-ui-sm font-medium">Running sessions</p>
-      <ul className="mt-1 max-h-[30vh] list-none space-y-1 overflow-y-auto p-0">
-        {agents.map((agent) => (
-          <li key={`${agent.epicId}:${agent.agentId}`}>
-            <Button
-              type="button"
-              variant="link"
-              size="inline"
-              className="max-w-full justify-start whitespace-normal text-left wrap-anywhere"
-              disabled={props.disabled}
-              onClick={() => openSession(agent.epicId, agent.agentId)}
-            >
-              {agent.title ?? agent.agentId}
-            </Button>
-          </li>
-        ))}
-        {hostTerminals.map(({ handle, key }) => (
-          <RunningTerminal
-            key={key}
-            handle={handle}
+      {agents.map((agent) => (
+        <li key={`${agent.epicId}:${agent.agentId}`}>
+          <Button
+            type="button"
+            variant="link"
+            size="inline"
+            className="max-w-full justify-start whitespace-normal text-left wrap-anywhere"
             disabled={props.disabled}
-            hostId={props.hostId}
-            onNavigate={props.onNavigate}
-          />
-        ))}
-      </ul>
-      <p className="mt-1 text-ui-xs text-muted-foreground">
-        Known running agents and Task terminals open in this window. Other
-        sessions may also be interrupted.
-      </p>
-    </section>
+            onClick={() => openSession(agent.epicId, agent.agentId)}
+          >
+            {agent.title ?? agent.agentId}
+          </Button>
+        </li>
+      ))}
+      {hostTerminals.map(({ handle, key }) => (
+        <RunningTerminal
+          key={key}
+          handle={handle}
+          disabled={props.disabled}
+          hostId={props.hostId}
+          onNavigate={props.onNavigate}
+        />
+      ))}
+    </ul>
   );
 }
 

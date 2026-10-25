@@ -53,7 +53,10 @@ import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-m
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
-import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
+import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
+import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
+import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   selectGlobalLastRunSettings,
@@ -110,6 +113,13 @@ import {
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
+import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  confirmPendingSandboxSendEpic,
+  endPendingSandboxSend,
+  handPendingSandboxSend,
+  pickedRunSettings,
+} from "@/lib/sandboxes/pending-sandbox-send";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
@@ -336,6 +346,8 @@ export function LandingComposer(props: LandingComposerProps) {
     },
     [activeHostId, authority, draftId, setDraftSettings, setGlobalRunSettings],
   );
+  // The window's pin key, which a staged sandbox is staged under.
+  const composerSurfaceKey = useComposerSurfaceHostKey();
   const settingsSeed = useMemo(
     () =>
       landingComposerSettingsSeedForDraft(
@@ -367,6 +379,7 @@ export function LandingComposer(props: LandingComposerProps) {
       tuiOnly: composerMode === "terminal",
       // The landing composer has no chat yet - see `ComposerBody`.
       chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: composerSurfaceKey,
     },
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
@@ -460,8 +473,6 @@ export function LandingComposer(props: LandingComposerProps) {
       resolvedWorkspace.isError,
     ],
   );
-  // The window's pin key, which a staged sandbox is staged under.
-  const composerSurfaceKey = useComposerSurfaceHostKey();
   const workspaceGate = useStagedWorkspaceGate(
     composerSurfaceKey,
     workspaceAvailability,
@@ -500,7 +511,32 @@ export function LandingComposer(props: LandingComposerProps) {
   // which is the whole point of gating the affordance instead of accepting the
   // turn and failing it. Fails open while `providers.list` is loading; the
   // host resolver is the authoritative backstop either way.
-  const packGate = useProviderPackGate(harnessId);
+  // On the composer's own host, the one the turn runs on, never the app-wide
+  // one: a placement on another machine is gated by that machine's pack.
+  const packGate = useProviderPackGateForClient(
+    hostClient,
+    harnessId,
+    chatComposerActive,
+  );
+  // A sandbox keeps the agent picked even when it cannot run there; the send
+  // is refused instead, never moved to another agent.
+  const sandboxAgentGate = useSandboxAgentGate({
+    hostId: resolvedHostId,
+    client: hostClient,
+    harnessId,
+    active: chatComposerActive,
+  });
+  // The agent the person picked, which a staged send runs on the sandbox.
+  const pickedHarnessId = useStore(
+    toolbarStore,
+    (s) => s.values.selection.harnessId,
+  );
+  const stagedSignInCheck = useStagedSendSignInCheck({
+    client: hostClient,
+    hostId: resolvedHostId,
+    harnessId: pickedHarnessId,
+    active: chatComposerActive && workspaceGate.stagedAhead,
+  });
   const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
     workspaceDisabledHint: workspaceGate.disabledHint,
     signedOut: reauthGate.signedOut,
@@ -517,9 +553,10 @@ export function LandingComposer(props: LandingComposerProps) {
     hasSubmittableContent,
   });
 
-  // The staged sandbox's send (sandboxes plan D1). Phase 2 resets the
-  // draft's workspace to the new host's, which starts empty, then resubmits.
-  // The latest resubmit, which is declared below and reads this hook.
+  // A terminal agent's Start on a staged sandbox (sandboxes plan D1). Phase 2
+  // resets the draft's workspace to the new host's, which starts empty, then
+  // launches it there. The latest resubmit, which is declared below and
+  // reads this hook.
   const stagedSubmitRef = useRef<() => StagedResubmit>(() => false);
   const prepareSandboxHandoff = useCallback(
     (hostId: string): void => {
@@ -546,12 +583,10 @@ export function LandingComposer(props: LandingComposerProps) {
     [],
   );
   // A terminal agent's Start that a staged sandbox took: launched on the new
-  // host in phase 2, as the chat send resubmits there.
+  // host in phase 2.
   const stagedTerminalLaunch = useStagedTerminalLaunch(composerSurfaceKey);
-  // Phase 2 resubmits once the new host's catalog has answered, so the
-  // selection holds its default model, or none when it offers no agent (the
-  // line then says the sandbox is awake but cannot run one). A Start also
-  // waits for its providers, which say whether the profile is offered there.
+  // Phase 2 launches once the new host's catalog and providers have answered:
+  // they say whether the agent and its profile are offered there.
   const catalogSettled = useStore(toolbarStore, (s) =>
     catalogSettledFor(s, resolvedHostId),
   );
@@ -588,7 +623,6 @@ export function LandingComposer(props: LandingComposerProps) {
     canSubmit: stagedResubmitReady({
       catalogSettled,
       launch: stagedTerminalLaunch,
-      harnessId,
       canSubmit,
       canStart: [workspaceCanStart, !isSubmitting],
       providers: stagedProviders,
@@ -765,77 +799,117 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
-  /** Whether the submit went ahead; `settled` hears whether its create went out. */
-  const submitDraft = useCallback(
-    (settled: ((dispatched: boolean) => void) | null): boolean => {
-      if (!canSubmit) return false;
-      // A staged sandbox takes the first send: it is created or woken, and
-      // this submit runs again on it once it is ready. The draft stays. It
-      // needs no model yet: a person with no host has no catalog to pick one
-      // from, and the resubmit takes the new host's default.
-      if (
-        stagedSend.intercept(
-          composerDisplayPlainText(
-            editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
-          ),
-          null,
-        )
-      ) {
+  /** Whether the submit went ahead. */
+  const handleSubmit = useCallback((): boolean => {
+    if (!canSubmit) return false;
+    // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
+    // opens at once and the message waits in it, behind the setup line,
+    // until the agent the person picked is ready on the sandbox. It runs
+    // on that agent and model, never one this host would swap in.
+    const staged = readStagedSandbox(composerSurfaceKey);
+    if (staged !== null && staged.phase !== "handoff") {
+      // An agent signed out on the staged configuration is refused here,
+      // before anything is created or woken; the draft and the chip stay.
+      const signedOut = stagedSignInCheck(staged);
+      if (signedOut !== null) {
+        raiseHostNotice(signedOut);
         return false;
       }
-      const toolbar = toolbarStore.getState();
-      if (toolbar.selection.modelSlug.length === 0) return false;
-      // Submit is "delete the draft here, create the chat". A draft this host
-      // does not own is sent as it is: its retirement receipt keeps the row
-      // from being ingested back here, and its cloud row is retracted on the
-      // user's authority underneath. Nothing waits on ownership.
-      const refusal = actions.submit({
-        // `handleDocumentChange` mints the unbound draft the moment the first
-        // edit becomes submittable, but `props.draftId` only catches up on the
-        // parent's next render - so a type-then-Enter still reads `null` here.
-        // Without this fallback `ensureSubmissionDraft` would mint a SECOND
-        // draft and strand the one already holding the user's content.
+      const content = buildSubmittedChatJSONContent(
+        editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
+        pickerStore.getState().knownSlashCommands,
+      );
+      const text = composerDisplayPlainText(content);
+      const settings = pickedRunSettings(toolbarStore.getState());
+      const refusal = actions.startTaskOnStagedSandbox({
         draftId: draftId ?? createdUnboundDraftIdRef.current,
-        editor: editorRef.current,
-        slashCatalog: pickerStore.getState().knownSlashCommands,
-        toolbar: {
-          selection: toolbar.selection,
-          reasoning: toolbar.reasoning,
-          serviceTier: toolbar.serviceTier,
-          permission: toolbar.permission,
-        },
         owner,
-        teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
-          toolbar.selection.harnessId,
-        ),
-        settled,
+        text,
+        hand: (epicId) => {
+          const id = handPendingSandboxSend({
+            fromSurfaceKey: composerSurfaceKey,
+            epicId,
+            request: { kind: "chat", parentId: null },
+            content,
+            text,
+            settings,
+            // The task is created with the send: the sandbox waits for it.
+            epicConfirmed: false,
+            now: Date.now(),
+          });
+          return id === null
+            ? null
+            : {
+                confirm: () => confirmPendingSandboxSendEpic(id),
+                withdraw: () => endPendingSandboxSend(id),
+              };
+        },
       });
-      // Nothing was created when a refusal comes back - the draft, its content
-      // and its staged workspace are exactly as the user left them, and the
-      // reason is stated inline above the composer rather than as a toast.
       raiseHostNotice(
-        refusal === null ? null : { kind: "refused", message: refusal.message },
+        refusal === null
+          ? null
+          : { kind: "refused", message: refusal.message, action: null },
       );
       if (refusal === null) setComposerExpanded(false);
       return refusal === null;
-    },
-    [
-      actions,
-      canSubmit,
-      draftId,
+    }
+    // An agent that cannot run on this sandbox is refused at Send, with the
+    // configuration's Providers; the draft and the chip stay as they were.
+    if (sandboxAgentGate.notice !== null) {
+      raiseHostNotice(sandboxAgentGate.notice);
+      return false;
+    }
+    const toolbar = toolbarStore.getState();
+    if (toolbar.selection.modelSlug.length === 0) return false;
+    // Submit is "delete the draft here, create the chat". A draft this host
+    // does not own is sent as it is: its retirement receipt keeps the row
+    // from being ingested back here, and its cloud row is retracted on the
+    // user's authority underneath. Nothing waits on ownership.
+    const refusal = actions.submit({
+      // `handleDocumentChange` mints the unbound draft the moment the first
+      // edit becomes submittable, but `props.draftId` only catches up on the
+      // parent's next render - so a type-then-Enter still reads `null` here.
+      // Without this fallback `ensureSubmissionDraft` would mint a SECOND
+      // draft and strand the one already holding the user's content.
+      draftId: draftId ?? createdUnboundDraftIdRef.current,
+      editor: editorRef.current,
+      slashCatalog: pickerStore.getState().knownSlashCommands,
+      toolbar: {
+        selection: toolbar.selection,
+        reasoning: toolbar.reasoning,
+        serviceTier: toolbar.serviceTier,
+        permission: toolbar.permission,
+      },
       owner,
-      pickerStore,
-      raiseHostNotice,
-      setComposerExpanded,
-      stagedSend,
-      teamSandboxHarnessBlockedFor,
-      toolbarStore,
-    ],
-  );
-  const handleSubmit = useCallback(
-    (): boolean => submitDraft(null),
-    [submitDraft],
-  );
+      teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
+        toolbar.selection.harnessId,
+      ),
+      settled: null,
+    });
+    // Nothing was created when a refusal comes back - the draft, its content
+    // and its staged workspace are exactly as the user left them, and the
+    // reason is stated inline above the composer rather than as a toast.
+    raiseHostNotice(
+      refusal === null
+        ? null
+        : { kind: "refused", message: refusal.message, action: null },
+    );
+    if (refusal === null) setComposerExpanded(false);
+    return refusal === null;
+  }, [
+    actions,
+    canSubmit,
+    draftId,
+    owner,
+    pickerStore,
+    composerSurfaceKey,
+    raiseHostNotice,
+    sandboxAgentGate.notice,
+    setComposerExpanded,
+    stagedSignInCheck,
+    teamSandboxHarnessBlockedFor,
+    toolbarStore,
+  ]);
   // Whether the terminal agent's create went out: false on a refusal, which
   // says why inline, and on a hold, which creates nothing.
   const dispatchStartTerminal = useCallback(
@@ -853,7 +927,9 @@ export function LandingComposer(props: LandingComposerProps) {
         },
       });
       raiseHostNotice(
-        refusal === null ? null : { kind: "refused", message: refusal.message },
+        refusal === null
+          ? null
+          : { kind: "refused", message: refusal.message, action: null },
       );
       return dispatched.value;
     },
@@ -884,29 +960,15 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
   // A layout effect, so the staged handoff's effect (a passive one, declared
-  // earlier) reads this render's submit, not the last one's. No model or no
-  // launch on the new host is no agent there; any other refusal, or a send
-  // that stops short while its images are read, is a send that did not go.
+  // earlier) reads this render's submit, not the last one's. Only a terminal
+  // agent's Start is resubmitted on the sandbox: a send hands its message to
+  // its task instead (`startTaskOnStagedSandbox`). No launch on the new host
+  // is no agent there.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
-        ? () => {
-            if (toolbarStore.getState().selection.modelSlug.length === 0) {
-              return false;
-            }
-            // The executor runs now: a create that goes out in this call is
-            // sent already, and one still reading its images settles later.
-            const sent = { value: false };
-            const accepted = new Promise<boolean>((resolve) => {
-              const submitted = submitDraft((dispatched) => {
-                sent.value = dispatched;
-                resolve(dispatched);
-              });
-              if (!submitted) resolve(false);
-            });
-            return sent.value ? true : accepted;
-          }
+        ? () => false
         : () => {
             const launch = stagedTerminalLaunchOnHost(
               stagedTerminalLaunch,
@@ -920,7 +982,6 @@ export function LandingComposer(props: LandingComposerProps) {
           };
   }, [
     dispatchStartTerminal,
-    submitDraft,
     stagedProviders.data,
     stagedTerminalLaunch,
     toolbarStore,
@@ -954,115 +1015,117 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   return (
-    <ComposerBody
-      pickerStore={pickerStore}
-      editorRef={editorRef}
-      toolbarStore={toolbarStore}
-      composerMode={composerMode}
-      chatEditorIsActive={chatComposerActive}
-      editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
-      initialContent={initialContent}
-      initialSelection={initialSelection}
-      canSubmit={canSubmit}
-      isSubmitting={isSubmitting}
-      editorReadOnly={false}
-      attachmentPending={attachmentPending}
-      workspaceDisabledHint={submitBlockedHint}
-      stagedAhead={workspaceGate.stagedAhead}
-      header={<div className="flex justify-start">{switcher}</div>}
-      toolbarLayout={isMobile ? "collapsed" : "full"}
-      expansion={composerExpansion}
-      topBanner={
-        <>
-          {stagedSend.line}
-          <ComposerHostNotice
-            notice={hostNotice}
-            onDismiss={dismissHostNotice}
+    <ComposerStagedSurfaceKeyProvider surfaceKey={composerSurfaceKey}>
+      <ComposerBody
+        pickerStore={pickerStore}
+        editorRef={editorRef}
+        toolbarStore={toolbarStore}
+        composerMode={composerMode}
+        chatEditorIsActive={chatComposerActive}
+        editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
+        initialContent={initialContent}
+        initialSelection={initialSelection}
+        canSubmit={canSubmit}
+        isSubmitting={isSubmitting}
+        editorReadOnly={false}
+        attachmentPending={attachmentPending}
+        workspaceDisabledHint={submitBlockedHint}
+        stagedAhead={workspaceGate.stagedAhead}
+        header={<div className="flex justify-start">{switcher}</div>}
+        toolbarLayout={isMobile ? "collapsed" : "full"}
+        expansion={composerExpansion}
+        topBanner={
+          <>
+            {stagedSend.line}
+            <ComposerHostNotice
+              notice={hostNotice}
+              onDismiss={dismissHostNotice}
+            />
+            <LandingTeamChatLine owner={owner} />
+            <ComposerUploadProgressNotice progress={actions.attachmentUpload} />
+            {profileEligibility.disabled ? (
+              <ProfileDisabledBanner
+                profileLabel={profileEligibility.profileLabel}
+                enablePending={profileEligibility.enablePending}
+                onEnableProfile={profileEligibility.enableProfile}
+                onChooseProfile={() => {
+                  toggleActiveModelPicker();
+                }}
+              />
+            ) : null}
+            {profileEligibility.disabled ? null : (
+              <LandingReauthBanner
+                gate={reauthGate}
+                hostId={resolvedHostId}
+                onContinueOnAmbient={() =>
+                  commitProfileSelection(toolbarStore, null)
+                }
+              />
+            )}
+            {!profileEligibility.disabled &&
+            !reauthGate.signedOut &&
+            rateLimitPrompt.kind === "visible" ? (
+              <ProfileRateLimitSwitchBanner
+                key={rateLimitPrompt.warningKey}
+                harnessId={harnessId}
+                providerId={rateLimitPrompt.providerId}
+                severity={rateLimitPrompt.severity}
+                limitedFamilies={rateLimitPrompt.limitedFamilies}
+                current={rateLimitPrompt.current}
+                profiles={rateLimitPrompt.profiles}
+                destinations={rateLimitPrompt.destinations}
+                primaryTarget={rateLimitPrompt.primaryTarget}
+                probeTarget={rateLimitPrompt.probeTarget}
+                // The composer's resolved host (pin, else effective), matching
+                // the `hostId` this surface hands `ComposerBody` below - so the
+                // usage sidecar / R-key refresh reads the machine the turn will
+                // actually run on.
+                runTargetHostId={resolvedHostId}
+                onSwitchProfile={onSwitchRateLimitedProfile}
+                affectedChatCount={0}
+                onSwitchProfileForTask={noopSwitchProfileForTask}
+                onDismiss={rateLimitPrompt.dismiss}
+              />
+            ) : null}
+          </>
+        }
+        draftsControl={
+          <ComposerDraftsControl
+            scope={{ surface: "landing", activeDraftId: draftId }}
+            hostId={resolvedHostId}
+            pickerStore={pickerStore}
+            editorRef={editorRef}
+            // The rail is no longer chat-mode-only (D11), so the Cmd+S owner is
+            // the surface being edited, whichever composer mode it is in.
+            active={activityEnabled}
           />
-          <LandingTeamChatLine owner={owner} />
-          <ComposerUploadProgressNotice progress={actions.attachmentUpload} />
-          {profileEligibility.disabled ? (
-            <ProfileDisabledBanner
-              profileLabel={profileEligibility.profileLabel}
-              enablePending={profileEligibility.enablePending}
-              onEnableProfile={profileEligibility.enableProfile}
-              onChooseProfile={() => {
-                toggleActiveModelPicker();
-              }}
-            />
-          ) : null}
-          {profileEligibility.disabled ? null : (
-            <LandingReauthBanner
-              gate={reauthGate}
-              hostId={resolvedHostId}
-              onContinueOnAmbient={() =>
-                commitProfileSelection(toolbarStore, null)
-              }
-            />
-          )}
-          {!profileEligibility.disabled &&
-          !reauthGate.signedOut &&
-          rateLimitPrompt.kind === "visible" ? (
-            <ProfileRateLimitSwitchBanner
-              key={rateLimitPrompt.warningKey}
-              harnessId={harnessId}
-              providerId={rateLimitPrompt.providerId}
-              severity={rateLimitPrompt.severity}
-              limitedFamilies={rateLimitPrompt.limitedFamilies}
-              current={rateLimitPrompt.current}
-              profiles={rateLimitPrompt.profiles}
-              destinations={rateLimitPrompt.destinations}
-              primaryTarget={rateLimitPrompt.primaryTarget}
-              probeTarget={rateLimitPrompt.probeTarget}
-              // The composer's resolved host (pin, else effective), matching
-              // the `hostId` this surface hands `ComposerBody` below - so the
-              // usage sidecar / R-key refresh reads the machine the turn will
-              // actually run on.
-              runTargetHostId={resolvedHostId}
-              onSwitchProfile={onSwitchRateLimitedProfile}
-              affectedChatCount={0}
-              onSwitchProfileForTask={noopSwitchProfileForTask}
-              onDismiss={rateLimitPrompt.dismiss}
-            />
-          ) : null}
-        </>
-      }
-      draftsControl={
-        <ComposerDraftsControl
-          scope={{ surface: "landing", activeDraftId: draftId }}
-          hostId={resolvedHostId}
-          pickerStore={pickerStore}
-          editorRef={editorRef}
-          // The rail is no longer chat-mode-only (D11), so the Cmd+S owner is
-          // the surface being edited, whichever composer mode it is in.
-          active={activityEnabled}
-        />
-      }
-      attachmentsStrip={
-        <LandingComposerAttachmentStrip
-          content={runtimeState.content}
-          onRemoveImage={handleRemoveImage}
-          hostId={resolvedHostId}
-        />
-      }
-      workspaceControls={props.workspaceControls(mutationsDisabled)}
-      dictationControl={dictationControl}
-      dictationPreparing={dictationPreparing}
-      paste={paste}
-      hasPastedImageBytes={hasLandingImageBytes}
-      ingestPastedComposerImages={ingestPastedComposerImages}
-      onEditorReady={reingestPendingImages}
-      // No tab yet, but a placement all the same: the composer creates on its
-      // window-keyed surface pin's resolved host (P1.2). `null` reaches here
-      // only in the ∅ case - nothing usable to create on - which submit
-      // re-validation refuses before any create runs.
-      hostId={resolvedHostId}
-      terminalLoginSurface={terminalLoginSurface}
-      onSubmit={handleSubmit}
-      onStartTerminal={handleStartTerminal}
-      onDocumentChange={handleDocumentChange}
-      onSelectionChange={handleSelectionChange}
-    />
+        }
+        attachmentsStrip={
+          <LandingComposerAttachmentStrip
+            content={runtimeState.content}
+            onRemoveImage={handleRemoveImage}
+            hostId={resolvedHostId}
+          />
+        }
+        workspaceControls={props.workspaceControls(mutationsDisabled)}
+        dictationControl={dictationControl}
+        dictationPreparing={dictationPreparing}
+        paste={paste}
+        hasPastedImageBytes={hasLandingImageBytes}
+        ingestPastedComposerImages={ingestPastedComposerImages}
+        onEditorReady={reingestPendingImages}
+        // No tab yet, but a placement all the same: the composer creates on its
+        // window-keyed surface pin's resolved host (P1.2). `null` reaches here
+        // only in the ∅ case - nothing usable to create on - which submit
+        // re-validation refuses before any create runs.
+        hostId={resolvedHostId}
+        terminalLoginSurface={terminalLoginSurface}
+        onSubmit={handleSubmit}
+        onStartTerminal={handleStartTerminal}
+        onDocumentChange={handleDocumentChange}
+        onSelectionChange={handleSelectionChange}
+      />
+    </ComposerStagedSurfaceKeyProvider>
   );
 }
 

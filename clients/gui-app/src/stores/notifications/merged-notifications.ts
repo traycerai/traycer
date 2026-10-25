@@ -89,10 +89,11 @@ import {
   type HostNotificationChatStoppedPayload,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
+  type HostNotificationSandboxNoticePayload,
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV14,
+  type HostNotificationsCloudFeedRowV15,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
@@ -145,6 +146,9 @@ export interface MergedNotificationRow {
   readonly secrets?: SecretsNotificationDetail | null;
   /** Extra content for P2's five environment / team / secret-removed rows. */
   readonly environmentDetail?: EnvironmentNotificationDetail | null;
+  /** A `sandbox.notice` row's sandbox and what happened to it, for its
+   * actions. Absent or `null` on every other row. */
+  readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -175,15 +179,17 @@ export interface MergedNotificationRow {
 }
 
 /**
- * The sandbox a sandbox push names, from its per-occurrence entry key
+ * The sandbox a sandbox row names, or `null` for any other row: a
+ * `sandbox.notice` row's payload, else a push's per-occurrence entry key
  * (`sandbox-<kind>:<sandboxId>:<stage>`, and the older
- * `sandbox-day-30:<sandboxId>:<days>`), or `null` for any other row. The push
- * carries nothing else about the sandbox, so its destination is found from
- * this id: Settings › Sandboxes with that row revealed.
+ * `sandbox-day-30:<sandboxId>:<days>`). Its destination is Settings ›
+ * Sandboxes with that row revealed.
  */
 export function sandboxIdOfNotificationRow(
-  row: Pick<MergedNotificationRow, "source" | "sourceId">,
+  row: Pick<MergedNotificationRow, "source" | "sourceId" | "sandboxNotice">,
 ): string | null {
+  const notice = row.sandboxNotice ?? null;
+  if (notice !== null) return notice.sandboxId;
   if (row.source !== "cloud" || !row.sourceId.startsWith("sandbox-")) {
     return null;
   }
@@ -340,7 +346,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV14 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV15 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -600,7 +606,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV14 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV15 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1465,7 +1471,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV14 =>
+              (row): row is HostNotificationsCloudFeedRowV15 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -1786,6 +1792,7 @@ function rowFromHostEntryForOrigin(
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     environmentDetail: environmentNotificationDetail(entry.kind, entry.payload),
+    sandboxNotice: sandboxNoticeFromHostEntry(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -1852,7 +1859,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV14,
+  row: HostNotificationsCloudFeedRowV15,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -1878,6 +1885,7 @@ export function rowFromCloudFeedRow(
       row.entry.kind,
       row.entry.payload,
     ),
+    sandboxNotice: sandboxNoticeFromHostEntry(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2008,6 +2016,16 @@ function payloadFromHostEntry(
   return known === null ? null : navigationPayloadFromKnown(known);
 }
 
+function sandboxNoticeFromHostEntry(
+  entry: HostNotificationFeedEntry,
+): HostNotificationSandboxNoticePayload | null {
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  return known?.kind === "sandbox_notice" ? known : null;
+}
+
 function agentSurfaceFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): "gui" | "tui" | null {
@@ -2046,6 +2064,7 @@ const ROW_COMPLETE_PAYLOAD_KINDS = [
   "team_role_changed",
   "team_host_returned",
   "secret_removed",
+  "sandbox_notice",
 ] as const satisfies readonly HostNotificationKnownPayload["kind"][];
 
 type RowCompletePayload = Extract<

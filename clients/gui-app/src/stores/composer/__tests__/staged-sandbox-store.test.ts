@@ -1,3 +1,5 @@
+import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { pendingSendSurfaceKey } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   readStagedSandbox,
@@ -62,7 +64,7 @@ describe("staged sandbox store", () => {
   it("restaging replaces the stage and drops the old idempotency key", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const first = store.begin(SURFACE, false, 1_000);
+    const first = store.begin(SURFACE, false, 1_000, false);
 
     store.stage(SURFACE, NEW_TARGET);
 
@@ -76,8 +78,8 @@ describe("staged sandbox store", () => {
     store.stage(SURFACE, NEW_TARGET);
     expect(stageOf(SURFACE).clientRequestId).toBeNull();
 
-    const first = store.begin(SURFACE, false, 1_000);
-    const repeat = store.begin(SURFACE, false, 2_000);
+    const first = store.begin(SURFACE, false, 1_000, false);
+    const repeat = store.begin(SURFACE, false, 2_000, false);
 
     expect(first).not.toBeNull();
     expect(repeat).toBe(first);
@@ -91,7 +93,7 @@ describe("staged sandbox store", () => {
   it("mints a new id for Retry creation and forgets the sandbox the old one made", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const first = store.begin(SURFACE, false, 1_000);
+    const first = store.begin(SURFACE, false, 1_000, false);
     store.report(SURFACE, {
       createdSandboxId: "sbx-9",
       createdHostId: "host-9",
@@ -102,7 +104,7 @@ describe("staged sandbox store", () => {
       },
     });
 
-    const retried = store.begin(SURFACE, true, 3_000);
+    const retried = store.begin(SURFACE, true, 3_000, false);
 
     expect(retried).not.toBeNull();
     expect(retried).not.toBe(first);
@@ -116,14 +118,14 @@ describe("staged sandbox store", () => {
 
   it("begins nothing when nothing is staged", () => {
     expect(
-      useStagedSandboxStore.getState().begin(SURFACE, false, 1),
+      useStagedSandboxStore.getState().begin(SURFACE, false, 1, false),
     ).toBeNull();
   });
 
   it("cancel returns to staged keeping the target, and the key of a create that may have been accepted", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const id = store.begin(SURFACE, false, 1_000);
+    const id = store.begin(SURFACE, false, 1_000, false);
 
     store.cancel(SURFACE);
 
@@ -135,7 +137,7 @@ describe("staged sandbox store", () => {
       target: NEW_TARGET,
     });
     expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(false);
-    expect(store.begin(SURFACE, false, 5_000)).toBe(id);
+    expect(store.begin(SURFACE, false, 5_000, false)).toBe(id);
   });
 
   const FAILED = {
@@ -178,7 +180,7 @@ describe("staged sandbox store", () => {
     ({ failure, target, keeps }) => {
       const store = useStagedSandboxStore.getState();
       store.stage(SURFACE, target);
-      const id = store.begin(SURFACE, false, 1_000);
+      const id = store.begin(SURFACE, false, 1_000, false);
       store.report(SURFACE, { failure });
 
       expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(!keeps);
@@ -191,7 +193,7 @@ describe("staged sandbox store", () => {
   it("needs a fresh key after a refusal only while no sandbox was accepted", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    store.begin(SURFACE, false, 1_000);
+    store.begin(SURFACE, false, 1_000, false);
     // Accepted, then frozen for credits on its way up.
     store.report(SURFACE, {
       createdSandboxId: "sbx-9",
@@ -204,7 +206,7 @@ describe("staged sandbox store", () => {
   it("rejoin takes the stage back to creating with its step and times as they were", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const id = store.begin(SURFACE, false, 1_000);
+    const id = store.begin(SURFACE, false, 1_000, false);
     store.report(SURFACE, { step: "applying", stepAt: 4_000 });
     store.cancel(SURFACE);
 
@@ -219,11 +221,97 @@ describe("staged sandbox store", () => {
     });
   });
 
-  it("keeps a stage in memory only, so a reload starts with nothing staged", () => {
+  it("persists only the stage of a send handed to its task, so a reload starts with nothing else staged", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    store.begin(SURFACE, false, 1_000);
+    store.begin(SURFACE, false, 1_000, false);
 
-    expect(localStorage.length).toBe(0);
+    expect(persistedSurfaceKeys()).toEqual([]);
+
+    store.stage(pendingSendSurfaceKey("send-1"), NEW_TARGET);
+    expect(persistedSurfaceKeys()).toEqual([pendingSendSurfaceKey("send-1")]);
+  });
+
+  it("brings a handed-over stage back after a reload with its create key and the sandbox it made", async () => {
+    const store = useStagedSandboxStore.getState();
+    const key = pendingSendSurfaceKey("send-1");
+    store.stage(key, NEW_TARGET);
+    const clientRequestId = store.begin(key, false, 1_000, false);
+    store.report(key, {
+      createdSandboxId: "sbx-1",
+      createdHostId: "host-1",
+      step: "booting",
+      stepAt: 4_000,
+    });
+    const persisted = localStorage.getItem(STAGE_STORAGE_KEY);
+
+    useStagedSandboxStore.setState({ bySurface: {} });
+    expect(readStagedSandbox(key)).toBeNull();
+    if (persisted !== null) localStorage.setItem(STAGE_STORAGE_KEY, persisted);
+    await useStagedSandboxStore.persist.rehydrate();
+
+    expect(readStagedSandbox(key)).toMatchObject({
+      phase: "creating",
+      clientRequestId,
+      createdSandboxId: "sbx-1",
+      createdHostId: "host-1",
+      step: "booting",
+      startedAt: 1_000,
+    });
+  });
+
+  it("moves a surface's stage to a pending send's key as it stands, key included", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, NEW_TARGET);
+    const clientRequestId = store.begin(SURFACE, false, 1_000, false);
+    const key = pendingSendSurfaceKey("send-1");
+
+    store.adopt(SURFACE, key);
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(readStagedSandbox(key)).toMatchObject({
+      phase: "creating",
+      clientRequestId,
+    });
+  });
+
+  it("takes up a run a reload stopped with its step and times, while a send starts them again", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, NEW_TARGET);
+    store.begin(SURFACE, false, 1_000, false);
+    store.report(SURFACE, { step: "booting", stepAt: 4_000 });
+
+    store.begin(SURFACE, false, 9_000, true);
+    expect(stageOf(SURFACE)).toMatchObject({
+      step: "booting",
+      stepAt: 4_000,
+      startedAt: 1_000,
+    });
+
+    store.begin(SURFACE, false, 9_000, false);
+    expect(stageOf(SURFACE)).toMatchObject({
+      step: "creating",
+      stepAt: 9_000,
+      startedAt: 9_000,
+    });
   });
 });
+
+const STAGE_STORAGE_KEY = persistKey(STORE_KEYS.stagedSandboxSend);
+
+/** The surfaces the store wrote to storage. */
+function persistedSurfaceKeys(): string[] {
+  const raw = localStorage.getItem(STAGE_STORAGE_KEY);
+  if (raw === null) return [];
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || !("state" in parsed)) {
+    return [];
+  }
+  const state = parsed.state;
+  if (typeof state !== "object" || state === null) return [];
+  if (!("bySurface" in state)) return [];
+  const bySurface = state.bySurface;
+  return typeof bySurface === "object" && bySurface !== null
+    ? Object.keys(bySurface)
+    : [];
+}

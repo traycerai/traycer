@@ -10,6 +10,7 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { recordListedDestroys } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 export function sandboxListQueryOptions(
   auth: AuthService | null,
@@ -28,6 +29,7 @@ export function sandboxListQueryOptions(
     queryFn: async () => {
       const result = await auth.listSandboxes();
       if (result.kind === "ok") {
+        recordListedDestroys(result.response.sandboxes);
         return result.response;
       }
       // Thrown, never `{ sandboxes: [] }`: an empty list would read as "every

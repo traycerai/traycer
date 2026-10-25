@@ -21,7 +21,7 @@ import {
   movedNoticeShown,
   SETUP_STEPS,
   setupView,
-  TERMINAL_ACCOUNT_SENTENCE,
+  terminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
   useEnvironmentNoticesRead,
@@ -171,7 +172,11 @@ function AccessSections(props: {
         hostId={props.hostId}
         status={props.status.remoteAccess}
       />
-      <TerminalAccountsSection client={props.client} />
+      <TerminalAccountsSection
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+      />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>
   );
@@ -374,7 +379,10 @@ const AMBIENT_PROFILE_ID = "ambient";
 
 function TerminalAccountsSection(props: {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+  readonly hostName: string;
 }): ReactNode {
+  const localHostId = useReactiveLocalHostId();
   const list = useProvidersListForClient(props.client, {
     enabled: true,
     subscribed: true,
@@ -402,7 +410,11 @@ function TerminalAccountsSection(props: {
       fill={false}
     >
       <p className="max-w-[72ch] px-5 pt-4 text-ui-sm text-muted-foreground">
-        {TERMINAL_ACCOUNT_SENTENCE}
+        {terminalAccountSentence(
+          props.hostId !== null && props.hostId === localHostId
+            ? null
+            : props.hostName,
+        )}
       </p>
       <ul className="flex flex-col">
         {rows.map((row) => (

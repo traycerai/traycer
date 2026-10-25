@@ -37,6 +37,7 @@ import {
   readStagedSandbox,
   refusedBeforeCreate,
   useStagedSandboxStore,
+  type StagedSandbox,
   type StagedSandboxFailure,
   type StagedSandboxStep,
   type StagedSandboxTarget,
@@ -79,6 +80,11 @@ export interface StagedSandboxRunDeps {
  */
 const running = new Map<string, string>();
 
+/** Whether a run in this window is driving the surface's stage. */
+export function stagedRunActive(surfaceKey: string): boolean {
+  return running.has(surfaceKey);
+}
+
 /**
  * Phase 1 of the composer's two-phase handoff (sandboxes plan D1): create the
  * staged sandbox (or wake the staged resting one), then wait until it is
@@ -116,17 +122,102 @@ export async function runStagedSandbox(
   }
   const clientRequestId = useStagedSandboxStore
     .getState()
-    .begin(surfaceKey, fresh, deps.now());
+    .begin(surfaceKey, fresh, deps.now(), request.resume);
   if (clientRequestId === null) return;
   running.set(surfaceKey, clientRequestId);
   try {
-    const started = await startTarget(
-      { surfaceKey, clientRequestId, ...request },
-      stage.target,
-      deps,
-    );
+    const started =
+      sandboxAlreadyMade(stage, fresh) ??
+      (await startTarget(
+        { surfaceKey, clientRequestId, ...request },
+        stage.target,
+        deps,
+      ));
     if (started === null) return;
-    await settle(surfaceKey, clientRequestId, started, deps);
+    await settle({
+      surfaceKey,
+      clientRequestId,
+      started,
+      deps,
+      budgetFrom: readStagedSandbox(surfaceKey)?.startedAt ?? deps.now(),
+    });
+  } finally {
+    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
+  }
+}
+
+/**
+ * The new sandbox this key already made, if any. It is read, never created
+ * again: a repeat or a resume after a reload waits on that row, and a row
+ * that failed or is gone stops the wait rather than naming the key a second
+ * time.
+ */
+function sandboxAlreadyMade(
+  stage: StagedSandbox,
+  fresh: boolean,
+): StartedSandbox | null {
+  if (
+    fresh ||
+    stage.target.kind !== "new" ||
+    stage.createdSandboxId === null ||
+    stage.createdHostId === null
+  ) {
+    return null;
+  }
+  return { sandboxId: stage.createdSandboxId, hostId: stage.createdHostId };
+}
+
+/**
+ * Wakes the sandbox of a stage already handed off, which rested while its
+ * send waited for the agent there: the send is the wake (it resumes on the
+ * person's next action, and the send is still that action). Under the same
+ * stage and key, back to its wake step on the line, then the wait as before;
+ * the send is delivered only once the agent is ready, as ever.
+ */
+export async function rewakeStagedSandbox(
+  surfaceKey: string,
+  deps: StagedSandboxRunDeps,
+): Promise<void> {
+  const stage = readStagedSandbox(surfaceKey);
+  if (
+    stage === null ||
+    stage.phase !== "handoff" ||
+    stage.clientRequestId === null ||
+    stage.createdSandboxId === null ||
+    stage.createdHostId === null ||
+    running.has(surfaceKey)
+  ) {
+    return;
+  }
+  const { clientRequestId } = stage;
+  const started = {
+    sandboxId: stage.createdSandboxId,
+    hostId: stage.createdHostId,
+  };
+  const now = deps.now();
+  // The line's clock restarts with the wake: the wait it times is this one.
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    phase: "creating",
+    startedAt: now,
+    step: "booting",
+    stepAt: now,
+    failure: null,
+  });
+  running.set(surfaceKey, clientRequestId);
+  try {
+    const awake = await deps.wake(started.hostId);
+    if (!stillCurrent(surfaceKey, clientRequestId)) return;
+    if (!awake) {
+      fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
+      return;
+    }
+    await settle({
+      surfaceKey,
+      clientRequestId,
+      started,
+      deps,
+      budgetFrom: now,
+    });
   } finally {
     if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
   }
@@ -167,6 +258,11 @@ export interface StagedRunRequest {
   readonly fallbackName: string;
   /** The task the surface is in; `null` on the landing composer. */
   readonly taskId: string | null;
+  /**
+   * Takes up a run a reload stopped, keeping its step and times; `false` for
+   * a send, Keep waiting or Retry, which start the wait again.
+   */
+  readonly resume: boolean;
 }
 
 /** Which run a step belongs to, and what its create adds. */
@@ -364,14 +460,15 @@ export function createErrorNeedsFreshKey(error: Error): boolean {
  * the host is connected. A failed row, settings that did not apply, or the
  * budget running out stop it with the failure on the line.
  */
-async function settle(
-  surfaceKey: string,
-  clientRequestId: string,
-  started: StartedSandbox,
-  deps: StagedSandboxRunDeps,
-): Promise<void> {
-  const startedAt = readStagedSandbox(surfaceKey)?.startedAt ?? deps.now();
-  const deadline = startedAt + STAGED_CREATE_BUDGET_MS;
+async function settle(input: {
+  readonly surfaceKey: string;
+  readonly clientRequestId: string;
+  readonly started: StartedSandbox;
+  readonly deps: StagedSandboxRunDeps;
+  readonly budgetFrom: number;
+}): Promise<void> {
+  const { surfaceKey, clientRequestId, started, deps, budgetFrom } = input;
+  const deadline = budgetFrom + STAGED_CREATE_BUDGET_MS;
   while (deps.now() < deadline) {
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
     const row = await readRow(deps, started.sandboxId);

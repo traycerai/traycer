@@ -49,7 +49,11 @@ describe("terminal mention sourcing", () => {
       session({ sessionId: "landing", scope: { kind: "independent" } }),
     ];
 
-    const entries = epicTerminalMentionEntriesFromSessions(sessions, "epic-1");
+    const entries = epicTerminalMentionEntriesFromSessions(
+      sessions,
+      "epic-1",
+      null,
+    );
 
     expect(entries.map((entry) => entry.terminalId)).toEqual([
       "term-1",
@@ -73,6 +77,7 @@ describe("terminal mention sourcing", () => {
         }),
       ],
       "epic-1",
+      null,
     );
 
     expect(named).toMatchObject({
@@ -93,6 +98,7 @@ describe("terminal mention sourcing", () => {
       epicTerminalMentionEntriesFromSessions(
         [session({ sessionId: "landing", scope: { kind: "independent" } })],
         "epic-1",
+        null,
       ),
     ).toEqual([]);
   });

@@ -66,6 +66,7 @@ function build(input: {
     localHostId: null,
     activeHostId: input.activeHostId,
     localService: undefined,
+    localPlatform: null,
     hasLiveSession: () => false,
     localHostSettingUp: false,
     localHostTerminalRunNote: null,

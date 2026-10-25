@@ -1,6 +1,7 @@
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
   parseSandboxHeartbeatPhase,
+  sandboxSupportReference,
   type SandboxKind,
   type SandboxLifecycleVerb,
   type SandboxMember,
@@ -8,6 +9,10 @@ import {
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
+import {
+  formatSandboxDate,
+  sandboxFailedToStart,
+} from "@/lib/sandboxes/sandbox-row-lines";
 
 /**
  * The sandbox card's per-state copy and actions, kept free of React so the
@@ -53,35 +58,21 @@ const ACTIONS_BY_STATE: Record<HostSandboxState, readonly SandboxCardAction[]> =
     destroying: NO_ACTIONS,
     destroyed: NO_ACTIONS,
     failed: ["destroy"],
-    // Only the Automations row rests here; see its own table below.
-    released: ["destroy"],
+    // Only the Automations host rests here, and it offers none.
+    released: NO_ACTIONS,
   };
 
 /**
- * The Automations row's verbs (`kind: "automation"`): it is `released` or
- * `awake`, never suspended. `stop` releases it (scaled to zero, disk kept),
- * `start` opens it, and a suspend would answer `409`, so it is never offered.
- * The server destroys it like any row.
+ * The Automations host (`kind: "automation"`) offers no lifecycle verb: its
+ * actions are Open terminal and Rename, and the next shell starts it.
  */
-const AUTOMATION_ACTIONS_BY_STATE: Record<
-  HostSandboxState,
-  readonly SandboxCardAction[]
-> = {
-  ...ACTIONS_BY_STATE,
-  awake: ["stop", "destroy"],
-  released: ["start", "destroy"],
-};
-
 export function sandboxCardActions(
   state: HostSandboxState | null,
   frozen: boolean,
   kind: SandboxKind,
 ): readonly SandboxCardAction[] {
-  if (state === null) return NO_ACTIONS;
-  const actions =
-    kind === "automation"
-      ? AUTOMATION_ACTIONS_BY_STATE[state]
-      : ACTIONS_BY_STATE[state];
+  if (state === null || kind === "automation") return NO_ACTIONS;
+  const actions = ACTIONS_BY_STATE[state];
   if (frozen) {
     return actions.includes("destroy") ? FROZEN_ACTIONS : NO_ACTIONS;
   }
@@ -112,7 +103,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
   failed: "Failed to start. Nothing is billed for a sandbox that never woke.",
-  released: "Released, disk kept. It comes back on the next shell.",
+  released: "Suspended, files kept. The next shell starts it.",
 };
 
 /** "Nov 7, 2026". */
@@ -133,7 +124,7 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
   const base = "Frozen: out of credits. Top up to resume.";
   return frozenAt === null
     ? base
-    : `${base} Destroyed on ${formatSandboxDay(frozenDestroyAt(frozenAt))}.`;
+    : `${base} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`;
 }
 
 /**
@@ -193,7 +184,7 @@ export function sandboxTeamFrozenStateLine(
   const line = sandboxTeamFrozenLine(summary, viewerUserId);
   return summary.frozenAt === null
     ? line
-    : `${line} Destroyed on ${formatSandboxDay(frozenDestroyAt(summary.frozenAt))}.`;
+    : `${line} Destroyed on ${formatSandboxDate(frozenDestroyAt(summary.frozenAt), true)}.`;
 }
 
 /** A team pod's room, from the pod list's `headroom` and `liveShells`. */
@@ -261,7 +252,10 @@ function stoppedFailureLine(failureCode: string): string {
   if (failureCode === CHAT_STORE_NEWER_CODE) {
     return "This sandbox's data was saved by a newer version of Traycer, so it can't start yet. Start it again after the next Traycer update.";
   }
-  return `The last start didn't finish (${failureCode}). Start tries again.`;
+  const reference = sandboxSupportReference(failureCode);
+  return reference === null
+    ? "The last start didn't finish. Start tries again."
+    : `The last start didn't finish (${reference}). Start tries again.`;
 }
 
 /** The card's one-line description of where the sandbox is. */
@@ -273,7 +267,7 @@ export function sandboxStateLine(
   if (frozen) return sandboxFrozenLine(summary?.frozenAt ?? null);
   if (state === null) return "Sandbox";
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
-    return `Failed to start (${summary.failureCode}). Nothing is billed for a sandbox that never woke.`;
+    return `${sandboxFailedToStart(summary.failureCode)}. Nothing is billed for a sandbox that never woke.`;
   }
   // The control plane clears the code only when the row next wakes, so on a
   // stopped row it is a start (or stop) that did not complete: a rolled-back
@@ -456,11 +450,11 @@ export function sandboxTileOverlay(
         verb: "start",
         label: "Start",
       };
-    // The Automations row at rest: `start` opens it.
+    // The Automations row at rest: `start` opens it. Suspended, as its badge.
     case "released":
       return {
         kind: "asleep",
-        message: "Released",
+        message: "Suspended",
         verb: "start",
         label: "Start",
       };

@@ -1,5 +1,7 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
+import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import type {
   StageConfiguration,
@@ -12,7 +14,10 @@ import type {
  * the first action (the send, or the terminal open) creates or wakes it.
  *
  * A stage belongs to the draft in front of the person, so it lives in memory
- * only: a reload or a restart starts with nothing staged.
+ * only: a reload or a restart starts with nothing staged. The one exception is
+ * a send already handed to its task ({@link PENDING_SEND_SURFACE_PREFIX}): its
+ * stage is persisted, so a reload observes the same create, under the same
+ * key, and never makes a second sandbox.
  */
 export type StagedSandboxTarget =
   | {
@@ -66,8 +71,16 @@ export type StagedSandboxFailure =
   | { readonly kind: "settings"; readonly code: string }
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
-  /** The sandbox is up; no usable provider runs agents on it. */
+  /**
+   * The sandbox is up; the requested agent cannot run on it (no sign-in on
+   * the configuration, or not offered there). Never swapped for another.
+   */
   | { readonly kind: "no-provider" }
+  /**
+   * The sandbox is up; the requested agent's install there failed. `detail`
+   * is the host's own sentence for it.
+   */
+  | { readonly kind: "agent-setup-failed"; readonly detail: string }
   /** The sandbox is up; the send handed to it stopped short of its create. */
   | { readonly kind: "not-sent" };
 
@@ -139,6 +152,7 @@ export function refusedBeforeCreate(
     case "settings":
     case "timed-out":
     case "no-provider":
+    case "agent-setup-failed":
     case "not-sent":
       return false;
   }
@@ -165,18 +179,26 @@ interface StagedSandboxStoreState {
   readonly stage: (surfaceKey: string, target: StagedSandboxTarget) => void;
   /** Drops the stage: another pick, or the handoff completed. */
   readonly clear: (surfaceKey: string) => void;
+  /**
+   * Moves a surface's stage, as it stands, to another key: a send handed to
+   * its task takes the composer's stage (its key included, so a create the
+   * server may have accepted is named again) and the composer stages nothing.
+   */
+  readonly adopt: (fromSurfaceKey: string, toSurfaceKey: string) => void;
   /** Rewrites the staged target in place (the shape sheet's Use this shape). */
   readonly setTarget: (surfaceKey: string, target: StagedSandboxTarget) => void;
   /**
    * Starts an action: a new `clientRequestId` when `fresh`
    * ({@link stagedCreateNeedsFreshKey}, or Retry creation after a terminal
    * failure) or when the stage has none, else the one it holds. Returns the
-   * id, `null` when nothing is staged.
+   * id, `null` when nothing is staged. `resume` takes up a run a reload
+   * stopped: its step and times stay as they were persisted.
    */
   readonly begin: (
     surfaceKey: string,
     fresh: boolean,
     now: number,
+    resume: boolean,
   ) => string | null;
   /**
    * Takes up the run still driving the stage's key after a Cancel: back to
@@ -192,6 +214,7 @@ interface StagedSandboxStoreState {
         | "ownerId"
         | "createdSandboxId"
         | "createdHostId"
+        | "startedAt"
         | "step"
         | "stepAt"
         | "failure"
@@ -235,84 +258,116 @@ function freshStage(target: StagedSandboxTarget): StagedSandbox {
   };
 }
 
+/**
+ * The surface key of a send handed to its task (`pending-sandbox-sends`):
+ * the only stages that are persisted.
+ */
+export const PENDING_SEND_SURFACE_PREFIX = "pending-send:";
+
+function persistedStages(
+  bySurface: StagedSandboxStoreState["bySurface"],
+): StagedSandboxStoreState["bySurface"] {
+  return Object.fromEntries(
+    Object.entries(bySurface).filter(([key]) =>
+      key.startsWith(PENDING_SEND_SURFACE_PREFIX),
+    ),
+  );
+}
+
 export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
-  (set, get) => ({
-    bySurface: {},
-    stage: (surfaceKey, target) =>
-      set((state) => ({
-        bySurface: { ...state.bySurface, [surfaceKey]: freshStage(target) },
-      })),
-    clear: (surfaceKey) =>
-      set((state) => {
-        if (state.bySurface[surfaceKey] === undefined) return state;
-        const next = { ...state.bySurface };
-        delete next[surfaceKey];
-        return { bySurface: next };
-      }),
-    setTarget: (surfaceKey, target) =>
-      set((state) => ({
-        bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
-          ...stage,
-          target,
+  persist(
+    (set, get) => ({
+      bySurface: {},
+      stage: (surfaceKey, target) =>
+        set((state) => ({
+          bySurface: { ...state.bySurface, [surfaceKey]: freshStage(target) },
         })),
-      })),
-    begin: (surfaceKey, fresh, now) => {
-      const stage = get().bySurface[surfaceKey];
-      if (stage === undefined) return null;
-      const clientRequestId =
-        fresh || stage.clientRequestId === null
-          ? uuidv4()
-          : stage.clientRequestId;
-      set((state) => ({
-        bySurface: withStage(state.bySurface, surfaceKey, (current) => ({
-          ...current,
-          phase: "creating",
-          clientRequestId,
-          createdSandboxId: fresh ? null : current.createdSandboxId,
-          createdHostId: fresh ? null : current.createdHostId,
-          startedAt: now,
-          step: "creating",
-          stepAt: now,
-          failure: null,
-        })),
-      }));
-      return clientRequestId;
-    },
-    rejoin: (surfaceKey) =>
-      set((state) => ({
-        bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
-          ...stage,
-          phase: "creating",
-        })),
-      })),
-    report: (surfaceKey, patch) =>
-      set((state) => ({
-        bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
-          ...stage,
-          ...patch,
-        })),
-      })),
-    cancel: (surfaceKey) =>
-      set((state) => ({
-        bySurface: withStage(state.bySurface, surfaceKey, (stage) => {
-          // The key stays while a create may have been accepted, so the next
-          // send names it again rather than billing a second sandbox; so do
-          // its times, for a send that takes up the run still on its way.
-          if (!stagedCreateNeedsFreshKey(stage)) {
-            return { ...stage, phase: "staged", failure: null };
-          }
-          return {
-            ...stage,
-            phase: "staged",
-            clientRequestId: null,
-            startedAt: null,
-            stepAt: null,
-            failure: null,
-          };
+      clear: (surfaceKey) =>
+        set((state) => {
+          if (state.bySurface[surfaceKey] === undefined) return state;
+          const next = { ...state.bySurface };
+          delete next[surfaceKey];
+          return { bySurface: next };
         }),
-      })),
-    clearAll: () => set({ bySurface: {} }),
-  }),
+      adopt: (fromSurfaceKey, toSurfaceKey) =>
+        set((state) => {
+          const stage = state.bySurface[fromSurfaceKey];
+          if (stage === undefined) return state;
+          const next = { ...state.bySurface, [toSurfaceKey]: stage };
+          delete next[fromSurfaceKey];
+          return { bySurface: next };
+        }),
+      setTarget: (surfaceKey, target) =>
+        set((state) => ({
+          bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
+            ...stage,
+            target,
+          })),
+        })),
+      begin: (surfaceKey, fresh, now, resume) => {
+        const stage = get().bySurface[surfaceKey];
+        if (stage === undefined) return null;
+        const clientRequestId =
+          fresh || stage.clientRequestId === null
+            ? uuidv4()
+            : stage.clientRequestId;
+        const resumed = resume && !fresh && stage.startedAt !== null;
+        set((state) => ({
+          bySurface: withStage(state.bySurface, surfaceKey, (current) => ({
+            ...current,
+            phase: "creating",
+            clientRequestId,
+            createdSandboxId: fresh ? null : current.createdSandboxId,
+            createdHostId: fresh ? null : current.createdHostId,
+            startedAt: resumed ? current.startedAt : now,
+            step: resumed ? current.step : "creating",
+            stepAt: resumed ? current.stepAt : now,
+            failure: null,
+          })),
+        }));
+        return clientRequestId;
+      },
+      rejoin: (surfaceKey) =>
+        set((state) => ({
+          bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
+            ...stage,
+            phase: "creating",
+          })),
+        })),
+      report: (surfaceKey, patch) =>
+        set((state) => ({
+          bySurface: withStage(state.bySurface, surfaceKey, (stage) => ({
+            ...stage,
+            ...patch,
+          })),
+        })),
+      cancel: (surfaceKey) =>
+        set((state) => ({
+          bySurface: withStage(state.bySurface, surfaceKey, (stage) => {
+            // The key stays while a create may have been accepted, so the next
+            // send names it again rather than billing a second sandbox; so do
+            // its times, for a send that takes up the run still on its way.
+            if (!stagedCreateNeedsFreshKey(stage)) {
+              return { ...stage, phase: "staged", failure: null };
+            }
+            return {
+              ...stage,
+              phase: "staged",
+              clientRequestId: null,
+              startedAt: null,
+              stepAt: null,
+              failure: null,
+            };
+          }),
+        })),
+      clearAll: () => set({ bySurface: {} }),
+    }),
+    {
+      ...basePersistOptions(persistKey(STORE_KEYS.stagedSandboxSend)),
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ bySurface: persistedStages(state.bySurface) }),
+    },
+  ),
 );
 
 /**

@@ -446,6 +446,7 @@ function activationDebtStatusHandler(): MockHandlerMap<HostRpcRegistry> {
       install: null,
       processMemory: null,
       crossHostMessaging: null,
+      sessions: null,
     }),
   };
 }
@@ -910,6 +911,7 @@ function statusWithBusy(
     install: null,
     processMemory: null,
     crossHostMessaging: null,
+    sessions: null,
   };
 }
 
@@ -1556,6 +1558,7 @@ function activationAttemptStatusHandler(): MockHandlerMap<HostRpcRegistry> {
       install: null,
       processMemory: null,
       crossHostMessaging: null,
+      sessions: null,
     }),
     "host.update.check": () => ({
       outcome: "ok" as const,

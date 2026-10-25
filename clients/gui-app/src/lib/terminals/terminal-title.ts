@@ -5,6 +5,16 @@ import type {
 
 export const DEFAULT_TERMINAL_TITLE = "New Terminal";
 
+/**
+ * A task's own directory on a host, and that host's name. A folderless task
+ * terminal starts in the task's directory (`~/.traycer/epics/<epicId>`), whose
+ * last segment is the task id: a title names it by the host instead.
+ */
+export interface TaskHomeDirectory {
+  readonly epicId: string;
+  readonly hostName: string;
+}
+
 export function deriveTitleSourceFromSessionTitle(
   title: string | null,
 ): "default" | "manual" {
@@ -21,11 +31,13 @@ export function terminalSessionLabel(
   session:
     | CanonicalTerminalSessionInfo
     | CanonicalTerminalSessionInfoWithCurrentCwd,
+  taskHome: TaskHomeDirectory | null,
 ): string {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
     currentCwd: "currentCwd" in session ? session.currentCwd : session.cwd,
+    taskHome,
   });
 }
 
@@ -33,16 +45,24 @@ export function terminalSessionTitle(input: {
   readonly title: string | null;
   readonly activeProcessName: string | null | undefined;
   readonly currentCwd: string | null | undefined;
+  readonly taskHome: TaskHomeDirectory | null;
 }): string {
   const title = input.title?.trim() ?? "";
   if (title.length > 0) return title;
   const activeProcessName = input.activeProcessName?.trim() ?? "";
-  const directoryName = terminalDirectoryName(input.currentCwd);
+  const cwdName = terminalDirectoryName(input.currentCwd);
+  const taskHomeName =
+    input.taskHome !== null && cwdName === input.taskHome.epicId
+      ? input.taskHome.hostName
+      : null;
+  const directoryName = taskHomeName ?? cwdName;
   if (activeProcessName.length > 0) {
     return directoryName === null
       ? activeProcessName
       : `${directoryName} · ${activeProcessName}`;
   }
+  // The host's name alone already says which terminal this is.
+  if (taskHomeName !== null) return taskHomeName;
   if (directoryName !== null) {
     return `${directoryName} · ${DEFAULT_TERMINAL_TITLE}`;
   }

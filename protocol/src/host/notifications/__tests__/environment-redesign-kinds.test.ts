@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/versioned-rpc";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  ALL_HOST_NOTIFICATION_KINDS,
   V23_HOST_NOTIFICATION_KINDS,
+  V24_HOST_NOTIFICATION_KINDS,
   formatHostNotificationPresentation,
   hiddenHostNotificationKinds,
   hostNotificationEntrySchemaV23,
@@ -148,7 +148,8 @@ describe("visibility of the five environments-redesign kinds", () => {
       expect(visible).toContain(kind);
       expect(hidden).not.toContain(kind);
     }
-    expect(hidden).toEqual([]);
+    // `sandbox.notice` is cloud-feed @1.5 only; the five are not what it hides.
+    expect(hidden.filter((kind) => kind !== "sandbox.notice")).toEqual([]);
   });
 
   it("freezes V23_HOST_NOTIFICATION_KINDS as what list 2.3, feed 1.4-1.5 and cloudFeed 1.3 carry", () => {
@@ -166,7 +167,7 @@ describe("visibility of the five environments-redesign kinds", () => {
       expect(V23_HOST_NOTIFICATION_KINDS).not.toContain(kind);
     }
     expect([...V23_HOST_NOTIFICATION_KINDS, ...NEW_KINDS]).toEqual(
-      ALL_HOST_NOTIFICATION_KINDS,
+      V24_HOST_NOTIFICATION_KINDS,
     );
   });
 

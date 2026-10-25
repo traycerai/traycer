@@ -170,6 +170,7 @@ import {
   chatStreamErrorNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
+import { endedSandboxHost } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 import {
   liveChatCompletionAcknowledgementMatches,
   liveChatCompletionAcknowledgements,
@@ -10148,7 +10149,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
           fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          if (options.fatalCloseNotification !== "silent") {
+          // A sandbox a member destroyed ends its session as a revocation;
+          // the chat says who destroyed it, and nothing needs attention.
+          if (
+            options.fatalCloseNotification !== "silent" &&
+            endedSandboxHost(options.hostId) === null
+          ) {
             notificationDependencies.appLocalNotifications
               .getState()
               .upsertRecurringFailure(

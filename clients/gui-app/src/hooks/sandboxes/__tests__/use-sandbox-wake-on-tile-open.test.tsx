@@ -127,7 +127,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       .mockImplementationOnce(listOf({ state: "suspended" }))
       .mockImplementation(listOf({ state: "awake" }));
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -136,11 +136,32 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "resume",
+      null,
       expect.any(Number),
     );
     expect(mocks.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.toastWarning).not.toHaveBeenCalled();
     expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("records the open under the gesture the tile gives it", async () => {
+    mocks.entry = entryFor("sandbox", "suspended", false);
+    const auth = mocks.binding?.auth;
+    auth?.listSandboxes
+      .mockImplementationOnce(listOf({ state: "suspended" }))
+      .mockImplementation(listOf({ state: "awake" }));
+
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, "open-files"), {
+      wrapper: wrapper(),
+    });
+    await settleWake();
+
+    expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
+      "sbx_1",
+      "resume",
+      "open-files",
+      expect.any(Number),
+    );
   });
 
   it("starts a stopped sandbox", async () => {
@@ -150,7 +171,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       .mockImplementationOnce(listOf({ state: "stopped" }))
       .mockImplementation(listOf({ state: "awake" }));
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -158,6 +179,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "start",
+      null,
       expect.any(Number),
     );
   });
@@ -169,7 +191,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       .mockImplementationOnce(listOf({ state: "released" }))
       .mockImplementation(listOf({ state: "awake" }));
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -178,6 +200,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "start",
+      null,
       expect.any(Number),
     );
   });
@@ -192,7 +215,7 @@ describe("useSandboxWakeForOpenedTile", () => {
         listOf({ state, frozen: true }),
       );
 
-      renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
         wrapper: wrapper(),
       });
       await settleWake();
@@ -214,7 +237,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       entryFor("personal", null, false),
     ]) {
       mocks.entry = entry;
-      renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+      renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
         wrapper: wrapper(),
       });
       await settleWake();
@@ -229,7 +252,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     mocks.binding?.auth.listSandboxes
       .mockImplementationOnce(listOf({ state: "suspended" }))
       .mockImplementation(listOf({ state: "awake" }));
-    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -254,7 +277,7 @@ describe("useSandboxWakeForOpenedTile", () => {
   it("spends its one shot on the first directory entry: a sandbox first seen awake that later suspends is not woken", async () => {
     mocks.entry = entryFor("sandbox", "awake", false);
     const auth = mocks.binding?.auth;
-    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -275,7 +298,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     auth?.listSandboxes
       .mockImplementationOnce(listOf({ state: "suspended" }))
       .mockImplementation(listOf({ state: "awake" }));
-    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -290,6 +313,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     expect(auth?.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "resume",
+      null,
       expect.any(Number),
     );
   });
@@ -300,7 +324,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     auth?.listSandboxes
       .mockImplementationOnce(listOf({ state: "suspended" }))
       .mockImplementation(listOf({ state: "awake" }));
-    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    const view = renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -329,10 +353,10 @@ describe("useSandboxWakeForOpenedTile", () => {
     );
     const Wrapper = wrapper();
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: Wrapper,
     });
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: Wrapper,
     });
     await settleWake();
@@ -349,10 +373,10 @@ describe("useSandboxWakeForOpenedTile", () => {
 
     // The second tile mounts while the first one's wake is still in flight, so
     // it joins that wake; only the starter reports the shared outcome.
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: Wrapper,
     });
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: Wrapper,
     });
     await settleWake();
@@ -370,7 +394,7 @@ describe("useSandboxWakeForOpenedTile", () => {
     auth?.listSandboxes.mockImplementation(listOf({ state: "suspended" }));
     auth?.runSandboxVerb.mockResolvedValue(refusal(501, "verb_not_available"));
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -390,7 +414,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       currentAwakeBurnMcPerHour: 120,
     });
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -409,7 +433,7 @@ describe("useSandboxWakeForOpenedTile", () => {
       listOf({ state: "resuming" }),
     );
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await act(async () => {
@@ -432,7 +456,11 @@ describe("<SandboxWakeOnTileOpen />", () => {
     const Wrapper = wrapper();
     render(
       <Wrapper>
-        <SandboxWakeOnTileOpen hostId={HOST_ID} instanceId="tile-1" />
+        <SandboxWakeOnTileOpen
+          hostId={HOST_ID}
+          instanceId="tile-1"
+          gesture={null}
+        />
       </Wrapper>,
     );
     await settleWake();
@@ -445,7 +473,11 @@ describe("<SandboxWakeOnTileOpen />", () => {
     const Wrapper = wrapper();
     render(
       <Wrapper>
-        <SandboxWakeOnTileOpen hostId={HOST_ID} instanceId="tile-1" />
+        <SandboxWakeOnTileOpen
+          hostId={HOST_ID}
+          instanceId="tile-1"
+          gesture={null}
+        />
       </Wrapper>,
     );
     await settleWake();

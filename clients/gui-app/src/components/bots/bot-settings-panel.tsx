@@ -167,6 +167,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: null,
     },
   );
   const selection = useStore(toolbarStore, (s) => s.selection);

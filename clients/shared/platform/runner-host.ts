@@ -50,6 +50,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -418,6 +419,7 @@ export interface IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(

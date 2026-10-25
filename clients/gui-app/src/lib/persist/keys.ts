@@ -307,6 +307,19 @@ export const PERSIST_STORES = [
     leaf: "initial-chat-handoffs",
     kind: "static",
   },
+  // A send handed to its task while its sandbox is created: the stage (its
+  // create key and the sandbox it made) and the message with its settings,
+  // so a reload observes the same create and delivers the message once.
+  {
+    camelName: "stagedSandboxSend",
+    leaf: "staged-sandbox-sends",
+    kind: "static",
+  },
+  {
+    camelName: "pendingSandboxSend",
+    leaf: "pending-sandbox-sends",
+    kind: "static",
+  },
   { camelName: "leftPanel", leaf: "left-panel", kind: "static" },
   { camelName: "commGraphPanel", leaf: "comm-graph-panel", kind: "static" },
   {

@@ -55,16 +55,34 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * whatever the owner may still be driving. Access to a remote agent is
  * live-only by construction; the owner's machine is the only place it can be
  * started.
+ *
+ * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
+ * ended with it, and Start is the remedy, so a terminal or a terminal
+ * agent says that instead of calling the host unreachable.
+ *
+ * `sandbox-destroyed` - a member destroyed the sandbox: the banner says who
+ * and when (`destroyedLine`), not a fault.
  */
-export type DeadTileReason = "host-unreachable" | "not-running-remotely";
+export type DeadTileReason =
+  | "host-unreachable"
+  | "not-running-remotely"
+  | "sandbox-stopped"
+  | "sandbox-destroyed";
 
 function terminalDeadTileMessage(
   reason: DeadTileReason,
   ownerKind: DeadTileOwnerKind,
   hostLabel: string,
+  destroyedLine: string | null,
 ): string {
+  if (reason === "sandbox-destroyed" && destroyedLine !== null) {
+    return destroyedLine;
+  }
   if (reason === "not-running-remotely") {
     return `This agent is not running on "${hostLabel}" right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
+  }
+  if (reason === "sandbox-stopped") {
+    return `${hostLabel} is stopped. Start it to use this terminal again.`;
   }
   return ownerKind === "agent"
     ? `Host "${hostLabel}" is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
@@ -80,6 +98,8 @@ export interface TerminalDeadTileBannerProps {
    * silently pick one for a call site that had not thought about it.
    */
   readonly reason: DeadTileReason;
+  /** Who destroyed the sandbox and when, for `sandbox-destroyed`; else `null`. */
+  readonly destroyedLine: string | null;
   readonly onClose: () => void;
   readonly testId: string;
 }
@@ -97,6 +117,7 @@ export function TerminalDeadTileBanner(
           props.reason,
           props.ownerKind,
           props.hostLabel,
+          props.destroyedLine,
         )}
       </p>
       <div className="flex flex-wrap justify-center gap-2">

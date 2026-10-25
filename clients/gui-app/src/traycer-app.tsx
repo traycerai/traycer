@@ -1,3 +1,4 @@
+import { PendingSandboxSendsDriver } from "@/components/sandboxes/pending-sandbox-sends";
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
@@ -290,6 +291,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <EpicSessionControllerBridge />
                             <EpicTabExistenceReconciler />
                             <PoolSessionMount />
+                            <PendingSandboxSendsDriver />
                             <ViewReplicaLifecycleMount />
                             <HistoryLocalContributionMount />
                             <HostStreamProvider>

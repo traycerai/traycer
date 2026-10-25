@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, Info, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 /**
  * The composer's host-placement slot.
@@ -23,6 +24,13 @@ import { AlertTriangle, Info, X } from "lucide-react";
 export interface ComposerHostNoticeState {
   readonly kind: "refused" | "mirror";
   readonly message: string;
+  /** The one remedy the notice offers, or `null` for none. */
+  readonly action: ComposerHostNoticeAction | null;
+}
+
+export interface ComposerHostNoticeAction {
+  readonly label: string;
+  readonly onAction: () => void;
 }
 
 interface ComposerHostNoticeProps {
@@ -53,7 +61,20 @@ export function ComposerHostNotice(props: ComposerHostNoticeProps): ReactNode {
             : "mt-0.5 size-4 shrink-0 text-muted-foreground"
         }
       />
-      <p className="min-w-0 flex-1 text-foreground">{notice.message}</p>
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        <p className="min-w-0 text-foreground">{notice.message}</p>
+        {notice.action === null ? null : (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            data-testid="composer-host-notice-action"
+            onClick={notice.action.onAction}
+          >
+            {notice.action.label}
+          </Button>
+        )}
+      </div>
       <button
         type="button"
         aria-label="Dismiss"

@@ -19,6 +19,7 @@ import { BROWSERS_UNSUPPORTED_MESSAGE } from "@traycer-clients/shared/platform/b
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
@@ -44,6 +45,15 @@ const spies = vi.hoisted(() => ({
   setBrowserPinSelection: vi.fn(),
   setTerminalPinSelection: vi.fn(),
   retryBrowserHosts: vi.fn(),
+}));
+// A terminal's task directory is named by its host's directory row; this
+// suite has no host directory and no task terminal in the task's own folder.
+vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
+  useTaskHomeDirectory: () => null,
+  useTaskHomeDirectoryFor: () => () => null,
+}));
+vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
+  wakeSandboxOnPick: vi.fn(),
 }));
 vi.mock("sonner", () => ({
   toast: Object.assign(spies.toast, {
@@ -1039,6 +1049,54 @@ describe("Terminals opener sub-page", () => {
     );
 
     expect(labels).toContain("Create terminal on Sleeping box");
+  });
+
+  it("wakes a sleeping sandbox as Open terminal when its workspace page opens", () => {
+    const sleeping = hostScopeOptionFixture({
+      hostId: "sleeping-host",
+      name: "Sleeping box",
+      isLocalMachine: false,
+      isActive: false,
+      connectable: false,
+      kind: "sandbox",
+      sandbox: {
+        state: "suspended",
+        frozen: false,
+        summary: sandboxSummaryFixture({
+          hostId: "sleeping-host",
+          state: "suspended",
+          burst: false,
+        }),
+        teamOwned: false,
+      },
+    });
+    extraHostsMock.directory = [
+      {
+        hostId: "sleeping-host",
+        label: "Sleeping box",
+        kind: "remote",
+        websocketUrl: null,
+        version: null,
+        transportDialability: "dialable",
+      },
+    ];
+    extraHostsMock.options = [...extraHostsMock.options, sleeping];
+    const items = renderItems(useTerminalsOpenerItems);
+    const newTerminal = items[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const hostPage = renderItems(newTerminal.subpage.useItems).find(
+      (item) => item.subpage?.title === "Create terminal on Sleeping box",
+    );
+    if (hostPage === undefined || hostPage.subpage === null) {
+      throw new Error("expected the sleeping host's page");
+    }
+    expect(wakeSandboxOnPick).not.toHaveBeenCalled();
+
+    renderItems(hostPage.subpage.useItems);
+
+    expect(wakeSandboxOnPick).toHaveBeenCalledWith(sleeping, "open-terminal");
   });
 
   describe("a team's Automations pod", () => {

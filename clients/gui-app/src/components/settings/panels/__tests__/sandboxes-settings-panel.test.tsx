@@ -31,10 +31,22 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import type { ReactElement } from "react";
 import type {
+  SandboxAutomationResponse,
   SandboxCatalogue,
   SandboxSummary,
+  UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { SandboxAutomationOpened } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
+import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import {
+  agentSessionFixture,
+  liveSessionReport,
+  sandboxSummaryFixture,
+  terminalSessionFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   sandboxPeriodLabel,
   sandboxRowActionLabel,
@@ -101,6 +113,13 @@ const mocks = vi.hoisted(() => ({
   listed: true,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
   catalogue: null as SandboxCatalogue | null,
+  report: { kind: "unknown" } as SandboxSessionReport,
+  costs: null as UserSandboxCost | null,
+  /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
+  automation: null as SandboxAutomationResponse | null,
+  openAutomation: vi.fn<() => Promise<SandboxAutomationOpened>>(),
+  openLink: vi.fn<(url: string, kind: string, event: null) => void>(),
+  close: vi.fn(),
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -155,7 +174,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
-  useSandboxCosts: () => ({ data: null }),
+  useSandboxCosts: () => ({ data: mocks.costs }),
 }));
 vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
   useRefreshSandboxCosts: () => undefined,
@@ -173,11 +192,19 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxSessionReport: () => ({
-    report: { kind: "unknown" },
-    failed: false,
+  useSandboxSessionReport: () => ({ report: mocks.report, failed: false }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
+  useSandboxAutomation: () => ({ data: mocks.automation }),
+  useSandboxTeamPods: () => new Map(),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
+  useSandboxAutomationOpen: () => ({
+    mutateAsync: mocks.openAutomation,
+    isPending: false,
   }),
 }));
+
 vi.mock("@/hooks/sandboxes/use-sandbox-destroy-batch-mutation", () => ({
   useSandboxDestroyBatch: () => ({
     data: undefined,
@@ -187,31 +214,42 @@ vi.mock("@/hooks/sandboxes/use-sandbox-destroy-batch-mutation", () => ({
   }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ signInUrl: "https://example.test" }),
+  useRunnerHost: () => ({ signInUrl: "https://platform.example.dev/sign-in" }),
 }));
-vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
-  useSystemTabModalActions: () => ({ close: vi.fn(), openSettings: vi.fn() }),
+  useSystemTabModalActions: () => ({
+    close: mocks.close,
+    openSettings: vi.fn(),
+  }),
 }));
 // The actions have their own verbs and dialogs; the page's contract is which
 // primary action each row offers, so the stub renders the model's own pick.
-vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
-  SandboxRowActions: (props: {
-    summary: SandboxSummary;
-    configuration: SandboxPageConfiguration;
-    unreachable: boolean;
-    frozenNeedsOwnCredits: boolean;
-  }) => {
-    const { primary } = sandboxRowActions(props);
-    return (
-      <span data-testid="row-primary">
-        {primary === null
-          ? ""
-          : sandboxRowActionLabel(primary, props.configuration)}
-      </span>
-    );
-  },
-}));
+vi.mock(
+  "@/components/settings/panels/sandbox-row-actions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/panels/sandbox-row-actions")
+    >()),
+    SandboxRowActions: (props: {
+      summary: SandboxSummary;
+      configuration: SandboxPageConfiguration;
+      unreachable: boolean;
+      frozenNeedsOwnCredits: boolean;
+    }) => {
+      const { primary } = sandboxRowActions(props);
+      return (
+        <span data-testid="row-primary">
+          {primary === null
+            ? ""
+            : sandboxRowActionLabel(primary, props.configuration)}
+        </span>
+      );
+    },
+  }),
+);
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
@@ -385,6 +423,14 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.listed = true;
     mocks.configurations = [{ kind: "personal" }];
     mocks.catalogue = null;
+    mocks.report = { kind: "unknown" };
+    mocks.costs = null;
+    mocks.automation = null;
+    mocks.openAutomation.mockReset();
+    mocks.openLink.mockReset();
+    mocks.close.mockReset();
+    useLandingPanelStore.getState().resetForTests();
+    useSurfaceHostSelectionStore.setState({ selections: {} });
     host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "owner")];
     host.items = {};
     host.members = [];
@@ -1028,5 +1074,328 @@ describe("<SandboxesSettingsPanel />", () => {
       },
     });
     useStagedSandboxStore.setState({ bySurface: {} });
+  });
+
+  it("says an agent started a sandbox an agent created and the person kept, not that they did", () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-me", username: "me" },
+    });
+    renderPanel([
+      row("sbx-kept", {
+        burst: false,
+        createdByAgentId: "agent-1",
+        createdBy: null,
+        keptBy: { userId: "user-me", displayName: "Me" },
+      }),
+    ]);
+
+    const kept = rowOf("sbx-kept");
+    expect(within(kept).getByText("Started by an agent")).toBeDefined();
+    expect(within(kept).getByText("Kept by you")).toBeDefined();
+    expect(within(kept).queryByText("Started by you")).toBeNull();
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  });
+
+  describe("a row's running sessions", () => {
+    const AWAKE = row("sbx-awake", { state: "awake" });
+
+    it("names each session on the host as a pill beside the count, an idle terminal included", () => {
+      mocks.report = liveSessionReport(
+        {
+          agents: [agentSessionFixture({ name: "Planner", working: true })],
+          terminals: [terminalSessionFixture({ name: "make watch" })],
+        },
+        true,
+      );
+      renderPanel([AWAKE]);
+
+      const line = within(rowOf("sbx-awake")).getByTestId(
+        "sandboxes-row-sessions",
+      );
+      expect(line.textContent).toBe("2 sessions runningPlannermake watch");
+      expect(
+        within(line)
+          .getAllByTestId("sandboxes-row-session-pill")
+          .map((pill) => pill.textContent),
+      ).toEqual(["Planner", "make watch"]);
+    });
+
+    it("draws no pills when the host runs nothing", () => {
+      mocks.report = liveSessionReport({ agents: [], terminals: [] }, false);
+      renderPanel([AWAKE]);
+
+      expect(screen.queryAllByTestId("sandboxes-row-session-pill")).toEqual([]);
+    });
+
+    it("says the count is unknown, never a zero, when no report is held", () => {
+      renderPanel([AWAKE]);
+
+      expect(
+        within(rowOf("sbx-awake")).getByTestId("sandboxes-row-sessions")
+          .textContent,
+      ).toBe("Sessions unknown · no report yet");
+    });
+  });
+
+  describe("the header's day total", () => {
+    const TEAM_DAY_ENV = "env-team-day";
+    const TEAM_DAY = {
+      kind: "team",
+      teamId: "team-1",
+      teamName: "Acme",
+      environmentId: TEAM_DAY_ENV,
+    } as const;
+
+    function costsOf(
+      todayByEnvironment: UserSandboxCost["todayByEnvironment"],
+      rowTodayMc: number,
+    ): UserSandboxCost {
+      return {
+        sandboxes: [
+          {
+            sandboxId: "sbx-a",
+            currentRateMillicreditsPerHour: 120,
+            state: "awake",
+            frozen: false,
+            charged: {
+              computeMillicredits: 0,
+              storageMillicredits: 0,
+              sinceCreatedAt: 0,
+            },
+            pendingMillicredits: 0,
+            segments: [],
+            todayMillicredits: rowTodayMc,
+            history: [],
+          },
+        ],
+        awakeBurnMillicreditsPerHour: 120,
+        todayYoursMillicredits: 0,
+        todayByEnvironment,
+      };
+    }
+
+    function header(): string {
+      return screen.getByTestId("sandboxes-list-header").textContent;
+    }
+
+    it("sums the environments that are none of the viewer's teams' for Personal, destroyed sandboxes included", () => {
+      mocks.configurations = [{ kind: "personal" }, TEAM_DAY];
+      mocks.costs = costsOf(
+        [
+          {
+            environmentId: "env-personal",
+            todayMillicredits: 300,
+            todayYoursMillicredits: 300,
+          },
+          {
+            environmentId: "env-other",
+            todayMillicredits: 200,
+            todayYoursMillicredits: 200,
+          },
+          {
+            environmentId: TEAM_DAY_ENV,
+            todayMillicredits: 5_000,
+            todayYoursMillicredits: 700,
+          },
+        ],
+        // The listed row's own day: the total is the server's, not this.
+        20,
+      );
+      renderPanel([row("sbx-a", {})]);
+
+      expect(header()).toBe("1 sandbox · $0.50 today (UTC day).");
+    });
+
+    it("reads the team's own environment for a team, with the viewer's share", () => {
+      mocks.configurations = [{ kind: "personal" }, TEAM_DAY];
+      host.environments = [
+        descriptor(PERSONAL_ENV, "user", "u1", "owner"),
+        descriptor(TEAM_DAY_ENV, "organization", "team-1", "viewer"),
+      ];
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: TEAM_DAY_ENV },
+      });
+      mocks.costs = costsOf(
+        [
+          {
+            environmentId: "env-personal",
+            todayMillicredits: 300,
+            todayYoursMillicredits: 300,
+          },
+          {
+            environmentId: TEAM_DAY_ENV,
+            todayMillicredits: 5_000,
+            todayYoursMillicredits: 700,
+          },
+        ],
+        20,
+      );
+      renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
+
+      expect(header()).toBe(
+        "1 sandbox · $5.00 today (UTC day), $0.70 of it yours.",
+      );
+    });
+
+    it("falls back to the listed rows' sum when the server sends no per-environment totals", () => {
+      mocks.costs = costsOf([], 20);
+      renderPanel([row("sbx-a", {})]);
+
+      expect(header()).toBe("1 sandbox · $0.02 today (UTC day).");
+    });
+  });
+
+  it("reads a row mid-destroy as Destroying… with no sessions line", () => {
+    mocks.report = liveSessionReport(
+      { agents: [], terminals: [terminalSessionFixture({})] },
+      true,
+    );
+    renderPanel([row("sbx-gone", { state: "destroying" })]);
+
+    const gone = rowOf("sbx-gone");
+    expect(within(gone).getByTestId("sandboxes-row-clock").textContent).toBe(
+      "Destroying…",
+    );
+    expect(within(gone).queryByTestId("sandboxes-row-sessions")).toBeNull();
+  });
+
+  describe("an Automations host that is not created yet", () => {
+    const NOT_CREATED: SandboxAutomationResponse = {
+      available: true,
+      sandbox: null,
+      pods: [],
+    };
+    const OPENED = row("sbx-auto", {
+      kind: "automation",
+      hostId: "auto-host",
+      state: "awake",
+    });
+
+    function unstarted(): HTMLElement {
+      return screen.getByTestId("sandboxes-row-automations-unstarted");
+    }
+
+    it("lists a released Automations row with Open terminal and no menu, and counts it in the header", () => {
+      mocks.automation = NOT_CREATED;
+      renderPanel([row("sbx-a", {}), row("sbx-b", {})]);
+
+      const automations = unstarted();
+      expect(
+        within(automations).getByTestId("sandboxes-row-name").textContent,
+      ).toBe("Automations");
+      expect(
+        within(automations).getByTestId("sandboxes-row-state").textContent,
+      ).toBe("Suspended");
+      expect(
+        within(automations).getByTestId("sandboxes-row-clock").textContent,
+      ).toBe("Released · comes back on the next shell");
+      expect(
+        within(automations).getByRole("button", { name: "Open terminal" }),
+      ).toBeDefined();
+      expect(
+        within(automations).queryByRole("button", {
+          name: /^More actions/,
+        }),
+      ).toBeNull();
+      expect(screen.getByTestId("sandboxes-list-header").textContent).toContain(
+        "2 sandboxes and Automations",
+      );
+    });
+
+    it("leaves the row out where a filter excludes it", () => {
+      mocks.automation = NOT_CREATED;
+      renderPanel([row("sbx-a", {})]);
+      expect(
+        screen.getByTestId("sandboxes-row-automations-unstarted"),
+      ).toBeDefined();
+
+      fireEvent.change(screen.getByTestId("sandboxes-search"), {
+        target: { value: "build" },
+      });
+
+      expect(
+        screen.queryByTestId("sandboxes-row-automations-unstarted"),
+      ).toBeNull();
+    });
+
+    it("stops listing it once the control plane lists the host", () => {
+      mocks.automation = NOT_CREATED;
+      renderPanel([OPENED]);
+
+      expect(
+        screen.queryByTestId("sandboxes-row-automations-unstarted"),
+      ).toBeNull();
+    });
+
+    it("creates and starts it, then opens the terminal on the host it answers with, leaving the composer as it was", async () => {
+      mocks.automation = NOT_CREATED;
+      mocks.openAutomation.mockResolvedValue({
+        sandbox: OPENED,
+        settled: true,
+      });
+      await withSettingsTabSelected();
+      renderPanel([row("sbx-a", {})]);
+
+      fireEvent.click(
+        within(unstarted()).getByRole("button", { name: "Open terminal" }),
+      );
+
+      await waitFor(() => {
+        expect(useLandingPanelStore.getState().terminalRequest?.hostId).toBe(
+          "auto-host",
+        );
+      });
+      expect(mocks.openAutomation).toHaveBeenCalledWith(null);
+      expect(mocks.close).toHaveBeenCalledTimes(1);
+      expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+    });
+
+    it("files no request and keeps Settings open when the start fails", async () => {
+      mocks.automation = NOT_CREATED;
+      mocks.openAutomation.mockRejectedValue(new Error("refused"));
+      renderPanel([row("sbx-a", {})]);
+
+      fireEvent.click(
+        within(unstarted()).getByRole("button", { name: "Open terminal" }),
+      );
+
+      await waitFor(() => {
+        expect(mocks.openAutomation).toHaveBeenCalledTimes(1);
+      });
+      await Promise.resolve();
+      expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+      expect(mocks.close).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a team's usage link", () => {
+    it("opens the team's usage under its environment", async () => {
+      mocks.configurations = [
+        { kind: "personal" },
+        {
+          kind: "team",
+          teamId: "team-1",
+          teamName: "acme",
+          environmentId: TEAM_ENV,
+        },
+      ];
+      host.environments = [
+        descriptor(PERSONAL_ENV, "user", "u1", "owner"),
+        descriptor(TEAM_ENV, "organization", "team-1", "owner"),
+      ];
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: TEAM_ENV },
+      });
+      renderPanel([]);
+
+      fireEvent.click(await screen.findByTestId("sandboxes-team-usage"));
+
+      expect(mocks.openLink).toHaveBeenCalledWith(
+        "https://platform.example.dev/team/acme/environment/usage",
+        "account",
+        null,
+      );
+    });
   });
 });

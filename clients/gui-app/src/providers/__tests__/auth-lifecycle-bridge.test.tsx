@@ -11,6 +11,7 @@ import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   openSandboxDetails,
@@ -337,6 +338,42 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+  });
+
+  it("drops every message waiting on a sandbox on user-switch", () => {
+    // Left standing, it would be delivered under the next account's sign-in.
+    usePendingSandboxSendStore.getState().add({
+      id: "send-alice",
+      userId: "user-alice",
+      epicId: "epic-alice",
+      request: { kind: "chat", parentId: null },
+      content: { type: "doc", content: [] },
+      text: "fix the login bug",
+      settings: {
+        harnessId: "codex",
+        model: "gpt-6.1-sol",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      },
+      createdAt: 1_000,
+      epicConfirmed: true,
+      delivery: null,
+    });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
   });
 
   it("drops a terminal a sandbox row asked the landing panel for on user-switch", () => {

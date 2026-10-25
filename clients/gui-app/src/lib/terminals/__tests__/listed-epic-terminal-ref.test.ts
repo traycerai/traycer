@@ -55,6 +55,7 @@ describe("makeListedEpicTerminalRef", () => {
       hostId: HOST_ID,
       instanceId: "inst-1",
       durable: false,
+      taskHome: null,
     });
     expect(isLegacyEpicTerminalRef(ref)).toBe(true);
     expect(ref.lifecycleOwner).toBe("manager");
@@ -75,6 +76,7 @@ describe("makeListedEpicTerminalRef", () => {
       hostId: HOST_ID,
       instanceId: "inst-manager",
       durable: false,
+      taskHome: null,
     });
     expect(manager.lifecycleOwner).toBe("manager");
     expect(manager.origin).toBeUndefined();
@@ -85,6 +87,7 @@ describe("makeListedEpicTerminalRef", () => {
       hostId: HOST_ID,
       instanceId: "inst-registry",
       durable: false,
+      taskHome: null,
     });
     expect(registry.lifecycleOwner).toBe("registry");
     expect(registry.origin).toBe("provider-login");
@@ -97,6 +100,7 @@ describe("makeListedEpicTerminalRef", () => {
       hostId: HOST_ID,
       instanceId: "inst-shadow",
       durable: false,
+      taskHome: null,
     });
     expect(ref.lifecycleOwner).toBe("registry");
     expect(isImportExemptEpicTerminalRef(ref)).toBe(false);

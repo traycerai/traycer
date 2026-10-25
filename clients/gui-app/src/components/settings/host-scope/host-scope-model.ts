@@ -116,6 +116,12 @@ export interface BuildHostScopeOptionsInput {
   readonly activeHostId: string | null;
   /** Local service truth, used only for the local machine's row. */
   readonly localService: ServiceStatusSnapshot | undefined;
+  /**
+   * This machine's platform as the desktop shell reports it (`win32`), or
+   * `null` outside the desktop. The local machine's row falls back to it when
+   * its registry row names none, so its OS is still said.
+   */
+  readonly localPlatform: string | null;
   readonly hasLiveSession: (hostId: string) => boolean;
   /**
    * Every lease the selection authority has published, as the store holds
@@ -177,7 +183,7 @@ export function buildHostScopeOptions(
       connectable: isAdministrableRoute(entry, input.hasLiveSession(hostId)),
       ...localLaneFacts(isLocalMachine, input),
       registered: item !== null,
-      platform: item?.platform ?? null,
+      platform: item?.platform ?? (isLocalMachine ? input.localPlatform : null),
       version: item?.status.appVersion ?? entry?.version ?? null,
       health: deriveHostHealth({
         item,

@@ -10,6 +10,7 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { resetSandboxesPage } from "@/stores/sandboxes/sandboxes-page-store";
@@ -120,6 +121,9 @@ export function EpicSessionLifecycleBridge(
       // create key and the host it made; account B would otherwise send into
       // A's team or resubmit A's create.
       useStagedSandboxStore.getState().clearAll();
+      // A message sent to a sandbox is the outgoing account's, waiting to be
+      // delivered under its sign-in.
+      usePendingSandboxSendStore.getState().clearAll();
       // So does a terminal a sandbox row asked the landing panel for: account
       // B's panel would otherwise open one on A's sandbox.
       useLandingPanelStore.getState().clearTerminalRequest();

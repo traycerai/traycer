@@ -16,10 +16,14 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  type SandboxCatalogue,
   type SandboxCreateRequest,
+  type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
@@ -28,6 +32,7 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
+  openLandingStagedTerminal,
   stagedSandboxFallbackName,
   startStagedTerminal,
   useStagedSandboxHandoff,
@@ -50,9 +55,17 @@ import type {
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+import {
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { notEnoughCreditsLine } from "@/lib/sandboxes/sandbox-strings";
 
 const mocks = vi.hoisted(() => ({
+  /** The viewer and the catalogue the setup line's facts are read from. */
+  user: null as AuthenticatedUser | null,
+  catalogue: null as SandboxCatalogue | null,
   runStagedSandbox: vi.fn<
     (
       surfaceKey: string,
@@ -68,6 +81,8 @@ const mocks = vi.hoisted(() => ({
     >(),
   /** The control plane's sandbox list, read while a create settles. */
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
+  /** The sandbox list rows the setup line prices a resting sandbox from. */
+  sandboxes: null as SandboxSummary[] | null,
   /** The account's host directory, which names the new host once it dials. */
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   repairHostIds: [] as string[],
@@ -111,11 +126,26 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
-  useAuthUser: () => ({ data: null }),
+  useAuthUser: () => ({ data: mocks.user }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
+  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
 }));
+// The list the setup line prices a resting sandbox from: the real query unless
+// a case names the rows, so the cases that run a create keep the reads it makes.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...actual,
+    useSandboxList: (...args: Parameters<typeof actual.useSandboxList>) =>
+      mocks.sandboxes === null
+        ? actual.useSandboxList(...args)
+        : { data: { sandboxes: mocks.sandboxes } },
+  };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ mutate: vi.fn() }),
 }));
@@ -125,6 +155,51 @@ vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
+
+/** A listed 1 vCPU · 1 GB rung at $0.12 an hour under the staged 2 vCPU · 4 GB. */
+const LADDER: SandboxCatalogue = {
+  providers: [
+    {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 102400,
+        diskDefaultMb: 20480,
+      },
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      shapes: [
+        { cpus: 1, memoryMb: 1024, diskMb: 10_240, default: false },
+        { cpus: 2, memoryMb: 4096, diskMb: 20_480, default: true },
+      ],
+      dockerInGuest: true,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [
+        {
+          id: "us-east",
+          label: "US East",
+          fromPriceMcPerHour: {
+            awakeMc: 120,
+            suspendedMc: 4,
+            stoppedMc: 2,
+          },
+          pricing: null,
+        },
+      ],
+    },
+  ],
+};
 
 const SURFACE = "tab:epic-1";
 const NEW_HOST = "sbx-host";
@@ -152,7 +227,7 @@ function stageCreated(
     name: "api-refactor",
     wakeString: null,
   });
-  store.begin(SURFACE, false, Date.now());
+  store.begin(SURFACE, false, Date.now(), false);
   store.report(SURFACE, {
     createdSandboxId: "sbx-1",
     createdHostId: NEW_HOST,
@@ -189,6 +264,9 @@ function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
 }
 
 beforeEach(() => {
+  mocks.user = null;
+  mocks.catalogue = null;
+  mocks.sandboxes = null;
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
@@ -283,7 +361,7 @@ describe("useStagedSandboxSend's setup line", () => {
 
     act(() => {
       latestSend?.intercept("fix the login bug", null);
-      store.begin(SURFACE, false, Date.now() - 8_000);
+      store.begin(SURFACE, false, Date.now() - 8_000, false);
     });
 
     expect(
@@ -325,18 +403,51 @@ describe("useStagedSandboxSend's line after a refusal", () => {
     });
   }
 
-  it("retries a create refused for credits under a new key", () => {
-    stageRefused({ kind: "credits", shortfallMc: 120 });
-    mount(vi.fn());
+  describe("for credits, from the viewer's balance and the catalogue's smallest shape", () => {
+    function viewerWithCredits(totalPlanCredits: number): AuthenticatedUser {
+      return userWith(
+        userSubscription({
+          totalPlanCredits,
+          consumedFromPlan: 0,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [],
+      );
+    }
 
-    fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
+    function refusalButtons(): string[] {
+      return within(screen.getByTestId("sandbox-refusal-line"))
+        .getAllByRole("button")
+        .map((button) => button.textContent);
+    }
 
-    expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
-      SURFACE,
-      true,
-      expect.any(Object),
-      expect.any(Object),
-    );
+    it("offers exactly Add credits and Choose another host at a zero balance", () => {
+      mocks.catalogue = LADDER;
+      mocks.user = viewerWithCredits(0);
+      stageRefused({ kind: "credits", shortfallMc: 120 });
+      mount(vi.fn());
+
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Choose another host",
+      ]);
+    });
+
+    it("adds Choose a smaller shape when the balance covers the smallest shape's hour", () => {
+      mocks.catalogue = LADDER;
+      // $0.20: under the staged shape's hour of credits, over the smallest's $0.12.
+      mocks.user = viewerWithCredits(0.2);
+      stageRefused({ kind: "credits", shortfallMc: 100 });
+      mount(vi.fn());
+
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Choose another host",
+        "Choose a smaller shape",
+      ]);
+    });
   });
 
   it("retries a create whose answer never came under its own key", () => {
@@ -360,6 +471,143 @@ describe("useStagedSandboxSend's line after a refusal", () => {
     const line = screen.getByTestId("sandbox-refusal-line").textContent;
     expect(line).toContain(notEnoughCreditsLine(null));
     expect(line).not.toContain("$0.00");
+  });
+});
+
+describe("useStagedSandboxSend's setup line prices and names what it stages", () => {
+  function stageExisting(): void {
+    stageCreated("booting", null);
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
+  }
+
+  function detail(): string {
+    fireEvent.click(screen.getByTestId("sandbox-setup-line-toggle"));
+    return screen.getByTestId("sandbox-setup-line-detail").textContent;
+  }
+
+  /** The detail as it stands: open already while taking longer or failed. */
+  function shownDetail(): string {
+    return screen.getByTestId("sandbox-setup-line-detail").textContent;
+  }
+
+  it("prices a resting sandbox from its list row's awake rate, exactly", () => {
+    mocks.sandboxes = [
+      sandboxSummaryFixture({
+        id: "sbx-1",
+        priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
+      }),
+    ];
+    stageExisting();
+    mount(vi.fn());
+
+    const text = detail();
+    expect(text).toContain("$0.21 an hour while awake · uses your credits");
+    expect(text).not.toContain("Billed by the hour");
+    expect(text).not.toContain("from $");
+  });
+
+  it("says the hour is billed, unpriced, when the row names no rate", () => {
+    mocks.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-1", priceMcPerHour: null }),
+    ];
+    stageExisting();
+    mount(vi.fn());
+
+    expect(detail()).toContain("Billed by the hour while awake");
+  });
+
+  it("says compute is charged while it is awake once the resume is ticked, in the taking-longer line", () => {
+    stageExisting();
+    useStagedSandboxStore.getState().report(SURFACE, {
+      startedAt: Date.now() - 200_000,
+      step: "delivering",
+      stepAt: Date.now() - 156_500,
+    });
+    mount(vi.fn());
+
+    expect(shownDetail()).toContain(
+      "Last step: Delivering your message, reported 2:36 ago · your message waits · compute is charged while it is awake",
+    );
+  });
+
+  it("still says nothing is billed until it is awake while the wake has not happened", () => {
+    stageExisting();
+    useStagedSandboxStore.getState().report(SURFACE, {
+      startedAt: Date.now() - 200_000,
+      step: "booting",
+      stepAt: Date.now() - 156_500,
+    });
+    mount(vi.fn());
+
+    const text = shownDetail();
+    expect(text).toContain(
+      "Last step: Resuming, reported 2:36 ago · your message waits · nothing is billed until it is awake",
+    );
+    expect(text).not.toContain("compute is charged while it is awake");
+  });
+
+  it.each(["applying", "delivering"] as const)(
+    "says compute is charged while it is awake when the sandbox failed at %s, not that nothing was billed",
+    (step) => {
+      stageExisting();
+      useStagedSandboxStore.getState().report(SURFACE, {
+        step,
+        stepAt: Date.now(),
+        failure: { kind: "failed", code: "PROVIDER_CREATE_FAILED", step },
+      });
+      mount(vi.fn());
+
+      const text = shownDetail();
+      expect(text).toContain("Compute is charged while it is awake.");
+      expect(text).not.toContain("Nothing was");
+    },
+  );
+
+  it("still says nothing was billed for a sandbox that failed before it woke", () => {
+    stageExisting();
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: {
+        kind: "failed",
+        code: "PROVIDER_CREATE_FAILED",
+        step: "booting",
+      },
+    });
+    mount(vi.fn());
+
+    expect(shownDetail()).toContain("Nothing was charged for this wake.");
+  });
+
+  it("never prints the id of a region the catalogue does not list in the shape refusal", () => {
+    mocks.catalogue = LADDER;
+    stageCreated("creating", { kind: "shape" });
+    useStagedSandboxStore.getState().setTarget(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "mars-central-9",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "api-refactor",
+      wakeString: null,
+    });
+    mount(vi.fn());
+
+    const line = screen.getByTestId("sandbox-refusal-line").textContent;
+    expect(line).toContain("This region doesn't offer 2 vCPU · 4 GB.");
+    expect(line).not.toContain("mars-central-9");
   });
 });
 
@@ -585,7 +833,7 @@ describe("useStagedSandboxSend's handoff", () => {
     act(() => {
       sendA?.intercept("fix the login bug", null);
       // Phase 1 is under way.
-      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now());
+      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
     });
     let takenFromB = false;
     act(() => {
@@ -629,7 +877,7 @@ describe("useStagedSandboxSend on a boot a terminal ask started", () => {
       verb: "resume",
     });
     useStagedSandboxStore.getState().report(SURFACE, { openTerminal: true });
-    useStagedSandboxStore.getState().begin(SURFACE, false, Date.now());
+    useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
     const submit = vi.fn(() => true);
     let send: StagedSandboxSend | null = null;
     render(
@@ -721,7 +969,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
       failure: { kind: "no-provider" },
     });
     expect(screen.getByTestId("sandbox-refusal-line").textContent).toContain(
-      "api-refactor is awake, but",
+      "Sign in to a coding agent to run agents on Personal.",
     );
     expect(screen.getByTestId("sandbox-refusal-details")).toBeDefined();
 
@@ -783,7 +1031,7 @@ async function sendAgainAfter(
 }
 
 describe("useStagedSandboxSend's send after a failed create", () => {
-  it("makes a new create after a refusal for credits, and offers Retry beside Add credits", async () => {
+  it("makes a new create after a refusal for credits, and offers Add credits and no Retry", async () => {
     mocks.createSandbox.mockResolvedValue(
       refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
     );
@@ -791,7 +1039,8 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     const [first, second] = await sendAgainAfter("credits");
 
     expect(second).not.toBe(first);
-    expect(screen.getByTestId("sandbox-refusal-retry")).toBeDefined();
+    expect(screen.getByTestId("sandbox-refusal-add-credits")).toBeDefined();
+    expect(screen.queryByTestId("sandbox-refusal-retry")).toBeNull();
   });
 
   it("repeats the same create after one whose answer never came, since it may have been accepted", async () => {
@@ -812,7 +1061,9 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     const keys: (string | null)[] = [];
     mocks.runStagedSandbox.mockImplementation((surfaceKey, fresh) => {
       keys.push(
-        useStagedSandboxStore.getState().begin(surfaceKey, fresh, Date.now()),
+        useStagedSandboxStore
+          .getState()
+          .begin(surfaceKey, fresh, Date.now(), false),
       );
       return Promise.resolve();
     });
@@ -835,7 +1086,9 @@ describe("useStagedSandboxSend's send after a failed create", () => {
     const keys: (string | null)[] = [];
     mocks.runStagedSandbox.mockImplementation((surfaceKey, fresh) => {
       keys.push(
-        useStagedSandboxStore.getState().begin(surfaceKey, fresh, Date.now()),
+        useStagedSandboxStore
+          .getState()
+          .begin(surfaceKey, fresh, Date.now(), false),
       );
       return Promise.resolve();
     });
@@ -909,7 +1162,7 @@ describe("startStagedTerminal", () => {
       configuration: { kind: "personal" },
       verb: "resume",
     });
-    store.begin(SURFACE, false, Date.now());
+    store.begin(SURFACE, false, Date.now(), false);
     store.report(SURFACE, {
       failure: { kind: "failed", code: "wake", step: "booting" },
     });
@@ -951,6 +1204,64 @@ describe("startStagedTerminal", () => {
     useStagedSandboxStore.getState().report(SURFACE, { phase: "handoff" });
 
     expect(startStagedTerminal(SURFACE, vi.fn()).kind).toBe("not-taken");
+  });
+});
+
+describe("openLandingStagedTerminal", () => {
+  beforeEach(() => {
+    useLandingPanelStore.getState().clearTerminalRequest();
+  });
+
+  it("takes the ask on a staged sandbox as its first run, folderless and nameless, without a task", () => {
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+      name: "",
+      wakeString: null,
+    });
+    const runner = vi.fn();
+
+    expect(openLandingStagedTerminal(SURFACE, runner)).toEqual({
+      kind: "taken",
+    });
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner).toHaveBeenCalledWith(SURFACE, true, {
+      fallbackName: stagedSandboxFallbackName(""),
+      taskId: null,
+      resume: false,
+    });
+    expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(true);
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+  });
+
+  it("opens the start page's terminal on a sandbox that is up with settings that did not apply, and pins the surface to it", () => {
+    stageCreated("applying", { kind: "settings", code: "settings" });
+    const runner = vi.fn();
+
+    expect(openLandingStagedTerminal(SURFACE, runner)).toEqual({
+      kind: "awake",
+      hostId: NEW_HOST,
+    });
+
+    expect(runner).not.toHaveBeenCalled();
+    expect(useLandingPanelStore.getState().terminalRequest).toEqual({
+      surfaceKey: SURFACE,
+      hostId: NEW_HOST,
+      landingPageId: null,
+    });
+    expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
+      NEW_HOST,
+    );
   });
 });
 
@@ -1033,16 +1344,14 @@ describe("useStagedSandboxSend after the sending tab is gone", () => {
 });
 
 describe("useStagedSandboxSend after the start page draft that sent is closed", () => {
-  it("brings the sandbox up on another draft's Retry and leaves that draft's text to it", async () => {
+  it("brings the sandbox up on another draft's Retry of a create whose answer never came and leaves that draft's text to it", async () => {
     const actual = await vi.importActual<
       typeof import("@/lib/sandboxes/staged-sandbox-run")
     >("@/lib/sandboxes/staged-sandbox-run");
     mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
     const sandbox = sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST });
     mocks.createSandbox
-      .mockResolvedValueOnce(
-        refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
-      )
+      .mockRejectedValueOnce(new Error("bridge refused"))
       .mockResolvedValue({
         kind: "ok",
         accepted: {
@@ -1112,13 +1421,13 @@ describe("useStagedSandboxSend after the start page draft that sent is closed", 
       sends.a?.intercept("fix the login bug", null);
     });
     await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe("credits");
+      expect(readStagedSandbox(SURFACE)?.failure?.kind).toBe("unverified");
     });
     // A closes; a fresh draft B opens on the start page.
     view.rerender(draftB(submitB));
     await afterCommit();
 
-    // After a top-up, B presses Retry and the sandbox comes up.
+    // B presses Retry and the sandbox comes up.
     fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
     await waitFor(() => {
       expect(readStagedSandbox(SURFACE)).toBeNull();

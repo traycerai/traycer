@@ -157,8 +157,16 @@ export function teamOwnedText(teamName: string): string {
 export const LOCAL_VALUES_RESTART_NOTE =
   "Agents started after a change use the new value; restart the host for the host itself to pick it up.";
 
-export const TERMINAL_ACCOUNT_SENTENCE =
-  "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere.";
+/**
+ * What a terminal sign-in is, named for the host it lives on: `null` for
+ * this computer, else the host's name (`e2e-sbx-p1's own sign-in, which
+ * stays on e2e-sbx-p1. …`).
+ */
+export function terminalAccountSentence(hostName: string | null): string {
+  return hostName === null
+    ? "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere."
+    : `${hostName}'s own sign-in, which stays on ${hostName}. Link a plan to use one everywhere.`;
+}
 
 /** A kept value's name: the variable, or the provider and its variable. */
 export function localOverrideLabel(override: LocalOverride): string {

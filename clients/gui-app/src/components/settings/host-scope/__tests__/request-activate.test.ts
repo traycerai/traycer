@@ -106,7 +106,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
       option,
     );
     expect(wakeSandboxOnPick).toHaveBeenCalledTimes(1);
-    expect(wakeSandboxOnPick).toHaveBeenCalledWith(option);
+    expect(wakeSandboxOnPick).toHaveBeenCalledWith(option, null);
 
     vi.mocked(wakeSandboxOnPick).mockClear();
     await requestActivate(
