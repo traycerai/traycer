@@ -1018,6 +1018,43 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     expect(screen.getByTestId("toolbar-popover-mock")).toBeDefined();
   });
 
+  it("keeps the modal open for a click inside a toolbar popover, and closes it for one on the overlay", async () => {
+    testState.toolbarPopoverOpen = true;
+    renderHost();
+    setOpen(true, null);
+    const popoverContent = screen.getByTestId("toolbar-popover-mock");
+
+    // Radix arms its document listener, and runs a deferred outside click, on
+    // a zero-delay timer.
+    const flushTimers = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    const clickAt = async (target: Element) => {
+      fireEvent.pointerDown(target, {
+        pointerType: "mouse",
+        button: 0,
+        bubbles: true,
+      });
+      fireEvent.click(target, { bubbles: true });
+      await flushTimers();
+    };
+
+    await flushTimers();
+    // The popover portals to document.body: outside the dialog's DOM, inside
+    // the body's React tree.
+    await clickAt(popoverContent);
+    expect(useNewConversationModalOpenStore.getState().request).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-new-conversation-modal"),
+    ).toBeDefined();
+
+    const overlay = document.querySelector('[data-slot="dialog-overlay"]');
+    if (overlay === null) throw new Error("expected the dialog overlay");
+    await clickAt(overlay);
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+  });
+
   it("holds a request filed while the send is handed off, and keeps it open after the send", () => {
     renderHost();
     sendOnStagedSandbox();
