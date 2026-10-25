@@ -76,9 +76,49 @@ export function newSandboxRowLabel(
   return `New ${configurationLabel(configuration)} sandbox`;
 }
 
-/** `3 more`: the collapsed New group's count past two configurations. */
-export function moreConfigurationsLabel(count: number): string {
-  return `${count} more`;
+/**
+ * The collapsed New group's header past two configurations:
+ * `4 teams: e9-frozen-team, pool-e2e-fixture, testteam, traycerai`.
+ */
+export function collapsedConfigurationsLabel(
+  configurations: readonly SandboxConfigurationCopy[],
+): string {
+  const teams = configurations.flatMap((configuration) =>
+    configuration.kind === "team" ? [configuration.teamName] : [],
+  );
+  const teamsLabel = `${teams.length} ${teams.length === 1 ? "team" : "teams"}: ${teams.join(", ")}`;
+  return teams.length === configurations.length
+    ? teamsLabel
+    : `Personal and ${teamsLabel}`;
+}
+
+export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
+
+/** The chip and row title of the machine this app runs on. */
+export const THIS_COMPUTER = "This computer";
+
+/** A computer row's status: it answers. */
+export const COMPUTER_ACTIVE = "Active";
+
+/**
+ * A computer row's status while it does not answer:
+ * `Offline since Tue 09:12 · picking it waits for it`. `since` is `null`
+ * when it was never seen; `pickable` says the row can be picked.
+ */
+export function computerOfflineLine(
+  since: string | null,
+  pickable: boolean,
+): string {
+  const offline = since === null ? "Offline" : `Offline since ${since}`;
+  return pickable ? `${offline} · picking it waits for it` : offline;
+}
+
+/**
+ * A computer row's sub-line, its known parts joined:
+ * `windows-test-machine · Windows · Active`, `Linux · Active`.
+ */
+export function computerSubLine(parts: readonly (string | null)[]): string {
+  return parts.filter((part) => part !== null).join(" · ");
 }
 
 /** The sub-line of a computer whose settings have not moved. */

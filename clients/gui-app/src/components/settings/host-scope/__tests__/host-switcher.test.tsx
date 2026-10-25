@@ -245,7 +245,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     }
 
     function searchBox(): HTMLInputElement {
-      return screen.getByPlaceholderText<HTMLInputElement>("Search hosts…");
+      return screen.getByPlaceholderText<HTMLInputElement>("Search hosts");
     }
 
     it("reopens unfiltered after the popover was dismissed with a search that matched nothing", () => {
@@ -255,7 +255,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
       expect(screen.getByText("No hosts match.")).not.toBeNull();
 
       fireEvent.keyDown(searchBox(), { key: "Escape" });
-      expect(screen.queryByPlaceholderText("Search hosts…")).toBeNull();
+      expect(screen.queryByPlaceholderText("Search hosts")).toBeNull();
       openSwitcher();
 
       expect(searchBox().value).toBe("");

@@ -253,7 +253,7 @@ describe("useSandboxStaging New rows", () => {
     ]);
     expect(composer.newRows[0]).toMatchObject({
       label: "New Personal sandbox",
-      configurationName: "Personal",
+      configuration: { kind: "personal" },
     });
     expect(composer.newRows[1].label).toBe("New acme sandbox");
     expect(composer.newRows[1].subLine).toContain("uses your acme credits");
