@@ -5,7 +5,7 @@ import { useTerminalAccountMentionStore } from "@/stores/onboarding/terminal-acc
 /**
  * The Terminal account's sentence, under the composer's account picker the
  * first time it names one: "This computer's own sign-in, which stays on this
- * computer. Link a plan to use one everywhere." Shown until the picker that
+ * computer. Sign in on Providers to use one everywhere." Shown until the picker that
  * showed it closes, then never again on this desktop.
  */
 export function TerminalAccountFirstMention(props: {

@@ -10,7 +10,8 @@ import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-q
 export function useSecretRowActions(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
-  readonly secret: EnvironmentSecret;
+  /** The secret by id, and its current version as the list last named it. */
+  readonly secret: Pick<EnvironmentSecret, "secretId" | "currentVersionId">;
   readonly onChanged: () => void;
 }) {
   const { environmentId, resolved } = useAddressedEnvironment();

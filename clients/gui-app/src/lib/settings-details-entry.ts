@@ -36,7 +36,10 @@ export interface DetailsItemStatus {
   readonly subject: DetailsSubject;
   readonly title: string;
   readonly summary: string;
+  /** Left out of the row when `null`: a time the app doesn't have. */
   readonly at: number | null;
+  /** The item has an unfinished step Retry repeats (a secret's removal). */
+  readonly retryable: boolean;
 }
 
 /** Value-free current evidence, already filtered to the reader's authority. */
@@ -47,6 +50,8 @@ export interface DetailsStatus {
   readonly changedAt: number | null;
   readonly reason: string | null;
   readonly hosts: readonly DetailsHostStatus[];
+  /** The subject has an unfinished secret removal Retry can resume. */
+  readonly retryable?: boolean;
   /** Page-level entries, including retained removed-secret metadata. */
   readonly items?: readonly DetailsItemStatus[];
 }

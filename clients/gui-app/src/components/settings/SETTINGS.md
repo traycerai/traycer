@@ -180,7 +180,7 @@ done in the dashboard is checked here too.
 
 The composer's account picker says what the Terminal account is the first
 time it names one ("This computer's own sign-in, which stays on this
-computer. Link a plan to use one everywhere.",
+computer. Sign in on Providers to use one everywhere.",
 `terminal-account-first-mention.tsx`), once per desktop
 (`useTerminalAccountMentionStore`, persisted; marked when the picker that
 showed it closes).
@@ -945,9 +945,13 @@ on for every provider). Add and Edit (`mcp-server-dialog.tsx`) write
 `mcpServers.put@1.1`; a remote server's Secret is picked from the
 configuration's secrets or typed, and a command server is refused one. The
 Skills page (`environment-skills.tsx`) lists the skills of a viewing host that
-serves the configuration (`environment.configuration.skills.list`), with their
-source, providers, Preview or Edit, and Remove for a skill written in Settings;
-a built-in is only switched off per provider. Remove asks first, naming where
+serves the configuration (`environment.configuration.skills.list`), with the
+providers that use each ("Built-in" before them for Traycer's own; the
+configuration's own carry no source word), Preview or Edit, and Remove for the
+configuration's own; a built-in is only switched off per provider. On a
+provider's Skills tab and in the skill's dialog, where sources mix, a
+configuration's own skill is named by the configuration ("Personal" or the
+team's name). Remove asks first, naming where
 the entry goes from; a server's confirm also says whether its secret stays on
 Secrets (picked) or is deleted with it (added with the server,
 `credential.owned`).
@@ -976,7 +980,9 @@ text.
 **Personal ▸ Empty states and words.** Each page opens empty to what it
 holds and one action: Variables and shells "Variables are plain values every
 host gets. Add a variable."; MCP servers "MCP servers give agents tools." with
-Add a server; Skills "Skills give agents instructions for a kind of task."
+Add a server, and under it, while a provider holds servers on this computer
+that Personal does not, "1 server on this computer only, not in Personal ·
+See it on <Provider> ▸ MCP" (`OnHostOnlyServersLine`); Skills "Skills give agents instructions for a kind of task."
 with Add a skill (Secrets: see Personal ▸ Secrets below). A desktop server or skill
 added here stays on this host until Add to Personal, so neither empty state
 claims "on every host". Four words carry these pages: Personal, secret,
@@ -1005,7 +1011,20 @@ order for a leaked secret. Empty, it reads "Values and logins your agents use. O
 they are set as values; on sandboxes agents use them without seeing them."
 with Add a secret, and the page has no subtitle, which would say it twice.
 A failed read shows only "Couldn't read Personal's secrets." with Retry,
-never the empty state. The page's own `Details` sits beside its chip, and a
+never the empty state. A team's empty state reads "Values and logins Acme's
+agents use, on its sandboxes without being seen." A removed secret keeps a
+row until it is destroyed (`list@1.1`'s `removed`): "Removing · no longer
+usable · waiting for dev-box to delete its copy · Retry", or "waiting for 2
+hosts to delete their copies". A failed cleanup reads "dev-box couldn't delete
+its copy". Retry on the row, Secrets Details and the single-secret drawer
+uses Remove again on the current version. While host cleanup is pending, it
+publishes a revision-only delta to retry failed host work immediately; a
+completed cleanup publishes nothing. The delta also retries the environment's
+other failed items, just as any configuration change does. It never rewrites
+a declaration, so a replacement secret using the same name survives.
+The page's own `Details` sits beside its chip: its Now reads "Applied on 2
+hosts" (or "Not applied on dev-box", "Applying on dev-box…"), and a removal
+under way reads "Cleanup requested · waiting for dev-box · Retry". A
 Details that cannot load reads "Couldn't load details." with Retry.
 **Add a secret** offers API key and database login, with "Provider keys are
 set on each provider's Account tab, under Providers." where Providers opens
@@ -1040,7 +1059,7 @@ per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1.
 On dev-box and laptop. Tools already running keep it until they restart."
 (`secretRemovePreview`), each of the first three clauses only when it is
 known. On Personal the hosts are the computers running Personal, as the page
-chip counts and names them (`usePersonalComputers`, `namedHosts`: "<A> and
+chip counts and names them (`useHostsRunningPersonal`, `namedHosts`: "<A> and
 <B>", "<A>, <B> and 1 more", "<n> computers"), and the clause is left out
 when none does; a team's computers and every sandbox hold no copy. A secret
 MCP servers use (`environment.configuration.mcpServers.list`, each server's
@@ -1096,7 +1115,12 @@ as a variable. A provider's own key variable typed on its Env tab
 instead with "This is Kiro's key. Set it on Kiro's Account tab.", whose link
 opens that provider's Account tab; the typed value is cleared and nothing is
 saved. That tab is the one the provider page shows (`apiKey.supported`), so a
-provider without one, such as Claude Code, keeps the first line. A value
+provider without one, such as Claude Code, keeps the first line. A name one
+of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
+`variables` and `providerVariables`: a moved key's secret is bound to the item
+it came from) reads "ENV_E2E_SERVICE_TOKEN · from the secret
+ENV_E2E_SERVICE_TOKEN · Secrets" on Variables or that provider's Env, with no
+value and nothing to edit there. A value
 already saved that looks like a key shows as dots with Remove, never in a
 field, on every Variables and Env list (Personal, a team, a Local row), with
 the same line beneath where the page has one; its link carries the saved
@@ -1106,10 +1130,13 @@ the value that host has now as its own (`config.env.localOverride.set`, the
 value read as the page reads it: `config.env.list` or `providers.list`) and
 then undoes the change everywhere; an undo that is refused leaves the kept
 value, equal to the current one, and the row says why. A Variables or
-provider-variable row this host keeps its own value for ("Overridden on
-<host>" on Variables) shows the shared value, and its Set and Remove change
-the shared value only; the host's own value is changed under Access and setup
-▸ This host's own values. A team's host shows no
+provider-variable row this host keeps its own value for shows the shared
+value with "dev-box uses: error · Use everywhere" beneath (dots for a value
+that looks like a key, with no Use everywhere), and its Set and Remove change
+the shared value only. Use everywhere saves the host's value as the shared one
+and then clears the host's own (`config.env.localOverride.clear`); the host's
+own value is otherwise changed under Access and setup ▸ This host's own
+values. A team's host shows no
 notices: its Personal pages are read-only (`inert`) under the team line,
 like a host whose version predates these settings.
 
@@ -4042,7 +4069,10 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     knowing if this ever reads as a bug report.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
-  and who reviews the rest. Its own page, not rows on Agent selection: that
+  and who reviews the rest; on Personal its subtitle reads "What your agents
+  may do without asking, on every computer and sandbox running Personal."
+  Rules carries **Reset to default**, which saves the empty policy after a
+  confirm (the custom rules go; the built-in ones stay). Its own page, not rows on Agent selection: that
   page is about which agent gets CHOSEN for a task, and permissions are a
   different question, asked at a different time (a user decision, 2026-09-12).
   Four tabs, one per question, in this order: **Modes**, **Judge**, **Rules**,
@@ -6143,8 +6173,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
        reports `off` (`shownRemoteAccess`), even when a status read still says
        `on`.
     4. **Terminal account**, one row per provider with an ambient profile,
-       under "This computer's own sign-in, which stays on this computer. Link
-       a plan to use one everywhere.", with a switch over
+       under "This computer's own sign-in, which stays on this computer. Sign
+       in on Providers to use one everywhere." (a team host: "This host's own
+       sign-in, which stays on this host. An admin can link a plan on
+       <Team>'s Providers to use one everywhere."), with a switch over
        `providers.setProfileEnabled` (`profileId: "ambient"`). No rename: no
        wire method renames a profile.
     5. **This host's own values** (`environment.localOverrides`): each value
@@ -6205,7 +6237,9 @@ set-state-in-effect` forbids the effect form, and an effect would also
        under the question): which configuration THIS host runs, as a fact,
        not a control - `Runs Personal`, or `Runs <team>` for a host an
        earlier build bound to a team (a team cannot hold a computer in this
-       version, so there is nothing to pick). It reads the scope's host, the
+       version, so there is nothing to pick). A computer with a Local row
+       (the Environment dropdown's rule) reads `Runs its own settings, not in
+Personal yet` instead, whatever it is bound to. It reads the scope's host, the
        one the picker names, never the window's, through its binding (the
        pool's `environment.binding.read { hostId }` in a build with a pool,
        the host's own `environment.host.read` without one). A sandbox shows
@@ -6213,7 +6247,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
        `environment.host.read`, or a binding still loading or refused.
     6. **The settings card** (`panels/host-overview-settings-card.tsx`, its
        own row under Runs Personal, on every tab): `Settings on this computer
-only.` with `Move to Personal` (or `Finish moving` when an upload
+only. · Details · Move to Personal`, on one line, (or `Finish moving` when an upload
        stopped) while the computer has a Local row, the picker's own rule
        (`environment/local-row-cohort.tsx`); the progress row while it moves;
        `Moved to Personal on <date>` after a consented move; and the dated

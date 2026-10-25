@@ -10,7 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -26,6 +26,7 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  windowHostScopeMock,
 } from "./team-configuration-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -51,6 +52,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null ? null : requireTeamHostClient(),
 }));
 
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    usePersonalHostScope: () => windowHostScopeMock(),
+  }),
+);
+
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
@@ -71,8 +82,8 @@ function negotiate(put: { major: number; minor: number }): void {
 
 function secret(
   secretId: string,
-  overrides: Partial<EnvironmentSecret>,
-): EnvironmentSecret {
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId,
     name: secretId,
@@ -84,13 +95,15 @@ function secret(
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
 
 function handlers(options: {
   readonly servers: readonly EnvironmentMcpServerDeclaration[];
-  readonly secrets: readonly EnvironmentSecret[];
+  readonly secrets: readonly EnvironmentSecretV12[];
   readonly answer: {
     readonly outcome: "saved" | "forbidden" | "refused";
     readonly reason: string | null;
@@ -354,11 +367,11 @@ describe("The MCP server dialog", () => {
   });
 
   it.each([
-    { variable: "GITHUB_TOKEN", field: "GITHUB_TOKEN" },
-    { variable: "", field: "this server" },
+    { variable: "GITHUB_TOKEN", phrase: "a secret for GITHUB_TOKEN" },
+    { variable: "", phrase: "a secret" },
   ])(
-    "refuses a secret on a command server, naming $field, and keeps Add disabled",
-    async ({ variable, field }) => {
+    "refuses a secret on a command server, saying $phrase, and keeps Add disabled",
+    async ({ variable, phrase }) => {
       negotiate(PUT_1_1);
       const harness = mountTeamPage(
         poolSource("editor"),
@@ -380,7 +393,7 @@ describe("The MCP server dialog", () => {
 
       expect(
         within(dialog).getByText(
-          `A server that runs as a command can't use a secret for ${field}. Add the server without it, or choose Remote if the server has a web address.`,
+          `A server that runs as a command can't use ${phrase}. Add the server without it, or choose Remote if the server has a web address.`,
         ),
       ).toBeTruthy();
       expect(

@@ -7,7 +7,11 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  SECRETS_EMPTY_TEXT,
+  TEAM_SECRETS_LINE,
+  teamSecretsText,
+} from "@/lib/sandboxes/secrets-page-copy";
 
 import {
   useCanEditConfiguration,
@@ -46,11 +50,7 @@ function TeamSecretsSettingsPanel(): ReactNode {
   return (
     <SecretsListPanelShell
       client={client}
-      description={
-        personal
-          ? SECRETS.page.description
-          : `Values and logins ${name}'s agents use, on its sandboxes without being seen.`
-      }
+      description={personal ? SECRETS.page.description : teamSecretsText(name)}
       headerAction={
         canEdit ? undefined : (
           <span className="text-ui-xs text-muted-foreground">Read-only</span>
@@ -60,6 +60,7 @@ function TeamSecretsSettingsPanel(): ReactNode {
       <SecretsPage
         client={client}
         hostId={client.getActiveHostId()}
+        emptyText={personal ? SECRETS_EMPTY_TEXT : teamSecretsText(name)}
         hostName={(hostId) =>
           scope.hosts.data?.hosts.find((host) => host.hostId === hostId)
             ?.hostLabel ?? "a host"
@@ -80,14 +81,17 @@ function SecretsListPanelShell(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const list = useEnvironmentSecretsQuery(props.client);
+  // The page shows its empty state only with no secret and no removal
+  // still under way (`SecretsPage`).
+  const empty =
+    !list.isError &&
+    list.data !== undefined &&
+    list.data.secrets.length === 0 &&
+    list.data.removed.every((entry) => entry.removal.outcome === "destroyed");
   return (
     <SettingsPanelShell
       title={SECRETS.page.label}
-      description={
-        !list.isError && list.data?.secrets.length === 0
-          ? undefined
-          : props.description
-      }
+      description={empty ? undefined : props.description}
       headerAction={props.headerAction}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
@@ -115,6 +119,7 @@ function HostSecretsSettingsPanel(): ReactNode {
         <SecretsPage
           client={scope.client}
           hostId={scope.hostId}
+          emptyText={SECRETS_EMPTY_TEXT}
           hostName={(hostId) =>
             scope.hosts.find((host) => host.hostId === hostId)?.name ??
             "a sandbox"

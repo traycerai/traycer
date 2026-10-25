@@ -74,6 +74,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "host-a";
+/** The window host's scope status; a case sets it before it mounts. */
+let windowScopeStatus: "ready" | "unreachable" | "vanished" = "ready";
 const WINDOW_METHODS = [
   "environment.status",
   "environment.configuration.mcpServers.list",
@@ -96,6 +98,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
+  windowScopeStatus = "ready";
   windowHost.client = null;
   useAuthStore.setState({ status: "signed-out" });
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -209,7 +212,7 @@ function mountSection(options: {
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
     hostId: HOST_ID,
-    status: "ready",
+    status: windowScopeStatus,
     client,
   };
   useAuthStore.setState({ status: "signed-in" });
@@ -356,6 +359,26 @@ describe("PersonalPageFrame's source, one per pick", () => {
     expectNoHostReads(mounted);
     expect(mounted.sent("environment.configuration.items")).toHaveLength(0);
   });
+
+  it.each(["unreachable", "vanished"] as const)(
+    "reads Personal from the cloud, not a spinner, when the window's host is %s",
+    async (status) => {
+      windowScopeStatus = status;
+      const mounted = mountPage({
+        pick: { kind: "personal" },
+        methods: null,
+        status: () => environmentStatusFixture({ principal: null }),
+      });
+
+      await waitFor(() => {
+        expect(mounted.sent("environment.configuration.items")).toEqual([
+          { environmentId: "env-personal" },
+        ]);
+      });
+      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
+      expectNoHostReads(mounted);
+    },
+  );
 
   it.each([
     { section: "mcp-servers" as const, page: <EnvironmentMcpServersPage /> },

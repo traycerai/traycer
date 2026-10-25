@@ -5,9 +5,18 @@
  */
 
 import { namedHosts } from "@/components/settings/environment/status-chip-model";
+import {
+  formatSettingsDate,
+  onSettingsDate,
+} from "@/lib/settings/settings-date";
 
 export const SECRETS_EMPTY_TEXT =
   "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.";
+
+/** A team's Secrets text, as its subtitle and as its empty state. */
+export function teamSecretsText(teamName: string): string {
+  return `Values and logins ${teamName}'s agents use, on its sandboxes without being seen.`;
+}
 
 export const SECRETS_ADD_LABEL = "Add a secret";
 
@@ -23,11 +32,6 @@ export const PROVIDER_KEYS_LINE = {
   after: ".",
 } as const;
 
-const SECRET_DATE = new Intl.DateTimeFormat(undefined, {
-  day: "numeric",
-  month: "short",
-});
-
 /**
  * Who made a secret's current value and when: "added by you 24 Oct" for its
  * first, "replaced by you 24 Oct" after. Personal's values are all the
@@ -38,7 +42,7 @@ export function secretValueOrigin(
   byYou: boolean,
 ): string {
   const verb = version.ordinal === 1 ? "added" : "replaced";
-  return `${verb}${byYou ? " by you" : ""} ${SECRET_DATE.format(version.createdAt)}`;
+  return `${verb}${byYou ? " by you" : ""} ${formatSettingsDate(version.createdAt, false)}`;
 }
 
 /**
@@ -151,7 +155,7 @@ export function secretUsedByLine(servers: readonly string[]): {
 
 /** The add clause of Remove's preview: "Added by you on 24 Oct". */
 export function secretAddedClause(createdAt: number, byYou: boolean): string {
-  return `Added${byYou ? " by you" : ""} on ${SECRET_DATE.format(createdAt)}`;
+  return `Added${byYou ? " by you" : ""} ${onSettingsDate(createdAt)}`;
 }
 
 export const SECRET_RECOVERY_FALLBACK =

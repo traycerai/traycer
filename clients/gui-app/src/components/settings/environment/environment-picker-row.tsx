@@ -70,9 +70,11 @@ export function EnvironmentPickerRow(props: {
   );
   if (props.verb === null) return row;
   // Bottom-aligned beside a row sized to its text, the verb sits on the
-  // secondary line: `<subtitle> · Move to Personal`.
+  // secondary line: `<subtitle> · Move to Personal`. The two stay separate
+  // items, so the keyboard reaches the verb, and the row draws one highlight
+  // under both when either is highlighted: the verb reads as part of the row.
   return (
-    <div className="flex flex-wrap items-end">
+    <div className="flex flex-wrap items-end rounded-md has-[[data-highlighted]]:bg-accent">
       {row}
       <DropdownMenuItem
         data-testid={props.verb.testId}
@@ -83,7 +85,7 @@ export function EnvironmentPickerRow(props: {
           <span aria-hidden className="text-muted-foreground">
             ·{" "}
           </span>
-          <span className="text-primary underline-offset-2 hover:underline">
+          <span className="text-primary underline-offset-2 group-focus/dropdown-menu-item:underline hover:underline">
             {props.verb.label}
           </span>
         </span>

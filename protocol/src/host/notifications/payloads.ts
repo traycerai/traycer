@@ -719,7 +719,9 @@ export type HostNotificationRemovalHost = z.infer<
 /**
  * `team.member.removed`: a member left or was removed, with each host's facts.
  * `receiptId` is the receipt `environment.members.remove` answered for this
- * removal; absent or null on a row written without one.
+ * removal; absent or null on a row written without one. `toRemovedMember`
+ * marks the row told to the person removed, once, when their access ends;
+ * absent on the admins' rows and on rows written before it.
  */
 export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
   z
@@ -730,6 +732,7 @@ export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
       memberName: z.string(),
       hosts: z.array(hostNotificationRemovalHostSchema),
       receiptId: idSchema.nullable().optional(),
+      toRemovedMember: z.boolean().optional(),
     })
     .catchall(z.unknown()),
 );
@@ -740,6 +743,8 @@ export type HostNotificationTeamMemberRemovedPayload = z.infer<
 /**
  * `team.member.joined`: told to the admins, and to the newcomer
  * (`toNewcomer`), whose row carries the step to start working in the team.
+ * `role` is the newcomer's role, read as a string so a newer role still
+ * renders; absent on a row written before it.
  */
 export const hostNotificationTeamMemberJoinedPayloadSchema = lazySchema(() =>
   z
@@ -749,6 +754,7 @@ export const hostNotificationTeamMemberJoinedPayloadSchema = lazySchema(() =>
       teamName: z.string(),
       memberName: z.string(),
       toNewcomer: z.boolean(),
+      role: z.string().min(1).optional(),
     })
     .catchall(z.unknown()),
 );

@@ -6,7 +6,6 @@ import {
   PlansCard,
   type ConfigurationPlan,
 } from "@/components/settings/environment/plans-card";
-import { TeamContentNeedsHost } from "@/components/settings/environment/team-content-needs-host";
 import { TeamSecretNames } from "@/components/settings/environment/team-secret-names";
 
 const plan: ConfigurationPlan = {
@@ -139,29 +138,4 @@ describe("PlanUnlinkPreview", () => {
       screen.getByText(/Active turns could not be counted\./),
     ).toBeTruthy();
   });
-});
-
-describe("TeamContentNeedsHost", () => {
-  it.each([
-    ["guide", "The guide needs a host running Acme. Pick one."],
-    ["skills", "Skills need a host running Acme. Pick one."],
-  ] as const)(
-    "reads the %s line and picks a host on click",
-    (content, line) => {
-      const onPickHost = vi.fn();
-      render(
-        <TeamContentNeedsHost
-          content={content}
-          teamName="Acme"
-          onPickHost={onPickHost}
-        />,
-      );
-
-      expect(screen.getByRole("status").textContent).toBe(line);
-      expect(onPickHost).not.toHaveBeenCalled();
-
-      fireEvent.click(screen.getByRole("button", { name: "Pick one." }));
-      expect(onPickHost).toHaveBeenCalledOnce();
-    },
-  );
 });

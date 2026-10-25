@@ -55,6 +55,30 @@ function hostStatus(
   };
 }
 
+/**
+ * The drawer's `Now`: `<n> not applied on <host>` while a host reports an
+ * item it couldn't apply, `Applying on <host>…` while one has an item on its
+ * way, else `Applied on <n> hosts`.
+ */
+export function detailsNowSummary(hosts: readonly DetailsHostStatus[]): string {
+  const failed = hosts.find(
+    (host) => host.state === "not_applied" || host.state === "failed",
+  );
+  if (failed !== undefined) {
+    const count = hosts.filter(
+      (host) =>
+        host.hostId === failed.hostId &&
+        (host.state === "not_applied" || host.state === "failed"),
+    ).length;
+    return `${count} not applied on ${failed.name}`;
+  }
+  const applying = hosts.find((host) => host.state !== "applied");
+  if (applying !== undefined) return `Applying on ${applying.name}…`;
+  const count = new Set(hosts.map((host) => host.hostId)).size;
+  if (count === 0) return "No hosts yet";
+  return count === 1 ? "Applied on 1 host" : `Applied on ${count} hosts`;
+}
+
 function detailsHistory(history: HistoryResponse): DetailsHistory {
   return {
     readerScope: history.readerScope,
@@ -86,15 +110,16 @@ async function environmentDetailsProvider(
   const history = detailsHistory(response);
   const latest = history.entries.toSorted((a, b) => b.at - a.at).at(0);
   let title = TITLES[subject.kind] ?? "Settings";
+  const hosts = response.hostStates.map((host) =>
+    hostStatus(host, historySubject(subject)?.kind ?? null),
+  );
   let status: DetailsStatus = {
-    summary: "Current status",
+    summary: detailsNowSummary(hosts),
     currentVersion: null,
     changedBy: latest?.actor?.label ?? null,
     changedAt: latest?.at ?? null,
     reason: null,
-    hosts: response.hostStates.map((host) =>
-      hostStatus(host, historySubject(subject)?.kind ?? null),
-    ),
+    hosts,
   };
   if (subject.kind === "secret") {
     const secret = await loadSecretDetails(subject, context, status);

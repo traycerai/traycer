@@ -10,9 +10,11 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
+import { useConfigurationReadClient } from "@/hooks/environment/team/use-configuration-read-client";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import {
   useEnvironmentSkillMutations,
@@ -37,6 +39,7 @@ import {
   providersPhrase,
   removeReach,
   removeTitle,
+  skillPageLine,
   skillSourcePhrase,
   skillsCardHeading,
   skillsPageSubtitle,
@@ -76,27 +79,39 @@ function useSkillProviders(): readonly ProviderId[] {
 }
 
 /**
- * The configuration's skills as the viewing host serves them, and whether
- * that host switches skills per provider. `fallback` is drawn for a host that
- * predates the list.
+ * The configuration's skills from its room, and which of its writes the
+ * serving tier takes: each is offered only once that tier advertised it.
+ * `TeamSkills` is drawn for a serving tier that predates the list.
  */
 function useServedSkills() {
   const scope = useTeamViewingHost();
+  const readClient = useConfigurationReadClient();
+  const servingHostId = readClient.getActiveHostId();
   const listVersion = useHostNegotiatedMethodVersion(
-    scope.client,
+    readClient,
     "environment.configuration.skills.list",
   );
   const switchesVersion = useHostNegotiatedMethodVersion(
-    scope.client,
+    readClient,
     "environment.configuration.skills.setProviders",
   );
+  const removable = useHostSupportsMethod(
+    servingHostId,
+    "environment.configuration.skills.remove",
+  );
+  const uploadable = useHostSupportsMethod(
+    servingHostId,
+    "environment.configuration.skills.upload",
+  );
   const listed = listVersion !== null && listVersion !== false;
-  const query = useEnvironmentSkillsQuery(scope.client, listed);
+  const query = useEnvironmentSkillsQuery(readClient, listed);
   return {
     scope,
     listVersion,
     query,
     switchesAvailable: switchesVersion !== null && switchesVersion !== false,
+    removable,
+    uploadable,
   };
 }
 
@@ -128,6 +143,7 @@ function EnvironmentSkills(props: {
   const served = useServedSkills();
   const name = useConfigurationName();
   const canEdit = useCanEditConfiguration();
+  const canRemove = canEdit && served.removable;
   const [picking, setPicking] = useState(false);
   const noHost = (
     <TeamContentNeedsHost
@@ -139,16 +155,20 @@ function EnvironmentSkills(props: {
   const picker = (
     <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
   );
-  if (served.scope.client === null)
-    return (
-      <section className="flex flex-col gap-3">
-        {picker}
-        {noHost}
-      </section>
-    );
+  // Listing and the writes go through the room; Preview and Edit read the
+  // skill's files where a picked host projects them.
+  const hosted =
+    served.scope.client !== null && served.scope.viewingHost !== null;
   if (served.listVersion === null) return <MutedAgentSpinner />;
   if (served.listVersion === false)
-    return <TeamSkills providerId={props.providerId} />;
+    return hosted ? (
+      <TeamSkills providerId={props.providerId} />
+    ) : (
+      <TeamReadFailed
+        message={skillsReadFailed(name)}
+        onRetry={() => void served.query.refetch()}
+      />
+    );
   const { query } = served;
   if (query.isPending) return <MutedAgentSpinner />;
   if (query.isError)
@@ -166,29 +186,37 @@ function EnvironmentSkills(props: {
       </section>
     );
   const { skills, revision } = query.data;
+  const list =
+    props.providerId === null ? (
+      <SkillsPageList
+        skills={skills}
+        canEdit={canRemove}
+        switchesAvailable={served.switchesAvailable}
+        hosted={hosted}
+      />
+    ) : (
+      <ProviderSkillsList
+        providerId={props.providerId}
+        skills={skills}
+        revision={revision}
+        canEdit={canEdit}
+        switchesAvailable={served.switchesAvailable}
+        hosted={hosted}
+      />
+    );
   return (
     <section className="flex flex-col gap-3">
       {picker}
-      <TeamViewingHostBinding unavailable={noHost}>
-        {props.providerId === null ? (
-          <SkillsPageList
-            skills={skills}
-            canEdit={canEdit}
-            switchesAvailable={served.switchesAvailable}
-          />
-        ) : (
-          <ProviderSkillsList
-            providerId={props.providerId}
-            skills={skills}
-            revision={revision}
-            canEdit={canEdit}
-            switchesAvailable={served.switchesAvailable}
-          />
-        )}
-        {props.providerId === null && canEdit ? (
-          <TeamSkillUpload onNotServed={() => setPicking(true)} />
-        ) : null}
-      </TeamViewingHostBinding>
+      {hosted ? (
+        <TeamViewingHostBinding unavailable={noHost}>
+          {list}
+        </TeamViewingHostBinding>
+      ) : (
+        list
+      )}
+      {props.providerId === null && canEdit && served.uploadable ? (
+        <TeamSkillUpload onNotServed={() => setPicking(true)} />
+      ) : null}
     </section>
   );
 }
@@ -197,11 +225,12 @@ function SkillsPageList(props: {
   readonly skills: readonly EnvironmentSkill[];
   readonly canEdit: boolean;
   readonly switchesAvailable: boolean;
+  /** Whether a viewing host serves Preview and Edit; the list needs none. */
+  readonly hosted: boolean;
 }): ReactNode {
   const providers = useSkillProviders();
   const source = useConfigurationSource();
-  const scope = useTeamViewingHost();
-  const { remove } = useEnvironmentSkillMutations(scope.client);
+  const { remove } = useEnvironmentSkillMutations(useConfigurationReadClient());
   const [open, setOpen] = useState<EnvironmentSkill | null>(null);
   const [removing, setRemoving] = useState<EnvironmentSkill | null>(null);
   const removeIssue =
@@ -237,24 +266,28 @@ function SkillsPageList(props: {
                   </div>
                 )}
                 <div className="text-ui-xs text-muted-foreground">
-                  {skillSourcePhrase(skill.origin)} ·{" "}
-                  {providersPhrase(
-                    using.map((id) => providerDisplayName(id)),
-                    providers.length,
+                  {skillPageLine(
+                    skill.origin,
+                    providersPhrase(
+                      using.map((id) => providerDisplayName(id)),
+                      providers.length,
+                    ),
                   )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setOpen(skill)}
-                >
-                  {skill.origin === "room" && props.canEdit
-                    ? "Edit"
-                    : "Preview"}
-                </Button>
+                {props.hosted ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setOpen(skill)}
+                  >
+                    {skill.origin === "room" && props.canEdit
+                      ? "Edit"
+                      : "Preview"}
+                  </Button>
+                ) : null}
                 {/* A built-in can't be removed, only switched off per provider. */}
                 {props.canEdit && skill.origin === "room" ? (
                   <Button
@@ -324,7 +357,7 @@ function RemoveSkillDialog(props: {
   );
 }
 
-/** A skill written in Settings is edited in place; a built-in is previewed. */
+/** The configuration's own skill is edited in place; a built-in is previewed. */
 function editable(canEdit: boolean, skill: EnvironmentSkill): boolean {
   return canEdit && skill.origin === "room";
 }
@@ -341,6 +374,7 @@ function EnvironmentSkillDetail(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const source = useConfigurationSource();
+  const name = useConfigurationName();
   const list = useProvidersSkillsList({
     providerId: props.providerId,
     scope: "global",
@@ -373,6 +407,9 @@ function EnvironmentSkillDetail(props: {
   return (
     <ProviderSkillDetailDialog
       skill={row}
+      // The provider lists the configuration's skills as its managed ones;
+      // the badge names the source as this page does.
+      sourceLabel={skillSourcePhrase(props.skill.origin, name)}
       removal={{ kind: "hidden" }}
       removePending={false}
       // The flag disables Edit too, and Remove is not offered here.
@@ -458,11 +495,14 @@ function ProviderSkillsList(props: {
   readonly revision: string | null;
   readonly canEdit: boolean;
   readonly switchesAvailable: boolean;
+  /** Whether a viewing host lists what the provider holds by itself. */
+  readonly hosted: boolean;
 }): ReactNode {
   const source = useConfigurationSource();
-  const scope = useTeamViewingHost();
   const name = useConfigurationName();
-  const { setProviders } = useEnvironmentSkillMutations(scope.client);
+  const { setProviders } = useEnvironmentSkillMutations(
+    useConfigurationReadClient(),
+  );
   const switchIssue =
     setProviders.data === undefined
       ? null
@@ -502,7 +542,7 @@ function ProviderSkillsList(props: {
                 <div className="min-w-0">
                   <div className="truncate text-ui-sm">{skill.name}</div>
                   <div className="text-ui-xs text-muted-foreground">
-                    {skillSourcePhrase(skill.origin)}
+                    {skillSourcePhrase(skill.origin, name)}
                   </div>
                   {skill.origin === "bundled" ? (
                     <div className="text-ui-xs text-muted-foreground">
@@ -538,10 +578,12 @@ function ProviderSkillsList(props: {
         </ul>
         <ConfigurationWriteFeedback issue={switchIssue} />
       </section>
-      <OnHostOnlySkills
-        providerId={props.providerId}
-        environmentNames={props.skills.map((skill) => skill.name)}
-      />
+      {props.hosted ? (
+        <OnHostOnlySkills
+          providerId={props.providerId}
+          environmentNames={props.skills.map((skill) => skill.name)}
+        />
+      ) : null}
     </div>
   );
 }

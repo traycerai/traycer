@@ -31,7 +31,9 @@ import {
   personalPoolSource,
   poolSource,
   requireTeamHostClient,
+  windowHostBoundary,
   resetTeamPageHarness,
+  windowHostScopeMock,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
 
@@ -62,6 +64,16 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
 }));
+
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    usePersonalHostScope: () => windowHostScopeMock(),
+  }),
+);
 
 afterEach(() => {
   vi.mocked(toast.error).mockClear();
@@ -707,6 +719,56 @@ describe("The MCP servers page", () => {
         "Tools agents can call. Acme's servers reach every provider on every host running Acme.",
       ),
     ).toBeTruthy();
+  });
+
+  it.each([
+    {
+      held: [hostMcpServer("github", [])],
+      line: "1 server on this computer only, not in Acme",
+      link: "See it on Codex ▸ MCP",
+    },
+    {
+      held: [hostMcpServer("github", []), hostMcpServer("linear", [])],
+      line: "2 servers on this computer only, not in Acme",
+      link: "See them on Codex ▸ MCP",
+    },
+  ])(
+    "says $line on an empty page, linking to the provider's MCP tab",
+    async ({ held, line, link }) => {
+      negotiateMethods(ALL_METHODS);
+      windowHostBoundary.hostId = reachableHost.hostId;
+      const harness = mountTeamPage(
+        poolSource("editor"),
+        handlers({ servers: () => [], hostServers: held }),
+      );
+      render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+      expect(
+        await screen.findByText(
+          (_content, element) => element?.textContent === `${line} · ${link}`,
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: link })).toBeTruthy();
+    },
+  );
+
+  it("says nothing about servers on this computer when the viewing host is another computer", async () => {
+    negotiateMethods(ALL_METHODS);
+    windowHostBoundary.hostId = "host-elsewhere";
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        servers: () => [],
+        hostServers: [hostMcpServer("github", [])],
+      }),
+    );
+    render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
+
+    await screen.findByText("MCP servers give agents tools.");
+    await waitFor(() => {
+      expect(harness.paramsOf("providers.list").length).toBeGreaterThan(1);
+    });
+    expect(screen.queryByText(/on this computer only/)).toBeNull();
   });
 
   it("says the read failed, and Retry reads again", async () => {

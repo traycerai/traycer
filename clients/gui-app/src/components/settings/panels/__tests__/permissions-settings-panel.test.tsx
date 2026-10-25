@@ -251,6 +251,40 @@ describe("PermissionsSettingsPanel", () => {
     expect(activeTabTestId()).toBe("permissions-tab-modes");
   });
 
+  describe("the page subtitle", () => {
+    afterEach(() => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: null,
+        defaultPick: PERSONAL_PICK,
+      });
+    });
+
+    it("says what Personal's agents may do on every computer and sandbox running it", () => {
+      useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+      render(<PermissionsSettingsPanel />);
+
+      expect(
+        screen.getByText(
+          "What your agents may do without asking, on every computer and sandbox running Personal.",
+        ),
+      ).not.toBeNull();
+    });
+
+    it("keeps the general subtitle on a computer's own row", () => {
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "local", hostId: "host-a", hostName: "MacBook Pro" },
+      });
+      render(<PermissionsSettingsPanel />);
+
+      expect(
+        screen.getByText(
+          "How much an agent may do on its own, and who reviews the rest.",
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByText(/running Personal/)).toBeNull();
+    });
+  });
+
   describe("Modes with no usable host", () => {
     it("renders and works while the scope is connecting", () => {
       scopeOverrides.current = { status: "connecting" };

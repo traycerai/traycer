@@ -25,6 +25,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
@@ -86,10 +87,11 @@ function AgentDefinitionsBody(props: {
   readonly configurationKey: string;
 }): ReactNode {
   const query = useEnvironmentAgentDefinitionsQuery(true);
+  const read = useBoundedRead(query);
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
   const [conflict, setConflict] = useState<ConfigurationWriteIssue>(null);
-  if (query.isPending) {
+  if (query.isPending && !read.failed) {
     return (
       <AgentSpinningDots
         className={undefined}
@@ -99,12 +101,9 @@ function AgentDefinitionsBody(props: {
       />
     );
   }
-  if (query.isError) {
+  if (query.isPending || query.isError) {
     return source.kind === "pool" ? (
-      <ConfigurationReadFailed
-        page="agent definitions"
-        onRetry={() => void query.refetch()}
-      />
+      <ConfigurationReadFailed page="agent definitions" onRetry={read.retry} />
     ) : (
       <p className="text-ui-sm text-muted-foreground">
         Couldn't read these agent definitions.

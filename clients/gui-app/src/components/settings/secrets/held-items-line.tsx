@@ -5,7 +5,12 @@ import {
   heldRowsFromReview,
   type HeldItemsGroup,
 } from "@/components/settings/move/held-from-review";
-import { heldItemsLineText } from "@/components/settings/move/held-items-line-copy";
+import {
+  heldItemsHostName,
+  heldItemsLineText,
+} from "@/components/settings/move/held-items-line-copy";
+import { findHostOption } from "@/components/settings/host-scope/host-scope-model";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { Button } from "@/components/ui/button";
@@ -55,8 +60,14 @@ function HeldItemsGroupLine(props: {
   const stopHostId = props.group.hostId ?? props.reviewHostId;
   const stopClient = useHostClientForHostId(stopHostId);
   const entry = useHostDirectoryEntry(stopHostId);
+  const { hosts } = useHostOptions();
   const personalName = usePersonalHostName();
-  const hostName = entry?.label ?? personalName ?? "this computer";
+  // The directory lists only hosts this window can dial; the account's list
+  // names the rest, an offline computer among them.
+  const hostName = heldItemsHostName(
+    [findHostOption(hosts, stopHostId)?.name ?? null, entry?.label ?? null],
+    { isSource: stopHostId === props.reviewHostId, name: personalName },
+  );
   return (
     <li>
       <Button

@@ -16,7 +16,14 @@ import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
 import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
 import { useHeldValueReviews } from "@/components/settings/personal/use-held-value-reviews";
-import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
+import {
+  usePersonalPageHost,
+  usePersonalRowNotes,
+} from "@/components/settings/personal/personal-page-context";
+import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
+import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
+import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -524,6 +531,31 @@ function ShellSettingsPanelBody(props: {
     beginEnvSave();
     controller.deleteEnv(key, envSaveCallbacks(key));
   };
+  // Use everywhere: this host's own value becomes Personal's, then the host
+  // stops keeping one of its own. Cleared only after the save landed, so a
+  // failed save leaves the host's value where it was.
+  const pageHost = usePersonalPageHost();
+  const clearOwnValue = useHostScopedMutationForClient(pageHost.client, {
+    method: "config.env.localOverride.clear",
+    mutationKey: environmentMutationKeys.localOverrideClear(),
+    errorMessage: "Couldn't stop this computer keeping its own value.",
+    scope: { id: "config.env.localOverride" },
+    invalidateMethods: ["environment.localOverrides", "config.env.list"],
+  });
+  const onUseEverywhere = (key: string, value: string): void => {
+    if (envPending || clearOwnValue.isPending) return;
+    beginEnvSave();
+    controller.setEnv(
+      { key, value },
+      {
+        onSuccess: () => {
+          finishEnvSave();
+          clearOwnValue.mutate({ target: { kind: "variable", key } });
+        },
+        onError: envSaveCallbacks(key).onError,
+      },
+    );
+  };
 
   return (
     <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
@@ -560,6 +592,8 @@ function ShellSettingsPanelBody(props: {
         keyRefusal={keyShaped.refusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
+        onUseEverywhere={onUseEverywhere}
+        useEverywherePending={clearOwnValue.isPending}
       />
       {keyShaped.dialog}
     </div>
@@ -954,10 +988,25 @@ function HostEnvironmentGroup(props: {
     value: string | null,
   ) => void;
   readonly onDelete: (key: string) => void;
+  readonly onUseEverywhere: (key: string, value: string) => void;
+  readonly useEverywherePending: boolean;
 }) {
-  const rowNotes = usePersonalRowNotes("variable");
+  const notes = usePersonalRowNotes(VARIABLE_NOTES);
+  const rowNotes = new Map<string, ReactNode>();
+  for (const [key, note] of notes) {
+    rowNotes.set(
+      key,
+      <PersonalRowNoteText
+        name={key}
+        note={note}
+        disabled={props.pending || props.useEverywherePending}
+        onUseEverywhere={props.onUseEverywhere}
+      />,
+    );
+  }
   const personal = useEnvironmentPick().kind === "personal";
   const onHold = useHeldValueReviews("variable", "");
+  const claimedBy = useSecretClaimedNames(VARIABLE_CLAIMS);
   return (
     <SettingsGroup
       group={SHELL.definitions.hostEnvironment}
@@ -994,6 +1043,7 @@ function HostEnvironmentGroup(props: {
           <EnvOverrideEditor
             rowNotes={rowNotes}
             onHold={onHold}
+            claimedBy={claimedBy}
             overrides={props.overrides}
             disabled={props.pending}
             credentialRefusal={props.credentialRefusal}
@@ -1016,6 +1066,9 @@ function HostEnvironmentGroup(props: {
     </SettingsGroup>
   );
 }
+
+const VARIABLE_NOTES = { kind: "variable" } as const;
+const VARIABLE_CLAIMS = { kind: "variable" } as const;
 
 /** One refusal for every name: Variables sends every key to Secrets. */
 function keyRefusalOf(refusal: KeyRefusal | null): KeyRefusalFor {

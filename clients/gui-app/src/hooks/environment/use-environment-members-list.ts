@@ -257,6 +257,8 @@ export interface TeamEnvironmentDescriptor {
   readonly teamHandle: string;
   readonly viewerRole: TeamRole | null;
   readonly kind: "personal" | "team" | null;
+  /** The hosts running the team, null until the list is read. */
+  readonly hostCount: number | null;
 }
 
 const EMPTY_TEAM: TeamEnvironmentDescriptor = {
@@ -264,6 +266,7 @@ const EMPTY_TEAM: TeamEnvironmentDescriptor = {
   teamHandle: "",
   viewerRole: null,
   kind: null,
+  hostCount: null,
 };
 
 /**
@@ -311,6 +314,7 @@ function descriptorFromListRow(
     teamHandle: row.providerHandle ?? "",
     viewerRole: role === "owner" ? "admin" : role,
     kind: row.kind,
+    hostCount: row.hostCount,
   };
 }
 

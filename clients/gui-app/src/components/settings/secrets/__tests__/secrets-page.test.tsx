@@ -18,17 +18,21 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 // The computers holding a copy are covered by `secret-remove-preview-computers`;
 // here Remove's preview is read with none.
-vi.mock("@/components/settings/personal/use-personal-computers", () => ({
-  usePersonalComputers: () => ({
-    computers: [],
-    statuses: new Map(),
-    versions: new Map(),
-    participants: [],
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
   }),
-}));
+);
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -39,7 +43,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsCreateRequest,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsVerifyRequest,
@@ -51,7 +55,10 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
-import { SECRET_REVOKED_LABEL } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  SECRET_REVOKED_LABEL,
+  SECRETS_EMPTY_TEXT,
+} from "@/lib/sandboxes/secrets-page-copy";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -64,18 +71,20 @@ const ADDED_AT = Date.UTC(2026, 9, 24, 9, 30);
 
 /** The day and month a row names, as the page formats them. */
 function dayMonth(at: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
   }).format(at);
 }
 
 interface SecretsHostState {
-  secrets: EnvironmentSecret[];
+  secrets: EnvironmentSecretV12[];
   /** What `environment.secrets.versions` answers for any secret. */
   versions: SecretVersion[];
   /** The list read rejects with this. */
   listError: Error | null;
+  /** The list read waits for this to settle before it answers. */
+  listHold: Promise<void> | null;
   /** `environment.list` rejects with this. */
   environmentsError: Error | null;
   verifyAnswer: SecretVerifyResult;
@@ -95,8 +104,8 @@ interface SecretsHost {
 }
 
 function secretFixture(
-  overrides: Partial<EnvironmentSecret>,
-): EnvironmentSecret {
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -108,6 +117,8 @@ function secretFixture(
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
@@ -127,6 +138,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       },
     ],
     listError: null,
+    listHold: null,
     environmentsError: null,
     verifyAnswer: { evidence: "probe_accepted" },
     createAnswer: {
@@ -174,8 +186,9 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
         entries: [],
         hostStates: [],
       }),
-      "environment.secrets.list": () => {
+      "environment.secrets.list": async () => {
         reads.list += 1;
+        if (state.listHold !== null) await state.listHold;
         if (state.listError !== null) throw state.listError;
         return { removed: [], secrets: [...state.secrets] };
       },
@@ -205,6 +218,7 @@ function renderPage(host: SecretsHost): QueryClient {
         <SecretsPage
           client={host.client}
           hostId={HOST_ID}
+          emptyText={SECRETS_EMPTY_TEXT}
           hostName={() => "dev-box"}
         />
       </RunnerHostContext.Provider>
@@ -214,11 +228,14 @@ function renderPage(host: SecretsHost): QueryClient {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   useAuthStore.setState({ status: "signed-in" });
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   hostBoundary.client = null;
   navigateToSettingsSectionMock.mockReset();
@@ -423,6 +440,35 @@ describe("the secrets list", () => {
   });
 });
 
+describe("a list read that never answers", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads as Personal's one failure line with Retry after 15 seconds, not a spinner for ever", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const host = buildSecretsHost({
+      secrets: [secretFixture({})],
+      listHold: new Promise<void>(() => undefined),
+    });
+    renderPage(host);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(14_000);
+    });
+    expect(screen.queryByTestId("secrets-page-error")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const error = screen.getByTestId("secrets-page-error");
+    expect(error.textContent).toContain("Couldn't read Personal's secrets.");
+    expect(within(error).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+  });
+});
+
 describe("a row's Verify", () => {
   it("probes the secret by id and names the setting when the port is wrong", async () => {
     const host = buildSecretsHost({
@@ -558,15 +604,34 @@ describe("the add dialog's kind picker", () => {
 });
 
 describe("Verify in the add dialog", () => {
-  it("is held until the destination and the value are filled", async () => {
+  it("keeps Verify held until the destination and the value are filled", async () => {
     renderPage(buildSecretsHost({ secrets: [] }));
     await openApiKeyForm();
 
     expect(buttonOf("secret-form-verify").disabled).toBe(true);
-    expect(buttonOf("secret-form-continue").disabled).toBe(true);
-    expect(screen.getByTestId("secret-form-problem").textContent).toBe(
-      "The name is capital letters, digits and underscores, starting with a letter.",
-    );
+  });
+
+  it("shows no problem before Continue, then names the server address and stays on the form", async () => {
+    renderPage(buildSecretsHost({ secrets: [] }));
+    await openApiKeyForm();
+    fireEvent.change(screen.getByTestId("secret-form-name"), {
+      target: { value: "STRIPE_KEY" },
+    });
+    fireEvent.change(screen.getByTestId("secret-form-value"), {
+      target: { value: TYPED_VALUE },
+    });
+
+    expect(screen.queryByText("Enter the server address.")).toBeNull();
+    expect(screen.queryByTestId("secret-form-problem")).toBeNull();
+    expect(buttonOf("secret-form-continue").disabled).toBe(false);
+
+    fireEvent.click(buttonOf("secret-form-continue"));
+
+    const problem = await screen.findByRole("alert");
+    expect(problem.getAttribute("data-testid")).toBe("secret-form-problem");
+    expect(problem.textContent).toBe("Enter the server address.");
+    expect(screen.getByTestId("secret-form-name")).toBeTruthy();
+    expect(screen.queryByTestId("secret-save")).toBeNull();
   });
 
   it("sends the candidate with the typed value and names the port setting above", async () => {

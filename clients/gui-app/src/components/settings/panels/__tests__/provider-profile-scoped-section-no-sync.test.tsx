@@ -4,25 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import type { ProfileSyncEntryButton as ProfileSyncEntryButtonType } from "@/components/settings/panels/profile-sync/profile-sync-entry-button";
 
-// The section's boundary with the sync entry: what it hands the button.
-const entry = vi.hoisted(
-  (): { props: Parameters<typeof ProfileSyncEntryButtonType>[0][] } => ({
-    props: [],
-  }),
-);
-vi.mock(
-  "@/components/settings/panels/profile-sync/profile-sync-entry-button",
-  () => ({
-    ProfileSyncEntryButton: (
-      props: Parameters<typeof ProfileSyncEntryButtonType>[0],
-    ) => {
-      entry.props.push(props);
-      return null;
-    },
-  }),
-);
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
@@ -143,9 +125,8 @@ function renderSection(
   );
 }
 
-describe("<ProviderProfileScopedSection /> sync entry boundary", () => {
+describe("<ProviderProfileScopedSection /> without a sync entry", () => {
   beforeEach(() => {
-    entry.props = [];
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: "host-1", hostName: "Studio" },
     });
@@ -155,33 +136,26 @@ describe("<ProviderProfileScopedSection /> sync entry boundary", () => {
     useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
-  it("hands the sync entry the host and provider when profiles exist", () => {
+  it("offers no Sync profiles on a Local row that has profiles, only Add a profile", () => {
     renderSection(state([profile("first"), profile("second")]), "second");
-    const last = entry.props.at(-1);
-    expect(last?.hostId).toBe("host-1");
-    expect(last?.providerId).toBe("claude-code");
+
+    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
+    expect(screen.queryByText("Sync profiles")).toBeNull();
   });
 
-  it("hands the sync entry the host and provider when the provider has none", () => {
+  it("draws no Profiles card, and so no Sync profiles, on a Local row with zero profiles", () => {
     renderSection(state([]), null);
-    const last = entry.props.at(-1);
-    expect(last).toBeDefined();
-    expect(last?.hostId).toBe("host-1");
-    expect(last?.providerId).toBe("claude-code");
-    // The empty copy is true whatever the host negotiated.
-    expect(screen.getByText("No profiles on this device.")).toBeTruthy();
-    expect(screen.queryByText(/automatic sync rules/)).toBeNull();
+
+    expect(screen.queryByText("Profiles")).toBeNull();
+    expect(screen.queryByText("Sync profiles")).toBeNull();
+    expect(screen.queryByText("No profiles on this device.")).toBeNull();
   });
 
-  it("offers no sync entry on Personal, which already carries every profile to its computers", () => {
+  it("offers no Sync profiles on Personal, which already carries every profile to its computers", () => {
     useSettingsEnvironmentPickStore.setState({ pick: null });
     renderSection(state([profile("first"), profile("second")]), "second");
-    expect(entry.props).toEqual([]);
-    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
 
-    cleanup();
-    renderSection(state([]), null);
-    expect(entry.props).toEqual([]);
-    expect(screen.queryByText("No profiles on this device.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
+    expect(screen.queryByText("Sync profiles")).toBeNull();
   });
 });

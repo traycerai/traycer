@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type RefObject } from "react";
+import { lazy, Suspense, useEffect, useRef, type RefObject } from "react";
 import { toast } from "sonner";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
@@ -113,8 +113,10 @@ function GettingStartedToast() {
 /**
  * Whether nothing of this computer's settings has moved and the move still
  * waits for the person: `pending` while its status is being read, `clear`
- * with no local host, a host without the method or its planes, a failed
- * read, an accepted move, or anything already in Personal.
+ * with no local host, a host without the method or its planes, a first read
+ * that failed, an accepted move, or anything already in Personal. The status
+ * is re-read every few seconds, and a re-read that fails keeps the last
+ * answer: otherwise one failed read would take the move toast away unpressed.
  */
 function useNotMovedOnThisComputer(
   computer: ThisComputer,
@@ -126,8 +128,8 @@ function useNotMovedOnThisComputer(
     enabled,
   );
   if (!enabled || computer.hostId === null) return "clear";
-  if (status.supported === false || status.isError) return "clear";
-  if (status.data === null) return "pending";
+  if (status.supported === false) return "clear";
+  if (status.data === null) return status.isError ? "clear" : "pending";
   const planes = planesFromStatus(status.data);
   if (planes === null || status.data.consent !== null) return "clear";
   return planesNotMoved(planes, status.data.pendingUploads.length > 0)
@@ -138,7 +140,7 @@ function useNotMovedOnThisComputer(
 /**
  * Whether anything this computer's earlier upload held waits on a choice:
  * `pending` while its review is still being read, `clear` with no local host,
- * a host without the method, a failed read, or nothing held.
+ * a host without the method, a first read that failed, or nothing held.
  */
 function useHeldOnThisComputer(
   computer: ThisComputer,
@@ -150,8 +152,9 @@ function useHeldOnThisComputer(
     enabled,
   );
   if (!enabled || computer.hostId === null) return "clear";
-  if (review.supported === false || review.isError) return "clear";
-  if (review.data === null) return "pending";
+  if (review.supported === false) return "clear";
+  // A re-read that fails keeps the last answer, as the status does.
+  if (review.data === null) return review.isError ? "clear" : "pending";
   return heldReviewEntries(review.data.entries).length > 0 ? "held" : "clear";
 }
 
@@ -215,6 +218,17 @@ function SetupReminderToast(props: {
     onboardingCompletedCount(state, shell),
   );
   const remaining = onboardingGuideCount(shell) - complete;
+  // Declared first, so on unmount its cleanup runs before the toast's: the
+  // toast stays until the person presses it or ×, even once the Start page is
+  // left, and that × still records the dismissal. A change of what it says
+  // still replaces it, and a later mount replaces it by its id.
+  const unmounting = useRef(false);
+  useEffect(() => {
+    unmounting.current = false;
+    return () => {
+      unmounting.current = true;
+    };
+  }, []);
   useEffect(() => {
     if (completedAt === null || dismissed) return;
     // The setup count gates only the setup reminder: a computer whose
@@ -242,6 +256,7 @@ function SetupReminderToast(props: {
         },
       });
       return () => {
+        if (unmounting.current) return;
         mounted = false;
         toast.dismiss(id);
       };

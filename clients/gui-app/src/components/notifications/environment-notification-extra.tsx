@@ -26,8 +26,15 @@ export function EnvironmentNotificationExtra(props: {
       controls={null}
     />
   );
-  if (props.detail.kind === "team_role_changed") {
-    const role = isTeamRole(props.detail.to) ? props.detail.to : "viewer";
+  if (
+    props.detail.kind === "team_role_changed" ||
+    props.detail.kind === "team_member_welcome"
+  ) {
+    const granted =
+      props.detail.kind === "team_role_changed"
+        ? props.detail.to
+        : props.detail.role;
+    const role = isTeamRole(granted) ? granted : "viewer";
     return (
       <TeamRoleChangedCard
         teamName={props.detail.teamName}
@@ -83,6 +90,7 @@ export function EnvironmentNotificationExtra(props: {
 function detailsSubject(detail: EnvironmentNotificationDetail): DetailsSubject {
   if (
     detail.kind === "team_role_changed" ||
+    detail.kind === "team_member_welcome" ||
     detail.kind === "team_host_returned"
   ) {
     return { environmentId: detail.environmentId, kind: "member", key: "" };
@@ -107,6 +115,7 @@ function detailsSubject(detail: EnvironmentNotificationDetail): DetailsSubject {
 function detailsTitle(detail: EnvironmentNotificationDetail): string {
   if (
     detail.kind === "team_role_changed" ||
+    detail.kind === "team_member_welcome" ||
     detail.kind === "team_host_returned"
   ) {
     return "Member details";

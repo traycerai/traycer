@@ -13,12 +13,12 @@ import {
   isRateLimitProfileFetchEligible,
   resolveRateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
-import { Button } from "@/components/ui/button";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamReadFailed } from "./team-read-failed";
+import { TeamContentNeedsHost } from "./team-content-needs-host";
 
 export function TeamProviderLiveFacts(props: {
   readonly providerId: ProviderId;
@@ -42,17 +42,11 @@ export function TeamProviderLiveFacts(props: {
   );
   const hostName = scope.viewingHost?.hostLabel ?? "This host";
   const noHost = (
-    <p role="status" className="text-ui-sm text-muted-foreground">
-      Rate limits need a host running {name}.{" "}
-      <Button
-        type="button"
-        size="sm"
-        variant="link"
-        onClick={() => setPicking(true)}
-      >
-        Pick one.
-      </Button>
-    </p>
+    <TeamContentNeedsHost
+      content="rate-limits"
+      teamName={name}
+      onPickHost={() => setPicking(true)}
+    />
   );
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">

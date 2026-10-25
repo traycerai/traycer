@@ -1,5 +1,6 @@
-// The computers running Personal are the page chip's participants. The scope
-// and the per-host reads are the boundary; the participant rule runs for real.
+// The computers running Personal are its host list's rows, plus those this
+// window reads that run it by their own status. The scope, the per-host
+// reads and the host list are the boundary; the membership rule runs for real.
 const reads = vi.hoisted(
   (): {
     scope: HostScope | null;
@@ -8,6 +9,7 @@ const reads = vi.hoisted(
     client: unknown;
     servers: EnvironmentMcpServerDeclaration[];
     readonly listed: unknown[];
+    hostList: EnvironmentHostRecordV12[];
   } => ({
     scope: null,
     statuses: new Map<string, unknown>(),
@@ -15,6 +17,7 @@ const reads = vi.hoisted(
     client: null,
     servers: [],
     listed: [],
+    hostList: [],
   }),
 );
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
@@ -44,7 +47,8 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   hostScopeFixture,
@@ -66,7 +70,7 @@ const ADDED = Date.UTC(2026, 9, 24, 9, 30);
 const RESTART = "Tools already running keep it until they restart.";
 
 function dayMonth(at: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
   }).format(at);
@@ -82,7 +86,7 @@ const AWAITING_MOVE = environmentStatusFixture({
   setup: { stage: "moving_settings", state: "awaiting_consent" },
 });
 
-const secret: EnvironmentSecret = {
+const secret: EnvironmentSecretV12 = {
   secretId: "sec-1",
   name: "STRIPE_KEY",
   kind: "api_key",
@@ -93,6 +97,8 @@ const secret: EnvironmentSecret = {
   currentVersionId: "ver-1",
   revoked: false,
   updatedAt: 1,
+  variables: [],
+  providerVariables: [],
 };
 
 function computer(name: string): HostScopeOption {
@@ -161,6 +167,7 @@ function mountRow(
           },
         ],
       }),
+      "environment.host.list": () => ({ hosts: reads.hostList }),
       "environment.configuration.mcpServers.list": (request: unknown) => {
         reads.listed.push(request);
         return { servers: reads.servers };
@@ -224,8 +231,11 @@ async function previewText(): Promise<string> {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   reads.statuses.clear();
   reads.servers = [];
+  reads.hostList = [];
   reads.listed.length = 0;
   navigateToSettingsSectionMock.mockReset();
   reads.versions.clear();
@@ -234,6 +244,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   reads.client = null;
   reads.scope = null;
@@ -290,6 +301,35 @@ describe("Remove's preview on Personal names the computers that hold a copy", ()
     const text = await previewText();
     expect(text).toContain(`${added} On dev-box. ${RESTART}`);
     expect(text).not.toMatch(/old-laptop|work-pc|sandbox-1/);
+  });
+
+  it("names the computers in Personal's host list, though this window cannot dial them, and not its sandboxes", async () => {
+    const listed = (
+      hostId: string,
+      kind: EnvironmentHostRecordV12["kind"],
+    ): EnvironmentHostRecordV12 => ({
+      hostId,
+      hostLabel: hostId,
+      hostPlatform: "darwin",
+      enrolledByUserId: "user-me",
+      kind,
+      boundAt: 1,
+      reachable: false,
+      lastReportedAt: 1,
+      hasLocalRow: false,
+      applied: [],
+    });
+    reads.hostList = [
+      listed("cloud-box", "personal"),
+      listed("studio", "personal"),
+      listed("sandbox-9", "sandbox"),
+    ];
+    setComputers({}, []);
+    mountRow("host", null);
+
+    const text = await previewText();
+    expect(text).toContain(`${added} On cloud-box and studio. ${RESTART}`);
+    expect(text).not.toContain("sandbox-9");
   });
 
   it("leaves out the On clause when no computer runs Personal, keeping the restart sentence", async () => {

@@ -280,6 +280,76 @@ describe("RulesTab", () => {
     });
   });
 
+  describe("Reset to default", () => {
+    it("is off while the stored policy is empty and the edit is clean", async () => {
+      policy.current = record({ body: "" });
+      render(tab({}));
+      await settledSave();
+
+      expect(button("auto-policy-reset").disabled).toBe(true);
+    });
+
+    it("turns on once the edit adds a rule to an empty policy", async () => {
+      policy.current = record({ body: "" });
+      render(tab({}));
+      await settledSave();
+      fireEvent.change(input("allow"), {
+        target: { value: "- Run the linter" },
+      });
+
+      expect(button("auto-policy-reset").disabled).toBe(false);
+    });
+
+    it("asks first when a custom policy is stored, and Cancel sends nothing", async () => {
+      render(tab({}));
+      await settledSave();
+      fireEvent.click(button("auto-policy-reset"));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByText("Reset the approval policy?"),
+      ).not.toBeNull();
+      expect(
+        within(dialog).getByText(
+          "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal.",
+        ),
+      ).not.toBeNull();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(setPolicyMutate).not.toHaveBeenCalled();
+    });
+
+    it("saves the empty policy on confirm, then reads as the default", async () => {
+      render(tab({}));
+      await settledSave();
+      fireEvent.click(button("auto-policy-reset"));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Reset to default" }),
+      );
+
+      expect(setPolicyMutate).toHaveBeenCalledTimes(1);
+      expect(setPolicyMutate.mock.calls[0][0]).toEqual({ body: "" });
+
+      policy.current = record({
+        body: "",
+        updatedAt: "2026-09-10T00:05:00.000Z",
+      });
+      setPolicyMutate.mock.calls[0][1].onSuccess({
+        updatedAt: "2026-09-10T00:05:00.000Z",
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(input("allow").value).toBe("");
+      expect(button("auto-policy-reset").disabled).toBe(true);
+    });
+  });
+
   describe("Save and Discard", () => {
     it("keeps both off until something changes", async () => {
       render(tab({}));

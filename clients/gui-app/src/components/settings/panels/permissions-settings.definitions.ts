@@ -15,7 +15,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     availableWhen: alwaysAvailable,
     label: "Permissions",
     description:
-      "How much an agent may do on its own, and who reviews the rest.",
+      "What your agents may do without asking, on every computer and sandbox running Personal.",
     // Browser agent access is a region of this page, below the tabs.
     keywords: [
       "permissions",

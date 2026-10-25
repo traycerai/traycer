@@ -331,23 +331,6 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
     expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
   });
 
-  it("keeps the Profiles header and the Sync profiles entry when a syncable provider has no profiles on a Local row, so saved rules stay manageable", () => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-1", hostName: "Studio" },
-    });
-    renderSection(
-      {
-        state: opencodeState({ providerId: "claude-code", profiles: [] }),
-      },
-      null,
-    );
-
-    expect(screen.getByText("Profiles")).toBeDefined();
-    expect(screen.getByRole("button", { name: /Sync profiles/ })).toBeDefined();
-    // Nothing to add a sign-in to from here: the profile controls stay absent.
-    expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
-  });
-
   it("holds Sign in and Add a profile with the credential refusal as the reason, and offers no CLI & Args link, when the host takes no credentials", () => {
     const REFUSAL = "Sandboxes don't take sign-ins";
     const profile = managedProfile();
@@ -410,11 +393,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         name: "OpenCode profile: OpenCode's own login on Studio",
       }),
     ).toBeDefined();
-    expect(
-      screen.getByText(
-        "OpenCode's own login on Studio · works on this computer only",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("works on this computer only")).toBeDefined();
     expect(screen.queryByText("Terminal")).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();

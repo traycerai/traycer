@@ -142,8 +142,67 @@ export const environmentMovePlanUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
+ * `@1.2` adds `personalHoldsSecrets`: Personal holds at least one key or
+ * secret, which reaches this computer as a readable value once it runs
+ * Personal, so the sheet discloses it even when this move stores none. It
+ * also adds `itemChoices`: this host honours a choice on a `moves` row
+ * (`environmentMoveItemChoiceKey`). A host that does not drops such a
+ * choice and would upload the row, so a client offers them only when this
+ * is true. A `@1.1` answer upgrades with both false.
+ */
+export const environmentMovePlanResponseSchemaV12 = lazySchema(() =>
+  environmentMovePlanResponseSchemaV11.extend({
+    personalHoldsSecrets: z.boolean().default(false),
+    itemChoices: z.boolean().default(false),
+  }),
+);
+export type EnvironmentMovePlanResponseV12 = z.infer<
+  typeof environmentMovePlanResponseSchemaV12
+>;
+
+export const environmentMovePlanV12 = defineRpcContract({
+  method: "environment.move.plan",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentMovePlanRequestSchema,
+  responseSchema: environmentMovePlanResponseSchemaV12,
+});
+
+export const environmentMovePlanUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentMovePlanV11,
+  typeof environmentMovePlanV12
+>({
+  from: environmentMovePlanV11.schemaVersion,
+  to: environmentMovePlanV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    personalHoldsSecrets: false,
+    itemChoices: false,
+  }),
+});
+
+/** What every `environmentMoveItemChoiceKey` starts with. */
+export const ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX = "item:";
+
+/**
+ * The key a choice on one `moves` row is sent under, beside the
+ * `looksLikeAKey` rows' own keys: `item:<kind>:<key>`. A row's kind has no
+ * `:`, so the separator after it splits the key back out. Only a host whose plan
+ * says `itemChoices` reads it: `secret` stores a variable or provider
+ * override as a secret, `stays` leaves the row on this computer only.
+ */
+export function environmentMoveItemChoiceKey(
+  kind: string,
+  key: string,
+): string {
+  return `${ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX}${kind}:${key}`;
+}
+
+/**
  * The person's answer to one `looksLikeAKey` row, by its key: move it as a
  * `secret`, move it as a `variable`, or leave it on this computer (`stays`).
+ * On a host whose plan says `itemChoices`, also one `moves` row's, under
+ * `environmentMoveItemChoiceKey`; the request's shape is the same.
  */
 export const environmentMoveKeyChoiceSchema = lazySchema(() =>
   z.object({

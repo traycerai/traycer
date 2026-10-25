@@ -18,6 +18,7 @@ import type {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Collapsible,
   CollapsibleContent,
@@ -378,6 +379,7 @@ function RulesEditor(props: {
   });
   if (editor !== editorState) setEditorState(editor);
   const openingRead = useOpeningRead(props.active, query.refetch);
+  const [resetConfirm, setResetConfirm] = useState(false);
 
   const appliedDraftId = editor?.appliedDraftId ?? 0;
   const { onDraftsConsumed, onSnapshot } = props;
@@ -419,6 +421,26 @@ function RulesEditor(props: {
           setEditorState((current) =>
             editorFromRecord({
               body,
+              updatedAt: response.updatedAt,
+              readState: "fresh",
+              appliedDraftId: current?.appliedDraftId ?? 0,
+            }),
+          );
+        },
+      },
+    );
+  };
+  // Reset saves the empty policy: the custom rules go, and the built-in ones
+  // they sat on top of are the default.
+  const reset = (): void => {
+    setPolicy.mutate(
+      { body: "" },
+      {
+        onSuccess: (response) => {
+          setResetConfirm(false);
+          setEditorState((current) =>
+            editorFromRecord({
+              body: "",
               updatedAt: response.updatedAt,
               readState: "fresh",
               appliedDraftId: current?.appliedDraftId ?? 0,
@@ -529,6 +551,18 @@ function RulesEditor(props: {
         )}
         onDiscard={discard}
         onSave={commit}
+        onReset={() => setResetConfirm(true)}
+      />
+      <ConfirmDestructiveDialog
+        open={resetConfirm}
+        onOpenChange={setResetConfirm}
+        title="Reset the approval policy?"
+        description="This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal."
+        cascadeSummary={null}
+        actionLabel="Reset to default"
+        isPending={saving}
+        blockedReason={null}
+        onConfirm={reset}
       />
     </div>
   );
@@ -814,8 +848,20 @@ function BuiltInRules(props: {
 }
 
 /**
+ * Whether Reset has anything to remove: the stored policy holds custom rules,
+ * or the edit adds some.
+ */
+function hasCustomRules(
+  record: AutoPolicyGetResponse | undefined,
+  dirty: boolean,
+): boolean {
+  return dirty || (record?.body ?? "") !== "";
+}
+
+/**
  * The sticky footer: what is stored (or, when the draft is over the server's
- * cap, by how much), and the two actions. Save's pending affordance serves
+ * cap, by how much), and its actions: Reset to default, Discard and Save.
+ * Save's pending affordance serves
  * both waits - the write and the opening read - because both say the same
  * thing to the user: Save is busy, not broken.
  */
@@ -830,6 +876,7 @@ function RulesFooter(props: {
   readonly unrepresentable: boolean;
   readonly onDiscard: () => void;
   readonly onSave: () => void;
+  readonly onReset: () => void;
 }): ReactNode {
   const { editor, saving } = props;
   const dirty = editorIsDirty(editor);
@@ -851,6 +898,21 @@ function RulesFooter(props: {
         <AutoPolicySummary record={props.record} />
       )}
       <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={
+            saving ||
+            checking ||
+            saveBlocked ||
+            !hasCustomRules(props.record, dirty)
+          }
+          onClick={props.onReset}
+          data-testid="auto-policy-reset"
+        >
+          Reset to default
+        </Button>
         <Button
           type="button"
           variant="outline"

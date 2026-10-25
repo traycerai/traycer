@@ -1162,6 +1162,55 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
   });
 
+  describe("a server Traycer has not checked", () => {
+    const UNCHECKED = {
+      name: "unchecked",
+      status: "config_only",
+      configOnly: true,
+      tools: [],
+    } satisfies Partial<ProviderMcpServer>;
+
+    it("reads Not checked with no config only badge, and says why when expanded", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer(UNCHECKED)] };
+      renderTab(FULL_CAPS, "codex");
+
+      expect(screen.getByText("Not checked")).toBeDefined();
+      expect(screen.queryByText(/config only/i)).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: /Expand unchecked/ }));
+      expect(
+        screen.getByText("Traycer hasn't checked this server yet."),
+      ).toBeDefined();
+    });
+
+    it("offers Retry when discovery is allowed, and it checks the server", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer(UNCHECKED)] };
+      renderTab(FULL_CAPS, "codex");
+
+      fireEvent.click(screen.getByRole("button", { name: /Expand unchecked/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(mcpMocks.discoverMutate).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers no Retry where discovery is not allowed", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer(UNCHECKED)] };
+      renderTab(
+        {
+          ...FULL_CAPS,
+          actionScopes: { ...FULL_CAPS.actionScopes, discover: [] },
+        },
+        "codex",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Expand unchecked/ }));
+      expect(
+        screen.getByText("Traycer hasn't checked this server yet."),
+      ).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
+  });
+
   it("shows shadowed by project badge on global rows", () => {
     mcpMocks.listResult.data = { servers: [connectedServer({})] };
     mcpMocks.projectListResult.data = {

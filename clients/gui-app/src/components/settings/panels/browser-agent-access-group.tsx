@@ -20,6 +20,7 @@ import {
 import { useEnvironmentBrowserAccessQuery } from "@/hooks/environment/team/use-browser-access-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
@@ -136,11 +137,12 @@ function TeamBrowserAccessRow(): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanAdministerConfiguration();
   const query = useEnvironmentBrowserAccessQuery(false);
+  const read = useBoundedRead(query);
   const { put } = useConfigurationItemMutations();
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
   let control: ReactNode = null;
-  if (query.isPending)
+  if (read.pending)
     control = <span className="text-ui-xs text-muted-foreground">Loading</span>;
   else if (query.data !== undefined) {
     control = canEdit ? (
@@ -172,10 +174,10 @@ function TeamBrowserAccessRow(): ReactNode {
       <SettingsRow
         row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
         status={
-          query.isError ? (
+          read.failed ? (
             <ConfigurationReadFailed
               page="browser agent access"
-              onRetry={() => void query.refetch()}
+              onRetry={read.retry}
             />
           ) : (
             "Running agents pick this up on their next turn."

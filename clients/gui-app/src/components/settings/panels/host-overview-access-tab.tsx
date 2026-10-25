@@ -22,6 +22,7 @@ import {
   SETUP_STEPS,
   setupView,
   TERMINAL_ACCOUNT_SENTENCE,
+  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -171,7 +172,14 @@ function AccessSections(props: {
         hostId={props.hostId}
         status={props.status.remoteAccess}
       />
-      <TerminalAccountsSection client={props.client} />
+      <TerminalAccountsSection
+        client={props.client}
+        sentence={
+          props.status.principal?.kind === "team"
+            ? teamTerminalAccountSentence(props.status.principal.teamName)
+            : TERMINAL_ACCOUNT_SENTENCE
+        }
+      />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>
   );
@@ -374,6 +382,7 @@ const AMBIENT_PROFILE_ID = "ambient";
 
 function TerminalAccountsSection(props: {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly sentence: string;
 }): ReactNode {
   const list = useProvidersListForClient(props.client, {
     enabled: true,
@@ -402,7 +411,7 @@ function TerminalAccountsSection(props: {
       fill={false}
     >
       <p className="max-w-[72ch] px-5 pt-4 text-ui-sm text-muted-foreground">
-        {TERMINAL_ACCOUNT_SENTENCE}
+        {props.sentence}
       </p>
       <ul className="flex flex-col">
         {rows.map((row) => (

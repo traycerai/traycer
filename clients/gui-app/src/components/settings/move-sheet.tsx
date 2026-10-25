@@ -1,27 +1,36 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import type { EnvironmentMovePlanResponseV11 } from "@traycer/protocol/host/environment/move-contracts";
 import {
   DEFAULT_KEY_CHOICE,
+  existingSecretsArriveSentence,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
   MOVE_SECTIONS,
   moveAcceptRequest,
   moveReachSentence,
   moveRecipientSentence,
+  moveItemChoiceKey,
+  moveRowChoices,
+  movesRowText,
   movesSectionRows,
+  movesSummary,
   guideDiffersNote,
   nothingToMoveLine,
   notAwaitingLine,
   PLAN_CHANGED_TEXT,
   planMovesASecret,
   planMovesNothing,
+  rowsLeftHere,
+  type MoveChoices,
   type MoveKeyChoice,
+  type MovePlan,
   type MoveRow,
+  type MovesSectionRow,
 } from "@/components/settings/move-sheet-model";
 import { needsUpdateSubtitle } from "@/components/settings/environment/environment-picker-model";
-import { useHostsRunningPersonal } from "@/components/settings/environment/use-environment-status-model";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
+import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
+import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
@@ -96,7 +105,7 @@ function MoveSheetBody(props: {
   const { target } = props;
   // Read only while the sheet is open: the same reads the Environment
   // dropdown makes, which the app-wide mount must not hold open otherwise.
-  const runningPersonal = useHostsRunningPersonal(useHostScope());
+  const runningPersonal = useHostsRunningPersonal();
   const client = useHostClientForHostId(target.hostId);
   const supported = useHostMethodSupport(
     target.hostId,
@@ -109,9 +118,7 @@ function MoveSheetBody(props: {
     params: EMPTY_PARAMS,
     options: { enabled: supported === true, refetchOnWindowFocus: false },
   });
-  const [choices, setChoices] = useState<ReadonlyMap<string, MoveKeyChoice>>(
-    () => new Map(),
-  );
+  const [choices, setChoices] = useState<MoveChoices>(() => new Map());
   const [planChanged, setPlanChanged] = useState(false);
   const [notAwaiting, setNotAwaiting] = useState(false);
   const accept = useHostScopedMutationForClient(client, {
@@ -120,10 +127,16 @@ function MoveSheetBody(props: {
     errorMessage: "Couldn't start the move.",
     invalidateMethods: ["environment.status", "environment.move.plan"],
   });
-  const choose = (key: string, choice: MoveKeyChoice): void => {
-    setChoices((current) => new Map(current).set(key, choice));
+  // `null` takes a Moves row's choice back: it moves as planned.
+  const choose = (key: string, choice: MoveKeyChoice | null): void => {
+    setChoices((current) => {
+      const next = new Map(current);
+      if (choice === null) next.delete(key);
+      else next.set(key, choice);
+      return next;
+    });
   };
-  const send = (data: EnvironmentMovePlanResponseV11): void => {
+  const send = (data: MovePlan): void => {
     accept.mutate(moveAcceptRequest(data, choices), {
       onSuccess: (response) => {
         if (response.outcome === "plan_changed") {
@@ -142,10 +155,12 @@ function MoveSheetBody(props: {
     });
   };
   const movesNothing = plan.data !== undefined && planMovesNothing(plan.data);
-  const reachedHostNames = runningPersonal
+  const reachedHostNames = runningPersonal.hosts
     .filter((host) => host.hostId !== target.hostId)
     .map((host) => host.name);
-  const reach = moveReachSentence(reachedHostNames, target.hostName);
+  // Who the settings reach is said, and the plan offered, only once the
+  // host list has answered: an unread list is not "no other computer".
+  const shownPlan = planOnceReachKnown(runningPersonal, plan.data);
   return (
     <>
       <SheetHeader>
@@ -153,7 +168,7 @@ function MoveSheetBody(props: {
         <SheetDescription data-testid="move-sheet-description">
           {movesNothing
             ? nothingToMoveLine(target.hostName)
-            : `${reach} ${target.hostName} keeps working either way. Every row opens to its items.`}
+            : moveSheetLead(runningPersonal, reachedHostNames, target.hostName)}
         </SheetDescription>
       </SheetHeader>
       <div
@@ -181,7 +196,11 @@ function MoveSheetBody(props: {
             </Button>
           </div>
         ) : null}
-        {supported === true && plan.data === undefined && !plan.isError ? (
+        <HostListReadFailed running={runningPersonal} />
+        {supported === true &&
+        shownPlan === null &&
+        runningPersonal.state !== "failed" &&
+        !plan.isError ? (
           <AgentSpinningDots
             className={undefined}
             testId="move-sheet-loading"
@@ -207,9 +226,9 @@ function MoveSheetBody(props: {
             {notAwaitingLine(target.hostName)}
           </p>
         ) : null}
-        {plan.data === undefined ? null : (
+        {shownPlan === null ? null : (
           <MovePlanRows
-            plan={plan.data}
+            plan={shownPlan}
             hostName={target.hostName}
             choices={choices}
             reachedHostNames={reachedHostNames}
@@ -239,9 +258,9 @@ function MoveSheetBody(props: {
             <Button
               type="button"
               data-testid="move-sheet-accept"
-              disabled={plan.data === undefined || accept.isPending}
+              disabled={shownPlan === null || accept.isPending}
               onClick={() => {
-                if (plan.data !== undefined) send(plan.data);
+                if (shownPlan !== null) send(shownPlan);
               }}
             >
               Move to Personal
@@ -261,19 +280,59 @@ function MoveSheetBody(props: {
   );
 }
 
-function MovePlanRows(props: {
-  readonly plan: EnvironmentMovePlanResponseV11;
-  readonly hostName: string;
-  readonly choices: ReadonlyMap<string, MoveKeyChoice>;
-  readonly reachedHostNames: readonly string[];
-  readonly onChoose: (key: string, choice: MoveKeyChoice) => void;
+/** The plan, once the host list has answered: its lines name where it reaches. */
+function planOnceReachKnown(
+  running: HostsRunningConfiguration,
+  plan: MovePlan | undefined,
+): MovePlan | null {
+  return running.state === "ready" && plan !== undefined ? plan : null;
+}
+
+/** The host list could not be read, so nothing says where the move reaches. */
+function HostListReadFailed(props: {
+  readonly running: HostsRunningConfiguration;
 }): ReactNode {
-  const { rows } = props.plan;
-  const movesNothing = planMovesNothing(props.plan);
-  const moving = movesSectionRows(props.plan, props.choices);
+  if (props.running.state !== "failed") return null;
+  return (
+    <TeamReadFailed
+      message="Couldn't read which computers run Personal."
+      onRetry={props.running.retry}
+    />
+  );
+}
+
+/**
+ * The sheet's lead. Until the host list has answered it names nobody the
+ * settings reach.
+ */
+function moveSheetLead(
+  running: HostsRunningConfiguration,
+  reachedHostNames: readonly string[],
+  hostName: string,
+): string {
+  const reach =
+    running.state === "ready"
+      ? `${moveReachSentence(reachedHostNames, hostName)} `
+      : "";
+  return `${reach}${hostName} keeps working either way. Every row opens to its items.`;
+}
+
+function MovePlanRows(props: {
+  readonly plan: MovePlan;
+  readonly hostName: string;
+  readonly choices: MoveChoices;
+  readonly reachedHostNames: readonly string[];
+  readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
+}): ReactNode {
+  const { plan, choices } = props;
+  const { rows } = plan;
+  const movesNothing = planMovesNothing(plan);
+  const moving = movesSectionRows(plan, choices);
+  const leftHere = rowsLeftHere(plan, choices);
+  const storesASecret = planMovesASecret(plan, choices);
   return (
     <>
-      {props.plan.guideDiffers ? (
+      {plan.guideDiffers ? (
         // Above Moves, in no section and with no choice: the move never puts
         // this guide over Personal's.
         <p
@@ -283,18 +342,28 @@ function MovePlanRows(props: {
           {guideDiffersNote(props.hostName)}
         </p>
       ) : null}
+      {moving.length === 0 ? null : (
+        <MovesSection plan={plan} rows={moving} onChoose={props.onChoose} />
+      )}
       {MOVE_SECTIONS.map((section) => {
-        const sectionRows =
-          section.rows === "moves" ? moving : rows[section.rows];
+        // Stays lists the rows the person left here after the plan's own.
+        const stays = section.rows === "staysOnThisComputer";
+        const sectionRows = stays
+          ? [...rows.staysOnThisComputer, ...leftHere.keys]
+          : rows[section.rows];
+        const chosen = stays ? leftHere.items : [];
         // A sheet that moves nothing says so in its description instead.
         const hidden =
-          sectionRows.length === 0 && (section.empty === null || movesNothing);
+          sectionRows.length + chosen.length === 0 &&
+          (section.empty === null || movesNothing);
         return hidden ? null : (
           <MoveSection
             key={section.rows}
             testId={`move-sheet-${section.rows}`}
             title={section.title}
             rows={sectionRows}
+            chosen={chosen}
+            onTakeBack={(row) => props.onChoose(moveItemChoiceKey(row), null)}
             empty={section.empty ?? ""}
             detailSeparator={section.detailSeparator}
           />
@@ -311,7 +380,7 @@ function MovePlanRows(props: {
               <LooksLikeAKeyRow
                 key={row.key}
                 row={row}
-                choice={props.choices.get(row.key) ?? DEFAULT_KEY_CHOICE}
+                choice={choices.get(row.key) ?? DEFAULT_KEY_CHOICE}
                 onChoose={(choice) => props.onChoose(row.key, choice)}
               />
             ))}
@@ -324,9 +393,12 @@ function MovePlanRows(props: {
             className="text-ui-sm text-muted-foreground"
             data-testid="move-sheet-disclosure"
           >
-            {planMovesASecret(props.plan, props.choices)
-              ? `${MOVE_DISCLOSURE} ${moveRecipientSentence(props.reachedHostNames)} ${MOVE_ACCEPTS_AS_SHOWN}`
-              : MOVE_ACCEPTS_AS_SHOWN}
+            {disclosureText(
+              storesASecret,
+              plan.personalHoldsSecrets,
+              props.reachedHostNames,
+              props.hostName,
+            )}
           </p>
           <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
         </div>
@@ -335,26 +407,145 @@ function MovePlanRows(props: {
   );
 }
 
+/**
+ * Who receives what: the custody sentence and its recipient boundary when
+ * this move stores a secret; that Personal's existing keys and secrets
+ * arrive when it stores none but Personal holds some; then that Move accepts
+ * the list as shown.
+ */
+function disclosureText(
+  storesASecret: boolean,
+  personalHoldsSecrets: boolean,
+  reachedHostNames: readonly string[],
+  hostName: string,
+): string {
+  if (storesASecret) {
+    return `${MOVE_DISCLOSURE} ${moveRecipientSentence(reachedHostNames)} ${MOVE_ACCEPTS_AS_SHOWN}`;
+  }
+  if (personalHoldsSecrets) {
+    return `${existingSecretsArriveSentence(hostName)} ${MOVE_ACCEPTS_AS_SHOWN}`;
+  }
+  return MOVE_ACCEPTS_AS_SHOWN;
+}
+
+/**
+ * Moves as counts, with `Show all <n>` opening every row; on a host that
+ * honours them, each row has its own choices.
+ */
+function MovesSection(props: {
+  readonly plan: MovePlan;
+  readonly rows: readonly MovesSectionRow[];
+  readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
+}): ReactNode {
+  return (
+    <section className="flex flex-col gap-1" data-testid="move-sheet-moves">
+      <h3 className="font-medium text-ui-sm">Moves</h3>
+      <p className="text-ui-sm" data-testid="move-sheet-moves-summary">
+        {movesSummary(props.rows)}
+      </p>
+      <Collapsible>
+        <CollapsibleTrigger asChild>
+          <Button type="button" variant="ghost" size="sm">
+            <ChevronRight className="size-3.5" aria-hidden />
+            Show all {props.rows.length}
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul className="flex flex-col gap-2 pl-6">
+            {props.rows.map((entry) => (
+              <MovesRow
+                key={`${entry.row.kind}:${entry.row.key}:${entry.row.os ?? ""}`}
+                plan={props.plan}
+                entry={entry}
+                onChoose={(choice) => props.onChoose(entry.choiceKey, choice)}
+              />
+            ))}
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
+    </section>
+  );
+}
+
+/**
+ * One Moves row: its name, how it moves, and its choices. A row from Looks
+ * like a key takes its choices there; a row a host does not let the person
+ * choose for has none.
+ */
+function MovesRow(props: {
+  readonly plan: MovePlan;
+  readonly entry: MovesSectionRow;
+  readonly onChoose: (choice: MoveKeyChoice | null) => void;
+}): ReactNode {
+  const { entry } = props;
+  const offers = entry.looksLikeAKey
+    ? { secret: false, stays: false }
+    : moveRowChoices(props.plan, entry.row);
+  const marked = entry.treatment === "secret";
+  return (
+    <li className="flex flex-col gap-1" data-testid="move-sheet-moves-row">
+      <span className="text-ui-sm">
+        {movesRowText(entry)}
+        {entry.row.detail === null ? null : (
+          <span className="text-muted-foreground"> · {entry.row.detail}</span>
+        )}
+      </span>
+      {offers.secret || offers.stays ? (
+        <div className="flex flex-wrap gap-2">
+          {offers.secret ? (
+            <Button
+              type="button"
+              size="sm"
+              variant={marked ? "secondary" : "outline"}
+              aria-pressed={marked}
+              onClick={() => props.onChoose(marked ? null : "secret")}
+            >
+              Mark as a secret
+            </Button>
+          ) : null}
+          {offers.stays ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-pressed={false}
+              onClick={() => props.onChoose("stays")}
+            >
+              Leave on this computer only
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * A section after Moves, collapsed to its count. `chosen` are Moves rows the
+ * person left on this computer only, listed after the section's own rows
+ * with the pressed `Leave on this computer only` that takes the choice back.
+ */
 function MoveSection(props: {
   readonly testId: string;
   readonly title: string;
   readonly rows: readonly MoveRow[];
+  readonly chosen: readonly MoveRow[];
+  readonly onTakeBack: (row: MoveRow) => void;
   readonly empty: string;
   readonly detailSeparator: string | null;
 }): ReactNode {
+  const count = props.rows.length + props.chosen.length;
   return (
     <section className="flex flex-col gap-1" data-testid={props.testId}>
       <h3 className="font-medium text-ui-sm">{props.title}</h3>
-      {props.rows.length === 0 ? (
+      {count === 0 ? (
         <p className="text-ui-sm text-muted-foreground">{props.empty}</p>
       ) : (
         <Collapsible>
           <CollapsibleTrigger asChild>
             <Button type="button" variant="ghost" size="sm">
               <ChevronRight className="size-3.5" aria-hidden />
-              {props.rows.length === 1
-                ? "1 item"
-                : `${props.rows.length} items`}
+              {count === 1 ? "1 item" : `${count} items`}
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent>
@@ -365,6 +556,26 @@ function MoveSection(props: {
                   className="text-ui-sm"
                 >
                   <MoveRowText row={row} separator={props.detailSeparator} />
+                </li>
+              ))}
+              {props.chosen.map((row) => (
+                <li
+                  key={`chosen:${row.kind}:${row.key}:${row.os ?? ""}`}
+                  className="flex flex-col gap-1 text-ui-sm"
+                  data-testid="move-sheet-left-here-row"
+                >
+                  <span>{moveRowLabel(row)}</span>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      aria-pressed
+                      onClick={() => props.onTakeBack(row)}
+                    >
+                      Leave on this computer only
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -403,7 +614,7 @@ function LooksLikeAKeyRow(props: {
   return (
     <li className="flex flex-col gap-1" data-testid="move-sheet-key-row">
       <span className="text-ui-sm">
-        <code>{row.label}</code>
+        <code>{moveRowLabel(row)}</code>
         {choice === "secret" ? " would become a secret." : null}
       </span>
       <div className="flex flex-wrap gap-2">

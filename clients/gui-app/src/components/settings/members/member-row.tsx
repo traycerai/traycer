@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
 import {
-  DONE_REMOVAL_LABEL,
   GAINED_EDITING_TAG,
-  PENDING_REMOVAL_LABEL,
   MEMBER_UNLOADED,
   REMOVE_LABEL,
   RETRY_LABEL,
@@ -12,6 +10,7 @@ import {
   memberDisplayName,
   memberRoleAriaLabel,
   memberRowTitle,
+  pendingRemovalLabel,
 } from "@/components/settings/members/copy";
 import type {
   MembersListMember,
@@ -26,6 +25,7 @@ export function MemberRow(props: {
   readonly member: MembersListMember;
   readonly isSelf: boolean;
   readonly isLastAdmin: boolean;
+  readonly teamHostCount: number | null;
   readonly viewerIsAdmin: boolean;
   readonly gainedEditing: boolean;
   readonly details: ReactNode;
@@ -80,10 +80,9 @@ export function MemberRow(props: {
             <Badge variant="muted">{GAINED_EDITING_TAG}</Badge>
           ) : null}
           {props.member.removalState === "pending" ? (
-            <Badge variant="muted">{PENDING_REMOVAL_LABEL}</Badge>
-          ) : null}
-          {props.member.removalState === "done" ? (
-            <Badge variant="muted">{DONE_REMOVAL_LABEL}</Badge>
+            <Badge variant="muted">
+              {pendingRemovalLabel(props.teamHostCount)}
+            </Badge>
           ) : null}
         </div>
         {detail.length === 0 ? null : (

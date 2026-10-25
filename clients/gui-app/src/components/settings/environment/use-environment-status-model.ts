@@ -3,7 +3,6 @@ import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/enviro
 import {
   environmentPickerModel,
   isEnvironmentComputer,
-  type EnvironmentPickerHost,
   type EnvironmentPickerModel,
 } from "@/components/settings/environment/environment-picker-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -39,14 +38,4 @@ export function useEnvironmentStatusModel(scope: HostScope): {
     [hosts, statuses, versions, scope.activeHostId],
   );
   return { picker, statuses };
-}
-
-/**
- * The computers running Personal, from the same reads the dropdown makes;
- * the move sheet names them as where the moved settings reach.
- */
-export function useHostsRunningPersonal(
-  scope: HostScope,
-): readonly EnvironmentPickerHost[] {
-  return useEnvironmentStatusModel(scope).picker.runningPersonal;
 }

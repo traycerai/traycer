@@ -33,7 +33,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentReachDiagnosticsResponse,
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsRotationResponse,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -72,7 +72,7 @@ const STALE_SECTION: SupportEnvironmentSection = {
   servedTask: null,
 };
 
-const SECRET: EnvironmentSecret = {
+const SECRET: EnvironmentSecretV12 = {
   secretId: "sec-1",
   name: "STRIPE_KEY",
   kind: "api_key",
@@ -83,6 +83,8 @@ const SECRET: EnvironmentSecret = {
   currentVersionId: "ver-2",
   revoked: false,
   updatedAt: 1,
+  variables: [],
+  providerVariables: [],
 };
 
 // Settled (enforced, every producer proven), so the bridge stops re-reading it.

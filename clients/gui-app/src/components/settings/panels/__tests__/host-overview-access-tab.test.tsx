@@ -443,9 +443,25 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     expect(within(rows[0]).getByText("Terminal account")).toBeTruthy();
     expect(
       screen.getByText(
-        "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere.",
+        "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.",
       ),
     ).toBeTruthy();
+  });
+
+  it("tells a team host's reader that an admin links a plan on the team's Providers", async () => {
+    const host = hostWith(
+      { principal: { kind: "team", teamName: "Acme" } },
+      { providers: [claudeAmbient(true)] },
+    );
+    renderTab(host, READY);
+
+    await screen.findByTestId("terminal-account-row");
+    expect(
+      screen.getByText(
+        "This host's own sign-in, which stays on this host. An admin can link a plan on Acme's Providers to use one everywhere.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/This computer's own sign-in/)).toBeNull();
   });
 
   it("has no terminal accounts section when no provider has an ambient profile", async () => {
@@ -513,7 +529,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
     const rows = await screen.findAllByTestId("local-value-row");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("LOG_LEVEL"),
-      expect.stringContaining("Claude Code: ANTHROPIC_BASE_URL"),
+      expect.stringContaining("ANTHROPIC_BASE_URL (Claude Code)"),
     ]);
     expect(within(rows[0]).getByText("debug")).toBeTruthy();
     expect(within(rows[1]).getByText("http://proxy")).toBeTruthy();
@@ -609,7 +625,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
     fireEvent.change(
       within(row).getByLabelText(
-        "Claude Code: ANTHROPIC_BASE_URL value on this host",
+        "ANTHROPIC_BASE_URL (Claude Code) value on this host",
       ),
       { target: { value: "b" } },
     );

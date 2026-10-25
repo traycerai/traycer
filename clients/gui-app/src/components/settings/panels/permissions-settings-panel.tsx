@@ -35,7 +35,10 @@ import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
 import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
 import { useRulesEdit } from "@/components/settings/panels/permissions/rules-edit-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   acknowledgeSettingsOpenIntent,
@@ -131,8 +134,12 @@ function PermissionsBrowserAgentAccess(): ReactNode {
   );
 }
 
+const PERSONAL_PERMISSIONS_DESCRIPTION =
+  "What your agents may do without asking, on every computer and sandbox running Personal.";
+
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
+  const pick = useEnvironmentPick();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
   const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);
@@ -204,7 +211,11 @@ function HostPermissionsSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Permissions"
-      description="How much an agent may do on its own, and who reviews the rest."
+      description={
+        pick.kind === "personal"
+          ? PERSONAL_PERMISSIONS_DESCRIPTION
+          : "How much an agent may do on its own, and who reviews the rest."
+      }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <Tabs

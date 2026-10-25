@@ -9,10 +9,13 @@
  * `environment.members.invite` / `.setRole` / `.remove` / `.removePreview` /
  * `.noticeSeen` - an admin's member management, and the legacy-role notice.
  * `environment.members.seats` - the team's seats, read before an invite.
+ * `environment.invitations.list` / `.accept` - the teams waiting for the
+ * signed-in person's Accept, and accepting one.
  *
  * `@1.1` of `environment.list`, `environment.host.list` and
  * `environment.members` adds the redesign's fields, each with its upgrade
- * from `@1.0`; no line here has shipped, so none is a MAJOR.
+ * from `@1.0`; no line here has shipped, so none is a MAJOR. `@1.2` of
+ * `environment.host.list` adds each host's `hasLocalRow`.
  *
  * An environment is the cloud container a team shares: skills, the shared
  * notes block, the agent selection guide and the bot list, all held in one
@@ -374,6 +377,51 @@ export const environmentHostListUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
+/**
+ * `environment.host.list@1.2`: each host with `hasLocalRow`, whether it last
+ * reported that its own settings are not all in the configuration yet (any
+ * plane still its own: never moved, partly moved, or stopped). A client
+ * leaves such a host out of the hosts running the configuration. Null when
+ * the host has not said: it predates the field, or it has never reported.
+ */
+export const environmentHostRecordSchemaV12 = lazySchema(() =>
+  environmentHostRecordSchemaV11.extend({
+    hasLocalRow: z.boolean().nullable(),
+  }),
+);
+export type EnvironmentHostRecordV12 = z.infer<
+  typeof environmentHostRecordSchemaV12
+>;
+
+export const environmentHostListResponseSchemaV12 = lazySchema(() =>
+  z.object({
+    hosts: z.array(environmentHostRecordSchemaV12),
+  }),
+);
+export type EnvironmentHostListResponseV12 = z.infer<
+  typeof environmentHostListResponseSchemaV12
+>;
+
+export const environmentHostListV12 = defineRpcContract({
+  method: "environment.host.list",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentHostListRequestSchema,
+  responseSchema: environmentHostListResponseSchemaV12,
+});
+
+/** A `@1.1` answer says nothing of a Local row: each host upgrades as not said. */
+export const environmentHostListUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentHostListV11,
+  typeof environmentHostListV12
+>({
+  from: environmentHostListV11.schemaVersion,
+  to: environmentHostListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    hosts: response.hosts.map((host) => ({ ...host, hasLocalRow: null })),
+  }),
+});
+
 export const environmentMembersRequestSchema = lazySchema(() =>
   z.object({
     environmentId: z.string().min(1),
@@ -729,6 +777,74 @@ export const environmentMembersSeatsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMembersSeatsRequestSchema,
   responseSchema: environmentMembersSeatsResponseSchema,
+});
+
+/**
+ * One invitation waiting for the reader's Accept: the team's environment and
+ * name, the role the invitation gives, and whether the team is on a paid
+ * plan, which decides the seat sentences shown with the grant.
+ */
+export const environmentInvitationSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+    teamName: z.string().min(1),
+    role: environmentMemberRoleSchema,
+    paidPlan: z.boolean(),
+  }),
+);
+export type EnvironmentInvitation = z.infer<typeof environmentInvitationSchema>;
+
+/**
+ * `environment.invitations.list@1.0`: the teams that invited the signed-in
+ * person and wait for their Accept. A host that serves it also never joins
+ * the person to a team without that Accept.
+ */
+export const environmentInvitationsListRequestSchema = lazySchema(() =>
+  z.object({}),
+);
+export type EnvironmentInvitationsListRequest = z.infer<
+  typeof environmentInvitationsListRequestSchema
+>;
+
+export const environmentInvitationsListResponseSchema = lazySchema(() =>
+  z.object({ invitations: z.array(environmentInvitationSchema) }),
+);
+export type EnvironmentInvitationsListResponse = z.infer<
+  typeof environmentInvitationsListResponseSchema
+>;
+
+export const environmentInvitationsListV10 = defineRpcContract({
+  method: "environment.invitations.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentInvitationsListRequestSchema,
+  responseSchema: environmentInvitationsListResponseSchema,
+});
+
+/**
+ * `environment.invitations.accept@1.0`: the signed-in person accepts the
+ * invitation to `environmentId`'s team, after reading its grant. `accepted`
+ * also answers a seat already accepted; `not_found` is an invitation that
+ * was revoked, or never sent to this person.
+ */
+export const environmentInvitationsAcceptRequestSchema = lazySchema(() =>
+  z.object({ environmentId: z.string().min(1) }),
+);
+export type EnvironmentInvitationsAcceptRequest = z.infer<
+  typeof environmentInvitationsAcceptRequestSchema
+>;
+
+export const environmentInvitationsAcceptResponseSchema = lazySchema(() =>
+  z.object({ outcome: z.enum(["accepted", "not_found"]) }),
+);
+export type EnvironmentInvitationsAcceptResponse = z.infer<
+  typeof environmentInvitationsAcceptResponseSchema
+>;
+
+export const environmentInvitationsAcceptV10 = defineRpcContract({
+  method: "environment.invitations.accept",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentInvitationsAcceptRequestSchema,
+  responseSchema: environmentInvitationsAcceptResponseSchema,
 });
 
 /** `environment.members.noticeSeen@1.0`: the reader dismissed the legacy-role notice. */

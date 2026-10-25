@@ -776,7 +776,7 @@ describe("JudgeTab", () => {
       renderTab();
 
       expect(screen.getByTestId("auto-judge-effective").textContent).toBe(
-        "Now: each conversation's own model · on your account there",
+        "Now: each conversation's own model, on your account",
       );
     });
 

@@ -841,6 +841,19 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   }),
 }));
 
+// A provider's Env tab reads the secrets that set its variables and writes
+// through a host-scoped mutation; neither is about these cases, and both open
+// with `useQueryClient()`.
+vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
+  useSecretClaimedNames: () => new Map<string, string>(),
+}));
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: () => ({
+    mutate: () => {},
+    isPending: false,
+  }),
+}));
+
 // Pure side-effect hook in the Traycer subscription card; no render output, and
 // it needs a QueryClient this harness doesn't set up.
 vi.mock("@/hooks/auth/use-refresh-credits-on-traycer-turn", () => ({
@@ -2926,7 +2939,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Variables")).toBeDefined();
     expect(screen.getByDisplayValue("OPENAI_API_KEY")).toBeDefined();
     expect(
-      screen.getByText(/Applied when Traycer spawns the OpenCode/),
+      screen.getByText(
+        /Set for OpenCode each time it starts, on this computer only\./,
+      ),
     ).toBeDefined();
   });
 
@@ -4218,7 +4233,7 @@ describe("<ProvidersSettingsPanel />", () => {
       }),
     ).toBeDefined();
     const ownLoginRow = screen
-      .getByText("Codex's own login on dev-box · works on this computer only")
+      .getByText("works on this computer only")
       .closest('[data-slot="profile-summary-actions"]');
     if (!(ownLoginRow instanceof HTMLElement)) {
       throw new Error("Expected own-login row");
@@ -4313,9 +4328,7 @@ describe("<ProvidersSettingsPanel />", () => {
       );
       openProfilesTab();
       const row = screen
-        .getByText(
-          "Claude Code's own login on windows-test-machine · works on this computer only",
-        )
+        .getByText("works on this computer only")
         .closest('[data-slot="profile-summary-actions"]');
       if (!(row instanceof HTMLElement))
         throw new Error("Expected own-login row");
@@ -4855,11 +4868,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getAllByText("Codex's own login on dev-box").length,
     ).toBeGreaterThan(0);
-    expect(
-      screen.getByText(
-        "Codex's own login on dev-box · works on this computer only",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("works on this computer only")).toBeDefined();
     expect(screen.queryByText("Pro")).toBeNull();
     expect(screen.queryByText("c•••@e…")).toBeNull();
     expect(

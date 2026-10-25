@@ -2505,6 +2505,8 @@ export const HOST_METHOD_POLL_TABLE = {
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.seats": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.accept": { ...LATEST_SCHEDULING, poll: null },
   "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },

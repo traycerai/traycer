@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog";
+import { RemovedSecretRow } from "@/components/settings/secrets/removed-secret-row";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
 import { Button } from "@/components/ui/button";
@@ -13,25 +14,65 @@ import {
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { TeamSecretNames } from "@/components/settings/environment/team-secret-names";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   PERSONAL_SECRETS_READ_FAILED,
   SECRETS_ADD_LABEL,
-  SECRETS_EMPTY_TEXT,
   SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
-/** Why the list is not shown: an old host by name, Personal's in one line. */
-function readFailureText(error: Error, personal: boolean): string {
+type SecretsList = ResponseOfMethod<
+  HostRpcRegistry,
+  "environment.secrets.list"
+>;
+
+/**
+ * The list's rows: the live secrets, `null` until read, and the removed ones
+ * not yet destroyed, which keep a row until they are. A removed secret is
+ * never shown a second time among the live ones.
+ */
+function secretRows(list: SecretsList | undefined): {
+  readonly secrets: SecretsList["secrets"] | null;
+  readonly removing: SecretsList["removed"];
+} {
+  if (list === undefined) return { secrets: null, removing: [] };
+  return {
+    secrets: list.secrets.filter(
+      (secret) => !list.removed.some((entry) => entry.id === secret.secretId),
+    ),
+    removing: list.removed.filter(
+      (entry) => entry.removal.outcome !== "destroyed",
+    ),
+  };
+}
+
+/**
+ * Why the list is not shown: an old host by name, Personal's in one line, a
+ * team's in the host's words. A read with no answer in time (`error` null)
+ * names the configuration.
+ */
+function readFailureText(
+  error: Error | null,
+  personal: boolean,
+  configurationName: string,
+): string {
   if (error instanceof HostMethodVersionUnsatisfiedError) {
     return SECRETS_NEED_UPDATED_HOST;
   }
-  return personal ? PERSONAL_SECRETS_READ_FAILED : error.message;
+  if (personal) return PERSONAL_SECRETS_READ_FAILED;
+  return error === null
+    ? `Couldn't read ${configurationName}'s secrets.`
+    : error.message;
 }
 
 /**
@@ -43,12 +84,16 @@ function readFailureText(error: Error, personal: boolean): string {
 export function SecretsPage(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
+  /** In place of the list when there is no secret: the configuration's text. */
+  readonly emptyText: string;
   /** A host's name by its id, for the rotation's per-host lines. */
   readonly hostName: (hostId: string) => string;
 }): ReactNode {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const list = useEnvironmentSecretsQuery(props.client);
+  const read = useBoundedRead(list);
+  const configurationName = useConfigurationName();
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();
   const configurationKey = useConfigurationKey();
@@ -63,50 +108,56 @@ export function SecretsPage(props: {
     }
   };
 
-  const pick = useEnvironmentPick();
   // A failed read shows only its line: never the empty state or stale rows.
-  const secrets = list.isError ? null : (list.data?.secrets ?? null);
+  const { secrets, removing } = secretRows(read.failed ? undefined : list.data);
+  const pick = useEnvironmentPick();
+  const personal = pick.kind === "personal";
   return (
     <section className="flex flex-col gap-3" data-testid="secrets-page">
       {source.kind === "host" ? (
         <HeldItemsLine client={props.client} hostId={props.hostId} />
       ) : null}
-      {list.isError ? (
+      {read.failed ? (
         <div
           role="status"
           className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
           data-testid="secrets-page-error"
         >
           <span className="min-w-0 max-w-[72ch]">
-            {readFailureText(list.error, pick.kind === "personal")}
+            {readFailureText(list.error, personal, configurationName)}
           </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => void list.refetch().catch(ignoreError)}
-          >
+          <Button type="button" size="sm" variant="ghost" onClick={read.retry}>
             Retry
           </Button>
         </div>
       ) : null}
-      {secrets !== null && secrets.length === 0 ? (
+      {secrets !== null && secrets.length === 0 && removing.length === 0 ? (
         <p
           className="max-w-[72ch] text-ui-sm text-muted-foreground"
           data-testid="secrets-empty"
         >
-          {SECRETS_EMPTY_TEXT}
+          {props.emptyText}
         </p>
       ) : null}
       {secrets !== null && !canEdit ? (
         <TeamSecretNames secrets={secrets} />
       ) : null}
-      {canEdit && secrets !== null && secrets.length > 0 ? (
+      {canEdit && secrets !== null && secrets.length + removing.length > 0 ? (
         <ul className="flex flex-col" data-testid="secrets-list">
           {secrets.map((secret) => (
             <SecretRow
               key={secret.secretId}
               secret={secret}
+              client={props.client}
+              hostId={props.hostId}
+              hostName={props.hostName}
+              onChanged={reread}
+            />
+          ))}
+          {removing.map((entry) => (
+            <RemovedSecretRow
+              key={entry.id}
+              removed={entry}
               client={props.client}
               hostId={props.hostId}
               hostName={props.hostName}

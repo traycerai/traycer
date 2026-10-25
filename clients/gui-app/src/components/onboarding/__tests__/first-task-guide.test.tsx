@@ -76,10 +76,17 @@ vi.mock("@/lib/settings-navigation", () => ({
 }));
 
 function renderGuide(): RenderResult {
+  return mountGuide().view;
+}
+
+function mountGuide(): {
+  readonly view: RenderResult;
+  readonly queryClient: QueryClient;
+} {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <FirstTaskLandingGuide
         enabled
@@ -88,6 +95,7 @@ function renderGuide(): RenderResult {
       />
     </QueryClientProvider>,
   );
+  return { view, queryClient };
 }
 
 /** This computer, with a fake host answering `environment.review` with `entries`. */
@@ -129,6 +137,44 @@ function computerWithStatus(status: EnvironmentStatusResponseV11): void {
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
 }
+
+/**
+ * This computer, whose `environment.status` answers `status` once and then
+ * fails. `statusReads` counts the reads the host has been asked.
+ */
+function computerWhoseStatusFailsAfterOneRead(
+  status: EnvironmentStatusResponseV11,
+): { readonly statusReads: () => number } {
+  let reads = 0;
+  const { client } = buildEnvironmentClient({
+    hostId: "old",
+    handlers: {
+      "environment.review": () => ({
+        entries: [],
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
+      "environment.status": () => {
+        reads += 1;
+        if (reads > 1) throw new Error("status read failed");
+        return status;
+      },
+    },
+  });
+  recordNegotiatedHostManifest("old", {
+    "environment.review": { major: 1, minor: 2 },
+    "environment.status": { major: 1, minor: 1 },
+  });
+  thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+  return { statusReads: () => reads };
+}
+
+const NOT_MOVED_STATUS = environmentStatusFixture({
+  planes: { records: "local", broker: "local", room: "local" },
+  consent: null,
+  pendingUploads: [],
+});
 
 function held(
   overrides: Partial<EnvironmentReviewEntryV12>,
@@ -293,5 +339,54 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       "This computer's settings aren't in Personal.",
       expect.anything(),
     );
+  });
+
+  describe("the move toast", () => {
+    const MOVE_TOAST = "This computer's settings aren't in Personal.";
+
+    async function mountedMoveToast(): Promise<RenderResult> {
+      computerWithStatus(NOT_MOVED_STATUS);
+      const mounted = mountGuide();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+      return mounted.view;
+    }
+
+    it("stays shown when a later read of the status fails", async () => {
+      const host = computerWhoseStatusFailsAfterOneRead(NOT_MOVED_STATUS);
+      const { queryClient } = mountGuide();
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(MOVE_TOAST, expect.anything()),
+      );
+
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+      await waitFor(() => expect(host.statusReads()).toBeGreaterThan(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      expect(toastState.dismiss).not.toHaveBeenCalled();
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    });
+
+    it("is not dismissed when the guide unmounts", async () => {
+      const view = await mountedMoveToast();
+
+      view.unmount();
+
+      expect(toastState.dismiss).not.toHaveBeenCalled();
+    });
+
+    it("records its dismissal when × is pressed after the guide unmounted", async () => {
+      const view = await mountedMoveToast();
+      view.unmount();
+
+      act(() => toastState.invokeDismiss());
+
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    });
   });
 });
