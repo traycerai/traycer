@@ -142,16 +142,15 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
-import {
-  SANDBOXES_UNAVAILABLE_IN_STAGING,
-  type SandboxAutomationFetchResult,
-  type SandboxAutomationOpenFetchResult,
-  type SandboxCatalogueFetchResult,
-  type SandboxCreateFetchResult,
-  type SandboxListFetchResult,
-  type SandboxCostsFetchResult,
-  type SandboxLifecycleVerbFetchResult,
-  type SandboxVerbFetchResult,
+import type {
+  SandboxAutomationFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxCostsFetchResult,
+  SandboxLifecycleVerbFetchResult,
+  SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   EnvironmentProvidersFetchResult,
@@ -202,7 +201,6 @@ import type {
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
-import { config } from "../config";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -830,10 +828,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   // False for a launch booted in the `none` lifecycle mode: main runs no
   // local-host lanes, so nothing may wait on, provision or manage one.
   readonly hasLocalHost: boolean;
-  // Staging's traycer-server is fronted by IAP, which refuses the app's
-  // bearer, so a staging build offers no sandbox surfaces.
-  readonly sandboxControlUnavailableReason: string | null =
-    config.environment === "staging" ? SANDBOXES_UNAVAILABLE_IN_STAGING : null;
+  // Every build reaches the control plane: main sends a staging build's calls
+  // through IAP with its proxy token (`iap-proxy-token.ts`).
+  readonly sandboxControlUnavailableReason: string | null = null;
   // The renderer's own clipboard takes images, and where a MIME type defeats
   // it the main-process nativeImage bridge picks the write up.
   readonly canCopyImages: boolean = true;

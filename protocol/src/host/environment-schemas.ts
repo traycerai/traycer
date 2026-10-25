@@ -50,6 +50,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "auto_policy",
   "member",
   "secret",
+  "sandbox_defaults",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),

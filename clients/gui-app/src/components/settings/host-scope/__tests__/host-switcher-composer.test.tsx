@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -95,14 +96,14 @@ function composerMode(
         configurationKey: "personal",
         label: "New Personal sandbox",
         subLine: "2 vCPU · 4 GB · $0.12/h · uses your credits",
-        configurationName: "Personal",
+        configuration: { kind: "personal" },
         disabled: false,
       },
       {
         configurationKey: "team-acme",
         label: "New Acme sandbox",
         subLine: "2 vCPU · 4 GB · $0.12/h · uses your Acme credits",
-        configurationName: "Acme",
+        configuration: { kind: "team", teamName: "Acme" },
         disabled: false,
       },
     ],
@@ -118,32 +119,46 @@ function composerMode(
   };
 }
 
+function renderPicker(input: {
+  readonly hosts: readonly HostScopeOption[];
+  readonly selected: HostScopeOption;
+  readonly composer: HostSwitcherComposerMode | null;
+  readonly intent: HostPickIntent;
+  readonly onAncestorKeyDown:
+    | ((event: KeyboardEvent<HTMLElement>) => void)
+    | null;
+}): void {
+  render(
+    <div role="presentation" onKeyDown={input.onAncestorKeyDown ?? undefined}>
+      <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        hosts={input.hosts}
+        selected={input.selected}
+        activeHostId={LAPTOP.hostId}
+        onSelect={onSelect}
+        action={null}
+        surface="field"
+        intent={input.intent}
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        environmentLabelForHost={null}
+        composer={input.composer}
+      />
+    </div>,
+  );
+  fireEvent.click(screen.getByTestId("settings-host-switcher"));
+}
+
 function renderSwitcher(input: {
   readonly hosts: readonly HostScopeOption[];
   readonly composer: HostSwitcherComposerMode | null;
   readonly intent: HostPickIntent;
 }): void {
-  render(
-    <HostSwitcher
-      refusalByHostId={NO_HOST_OPTION_REFUSALS}
-      inertExceptHostId={null}
-      hosts={input.hosts}
-      selected={LAPTOP}
-      activeHostId={LAPTOP.hostId}
-      onSelect={onSelect}
-      action={null}
-      surface="field"
-      intent={input.intent}
-      disabled={false}
-      isLoading={false}
-      listsFailed={false}
-      onRetryLists={() => undefined}
-      updateViewForHost={null}
-      environmentLabelForHost={null}
-      composer={input.composer}
-    />,
-  );
-  fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  renderPicker({ ...input, selected: LAPTOP, onAncestorKeyDown: null });
 }
 
 function row(hostId: string): HTMLElement {
@@ -316,13 +331,16 @@ describe("<HostSwitcher /> composer mode groups", () => {
     ).toContain("uses your Acme credits");
   });
 
-  it("collapses the configurations past two behind `N more`, the remembered one leading", () => {
+  it("collapses the configurations past two behind a header that names them, the remembered one leading", () => {
     const newRows = ["personal", "team-acme", "team-globex"].map(
       (configurationKey) => ({
         configurationKey,
         label: `New ${configurationKey} sandbox`,
         subLine: "2 vCPU · 4 GB",
-        configurationName: configurationKey,
+        configuration:
+          configurationKey === "personal"
+            ? ({ kind: "personal" } as const)
+            : ({ kind: "team", teamName: configurationKey } as const),
         disabled: false,
       }),
     );
@@ -341,8 +359,9 @@ describe("<HostSwitcher /> composer mode groups", () => {
     expect(
       screen.queryByTestId("host-switcher-new-sandbox-personal"),
     ).toBeNull();
-    const more = screen.getByTestId("host-switcher-new-sandbox-more");
-    expect(more.textContent).toContain("2 more");
+    expect(
+      screen.getByTestId("host-switcher-new-sandbox-more-toggle").textContent,
+    ).toBe("Personal and 1 team: team-acme");
 
     fireEvent.click(
       screen.getByTestId("host-switcher-new-sandbox-more-toggle"),
@@ -350,6 +369,79 @@ describe("<HostSwitcher /> composer mode groups", () => {
     expect(
       screen.getByTestId("host-switcher-new-sandbox-personal"),
     ).toBeDefined();
+  });
+
+  describe("the collapsed header", () => {
+    function teamRows(
+      teamNames: readonly string[],
+    ): HostSwitcherComposerMode["newRows"] {
+      return [
+        {
+          configurationKey: "personal",
+          label: "New Personal sandbox",
+          subLine: "2 vCPU · 4 GB",
+          configuration: { kind: "personal" },
+          disabled: false,
+        },
+        ...teamNames.map((teamName) => ({
+          configurationKey: `team-${teamName}`,
+          label: `New ${teamName} sandbox`,
+          subLine: "2 vCPU · 4 GB",
+          configuration: { kind: "team", teamName } as const,
+          disabled: false,
+        })),
+      ];
+    }
+
+    it("counts and names the four teams behind it, with no `more`, the chevron turning down when opened", () => {
+      renderSwitcher({
+        hosts: [LAPTOP],
+        composer: composerMode({
+          newRows: teamRows([
+            "e9-frozen-team",
+            "pool-e2e-fixture",
+            "testteam",
+            "traycerai",
+          ]),
+          rememberedConfigurationKey: "personal",
+        }),
+        intent: "pin",
+      });
+      const header =
+        "4 teams: e9-frozen-team, pool-e2e-fixture, testteam, traycerai";
+      const toggle = screen.getByTestId(
+        "host-switcher-new-sandbox-more-toggle",
+      );
+
+      expect(toggle.textContent).toBe(header);
+      expect(toggle.textContent).not.toContain("more");
+      expect(toggle.querySelector("svg.lucide-chevron-right")).not.toBeNull();
+      expect(toggle.querySelector("svg.lucide-chevron-down")).toBeNull();
+
+      fireEvent.click(toggle);
+
+      expect(toggle.textContent).toBe(header);
+      expect(toggle.querySelector("svg.lucide-chevron-down")).not.toBeNull();
+      expect(toggle.querySelector("svg.lucide-chevron-right")).toBeNull();
+      expect(
+        screen.getByTestId("host-switcher-new-sandbox-team-testteam"),
+      ).toBeDefined();
+    });
+
+    it("names the two teams behind it when Personal leads", () => {
+      renderSwitcher({
+        hosts: [LAPTOP],
+        composer: composerMode({
+          newRows: teamRows(["pool-e2e-fixture", "testteam"]),
+          rememberedConfigurationKey: "personal",
+        }),
+        intent: "pin",
+      });
+
+      expect(
+        screen.getByTestId("host-switcher-new-sandbox-more-toggle").textContent,
+      ).toBe("2 teams: pool-e2e-fixture, testteam");
+    });
   });
 });
 
@@ -435,7 +527,7 @@ describe("<HostSwitcher /> composer mode search", () => {
       intent: "pin",
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search hosts…"), {
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
       target: { value: "zzz" },
     });
 
@@ -456,10 +548,216 @@ describe("<HostSwitcher /> composer mode search", () => {
       screen.queryByTestId("settings-host-switcher-option-sbx-suspended"),
     ).toBeNull();
 
-    fireEvent.change(screen.getByPlaceholderText("Search hosts…"), {
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
       target: { value: "suspended" },
     });
 
     expect(row("sbx-suspended")).toBeDefined();
+  });
+});
+
+describe("<HostSwitcher /> composer mode search field", () => {
+  it("is there for a single host, holds focus, and filters the rows", () => {
+    renderSwitcher({
+      hosts: [LAPTOP],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const search = screen.getByPlaceholderText("Search hosts");
+    expect(document.activeElement).toBe(search);
+
+    fireEvent.change(search, { target: { value: "lap" } });
+    expect(row("laptop")).toBeDefined();
+
+    fireEvent.change(search, { target: { value: "zzz" } });
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-laptop"),
+    ).toBeNull();
+  });
+
+  it("says no host matches, where the others are, and keeps Manage sandboxes", () => {
+    renderSwitcher({
+      hosts: [LAPTOP],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+      target: { value: "ci-triage" },
+    });
+
+    const empty = screen.getByTestId("host-switcher-composer-no-match");
+    expect(empty.textContent).toContain(
+      'No host of yours matches "ci-triage".',
+    );
+    expect(empty.textContent).toContain(
+      "Other members' and agent sandboxes are in Settings.",
+    );
+    expect(
+      screen.getByTestId("host-switcher-manage-sandboxes").textContent,
+    ).toBe("Manage sandboxes in Settings");
+  });
+
+  it("keeps the keys typed in it from an ancestor's key handler", () => {
+    const onAncestorKeyDown =
+      vi.fn<(event: KeyboardEvent<HTMLElement>) => void>();
+    renderPicker({
+      hosts: [LAPTOP],
+      selected: LAPTOP,
+      composer: composerMode({}),
+      intent: "pin",
+      onAncestorKeyDown,
+    });
+
+    // The handler is wired: a key on the trigger, which is not portalled, arrives.
+    fireEvent.keyDown(screen.getByTestId("settings-host-switcher"), {
+      key: "a",
+    });
+    expect(onAncestorKeyDown).toHaveBeenCalledTimes(1);
+    onAncestorKeyDown.mockClear();
+
+    const search = screen.getByPlaceholderText("Search hosts");
+    fireEvent.keyDown(search, { key: "c" });
+    fireEvent.keyDown(search, { key: "Enter" });
+
+    expect(onAncestorKeyDown).not.toHaveBeenCalled();
+  });
+
+  it("is there for the in-task picker too, focused", () => {
+    renderSwitcher({
+      hosts: [LAPTOP, AWAKE],
+      composer: composerMode({ inThisTask: [AWAKE] }),
+      intent: "pin",
+    });
+
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText("Search hosts"),
+    );
+  });
+});
+
+describe("<HostSwitcher /> composer mode computers", () => {
+  const WINDOWS_LOCAL = hostScopeOptionFixture({
+    hostId: "local-win",
+    name: "windows-test-machine",
+    platform: "win32-x64",
+    isLocalMachine: true,
+    isActive: true,
+  });
+
+  function remoteComputer(
+    overrides: Partial<HostScopeOption> & { readonly hostId: string },
+  ): HostScopeOption {
+    return hostScopeOptionFixture({
+      isLocalMachine: false,
+      isActive: false,
+      entry: {
+        hostId: overrides.hostId,
+        label: overrides.hostId,
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "1.0.0",
+        transportDialability: "dialable",
+      },
+      ...overrides,
+    });
+  }
+
+  it("calls the machine the app runs on `This computer` on the chip and the row, its name on the row's line", () => {
+    renderPicker({
+      hosts: [WINDOWS_LOCAL],
+      selected: WINDOWS_LOCAL,
+      composer: composerMode({}),
+      intent: "pin",
+      onAncestorKeyDown: null,
+    });
+
+    const chip = screen.getByTestId("settings-host-switcher");
+    expect(chip.textContent).toContain("This computer");
+    expect(chip.textContent).not.toContain("windows-test-machine");
+    const local = row("local-win");
+    expect(within(local).getByText("This computer")).toBeDefined();
+    expect(
+      within(local).getByText("windows-test-machine · Windows · Active"),
+    ).toBeDefined();
+  });
+
+  it("still names the machine in a list that is not the composer's", () => {
+    renderPicker({
+      hosts: [WINDOWS_LOCAL],
+      selected: WINDOWS_LOCAL,
+      composer: null,
+      intent: "pin",
+      onAncestorKeyDown: null,
+    });
+
+    expect(screen.getByTestId("settings-host-switcher").textContent).toContain(
+      "windows-test-machine",
+    );
+    expect(row("local-win").textContent).not.toContain("This computer");
+  });
+
+  it("says OS and Active under another computer's name, drawn as a monitor", () => {
+    const linux = remoteComputer({
+      hostId: "remote-linux",
+      name: "build-box",
+      platform: "linux-x64",
+    });
+    renderSwitcher({
+      hosts: [LAPTOP, linux],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const box = row("remote-linux");
+    expect(within(box).getByText("build-box")).toBeDefined();
+    expect(within(box).getByText("Linux · Active")).toBeDefined();
+    expect(box.querySelector("svg.lucide-monitor")).not.toBeNull();
+    expect(box.querySelector("svg.lucide-cloud")).toBeNull();
+  });
+
+  it("says since when an offline computer was last seen, and that picking it waits", () => {
+    const lastSeenAt = new Date(2026, 9, 20, 9, 12).toISOString();
+    const sleeper = remoteComputer({
+      hostId: "remote-mac",
+      name: "studio-mac",
+      platform: "darwin-arm64",
+      connectable: true,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
+      item: {
+        hostId: "remote-mac",
+        displayName: "studio-mac",
+        platform: "darwin-arm64",
+        kind: "personal",
+        publicKey: "pk",
+        createdAt: new Date(0).toISOString(),
+        updatePolicy: "manual",
+        status: {
+          connectivity: "offline",
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt,
+        },
+      },
+    });
+    renderSwitcher({
+      hosts: [LAPTOP, sleeper],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    const line = "macOS · Offline since Tue 09:12 · picking it waits for it";
+    const mac = row("remote-mac");
+    expect(within(mac).getByText(line)).toBeDefined();
+    expect(mac.textContent.replace(line, "")).not.toMatch(/offline/i);
   });
 });

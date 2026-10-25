@@ -541,7 +541,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
       return "Starting";
     case "awake":
       return summary.kind === "automation"
-        ? "released after a day with no shell"
+        ? `stops after ${idleMinutesOf(summary)} idle min · files kept · the next shell starts it`
         : awakeClockLine(input);
     case "suspended":
     case "stopped":

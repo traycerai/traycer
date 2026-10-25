@@ -153,6 +153,29 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(screen.queryByTestId("host-settings-card-move")).toBeNull();
   });
 
+  it("leaves a configuration's sandbox defaults out of the items moving", () => {
+    expect(
+      hostSettingsCardState(
+        environmentStatusFixture({
+          consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+          setup: { stage: "moving_settings", state: "running" },
+          items: [
+            itemStatusFixture({
+              kind: "variable",
+              key: "A",
+              status: "applied",
+            }),
+            itemStatusFixture({
+              kind: "sandbox_defaults",
+              key: "sandbox",
+              status: "pending",
+            }),
+          ],
+        }),
+      ),
+    ).toEqual({ kind: "moving", applied: 1, total: 1 });
+  });
+
   it("says when it moved, from the consent, once setup is past the move", () => {
     renderCard(
       environmentStatusFixture({
