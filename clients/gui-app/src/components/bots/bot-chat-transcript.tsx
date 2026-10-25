@@ -535,15 +535,18 @@ function BotChatTranscriptBody(props: {
     transcriptWindow,
   );
 
+  // The channel's first screen, as a created channel nobody has written in
+  // opens: the next post re-subscribes on its own, so nothing more is said.
   if (channelNotHereYet) {
     return (
       <div
         data-testid="bot-channel-not-here-yet"
-        className="flex min-h-0 flex-1 flex-col items-center justify-center p-4"
+        className="flex min-h-0 flex-1 flex-col"
       >
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          No messages yet. Your first message starts the channel.
-        </p>
+        <BotChannelIntro
+          botTitle={surface.intro.botTitle}
+          directive={surface.intro.directive}
+        />
       </div>
     );
   }

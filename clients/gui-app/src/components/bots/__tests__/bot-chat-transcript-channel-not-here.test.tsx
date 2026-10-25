@@ -2,7 +2,7 @@
  * A channel the host has not created yet (Tracy Bots T57): a host that makes
  * the channel chat only on its first post closes the channel's subscribe
  * with `CHAT_NOT_VISIBLE`. The REAL `BotChatTranscript` draws that as the
- * empty channel with a notice, and re-subscribes once a send to the channel
+ * empty channel with its intro, and re-subscribes once a send to the channel
  * succeeds - read from the real mutation cache, where the composer's
  * `bot.conversation.send` lands. Only the session store and the virtualised
  * list are stand-ins.
@@ -207,11 +207,11 @@ afterEach(() => {
 });
 
 describe("<BotChatTranscript /> on a channel the host has not created yet", () => {
-  it("shows the empty channel with a notice, not the stream's failure", () => {
+  it("shows the empty channel with its intro, not the stream's failure", () => {
     mountTranscript(CHANNEL_SURFACE);
 
-    expect(screen.getByRole("status").textContent).toBe(
-      "No messages yet. Your first message starts the channel.",
+    expect(screen.getByTestId("bot-channel-intro").textContent).toContain(
+      "This is the beginning of #Release Bot.",
     );
     expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
     expect(retry).not.toHaveBeenCalled();
