@@ -113,16 +113,22 @@ describe("useTeamViewingHost, the window's own host", () => {
     expect(result.current.canSelectHost(remote)).toBe(false);
   });
 
-  it("names the own host as the viewed one and shows no host as offline", async () => {
+  it("names the own host as the viewed one and reads each row's availability", async () => {
     const harness = mountTeamHarness([
       lapsed(mockLocalHostEntry.hostId, "Studio"),
       lapsed(mockRemoteHostEntry.hostId, "Laptop"),
+      { ...reachableHost, hostId: "host-third", hostLabel: "Desk" },
     ]);
     render(<TeamViewingHostPicker open onOpenChange={() => {}} />, {
       wrapper: harness.Wrapper,
     });
 
     expect(await screen.findByText("as reported by Studio")).toBeTruthy();
-    expect(screen.queryByText(/offline/)).toBeNull();
+    const own = await screen.findByRole("option", { name: "Studio" });
+    expect(own.getAttribute("aria-disabled")).not.toBe("true");
+    const lapsedRow = screen.getByRole("option", { name: "Laptop · offline" });
+    expect(lapsedRow.getAttribute("aria-disabled")).toBe("true");
+    const reachable = screen.getByRole("option", { name: "Desk" });
+    expect(reachable.getAttribute("aria-disabled")).not.toBe("true");
   });
 });
