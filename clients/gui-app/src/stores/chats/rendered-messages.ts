@@ -4394,7 +4394,12 @@ function objectArtifactInsertionIndex(
       candidate.type === "tool_call" ||
       candidate.type === "command" ||
       candidate.type === "file_change";
-    if (candidate.timestamp <= timestamp && (!legacySweep || activity)) {
+    // Tool and subagent completion advances timestamp past artifacts they created.
+    const anchorTimestamp =
+      candidate.type === "tool_call" || candidate.type === "subagent"
+        ? (candidate.startedAt ?? candidate.timestamp)
+        : candidate.timestamp;
+    if (anchorTimestamp <= timestamp && (!legacySweep || activity)) {
       insertion = index + 1;
       break;
     }

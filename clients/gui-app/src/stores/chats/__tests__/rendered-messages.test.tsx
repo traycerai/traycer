@@ -7940,7 +7940,10 @@ describe("useRenderedMessages: object artifact creation cards", () => {
     ).toEqual(["command", "text:Done", "card:spec", "card:html"]);
   });
 
-  function readToolBlockAt(blockId: string, timestamp: number): AssistantBlock {
+  function readToolBlockAt(
+    blockId: string,
+    timestamp: number,
+  ): Extract<AssistantBlock, { type: "tool_call" }> {
     return {
       type: "tool_call",
       blockId,
@@ -8023,4 +8026,33 @@ describe("useRenderedMessages: object artifact creation cards", () => {
       ]),
     ).toEqual(["text:writing", "card:canvas", "text:closing"]);
   });
+  it.each([
+    ["completed", "completed", 100],
+    ["still running", "streaming", 60],
+  ] as const)(
+    "keeps a card created mid-tool after that tool when the tool's timestamp advanced past it (%s)",
+    (_name, status, advancedTimestamp) => {
+      const tool = {
+        ...readToolBlockAt("r1", advancedTimestamp),
+        startedAt: 20,
+        status,
+        endedAt: status === "completed" ? advancedTimestamp : null,
+      };
+      expect(
+        segmentOrder([
+          plainTextBlock("w1", 10, "writing"),
+          tool,
+          plainTextBlock("t-final", 110, "closing"),
+          artifactBlockAt("a1", 50, "html", "create"),
+          artifactBlockAt("a2", 50, "canvas", "create"),
+        ]),
+      ).toEqual([
+        "text:writing",
+        "tool",
+        "card:html",
+        "card:canvas",
+        "text:closing",
+      ]);
+    },
+  );
 });
