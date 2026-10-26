@@ -866,6 +866,75 @@ describe("<UserMessageBody /> agent messages", () => {
   // named "submits base64 nodes" asserting the opposite was the old truth;
   // keeping that name while flipping the assertion is exactly the trap T3's
   // review caught once already.
+  it("reveals an edited row that overflows its scroller with an absolute scroll target", async () => {
+    const view = render(
+      <div data-testid="scroller" style={{ overflowY: "auto" }}>
+        <InlineEditAttachmentHarness onSubmit={vi.fn()} />
+      </div>,
+    );
+    const scroller = screen.getByTestId("scroller");
+    // Mount focuses the editor over four animation frames, restoring the
+    // scroller's mount-time offset after each; let them finish before the
+    // offset is replaced so a late restore neither throws nor overwrites it.
+    await screen.findByRole("textbox", { name: "Edit message" });
+    for (let frame = 0; frame < 4; frame += 1) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    }
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      writable: true,
+      value: 300,
+    });
+    const scrollTo = vi.fn();
+    scroller.scrollTo = scrollTo;
+    // The scroller's viewport ends at 500; the edited row ends 120px below it.
+    // iOS WebKit lands a relative `scrollBy` twice, so the reveal must write
+    // the absolute target: the current offset plus the overflow and padding.
+    const rectSpy = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const bottom = this === scroller ? 500 : 620;
+        return {
+          x: 0,
+          y: bottom - 100,
+          width: 400,
+          height: 100,
+          top: bottom - 100,
+          right: 400,
+          bottom,
+          left: 0,
+          toJSON: () => ({}),
+        };
+      });
+    try {
+      const editor = await screen.findByRole("textbox", {
+        name: "Edit message",
+      });
+      fireEvent.paste(editor, {
+        clipboardData: {
+          files: [],
+          items: [],
+          types: ["text/plain"],
+          getData: (type: string) => (type === "text/plain" ? " more" : ""),
+        },
+      });
+      await waitFor(() => {
+        expect(scrollTo).toHaveBeenCalledWith({
+          top: 300 + (620 - 500) + 16,
+          behavior: "auto",
+        });
+      });
+      expect(scrollTo).not.toHaveBeenCalledWith(
+        expect.objectContaining({ top: 620 - 500 + 16 }),
+      );
+    } finally {
+      rectSpy.mockRestore();
+      view.unmount();
+    }
+  });
+
   it("adds multiple pasted images to the edit strip and submits hash-only nodes", async () => {
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
