@@ -6962,7 +6962,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
           jumpTargetOrdinal: null,
           findReadOrdinal: null,
-          heldReadOrdinals: [],
+          // `heldReadOrdinals` stays: each hold belongs to the surface still
+          // showing its row and ends only by that surface's release, so a
+          // re-upgrade keeps the row held and no earlier release can take
+          // a later hold of the same ordinal.
           accumulatedFileChangeSummaries: [],
           accumulatedSummaryGenerationSeated: false,
           accumulatedSummaryAssemblyStarted: false,

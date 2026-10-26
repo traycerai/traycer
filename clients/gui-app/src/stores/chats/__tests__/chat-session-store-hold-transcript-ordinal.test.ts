@@ -229,11 +229,85 @@ describe("chat-session-store - held transcript ordinals", () => {
       expect(harness.handle.store.getState().heldReadOrdinals).toEqual([5]);
       vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
       expect(harness.rangeRequests).toHaveLength(2);
+      expect(harness.rangeRequests[1]).toMatchObject({
+        fromOrdinal: 5,
+        toOrdinal: 5,
+      });
 
       releaseSecond();
       expect(harness.handle.store.getState().heldReadOrdinals).toEqual([]);
       vi.advanceTimersByTime(HYDRATION_REQUEST_TIMEOUT_MS + 1);
       expect(harness.rangeRequests).toHaveLength(2);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("keeps every hold through a legacy downgrade, and only each surface's own release ends its hold", () => {
+    const harness = createHarness();
+    try {
+      primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
+      const releaseFirst = harness.handle.store
+        .getState()
+        .holdTranscriptOrdinal(5);
+      const releaseSecond = harness.handle.store
+        .getState()
+        .holdTranscriptOrdinal(5);
+      expect(harness.handle.store.getState().heldReadOrdinals).toEqual([5, 5]);
+
+      harness.callbacks().onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        snapshot: {
+          chat: {
+            id: CHAT_ID,
+            parentId: null,
+            userId: OWNER_ID,
+            hostId: "host-hold",
+            title: "Hold",
+            createdAt: 1,
+            updatedAt: 2,
+            isTitleEditedByUser: false,
+            settings: null,
+            archivedAt: null,
+            lastDeliveredRolesDigest: null,
+            activeSessionChain: null,
+            claudePendingWakes: [],
+            pinnedUserProviderHandle: null,
+            messages: [userMessage("legacy", 2)],
+            events: [],
+          },
+          access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "idle",
+          activeTurn: null,
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+          pendingFallback: undefined,
+          pendingReturn: undefined,
+          suggestedPrompt: undefined,
+          thinkingTokensEstimate: undefined,
+        },
+      });
+      const downgraded = harness.handle.store.getState();
+      expect(downgraded.transcriptDerived).toBeNull();
+      expect(downgraded.heldReadOrdinals).toEqual([5, 5]);
+
+      releaseFirst();
+      expect(harness.handle.store.getState().heldReadOrdinals).toEqual([5]);
+      releaseFirst();
+      expect(harness.handle.store.getState().heldReadOrdinals).toEqual([5]);
+      releaseSecond();
+      expect(harness.handle.store.getState().heldReadOrdinals).toEqual([]);
     } finally {
       harness.handle.dispose();
     }
