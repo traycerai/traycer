@@ -10,11 +10,5 @@ export const CREDITS_PAGE = {
   /** The card's figure: the balance as the card formats it, then "left". */
   remaining: (balance: string): string => `${balance} left`,
   readFailed: "Couldn't read your credits.",
-  keywords: [
-    "credits",
-    "billing",
-    "balance",
-    "add credits",
-    "spend",
-  ],
+  keywords: ["credits", "billing", "balance", "add credits", "spend"],
 } as const;
