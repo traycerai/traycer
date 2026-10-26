@@ -73,6 +73,7 @@ import {
   useMobileDrawerTaskPainted,
 } from "./mobile-drawer-history-state";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 const ROW_CLASS = "h-11 w-full justify-start gap-3 px-3";
 
@@ -349,7 +350,9 @@ function MobileNavTracyRow(props: {
   );
   const hostId = useEffectiveHostId();
   const connectable = useConnectableHostIds();
-  if (itemId === null || record === null) return null;
+  // Without bots (unread included) the entry is not drawn, as in the strip.
+  const bots = usePreviewFeature("bots");
+  if (bots !== "on" || itemId === null || record === null) return null;
   return (
     <MobileNavTracyButton
       botId={record.botId}

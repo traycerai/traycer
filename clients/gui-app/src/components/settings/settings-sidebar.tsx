@@ -248,6 +248,8 @@ function SettingsSidebarHostPicker(props: {
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const sandboxesUnavailable = useSandboxControlUnavailableReason();
+  // Without sandboxes (unread included) the list offers none of them.
+  const sandboxes = usePreviewFeature("sandboxes") === "on";
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
@@ -295,7 +297,7 @@ function SettingsSidebarHostPicker(props: {
       {/* A sandbox is an account's machine: nothing to create signed out,
           and nothing at all from a build that cannot reach the control
           plane (staging), which says so instead. */}
-      {signedIn && sandboxesUnavailable !== null ? (
+      {sandboxes && signedIn && sandboxesUnavailable !== null ? (
         <p
           data-testid="settings-sandboxes-unavailable"
           className="px-2 py-1 text-ui-xs text-muted-foreground"
@@ -305,14 +307,14 @@ function SettingsSidebarHostPicker(props: {
       ) : null}
       {/* The Automations host before its row exists; the real row joins the
           list above once it does. */}
-      {signedIn && sandboxesUnavailable === null ? (
+      {sandboxes && signedIn && sandboxesUnavailable === null ? (
         <AutomationsHostEntry />
       ) : null}
-      {signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
+      {sandboxes && signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
       {/* The host list's balance banner: the two-hour and thirty-minute
           warnings for the account's awake sandboxes. Nothing for a user with
           none. */}
-      <SandboxBalanceBanner />
+      {sandboxes ? <SandboxBalanceBanner /> : null}
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
           surface can be in, so it never waits to be noticed.

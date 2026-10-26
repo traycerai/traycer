@@ -11,6 +11,7 @@ import type { EnvironmentListResponse } from "@traycer/protocol/host/environment
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 import { useOptionalHostClient } from "@/lib/host";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -71,7 +72,10 @@ export function useTeamEnvironmentOwnership(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
+  // Without environments (unread included) there is no team to look up.
+  const environmentsOn = usePreviewFeature("environments") === "on";
+  const listApplies =
+    authorized && environmentsOn && readProcessHostRpcTierPlan().pool !== null;
   const environments = useEnvironmentListQuery(
     useOptionalHostClient(),
     listApplies,

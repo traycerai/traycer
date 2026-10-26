@@ -26,6 +26,7 @@ import {
   createTeamDashboardUrl,
   hasNoTeamEnvironment,
 } from "@/lib/home-bots/create-team-dashboard";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /** The Home tab's own section heading, so this reads as one of its bands. */
 const HEADING_CLASS_NAME = "tracking-[0.08em] uppercase";
@@ -48,6 +49,12 @@ const NO_MACHINES: ReadonlySet<string> = new Set();
  * notice the usage panel uses, and nothing else on Home changes.
  */
 export function HomeBotsSection(): ReactNode {
+  // Without bots (unread included) Home has no band and no notice: nothing
+  // is read and nothing says the host is out of date.
+  return usePreviewFeature("bots") === "on" ? <HomeBotsBand /> : null;
+}
+
+function HomeBotsBand(): ReactNode {
   const hostId = useEffectiveHostId();
   const client = useHostClient();
   const support = useHostMethodSupport(hostId, "bot.list");

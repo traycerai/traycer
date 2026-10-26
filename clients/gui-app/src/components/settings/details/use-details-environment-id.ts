@@ -1,5 +1,6 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
@@ -8,6 +9,11 @@ export function useDetailsEnvironmentId(
   client: HostClient<HostRpcRegistry>,
 ): string | null {
   const pick = useEnvironmentPick();
-  const personal = usePersonalEnvironment(client, pick.kind !== "team");
+  // Without environments (unread included) there is no Personal to resolve.
+  const environments = usePreviewFeature("environments");
+  const personal = usePersonalEnvironment(
+    client,
+    pick.kind !== "team" && environments === "on",
+  );
   return pick.kind === "team" ? pick.environmentId : personal.environmentId;
 }

@@ -3,6 +3,7 @@ import type {
   BotListResponse,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
@@ -32,28 +33,38 @@ const NONE: TracyResolution = { kind: "none" };
  * entry and kept first in the strip. Off, or with no main bot: the entry is
  * released and its tab closed, so Tracy opens from the bots list in an
  * ordinary tab. A list that has not answered changes nothing, so a restored
- * entry stays drawn while it loads.
+ * entry stays drawn while it loads. Without bots it reads nothing (see the
+ * first effect for what a read off closes).
  */
 export function TracyEntryController(): null {
   const show = useSettingsStore((state) => state.showTracy);
+  const bots = usePreviewFeature("bots");
   const hostId = useEffectiveHostId();
   const client = useHostClient();
   const supported = useHostMethodSupport(hostId, "bot.list") === true;
-  const enabled = show && supported;
+  const enabled = show && supported && bots === "on";
   const personal = usePersonalEnvironment(client, enabled);
-  const bots = useBotListQuery(client, enabled);
+  const botList = useBotListQuery(client, enabled);
   // The entry is often the only bots surface mounted: a main bot archived or
   // seeded elsewhere refetches the list here too, not only on focus.
   useBotListChangedSubscriptionForApp(enabled);
   const resolution = resolveTracy(
     personal.resolved ? personal.environmentId : null,
-    bots.data,
+    botList.data,
   );
   const bot = resolution.kind === "bot" ? resolution.bot : null;
   const botId = bot?.botId ?? null;
   const title = bot?.title ?? null;
 
   useEffect(() => {
+    // A read off closes every bot tab, the entry's first: nothing in them
+    // can answer. Unread changes nothing, so a restored entry waits (undrawn)
+    // for the read rather than closing on every cold start.
+    if (bots === "off") {
+      releaseEveryBotTab();
+      return;
+    }
+    if (bots === "unread") return;
     const store = useBotTabsStore.getState();
     const fixedBotId = store.fixedBotId;
     if (!show) {
@@ -65,7 +76,7 @@ export function TracyEntryController(): null {
     if (botId === null || title === null) return;
     store.openBotTab({ botId, hostId, title });
     store.setFixedBotId(botId);
-  }, [botId, hostId, resolution.kind, show, title]);
+  }, [botId, bots, hostId, resolution.kind, show, title]);
 
   useEffect(() => {
     // After the change that moved it settles: a reconciliation appends a
@@ -101,6 +112,14 @@ function releaseEntry(botId: string): void {
   const store = useBotTabsStore.getState();
   store.setFixedBotId(null);
   store.closeBotTab(botId);
+}
+
+function releaseEveryBotTab(): void {
+  const store = useBotTabsStore.getState();
+  if (store.fixedBotId !== null) releaseEntry(store.fixedBotId);
+  for (const botId of Object.keys(useBotTabsStore.getState().tabs)) {
+    store.closeBotTab(botId);
+  }
 }
 
 function resolveTracy(

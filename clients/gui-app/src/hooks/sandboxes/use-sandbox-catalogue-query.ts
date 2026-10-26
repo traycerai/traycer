@@ -10,6 +10,7 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /** The catalogue moves on a provider contract, not on a user's action. */
 const SANDBOX_CATALOGUE_STALE_MS = 10 * 60_000;
@@ -53,11 +54,13 @@ export function useSandboxCatalogue(
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const unavailable = useSandboxControlUnavailableReason() !== null;
+  // Without sandboxes (unread included) the control plane is never asked.
+  const offered = usePreviewFeature("sandboxes") === "on";
   return useQuery(
     sandboxCatalogueQueryOptions(
       auth,
       userId,
-      signedIn && enabled && !unavailable,
+      signedIn && enabled && !unavailable && offered,
     ),
   );
 }

@@ -61,6 +61,7 @@ import {
   useRetryUnansweredTaskPinReading,
   type TaskPinnedState,
 } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /**
  * Everything a tab strip does that is not layout: the projection it draws,
@@ -336,6 +337,9 @@ function useStripWithoutTracy(): {
   const headerTabs = useHeaderTabs();
   const fixedBotId = useBotTabsStore((state) => state.fixedBotId);
   const tracyItemId = useTracyEntryItemId();
+  // Without bots (unread included) a restored entry is kept out of the strip
+  // and not drawn: `TracyEntryController` releases it once the read is off.
+  const bots = usePreviewFeature("bots") === "on";
   const tracyTab = useMemo(
     () =>
       tracyItemId === null
@@ -351,17 +355,21 @@ function useStripWithoutTracy(): {
     if (tracyItemId === null || tracyTab === null) {
       return { headerItemIds, layoutItems, allTabs: headerTabs, tracy: null };
     }
+    const tracy = bots
+      ? {
+          tab: tracyTab,
+          isActive: tracyIsActive,
+          onActivate: onActivateTracy,
+        }
+      : null;
     return {
       headerItemIds: headerItemIds.filter((id) => id !== tracyItemId),
       layoutItems: layoutItems.filter((item) => item.id !== tracyItemId),
       allTabs: headerTabs.filter((tab) => tab !== tracyTab),
-      tracy: {
-        tab: tracyTab,
-        isActive: tracyIsActive,
-        onActivate: onActivateTracy,
-      },
+      tracy,
     };
   }, [
+    bots,
     headerItemIds,
     headerTabs,
     layoutItems,

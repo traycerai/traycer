@@ -14,6 +14,7 @@ import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationResolveHost } from "@/hooks/notifications/use-notification-host";
 import type { NotificationPayload } from "@/lib/notifications/payload";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 const NO_BOTS: ReadonlyMap<string, string> = new Map();
 
@@ -31,8 +32,10 @@ export function NotificationBotsProvider(props: {
   readonly children: ReactNode;
 }): ReactElement {
   const { hostId, client } = useNotificationResolveHost();
+  // Without bots (unread included) there are none to name.
+  const offered = usePreviewFeature("bots") === "on";
   const supported = useHostMethodSupport(hostId, "bot.list") === true;
-  const bots = useBotListQuery(client, supported);
+  const bots = useBotListQuery(client, supported && offered);
   const titles = useMemo(
     (): ReadonlyMap<string, string> =>
       bots.data === undefined
