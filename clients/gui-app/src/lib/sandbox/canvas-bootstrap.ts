@@ -669,32 +669,47 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   window.addEventListener("click", blockEdit, true);
   window.addEventListener("auxclick", blockEdit, true);
   window.addEventListener("submit", blockEdit, true);
+  const bare = (event: KeyboardEvent): boolean =>
+    !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+  const forwardShortcut = (event: KeyboardEvent): void => {
+    event.preventDefault();
+    notify("traycer/notifications/shortcut", {
+      key: event.key,
+      code: event.code,
+      ctrl: false,
+      meta: false,
+      alt: false,
+      shift: false,
+    });
+  };
   // A bare Escape is the app's in both modes: it steps selection out while
   // editing and leaves Play, so the page never keeps it.
   window.addEventListener(
     "keydown",
     (event) => {
-      if (
-        event.code !== "Escape" ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.altKey ||
-        event.shiftKey
-      )
-        return;
-      event.preventDefault();
+      if (event.code !== "Escape" || !bare(event)) return;
       event.stopImmediatePropagation();
-      notify("traycer/notifications/shortcut", {
-        key: event.key,
-        code: event.code,
-        ctrl: false,
-        meta: false,
-        alt: false,
-        shift: false,
-      });
+      forwardShortcut(event);
     },
     true,
   );
+  // Bare left and right arrows step a fullscreen board through the canvas,
+  // but the playing page is asked first: a handler that cancelled the key, or
+  // a control that reads arrows itself, keeps it. Hence the bubbling listener.
+  const ARROW_OWNERS =
+    "input,textarea,select,[contenteditable]:not([contenteditable=false]),[role=textbox],[role=combobox],[role=slider],[role=spinbutton],[role=listbox],[role=option],[role=menu],[role=menubar],[role=menuitem],[role=radiogroup],[role=radio],[role=tablist],[role=tab],[role=grid],[role=tree]";
+  window.addEventListener("keydown", (event) => {
+    if (
+      mode !== "play" ||
+      (event.code !== "ArrowLeft" && event.code !== "ArrowRight") ||
+      !bare(event) ||
+      event.defaultPrevented ||
+      (event.target instanceof Element &&
+        event.target.closest(ARROW_OWNERS) !== null)
+    )
+      return;
+    forwardShortcut(event);
+  });
   // Pinch/modified-wheel belongs to the canvas; ordinary wheel scrolling
   // remains inside the prototype. Coordinates are local CSS pixels.
   document.addEventListener(

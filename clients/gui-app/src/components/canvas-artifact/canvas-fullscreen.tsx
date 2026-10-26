@@ -1,7 +1,12 @@
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import type { CanvasFrameEvents } from "./canvas-frame";
 import { CanvasErrorPill } from "./canvas-error-pill";
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +20,7 @@ import {
   WINDOW_TRAILING_INSET_CLASS,
 } from "@/components/layout/header/title-bar-drag";
 import { cn } from "@/lib/utils";
+import { adjacentFullscreenBoard, fullscreenBoardSequence } from "./canvas-model";
 
 export type CanvasFullscreenSizing = "fit" | "fill";
 
@@ -44,6 +50,8 @@ export function CanvasFullscreen({
   if (path === null) return null;
   const board = snapshot.boards[path];
   const error = errors[path] ?? null;
+  const previous = adjacentFullscreenBoard(snapshot, path, -1);
+  const next = adjacentFullscreenBoard(snapshot, path, 1);
   return (
     <div
       className={cn(
@@ -56,6 +64,32 @@ export function CanvasFullscreen({
         <ArrowLeft />
         Back to canvas
       </Button>
+      {/* The steppers sit before the title so they keep their place while
+          the title changes width from board to board. */}
+      <div className="flex shrink-0 items-center">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Previous board"
+          disabled={previous === null}
+          onClick={() => {
+            if (previous !== null) onSelect(previous);
+          }}
+        >
+          <ChevronLeft />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Next board"
+          disabled={next === null}
+          onClick={() => {
+            if (next !== null) onSelect(next);
+          }}
+        >
+          <ChevronRight />
+        </Button>
+      </div>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <Button
@@ -69,13 +103,11 @@ export function CanvasFullscreen({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent container={container}>
-          {snapshot.order
-            .filter((item) => Object.hasOwn(snapshot.boards, item))
-            .map((item) => (
-              <DropdownMenuItem key={item} onSelect={() => onSelect(item)}>
-                {snapshot.boards[item].title || item}
-              </DropdownMenuItem>
-            ))}
+          {fullscreenBoardSequence(snapshot).map((item) => (
+            <DropdownMenuItem key={item} onSelect={() => onSelect(item)}>
+              {snapshot.boards[item].title || item}
+            </DropdownMenuItem>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
       <CanvasErrorPill

@@ -653,6 +653,98 @@ describe("the canvas bootstrap in a running page", () => {
     });
   });
 
+  describe("left and right arrows", () => {
+    const shortcutPosts = (page: Page) =>
+      page.posted.filter(
+        (message) => message.method === "traycer/notifications/shortcut",
+      );
+    /** Returns true when the page kept the event (not cancelled). */
+    function pressArrow(
+      page: Page,
+      target: Element,
+      init: KeyboardEventInit,
+    ): boolean {
+      return target.dispatchEvent(
+        new page.window.KeyboardEvent("keydown", {
+          code: "ArrowRight",
+          key: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    }
+    function playing(markup: string): Page {
+      const page = runCanvasPage(markup);
+      loaded(page);
+      page.deliver(request(1, "set-mode", { mode: "play" }));
+      return page;
+    }
+
+    it("tells the app about a bare arrow the playing page left alone, after the page saw it", () => {
+      const page = playing(MARKUP);
+      let pageSaw = 0;
+      page.window.document.body.addEventListener("keydown", () => {
+        pageSaw += 1;
+      });
+      expect(pressArrow(page, page.window.document.body, {})).toBe(false);
+      expect(pageSaw).toBe(1);
+      expect(shortcutPosts(page)).toEqual([
+        {
+          jsonrpc: "2.0",
+          method: "traycer/notifications/shortcut",
+          params: {
+            key: "ArrowRight",
+            code: "ArrowRight",
+            ctrl: false,
+            meta: false,
+            alt: false,
+            shift: false,
+            nonce: NONCE,
+          },
+        },
+      ]);
+    });
+
+    it("leaves an arrow the page cancelled to the page", () => {
+      const page = playing(MARKUP);
+      page.window.document.body.addEventListener("keydown", (event) => {
+        event.preventDefault();
+      });
+      pressArrow(page, page.window.document.body, {});
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it.each([
+      ["a text field", `<input id="t">`],
+      ["a slider", `<div id="t" role="slider" tabindex="0"></div>`],
+      ["a tab inside a tab list", `<div role="tablist"><button id="t" role="tab">a</button></div>`],
+    ])("leaves an arrow pressed in %s to the page", (_label, markup) => {
+      const page = playing(markup);
+      const target = page.window.document.getElementById("t");
+      if (target === null) throw new Error("no target");
+      expect(pressArrow(page, target, {})).toBe(true);
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it.each([
+      ["Shift", { shiftKey: true }],
+      ["Alt", { altKey: true }],
+      ["ArrowDown", { code: "ArrowDown", key: "ArrowDown" }],
+    ])("leaves %s to the page", (_label, init) => {
+      const page = playing(MARKUP);
+      expect(pressArrow(page, page.window.document.body, init)).toBe(true);
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+
+    it("leaves arrows to the page while editing", () => {
+      const page = runCanvasPage(MARKUP);
+      loaded(page);
+      expect(pressArrow(page, page.window.document.body, {})).toBe(true);
+      expect(shortcutPosts(page)).toEqual([]);
+    });
+  });
+
   describe("a wheel on the playing page", () => {
     const panPosts = (page: Page) =>
       page.posted.filter((message) => message.method === "traycer/canvas/pan");
