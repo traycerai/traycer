@@ -147,8 +147,7 @@ function mountPage(options: {
   readonly pick: EnvironmentPick;
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV11
-    | Promise<EnvironmentStatusResponseV11>;
+    EnvironmentStatusResponseV11 | Promise<EnvironmentStatusResponseV11>;
 }): Mounted {
   return mountSection({
     ...options,
@@ -164,8 +163,7 @@ function mountSection(options: {
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV11
-    | Promise<EnvironmentStatusResponseV11>;
+    EnvironmentStatusResponseV11 | Promise<EnvironmentStatusResponseV11>;
 }): Mounted {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": options.status,

@@ -221,7 +221,12 @@ import {
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -406,15 +411,25 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
   it.each(["off", "unread"] as const)(
     "describes a Personal pick by the host while environments read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       try {
-        useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+        useSettingsEnvironmentPickStore.setState({
+          pick: { kind: "personal" },
+        });
         renderPanel();
 
         expect(screen.getByText(/Applies to your chat agents on/)).toBeTruthy();
         expect(screen.queryByText(/running Personal/)).toBeNull();
       } finally {
-        previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+        previewVerdict.current = {
+          environments: "on",
+          sandboxes: "on",
+          bots: "on",
+        };
       }
     },
   );

@@ -1,3 +1,8 @@
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // What a link asks the app to open. The page opens none here; the mock only
 // keeps the real opener (which needs the app shell) out of the render.
 const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());

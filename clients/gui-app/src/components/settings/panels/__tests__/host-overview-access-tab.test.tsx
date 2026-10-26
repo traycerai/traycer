@@ -16,11 +16,9 @@ const RECORD_WITH_ENVIRONMENTS = {
   userId: "user-me",
   previewFeatures: { environments: true, sandboxes: false, bots: true },
 };
-const authUser = vi.hoisted(
-  (): { current: { readonly data: unknown } } => ({
-    current: { data: undefined },
-  }),
-);
+const authUser = vi.hoisted((): { current: { readonly data: unknown } } => ({
+  current: { data: undefined },
+}));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
     data: authUser.current.data,
@@ -869,10 +867,16 @@ describe("<HostOverviewAccessTab /> without environments", () => {
       const host = hostWith({}, { providers: [claudeAmbient(true)] });
       renderTab(host, {
         ...READY,
-        methods: ["host.status", "providers.list", "providers.setProfileEnabled"],
+        methods: [
+          "host.status",
+          "providers.list",
+          "providers.setProfileEnabled",
+        ],
       });
 
-      expect(await screen.findAllByTestId("terminal-account-row")).toHaveLength(1);
+      expect(await screen.findAllByTestId("terminal-account-row")).toHaveLength(
+        1,
+      );
       expectTerminalAccountsOnly();
       expect(screen.queryByTestId("remote-access-section")).toBeNull();
       expect(host.reads.status).toBe(0);
@@ -891,7 +895,9 @@ describe("<HostOverviewAccessTab /> without environments", () => {
       renderTab(host, READY);
 
       expect(await screen.findByTestId("remote-access-section")).toBeTruthy();
-      expect(await screen.findAllByTestId("terminal-account-row")).toHaveLength(1);
+      expect(await screen.findAllByTestId("terminal-account-row")).toHaveLength(
+        1,
+      );
       await settle();
       expectTerminalAccountsOnly();
     });

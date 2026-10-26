@@ -1140,7 +1140,11 @@ describe("the fixed Tracy entry - closing bot tabs follows a verdict the record 
   function seedRestoredBotTabs(): void {
     const store = useBotTabsStore.getState();
     store.openBotTab({ botId: TRACY, hostId: "host-a", title: "Tracy" });
-    store.openBotTab({ botId: TEAM_TAB, hostId: "host-a", title: "Release Bot" });
+    store.openBotTab({
+      botId: TEAM_TAB,
+      hostId: "host-a",
+      title: "Release Bot",
+    });
     store.setFixedBotId(TRACY);
   }
 
@@ -1160,9 +1164,9 @@ describe("the fixed Tracy entry - closing bot tabs follows a verdict the record 
   async function settle(): Promise<void> {
     if (scriptedUser.record !== undefined) {
       await waitFor(() => {
-        expect(queryClient.isFetching({ queryKey: ["scripted-auth-user"] })).toBe(
-          0,
-        );
+        expect(
+          queryClient.isFetching({ queryKey: ["scripted-auth-user"] }),
+        ).toBe(0);
       });
     }
     await act(async () => {

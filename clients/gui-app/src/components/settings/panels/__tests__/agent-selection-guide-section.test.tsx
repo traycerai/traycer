@@ -256,7 +256,12 @@ import { AgentsSettingsPanel } from "@/components/settings/panels/agents-setting
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -608,9 +613,15 @@ describe("AgentSelectionGuideSection", () => {
         content: "claude guide",
         generatedDefaultContent: "codex guide",
       };
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       try {
-        useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+        useSettingsEnvironmentPickStore.setState({
+          pick: { kind: "personal" },
+        });
         renderPanel();
 
         fireEvent.click(screen.getByTestId("agents-selection-guide-revert"));
@@ -621,7 +632,11 @@ describe("AgentSelectionGuideSection", () => {
         );
         expect(dialog.textContent).not.toContain("running Personal");
       } finally {
-        previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+        previewVerdict.current = {
+          environments: "on",
+          sandboxes: "on",
+          bots: "on",
+        };
       }
     },
   );

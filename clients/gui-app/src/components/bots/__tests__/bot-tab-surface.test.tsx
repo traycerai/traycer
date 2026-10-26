@@ -23,7 +23,12 @@ import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription"
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -397,7 +402,11 @@ describe("<BotTabSurface /> without the bots preview feature", () => {
   it.each(["off", "unread"] as const)(
     "waits as a connect does, never saying the host is out of date, and opens nothing while bots read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       mocks.state.support = false;
       render(surface());
 

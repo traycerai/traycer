@@ -32,7 +32,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -410,7 +415,11 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
   });
 
   it("shows the plain setup reminder, and reads neither the status nor the review, while environments read off", async () => {
-    previewVerdict.current = { environments: "off", sandboxes: "off", bots: "off" };
+    previewVerdict.current = {
+      environments: "off",
+      sandboxes: "off",
+      bots: "off",
+    };
     try {
       const reads = computerCountingReads(NOT_MOVED_STATUS);
       renderGuide();
@@ -432,12 +441,20 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       expect(reads.status()).toBe(0);
       expect(reads.review()).toBe(0);
     } finally {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+      previewVerdict.current = {
+        environments: "on",
+        sandboxes: "on",
+        bots: "on",
+      };
     }
   });
 
   it("shows no toast at all, and reads nothing, while environments are unread", async () => {
-    previewVerdict.current = { environments: "unread", sandboxes: "unread", bots: "unread" };
+    previewVerdict.current = {
+      environments: "unread",
+      sandboxes: "unread",
+      bots: "unread",
+    };
     try {
       const reads = computerCountingReads(NOT_MOVED_STATUS);
       renderGuide();
@@ -451,7 +468,11 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       expect(reads.status()).toBe(0);
       expect(reads.review()).toBe(0);
     } finally {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+      previewVerdict.current = {
+        environments: "on",
+        sandboxes: "on",
+        bots: "on",
+      };
     }
   });
 

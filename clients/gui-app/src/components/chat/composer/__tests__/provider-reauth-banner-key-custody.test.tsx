@@ -56,7 +56,12 @@ import { ProviderReauthBanner } from "../provider-reauth-banner";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -192,7 +197,11 @@ describe("<ProviderReauthBanner /> key custody and the host's configuration", ()
   it.each(["off", "unread"] as const)(
     "reads no environment.status and keeps the key on the one host, even from a host that would answer Personal, while environments read %s",
     async (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       hostRunning({ kind: "personal" });
       renderBanner("amp", AMP);
 

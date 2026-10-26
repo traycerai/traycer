@@ -14,7 +14,12 @@ const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -156,7 +161,11 @@ describe("<NotificationRow /> about a bot", () => {
   it.each(["off", "unread"] as const)(
     "reads no bot list and keeps the glyph while bots read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       const entry = renderRow(verdictRow(BOT_ID));
 
       expect(within(entry).queryByTestId("bot-avatar")).toBeNull();

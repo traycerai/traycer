@@ -39,7 +39,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -1114,10 +1119,20 @@ describe("<SettingsSidebar /> preview features", () => {
   it.each(["off", "unread"] as const)(
     "has no rows for the gated pages, no Environment picker and an Agent settings heading while the verdict reads %s",
     async (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       await renderRail();
 
-      for (const id of ["secrets", "members", "machine-setup", "agent-definitions", "sandboxes"]) {
+      for (const id of [
+        "secrets",
+        "members",
+        "machine-setup",
+        "agent-definitions",
+        "sandboxes",
+      ]) {
         expect(present(id)).toBe(false);
       }
       expect(present("providers")).toBe(true);
@@ -1138,7 +1153,11 @@ describe("<SettingsSidebar /> preview features", () => {
   });
 
   it("drops only the Sandboxes row when sandboxes read off and environments and bots read on", async () => {
-    previewVerdict.current = { environments: "on", sandboxes: "off", bots: "on" };
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "off",
+      bots: "on",
+    };
     await renderRail();
 
     expect(present("sandboxes")).toBe(false);
@@ -1150,7 +1169,11 @@ describe("<SettingsSidebar /> preview features", () => {
     it.each(["off", "unread"] as const)(
       "draws no sandboxes link, Automations entry, balance warning or unavailable note while sandboxes read %s",
       async (state) => {
-        previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+        previewVerdict.current = {
+          environments: state,
+          sandboxes: state,
+          bots: state,
+        };
         useAuthStore.setState({ status: "signed-in" });
         await renderRail();
         cleanup();

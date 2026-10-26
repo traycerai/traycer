@@ -116,7 +116,12 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -536,7 +541,11 @@ describe("<HostReadyGate />", () => {
     it.each(["off", "unread"] as const)(
       "keeps the no-host screen, staged sandbox or not, while sandboxes read %s",
       (state) => {
-        previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+        previewVerdict.current = {
+          environments: state,
+          sandboxes: state,
+          bots: state,
+        };
         useStagedSandboxStore.getState().stage("landing:window-test", {
           kind: "new",
           configuration: { kind: "personal" },

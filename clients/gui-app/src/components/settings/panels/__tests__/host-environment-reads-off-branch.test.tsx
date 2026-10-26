@@ -1,11 +1,9 @@
 // Host ▸ Overview's two environment reads, over a real client and a recording
 // messenger: with the verdict off or unread neither section sends a request or
 // draws anything; with environments on the same host is read and drawn.
-const authUser = vi.hoisted(
-  (): { current: { readonly data: unknown } } => ({
-    current: { data: undefined },
-  }),
-);
+const authUser = vi.hoisted((): { current: { readonly data: unknown } } => ({
+  current: { data: undefined },
+}));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
     data: authUser.current.data,
@@ -78,10 +76,12 @@ afterEach(() => {
   authUser.current = { data: undefined };
 });
 
-function hostFixture(): {
+interface HostFixture {
   readonly client: HostClient<HostRpcRegistry>;
   readonly requests: () => string[];
-} {
+}
+
+function hostFixture(): HostFixture {
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-reads",
@@ -92,15 +92,20 @@ function hostFixture(): {
           planes: { records: "local", broker: "local", room: "local" },
           setup: { stage: "moving_settings", state: "awaiting_consent" },
         }),
-      "environment.host.read": () => ({
-        environment: {
-          environmentId: "env-personal",
-          ownerKind: "user" as const,
-          ownerId: "user-me",
-          roomId: "room-personal",
-          label: "Personal",
-        },
-      }),
+      "environment.host.read": () =>
+        Promise.resolve({
+          hostId: HOST_ID,
+          environment: {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+          },
+          explicit: false,
+          enrolledByUserId: null,
+          canUnbind: false,
+        }),
     },
   });
   const entry = hostEntryFixture(HOST_ID);
@@ -174,7 +179,7 @@ describe("the Overview's settings card slot", () => {
 });
 
 describe("the Overview's Runs line", () => {
-  function renderSection(host: ReturnType<typeof hostFixture>): void {
+  function renderSection(host: HostFixture): void {
     renderWithQueries(
       <HostEnvironmentSection
         scope={hostScopeFixture({

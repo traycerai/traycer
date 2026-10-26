@@ -52,7 +52,12 @@ import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -177,7 +182,11 @@ describe("SupportEnvironmentBridge without environments", () => {
   it.each(["off", "unread"] as const)(
     "sends none of the four reads and leaves the section unavailable while environments read %s",
     async (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       setSupportEnvironmentSection(knownField(STALE_SECTION));
       const { client, served } = serveAllReads();
 

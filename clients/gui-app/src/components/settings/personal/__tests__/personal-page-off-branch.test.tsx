@@ -4,11 +4,9 @@
 // and the host is a real client over a recording messenger whose negotiated
 // manifest advertises no `environment.*` method, as a tip host with the
 // verdict off does.
-const authUser = vi.hoisted(
-  (): { current: { readonly data: unknown } } => ({
-    current: { data: undefined },
-  }),
-);
+const authUser = vi.hoisted((): { current: { readonly data: unknown } } => ({
+  current: { data: undefined },
+}));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
     data: authUser.current.data,
@@ -146,7 +144,7 @@ const OLD_HOST_METHODS = [
 
 function providerFixture(): ProviderCliState {
   return {
-    providerId: "claude",
+    providerId: "claude-code",
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
@@ -324,7 +322,10 @@ function expectHostNativePage(): void {
 const OFF_READINGS = [
   { reading: "an unread user record", user: undefined },
   { reading: "a record without a verdict", user: RECORD_WITHOUT_VERDICT },
-  { reading: "a record with environments off", user: RECORD_WITH_ENVIRONMENTS_OFF },
+  {
+    reading: "a record with environments off",
+    user: RECORD_WITH_ENVIRONMENTS_OFF,
+  },
 ] as const;
 
 describe("the Personal pages without environments", () => {
@@ -354,17 +355,40 @@ describe("the Personal pages without environments", () => {
     });
 
     it.each([
-      { section: "shell" as const, page: <ShellSettingsPanel />, ready: "Startup flags for zsh" },
-      { section: "providers" as const, page: <ProvidersSettingsPanel />, ready: "Providers" },
-      { section: "mcp-servers" as const, page: <McpServersSettingsPanel />, ready: "host MCP tab" },
-      { section: "skills" as const, page: <SkillsSettingsPanel />, ready: "host Skills tab" },
-      { section: "agents" as const, page: <AgentsSettingsPanel />, ready: "host selection guide" },
-    ])("sends no environment request from the $section page", async ({ section, page, ready }) => {
-      const mounted = mountSection({ section, page, user });
+      {
+        section: "shell" as const,
+        page: <ShellSettingsPanel />,
+        ready: "Startup flags for zsh",
+      },
+      {
+        section: "providers" as const,
+        page: <ProvidersSettingsPanel />,
+        ready: "Providers",
+      },
+      {
+        section: "mcp-servers" as const,
+        page: <McpServersSettingsPanel />,
+        ready: "host MCP tab",
+      },
+      {
+        section: "skills" as const,
+        page: <SkillsSettingsPanel />,
+        ready: "host Skills tab",
+      },
+      {
+        section: "agents" as const,
+        page: <AgentsSettingsPanel />,
+        ready: "host selection guide",
+      },
+    ])(
+      "sends no environment request from the $section page",
+      async ({ section, page, ready }) => {
+        const mounted = mountSection({ section, page, user });
 
-      expect((await screen.findAllByText(ready)).length).toBeGreaterThan(0);
-      expect(mounted.environmentRequests()).toEqual([]);
-    });
+        expect((await screen.findAllByText(ready)).length).toBeGreaterThan(0);
+        expect(mounted.environmentRequests()).toEqual([]);
+      },
+    );
 
     it.each([
       {
@@ -390,15 +414,18 @@ describe("the Personal pages without environments", () => {
         page: <SkillsSettingsPanel />,
         copy: ["The skills each coding agent can use on this host."],
       },
-    ])("speaks for this host only on the $section page", async ({ section, page, copy }) => {
-      mountSection({ section, page, user });
+    ])(
+      "speaks for this host only on the $section page",
+      async ({ section, page, copy }) => {
+        mountSection({ section, page, user });
 
-      for (const text of copy) {
-        expect(await screen.findByText(text)).toBeTruthy();
-      }
-      expect(screen.queryByText(/every computer and sandbox/)).toBeNull();
-      expect(screen.queryByText(/running Personal/)).toBeNull();
-    });
+        for (const text of copy) {
+          expect(await screen.findByText(text)).toBeTruthy();
+        }
+        expect(screen.queryByText(/every computer and sandbox/)).toBeNull();
+        expect(screen.queryByText(/running Personal/)).toBeNull();
+      },
+    );
 
     it("shows the Agents page as the selection guide alone, with no Definitions tab or read", async () => {
       const mounted = mountSection({
@@ -410,7 +437,9 @@ describe("the Personal pages without environments", () => {
       expect(await screen.findByText("host selection guide")).toBeTruthy();
       expect(screen.getByTestId("agents-guide-caption")).toBeTruthy();
       expect(screen.queryByTestId("agents-tab-definitions")).toBeNull();
-      expect(screen.queryByText("Couldn't read these agent definitions.")).toBeNull();
+      expect(
+        screen.queryByText("Couldn't read these agent definitions."),
+      ).toBeNull();
       expectHostNativePage();
       expect(mounted.messenger.calls.map((call) => call.method)).not.toContain(
         "environment.agentDefinitions.list",
@@ -418,14 +447,25 @@ describe("the Personal pages without environments", () => {
     });
 
     it.each([
-      { section: "mcp-servers" as const, page: <McpServersSettingsPanel />, tab: "host MCP tab" },
-      { section: "skills" as const, page: <SkillsSettingsPanel />, tab: "host Skills tab" },
-    ])("takes the host tab for the $section tab body, not the cloud boundary", async ({ section, page, tab }) => {
-      mountSection({ section, page, user });
+      {
+        section: "mcp-servers" as const,
+        page: <McpServersSettingsPanel />,
+        tab: "host MCP tab",
+      },
+      {
+        section: "skills" as const,
+        page: <SkillsSettingsPanel />,
+        tab: "host Skills tab",
+      },
+    ])(
+      "takes the host tab for the $section tab body, not the cloud boundary",
+      async ({ section, page, tab }) => {
+        mountSection({ section, page, user });
 
-      expect(await screen.findByText(tab)).toBeTruthy();
-      expect(screen.queryByText("Couldn't read these settings.")).toBeNull();
-    });
+        expect(await screen.findByText(tab)).toBeTruthy();
+        expect(screen.queryByText("Couldn't read these settings.")).toBeNull();
+      },
+    );
   });
 
   it("reaches the cloud path with environments on, over the same old host", async () => {
@@ -435,7 +475,9 @@ describe("the Personal pages without environments", () => {
       user: RECORD_WITH_ENVIRONMENTS,
     });
 
-    expect(await screen.findByText("Couldn't read these settings.")).toBeTruthy();
+    expect(
+      await screen.findByText("Couldn't read these settings."),
+    ).toBeTruthy();
     expect(screen.queryByText("host MCP tab")).toBeNull();
   });
 
@@ -466,13 +508,20 @@ describe("the Personal pages without environments", () => {
         "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
       ],
     },
-  ])("keeps the Personal sentences with environments on", async ({ page, copy }) => {
-    // A non-environment section keeps the cloud frame out of the way, so the
-    // panel's own verdict is what is read.
-    mountSection({ section: "general", page, user: RECORD_WITH_ENVIRONMENTS });
+  ])(
+    "keeps the Personal sentences with environments on",
+    async ({ page, copy }) => {
+      // A non-environment section keeps the cloud frame out of the way, so the
+      // panel's own verdict is what is read.
+      mountSection({
+        section: "general",
+        page,
+        user: RECORD_WITH_ENVIRONMENTS,
+      });
 
-    for (const text of copy) {
-      expect(await screen.findByText(text)).toBeTruthy();
-    }
-  });
+      for (const text of copy) {
+        expect(await screen.findByText(text)).toBeTruthy();
+      }
+    },
+  );
 });

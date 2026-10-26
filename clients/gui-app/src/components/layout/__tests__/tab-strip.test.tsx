@@ -100,6 +100,11 @@ const notificationIndicatorTestState = vi.hoisted(
   } => ({ request: null }),
 );
 
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: (request: {
     readonly epicIds: ReadonlyArray<string>;

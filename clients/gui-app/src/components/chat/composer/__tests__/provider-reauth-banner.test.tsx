@@ -45,9 +45,7 @@ type CancelLoginVariables = {
 type AwaitLoginResult = {
   readonly codeRejected: boolean;
   readonly state:
-    | { readonly auth: { readonly status: string } }
-    | null
-    | undefined;
+    { readonly auth: { readonly status: string } } | null | undefined;
   readonly refusal?: ProviderLoginRefusal | null;
 };
 type AwaitLoginOptions = {
@@ -85,8 +83,7 @@ const mocks = vi.hoisted(() => ({
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
   submitLoginCodeData: undefined as
-    | { readonly outcome: "accepted" | "noActiveLogin" }
-    | undefined,
+    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
   submitLoginCodeError: null as Error | null,
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),

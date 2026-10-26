@@ -7,7 +7,12 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -117,16 +122,22 @@ describe("<SettingsSearch /> without the preview features", () => {
   it.each(["off", "unread"] as const)(
     "finds nothing for Tracy, the install row or a gated page while the verdict reads %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       for (const query of ["tracy", "install traycer", "secrets"]) {
         const { unmount } = render(<Harness />);
         type(query);
         const texts = optionTexts();
-        expect(texts.filter((text) => /show tracy|install traycer/i.test(text))).toEqual([]);
+        expect(
+          texts.filter((text) => /show tracy|install traycer/i.test(text)),
+        ).toEqual([]);
         if (query === "secrets") {
-          expect(
-            texts.filter((text) => /^secrets/i.test(text.trim())),
-          ).toEqual([]);
+          expect(texts.filter((text) => /^secrets/i.test(text.trim()))).toEqual(
+            [],
+          );
         }
         unmount();
       }

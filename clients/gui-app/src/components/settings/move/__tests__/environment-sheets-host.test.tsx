@@ -33,7 +33,12 @@ import type { OpenSettingsModalOpts } from "@/stores/tabs/use-system-tab-modal";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -171,7 +176,11 @@ describe("<EnvironmentSheetsHost /> show-once", () => {
   it.each(["off", "unread"] as const)(
     "reads neither the status nor the review and opens nothing while environments read %s",
     async (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       const reads = thisComputerAnswering(SHARED, null);
       renderHost();
 

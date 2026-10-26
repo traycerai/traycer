@@ -12,7 +12,12 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -80,7 +85,11 @@ describe("navigationSource", () => {
 
   afterEach(() => {
     cleanup();
-    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
@@ -94,7 +103,11 @@ describe("navigationSource", () => {
   it.each(["off", "unread"] as const)(
     "settings sub-page drops the pages whose preview feature reads %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       const ids = captureSettingsSubpage("/").map((i) => i.id);
 
       for (const id of GATED_IDS) expect(ids).not.toContain(id);

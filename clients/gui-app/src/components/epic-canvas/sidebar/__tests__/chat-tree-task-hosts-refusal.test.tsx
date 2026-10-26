@@ -42,6 +42,11 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // The three seams `agent-row-reach-mark` stubs: host reachability, the per-host
 // client beneath a row (a null client disables the queries under it), a row's
 // owner PR references, and the notification indicator query.

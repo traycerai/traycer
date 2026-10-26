@@ -3,11 +3,9 @@
 // verdict off or unread none of them reaches the host; with environments on
 // the same host is read. The verdict is read through the real
 // `usePreviewFeature` from what `useAuthUser` returns.
-const authUser = vi.hoisted(
-  (): { current: { readonly data: unknown } } => ({
-    current: { data: undefined },
-  }),
-);
+const authUser = vi.hoisted((): { current: { readonly data: unknown } } => ({
+  current: { data: undefined },
+}));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
     data: authUser.current.data,
@@ -60,9 +58,7 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   >()),
   useStreamMethodSupportFor: () => "supported",
 }));
-const published = vi.hoisted(
-  (): { scopes: unknown[] } => ({ scopes: [] }),
-);
+const published = vi.hoisted((): { scopes: unknown[] } => ({ scopes: [] }));
 vi.mock("@/hooks/environment/use-environment-arms", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/environment/use-environment-arms")

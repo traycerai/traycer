@@ -33,7 +33,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -165,7 +170,11 @@ describe("the sandbox queries without the sandboxes preview feature", () => {
   it.each(["off", "unread"] as const)(
     "never ask the control plane for the list, costs, catalogue or Automations while sandboxes read %s",
     async (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       const list = renderHook(() => useSandboxList(), { wrapper: wrapper() });
       const costs = renderHook(() => useSandboxCosts(), { wrapper: wrapper() });
       const catalogue = renderHook(() => useSandboxCatalogue(true), {

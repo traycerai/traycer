@@ -32,7 +32,12 @@ import type {
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -57,8 +62,7 @@ const mocks = vi.hoisted(() => {
       support: initialSupport(),
       environments: {
         data: undefined as
-          | { environments: EnvironmentDescriptor[] }
-          | undefined,
+          { environments: EnvironmentDescriptor[] } | undefined,
         isError: false,
         refetch: environmentRefetch,
       },
@@ -314,7 +318,11 @@ describe("HomeBotsSection without the bots preview feature", () => {
   it.each(["off", "unread"] as const)(
     "renders no band and no update notice, and reads nothing, while bots read %s, even on a host without bot.list",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       mocks.state.support = false;
       mountSection();
 

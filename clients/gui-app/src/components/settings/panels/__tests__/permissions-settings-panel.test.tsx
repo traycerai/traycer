@@ -30,7 +30,12 @@ import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -284,7 +289,11 @@ describe("PermissionsSettingsPanel", () => {
     it.each(["off", "unread"] as const)(
       "keeps the general subtitle under a Personal pick while environments read %s",
       (state) => {
-        previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+        previewVerdict.current = {
+          environments: state,
+          sandboxes: state,
+          bots: state,
+        };
         try {
           useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
           render(<PermissionsSettingsPanel />);
@@ -296,7 +305,11 @@ describe("PermissionsSettingsPanel", () => {
           ).not.toBeNull();
           expect(screen.queryByText(/every computer and sandbox/)).toBeNull();
         } finally {
-          previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+          previewVerdict.current = {
+            environments: "on",
+            sandboxes: "on",
+            bots: "on",
+          };
         }
       },
     );

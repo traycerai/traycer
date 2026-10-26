@@ -217,7 +217,8 @@ const VIEW_COPY: Readonly<
     title: "Providers",
     description:
       "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
-    hostDescription: "Sign-ins, keys and tools for each coding agent on this host.",
+    hostDescription:
+      "Sign-ins, keys and tools for each coding agent on this host.",
     empty: "No providers on this host.",
   },
   "mcp-servers": {

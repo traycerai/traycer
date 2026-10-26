@@ -42,7 +42,12 @@ import { SettingsModalContent } from "@/components/settings/settings-modal-conte
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -54,13 +59,21 @@ vi.mock("@/hooks/auth/use-preview-feature", () => ({
 describe("<SettingsModalContent />", () => {
   afterEach(() => {
     cleanup();
-    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
   });
 
   it.each(["off", "unread"] as const)(
     "opens General for a section that needs a preview feature while environments read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       render(<SettingsModalContent section="secrets" />);
 
       expect(screen.getByTestId("general-page-probe")).toBeTruthy();

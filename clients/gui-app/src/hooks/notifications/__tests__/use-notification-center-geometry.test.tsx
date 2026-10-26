@@ -70,6 +70,11 @@ const hostBindingState = vi.hoisted<{ current: null }>(() => ({
   current: null,
 }));
 
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
 }));

@@ -182,7 +182,12 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -402,7 +407,11 @@ describe("MobileNavDrawer Tracy row", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
     useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useMobileNavStore.setState({ open: false });
@@ -418,7 +427,11 @@ describe("MobileNavDrawer Tracy row", () => {
   it.each(["off", "unread"] as const)(
     "draws no row for a restored entry while bots read %s",
     async (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       renderDrawer();
 
       // The drawer itself is up, so the row's absence is not an unmounted drawer.
@@ -465,7 +478,11 @@ describe("MobileNavDrawer", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
-    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
     useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
     useMobileNavStore.setState({ open: false });
     useAuthStore.setState({ profile: null, shareableTeams: [] });

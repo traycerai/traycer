@@ -54,6 +54,11 @@ const testState = vi.hoisted((): TestState => ({
   cloudKnownChatIds: new Set(),
 }));
 
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined }),
 }));

@@ -121,6 +121,11 @@ const registrations = vi.hoisted(
   } => ({ live: new Map(), peak: new Map() }),
 );
 
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/lib/keybindings/dispatch", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/keybindings/dispatch")>();

@@ -65,7 +65,12 @@ import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -222,7 +227,11 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
   it.each(["off", "unread"] as const)(
     "limits the reach to this computer under a Personal pick while environments read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       try {
         renderSection({
           providerId: "cursor",
@@ -236,7 +245,11 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
         ).toBeTruthy();
         expect(screen.queryByText(/running Personal/)).toBeNull();
       } finally {
-        previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+        previewVerdict.current = {
+          environments: "on",
+          sandboxes: "on",
+          bots: "on",
+        };
       }
     },
   );

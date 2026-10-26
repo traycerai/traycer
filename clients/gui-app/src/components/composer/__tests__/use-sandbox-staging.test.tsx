@@ -53,10 +53,14 @@ const mocks = vi.hoisted(() => ({
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
 }));
 
-
 // The preview-features verdict per feature; a case sets it, every other runs on.
 const previewVerdict = vi.hoisted(
-  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
     current: { environments: "on", sandboxes: "on", bots: "on" },
   }),
 );
@@ -260,7 +264,11 @@ describe("useSandboxStaging without the sandboxes preview feature", () => {
   it.each(["off", "unread"] as const)(
     "stages nothing for a composer's picker while sandboxes read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
       render(<Harness surfaceKey={SURFACE} hosts={[LAPTOP, SUSPENDED]} />);
 
       expect(latest).toBeNull();
