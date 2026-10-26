@@ -7,10 +7,12 @@ import {
   type ValueOf,
 } from "@traycer/protocol/framework/index";
 import type { DowngradeResult } from "@traycer/protocol/framework/versioned-record";
+import { PREVIEW_FEATURES_OFF } from "@traycer/protocol/auth/preview-features";
 import {
   authenticatedUserSchema,
   authenticatedUserSchemaPreApple,
   authenticatedUserSchemaWithEnvironments,
+  authenticatedUserSchemaWithPreviewFeatures,
   bundleSummarySchema,
   connectMcpServerResponseSchema,
   creditSchema,
@@ -88,6 +90,10 @@ import {
  * from "not said". It is served only by `GET /api/v3/user/negotiated` to a
  * caller that advertises it; the frozen `GET /api/v3/user` stays at major
  * 1. Only this envelope moves: the `user` inside it is unchanged.
+ *
+ * Minor 3.1 adds `previewFeatures`, authn's verdict on the caller's preview
+ * features (`auth/preview-features.ts`). Additive, and off when absent, so
+ * a 3.0 body upgrades to the off verdict and a 3.0 reader strips the field.
  */
 
 // ---- Entity records ----------------------------------------------------- //
@@ -170,6 +176,12 @@ export const authenticatedUserResponseRecordV300 = defineRecordContract({
   name: "authenticated-user-response",
   schemaVersion: { major: 3, minor: 0 } as const,
   schema: authenticatedUserSchemaWithEnvironments,
+});
+
+export const authenticatedUserResponseRecordV310 = defineRecordContract({
+  name: "authenticated-user-response",
+  schemaVersion: { major: 3, minor: 1 } as const,
+  schema: authenticatedUserSchemaWithPreviewFeatures,
 });
 
 export const legacyAuthenticatedUserResponseRecordV100 = defineRecordContract({
@@ -398,13 +410,26 @@ const authenticatedUserResponseUpgradeV200ToV300 = defineRecordUpgradePath<
   }),
 });
 
+/** A 3.0 body carries no verdict, so it reads as off. */
+const authenticatedUserResponseUpgradeV300ToV310 = defineRecordUpgradePath<
+  typeof authenticatedUserResponseRecordV300,
+  typeof authenticatedUserResponseRecordV310
+>({
+  from: authenticatedUserResponseRecordV300.schemaVersion,
+  to: authenticatedUserResponseRecordV310.schemaVersion,
+  upgradeRecord: (record) => ({
+    ...record,
+    previewFeatures: PREVIEW_FEATURES_OFF,
+  }),
+});
+
 /**
- * Drops the two major-3 fields by re-parsing through the major-2 schema,
- * which strips keys it does not declare. A reader of majors 1 and 2 that
- * wants `actingAs` gets it from authn outside the schema, as before.
+ * Drops the major-3 fields by re-parsing through the major-2 schema, which
+ * strips keys it does not declare. A reader of majors 1 and 2 that wants
+ * `actingAs` gets it from authn outside the schema, as before.
  */
 function downgradeAuthenticatedUserResponseToV200(
-  record: ValueOf<typeof authenticatedUserResponseRecordV300>,
+  record: ValueOf<typeof authenticatedUserResponseRecordV310>,
 ): DowngradeResult<ValueOf<typeof authenticatedUserResponseRecordV200>> {
   const parsed = authenticatedUserResponseRecordV200.schema.safeParse(record);
   if (parsed.success) return { ok: true as const, value: parsed.data };
@@ -418,11 +443,11 @@ function downgradeAuthenticatedUserResponseToV200(
   };
 }
 
-const authenticatedUserResponseDowngradeV300ToV200 = defineRecordDowngradePath<
-  typeof authenticatedUserResponseRecordV300,
+const authenticatedUserResponseDowngradeV310ToV200 = defineRecordDowngradePath<
+  typeof authenticatedUserResponseRecordV310,
   typeof authenticatedUserResponseRecordV200
 >({
-  from: authenticatedUserResponseRecordV300.schemaVersion,
+  from: authenticatedUserResponseRecordV310.schemaVersion,
   to: authenticatedUserResponseRecordV200.schemaVersion,
   downgradeRecord: (record) => downgradeAuthenticatedUserResponseToV200(record),
 });
@@ -433,11 +458,11 @@ const authenticatedUserResponseDowngradeV300ToV200 = defineRecordDowngradePath<
  * downgrades from its latest. So 3 reaches 1 by composing the two bridges
  * that already decide each step, never by restating either.
  */
-const authenticatedUserResponseDowngradeV300ToV100 = defineRecordDowngradePath<
-  typeof authenticatedUserResponseRecordV300,
+const authenticatedUserResponseDowngradeV310ToV100 = defineRecordDowngradePath<
+  typeof authenticatedUserResponseRecordV310,
   typeof authenticatedUserResponseRecordV100
 >({
-  from: authenticatedUserResponseRecordV300.schemaVersion,
+  from: authenticatedUserResponseRecordV310.schemaVersion,
   to: authenticatedUserResponseRecordV100.schemaVersion,
   downgradeRecord: (record) => {
     const v200 = downgradeAuthenticatedUserResponseToV200(record);
@@ -614,17 +639,22 @@ export const authRecordRegistry = defineVersionedRecordRegistry({
       },
     },
     3: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: authenticatedUserResponseRecordV300,
           upgradeFromPreviousVersion:
             authenticatedUserResponseUpgradeV200ToV300,
         },
+        1: {
+          contract: authenticatedUserResponseRecordV310,
+          upgradeFromPreviousVersion:
+            authenticatedUserResponseUpgradeV300ToV310,
+        },
       },
       downgradePathsFromLatest: {
-        1: authenticatedUserResponseDowngradeV300ToV100,
-        2: authenticatedUserResponseDowngradeV300ToV200,
+        1: authenticatedUserResponseDowngradeV310ToV100,
+        2: authenticatedUserResponseDowngradeV310ToV200,
       },
     },
   },

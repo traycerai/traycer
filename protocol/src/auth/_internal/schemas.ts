@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { previewFeaturesSchema } from "@traycer/protocol/auth/preview-features";
 
 /**
  * Private Zod values for the auth / session / MCP-server records and
@@ -328,6 +329,18 @@ export const authenticatedUserSchemaWithEnvironments = lazySchema(() =>
   authenticatedUserSchema.extend({
     environments: callerEnvironmentsSchema,
     actingAs: actingAsSchema,
+  }),
+);
+
+/**
+ * Minor 3.1: major 3 plus authn's preview-features verdict. Additive and
+ * optional, so a 3.0 body is a valid 3.1 body; an unreadable verdict parses
+ * as off rather than failing the record around it. A reader takes the
+ * verdict through `readPreviewFeatures`, which reads an absent one as off.
+ */
+export const authenticatedUserSchemaWithPreviewFeatures = lazySchema(() =>
+  authenticatedUserSchemaWithEnvironments.extend({
+    previewFeatures: previewFeaturesSchema.optional(),
   }),
 );
 
