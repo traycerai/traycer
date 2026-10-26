@@ -21,7 +21,10 @@ import {
   userRecordV200,
 } from "@traycer/protocol/auth/registry";
 import type { ProviderType, User } from "@traycer/protocol/auth";
-import { PREVIEW_FEATURES_OFF } from "@traycer/protocol/auth/preview-features";
+import {
+  PREVIEW_FEATURES_OFF,
+  readPreviewFeatures,
+} from "@traycer/protocol/auth/preview-features";
 
 /**
  * Bridge coverage for the two records that actually downgrade: `user` owns
@@ -254,7 +257,7 @@ function authenticatedUserResponseFixtureV310(
 }
 
 describe("authenticated-user-response major 3 bridges", () => {
-  it("upgrades a loaded major-2 body to the no-environments, preview-off value", () => {
+  it("upgrades a loaded major-2 body to the no-environments value, carrying no preview-features verdict", () => {
     const v200 = authenticatedUserResponseFixtureWithHostId("GITHUB", "host-1");
     const loaded = loadRecord(
       authRecordRegistry,
@@ -262,15 +265,14 @@ describe("authenticated-user-response major 3 bridges", () => {
       v200,
       { major: 2, minor: 0 },
     );
-    expect(loaded).toEqual({
+    expect(loaded).toStrictEqual({
       ...v200,
       environments: { personal: null, teams: [] },
       actingAs: null,
-      previewFeatures: PREVIEW_FEATURES_OFF,
     });
   });
 
-  it("upgrades a loaded 3.0 body to the off verdict", () => {
+  it("upgrades a loaded 3.0 body with the verdict still absent, which reads as off", () => {
     const v300 = authenticatedUserResponseFixtureV300("GITHUB");
     const loaded = loadRecord(
       authRecordRegistry,
@@ -278,7 +280,10 @@ describe("authenticated-user-response major 3 bridges", () => {
       v300,
       { major: 3, minor: 0 },
     );
-    expect(loaded).toEqual({ ...v300, previewFeatures: PREVIEW_FEATURES_OFF });
+    expect(loaded).toStrictEqual(v300);
+    expect(readPreviewFeatures(loaded.previewFeatures)).toEqual(
+      PREVIEW_FEATURES_OFF,
+    );
   });
 
   it("downgrades 3 to 2 to exactly the major-2 value, without any major-3 field", () => {

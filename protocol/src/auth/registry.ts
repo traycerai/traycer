@@ -7,7 +7,6 @@ import {
   type ValueOf,
 } from "@traycer/protocol/framework/index";
 import type { DowngradeResult } from "@traycer/protocol/framework/versioned-record";
-import { PREVIEW_FEATURES_OFF } from "@traycer/protocol/auth/preview-features";
 import {
   authenticatedUserSchema,
   authenticatedUserSchemaPreApple,
@@ -92,8 +91,9 @@ import {
  * 1. Only this envelope moves: the `user` inside it is unchanged.
  *
  * Minor 3.1 adds `previewFeatures`, authn's verdict on the caller's preview
- * features (`auth/preview-features.ts`). Additive, and off when absent, so
- * a 3.0 body upgrades to the off verdict and a 3.0 reader strips the field.
+ * features (`auth/preview-features.ts`). Additive and optional: a 3.0 body
+ * upgrades with the field still absent, so "this record carries no verdict"
+ * survives the chain, and a 3.0 reader strips it.
  */
 
 // ---- Entity records ----------------------------------------------------- //
@@ -410,17 +410,19 @@ const authenticatedUserResponseUpgradeV200ToV300 = defineRecordUpgradePath<
   }),
 });
 
-/** A 3.0 body carries no verdict, so it reads as off. */
+/**
+ * A 3.0 body carries no verdict, and the upgrade leaves it carrying none:
+ * every reader still reads off through `readPreviewFeatures`, and a site
+ * whose off branch destroys state can tell an absent verdict from authn's
+ * off and wait for a real one.
+ */
 const authenticatedUserResponseUpgradeV300ToV310 = defineRecordUpgradePath<
   typeof authenticatedUserResponseRecordV300,
   typeof authenticatedUserResponseRecordV310
 >({
   from: authenticatedUserResponseRecordV300.schemaVersion,
   to: authenticatedUserResponseRecordV310.schemaVersion,
-  upgradeRecord: (record) => ({
-    ...record,
-    previewFeatures: PREVIEW_FEATURES_OFF,
-  }),
+  upgradeRecord: (record) => record,
 });
 
 /**

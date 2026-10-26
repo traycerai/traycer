@@ -827,6 +827,34 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     );
   });
 
+  it("3a: a frozen-route recovery upgrades to the latest record carrying no preview-features verdict, never authn's off", async () => {
+    installUrlKeyedMockFetch(
+      new Map([
+        [NEGOTIATED_URL, [{ status: 404 }]],
+        [
+          FROZEN_URL,
+          [
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+              body: authenticatedUserRawBody("GITHUB"),
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await validateAuthTokenIdentityAccessOnly(
+      AUTHN_BASE_URL,
+      "token",
+    );
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") throw new Error("expected valid");
+    expect(result.user.environments).toEqual({ personal: null, teams: [] });
+    expect(result.user).not.toHaveProperty("previewFeatures");
+  });
+
   it("4: a 404 then a frozen-route 404 is rejected, not network-error, in exactly two requests", async () => {
     installUrlKeyedMockFetch(
       new Map([
