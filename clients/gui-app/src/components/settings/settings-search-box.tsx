@@ -4,7 +4,7 @@ import { useSettingsSectionOffered } from "@/hooks/settings/use-settings-section
 import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
-import type { PreviewFeature } from "@/lib/auth/preview-features";
+import type { PreviewFeature } from "@traycer/protocol/auth/preview-features";
 import { ChevronRight, Search, X } from "lucide-react";
 import {
   InputGroup,

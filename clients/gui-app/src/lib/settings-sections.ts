@@ -33,7 +33,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
-import type { PreviewFeature } from "@/lib/auth/preview-features";
+import type { PreviewFeature } from "@traycer/protocol/auth/preview-features";
 
 export type SettingsSectionId =
   | "dev-artifact-proof"

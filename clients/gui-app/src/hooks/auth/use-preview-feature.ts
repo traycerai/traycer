@@ -1,10 +1,9 @@
 import {
   previewFeatureState,
-  rawPreviewFeatures,
   readPreviewFeatures,
   type PreviewFeature,
   type PreviewFeatureState,
-} from "@/lib/auth/preview-features";
+} from "@traycer/protocol/auth/preview-features";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 
 /**
@@ -19,7 +18,7 @@ export function usePreviewFeature(
   return previewFeatureState(
     data === undefined || data === null
       ? { kind: "unread" }
-      : { kind: "read", verdict: readPreviewFeatures(rawPreviewFeatures(data)) },
+      : { kind: "read", verdict: readPreviewFeatures(data.previewFeatures) },
     feature,
   );
 }
