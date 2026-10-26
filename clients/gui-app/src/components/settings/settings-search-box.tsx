@@ -22,6 +22,7 @@ import {
   type SettingsSearchResult,
 } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { settingsSectionScopeLabel } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
@@ -87,12 +88,22 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   const bots = usePreviewFeature("bots") === "on";
   const results = useMemo(() => {
     const on = { environments, sandboxes: true, bots };
-    return searchSettings(query, availability).filter((result) => {
-      const feature = PREVIEW_FEATURE_ANCHORS.get(result.entry.anchor);
-      return (
-        offered(result.entry.section) && (feature === undefined || on[feature])
-      );
-    });
+    return searchSettings(query, availability)
+      .filter((result) => {
+        const feature = PREVIEW_FEATURE_ANCHORS.get(result.entry.anchor);
+        return (
+          offered(result.entry.section) &&
+          (feature === undefined || on[feature])
+        );
+      })
+      .map((result) => ({
+        ...result,
+        // The breadcrumb names the group as the rail heads it.
+        scopeLabel: settingsSectionScopeLabel(
+          result.entry.section,
+          environments,
+        ),
+      }));
   }, [query, availability, offered, environments, bots]);
   const active = isSettingsSearchActive(query);
   // Clamped rather than stored-and-corrected: `results` shrinks as the user

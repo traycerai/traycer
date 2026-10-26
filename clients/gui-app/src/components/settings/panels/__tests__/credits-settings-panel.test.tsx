@@ -77,9 +77,7 @@ describe("CreditsSettingsPanel", () => {
     expect(screen.getByTestId("credits-ready").textContent).toBe(
       "$0.00 leftAdd credits",
     );
-    expect(
-      screen.getAllByText("Credits pay for your sandboxes, awake or resting."),
-    ).toHaveLength(1);
+    expect(screen.getAllByText("Your remaining credits.")).toHaveLength(1);
   });
 
   it("counts credits, not dollars, in the installed app, with no Add credits", () => {

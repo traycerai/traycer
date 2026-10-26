@@ -77,12 +77,37 @@ describe("<SettingsSurface />", () => {
     },
   );
 
-  it("keeps the route section when its preview feature is on", () => {
+  it.each(["off", "unread"] as const)(
+    "opens General for the Credits route while environments read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      testState.pathname = "/settings/credits";
+      render(<SettingsSurface lastPath={null} />);
+
+      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+        "general",
+      );
+    },
+  );
+
+  it("keeps the route sections when their preview features are on", () => {
     testState.pathname = "/settings/members";
     render(<SettingsSurface lastPath={null} />);
 
     expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
       "members",
+    );
+    cleanup();
+
+    testState.pathname = "/settings/credits";
+    render(<SettingsSurface lastPath={null} />);
+
+    expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+      "credits",
     );
   });
 

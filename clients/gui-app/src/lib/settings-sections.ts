@@ -146,6 +146,12 @@ export interface SettingsSection {
   readonly label: string;
   readonly icon: LucideIcon;
   readonly group: SettingsSectionGroupId;
+  /**
+   * The preview feature this page is offered under, or `null` for none.
+   * Required, so a page states it where it is added: an unreleased page left
+   * out of a separate list was offered with its feature off (Credits).
+   */
+  readonly previewFeature: PreviewFeature | null;
 }
 
 // No `requiresLocalHost` flag any more. It marked Shell and Diagnostics as
@@ -192,6 +198,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Getting started",
     icon: ListChecks,
     group: "guide",
+    previewFeature: null,
   },
 
   {
@@ -199,24 +206,28 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "General",
     icon: SettingsIcon,
     group: "app",
+    previewFeature: null,
   },
   {
     id: "appearance",
     label: "Appearance",
     icon: Palette,
     group: "app",
+    previewFeature: null,
   },
   {
     id: "browser",
     label: "Browser",
     icon: Globe,
     group: "app",
+    previewFeature: null,
   },
   {
     id: "opening-behavior",
     label: "Opening behavior",
     icon: PanelsTopLeft,
     group: "app",
+    previewFeature: null,
   },
   // Different controls than Account → Notifications, so a different word and
   // icon (see the rail-table rule above). The id `app-notifications` now names
@@ -228,6 +239,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Sounds",
     icon: Volume2,
     group: "app",
+    previewFeature: null,
   },
   // How this app's alerts reach you: the OS's notification settings on the
   // desktop, the phone's push permission and severities in the mobile app.
@@ -238,12 +250,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Alerts",
     icon: MessageSquareDot,
     group: "app",
+    previewFeature: null,
   },
   {
     id: "keybindings",
     label: "Keybindings",
     icon: Keyboard,
     group: "app",
+    previewFeature: null,
   },
   // Where the app's own chrome SITS and how much of it shows - the status bar
   // first, the composer and the sidebar's own layout beside it later. It is a
@@ -255,6 +269,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Layout",
     icon: PanelBottom,
     group: "app",
+    previewFeature: null,
   },
   // Same kind of page as Host → Diagnostics, partitioned by scope, so the
   // same word and icon. The split exists because this half never varied by
@@ -265,12 +280,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Diagnostics",
     icon: Activity,
     group: "app",
+    previewFeature: null,
   },
   {
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
     group: "account",
+    previewFeature: null,
   },
   // Account, like Sessions: the code it mints signs the PHONE into the
   // account, regardless of which host this window looks at.
@@ -279,6 +296,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Link mobile app",
     icon: QrCode,
     group: "account",
+    previewFeature: null,
   },
   // Account, not Host: what this reports is the ACCOUNT's token and cost
   // spend, with the host as one filter INSIDE the page (defaulting to all of
@@ -291,6 +309,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Usage",
     icon: LineChart,
     group: "account",
+    previewFeature: null,
   },
   // Account, beside Usage: credits are the person's to add and spend. The
   // page is E8's (`panels/credits-settings-panel`).
@@ -299,6 +318,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Credits",
     icon: Coins,
     group: "account",
+    previewFeature: "environments",
   },
   // Event policy and automation for the account. Different controls than
   // Application → Sounds and Alerts, so it keeps the generic word and the
@@ -308,6 +328,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Notifications",
     icon: Bell,
     group: "account",
+    previewFeature: null,
   },
   // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
   // below). Last in its group because it is the group's one irreversible
@@ -319,6 +340,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Delete account",
     icon: UserX,
     group: "account",
+    previewFeature: null,
   },
   // The Environment group (id `personal`): the configuration the Environment
   // dropdown picks. Personal's pages read through the window's own host and
@@ -330,6 +352,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Providers",
     icon: Boxes,
     group: "personal",
+    previewFeature: null,
   },
   // MCP servers and Skills were tabs inside each provider. They are pages of
   // their own because each entry is one of the person's settings: managed
@@ -339,12 +362,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "MCP servers",
     icon: Plug,
     group: "personal",
+    previewFeature: null,
   },
   {
     id: "skills",
     label: "Skills",
     icon: Sparkles,
     group: "personal",
+    previewFeature: null,
   },
   // What an agent may do on its own: the mode a conversation starts in, the
   // judge that reviews actions under the `auto` permission mode, the rules it
@@ -360,6 +385,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     // broom.
     icon: KeyRound,
     group: "personal",
+    previewFeature: null,
   },
   // Two tabs over room files: the selection guide agents read to pick a
   // harness, model and effort, and the agent definitions a harness can start.
@@ -370,6 +396,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Agents",
     icon: Bot,
     group: "personal",
+    previewFeature: null,
   },
   // "Model routing" and not "Route automatically" - the section is the whole
   // subject, and "Route automatically" is the master toggle INSIDE it, so using
@@ -379,6 +406,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Model routing",
     icon: Waypoints,
     group: "personal",
+    previewFeature: null,
   },
   // The section `id` stays `shell`; the page now also holds the variables
   // every agent starts with, so the label names both.
@@ -387,6 +415,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Variables & shells",
     icon: TerminalSquare,
     group: "personal",
+    previewFeature: null,
   },
   // Whether agents may drive the in-app browser. Not offered in navigation
   // (`RETIRED_SETTINGS_SECTION_IDS`): the switch is a region of Permissions,
@@ -396,6 +425,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Browser agent access",
     icon: MousePointerClick,
     group: "personal",
+    previewFeature: null,
   },
   // Where secrets and GitHub access are managed. The page itself lives on the
   // web dashboard; this entry is how Settings reaches it.
@@ -404,6 +434,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Secrets",
     icon: LockKeyhole,
     group: "personal",
+    previewFeature: "environments",
   },
   // Every sandbox on the picked configuration's settings. The page itself is
   // the sandboxes plan's, mounted in the Environment page registry's
@@ -413,6 +444,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Sandboxes",
     icon: Cloud,
     group: "personal",
+    previewFeature: "sandboxes",
   },
   // A team's members (P2's page). Offered only while a team is picked
   // (`environmentSectionShown`).
@@ -421,6 +453,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Members",
     icon: Users,
     group: "personal",
+    previewFeature: "environments",
   },
   // The agent definition files every host gets. Not offered in navigation
   // (`RETIRED_SETTINGS_SECTION_IDS`): they are the Agents page's Definitions
@@ -430,6 +463,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Agent definitions",
     icon: FileText,
     group: "personal",
+    previewFeature: "environments",
   },
   // The script each computer runs once to set itself up, one per OS. Not
   // offered in navigation (`RETIRED_SETTINGS_SECTION_IDS`); its route still
@@ -439,18 +473,21 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Machine setup",
     icon: Wrench,
     group: "personal",
+    previewFeature: "environments",
   },
   {
     id: "dev-artifact-proof",
     label: "Dev: artifact serving proof",
     icon: Activity,
     group: "app",
+    previewFeature: null,
   },
   {
     id: "dev-canvas-proof",
     label: "Dev: canvas proof",
     icon: Activity,
     group: "app",
+    previewFeature: null,
   },
   // The host group. Everything here is scoped by the picker that heads it.
   {
@@ -458,12 +495,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Overview",
     icon: Server,
     group: "host",
+    previewFeature: null,
   },
   {
     id: "worktrees",
     label: "Worktrees",
     icon: GitBranch,
     group: "host",
+    previewFeature: null,
   },
   // Same kind of page as Application → Diagnostics, partitioned by scope, so
   // the same word and icon. Everything left here answers differently per host,
@@ -473,6 +512,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Diagnostics",
     icon: Activity,
     group: "host",
+    previewFeature: null,
   },
 ];
 
@@ -551,25 +591,44 @@ export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   "browser-agent-access": "permissions",
 };
 
+/** The Environment group's heading when there is no configuration to pick. */
+const AGENT_SETTINGS_GROUP_LABEL = "Agent settings";
+
 /**
- * Sections offered only while a preview feature is on: their pages exist only
- * for an environment or a sandbox. Every other section works without either.
+ * A group's heading. Without environments the Environment group has no
+ * configuration to pick and holds this computer's agent settings alone.
  */
-const PREVIEW_FEATURE_SECTIONS: Readonly<
-  Partial<Record<SettingsSectionId, PreviewFeature>>
-> = {
-  secrets: "environments",
-  members: "environments",
-  "machine-setup": "environments",
-  "agent-definitions": "environments",
-  sandboxes: "sandboxes",
-};
+export function settingsGroupLabel(
+  group: SettingsSectionGroup,
+  environments: boolean,
+): string {
+  return group.id === "personal" && !environments
+    ? AGENT_SETTINGS_GROUP_LABEL
+    : group.label;
+}
+
+/** The heading of the group `sectionId` sits in, as the rail shows it. */
+export function settingsSectionScopeLabel(
+  sectionId: SettingsSectionId,
+  environments: boolean,
+): string {
+  const groupId = SETTINGS_SECTIONS.find(
+    (section) => section.id === sectionId,
+  )?.group;
+  const group = SETTINGS_SECTION_GROUPS.find(
+    (candidate) => candidate.id === groupId,
+  );
+  return group === undefined ? "" : settingsGroupLabel(group, environments);
+}
 
 /** The preview feature `sectionId` needs on, or `null` for none. */
 export function settingsSectionPreviewFeature(
   sectionId: SettingsSectionId,
 ): PreviewFeature | null {
-  return PREVIEW_FEATURE_SECTIONS[sectionId] ?? null;
+  return (
+    SETTINGS_SECTIONS.find((section) => section.id === sectionId)
+      ?.previewFeature ?? null
+  );
 }
 
 /**
