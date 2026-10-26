@@ -9,6 +9,7 @@ import {
   SANDBOX_DATABASE_UPSTREAM_MECHANISMS,
   SANDBOX_PLAINTEXT_DISCLOSURE_VERSION,
   SANDBOX_SECRET_KIND_PROTOCOLS,
+  SANDBOX_SECRET_NAME_PATTERN,
   isSandboxDatabaseEngine,
   type SandboxConnectionDialect,
   type SandboxRouteProtocol,
@@ -147,7 +148,6 @@ export function secretFormNeedsConsent(state: SecretFormState): boolean {
   return state.mode === "brokered" && state.kind === "database";
 }
 
-const ENV_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
 const HOSTNAME = /^[A-Za-z0-9._-]{1,253}$/;
 
 function destinationProblem(state: SecretFormState): string | null {
@@ -169,7 +169,7 @@ function variablesProblem(state: SecretFormState): string | null {
   const allowed = secretVariableDialects(state.protocol);
   const seen = new Set<string>();
   for (const variable of state.variables) {
-    if (!ENV_NAME.test(variable.name)) {
+    if (!SANDBOX_SECRET_NAME_PATTERN.test(variable.name)) {
       return "A variable name is capital letters, digits and underscores, starting with a letter.";
     }
     if (seen.has(variable.name)) {
@@ -204,7 +204,7 @@ export function secretVerifyProblem(state: SecretFormState): string | null {
  * authority: these are the checks that need no round trip.
  */
 export function secretFormProblem(state: SecretFormState): string | null {
-  if (!ENV_NAME.test(state.name)) {
+  if (!SANDBOX_SECRET_NAME_PATTERN.test(state.name)) {
     return "The name is capital letters, digits and underscores, starting with a letter.";
   }
   const problem = secretVerifyProblem(state) ?? variablesProblem(state);

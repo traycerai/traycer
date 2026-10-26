@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
-  DEFAULT_KEY_CHOICE,
+  moveKeyChoice,
   existingSecretsArriveSentence,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
@@ -380,7 +380,7 @@ function MovePlanRows(props: {
               <LooksLikeAKeyRow
                 key={row.key}
                 row={row}
-                choice={choices.get(row.key) ?? DEFAULT_KEY_CHOICE}
+                choice={moveKeyChoice(row, choices.get(row.key) ?? "secret")}
                 onChoose={(choice) => props.onChoose(row.key, choice)}
               />
             ))}
@@ -624,7 +624,9 @@ function LooksLikeAKeyRow(props: {
           variant={choice === "variable" ? "secondary" : "outline"}
           aria-pressed={choice === "variable"}
           onClick={() =>
-            props.onChoose(choice === "variable" ? "secret" : "variable")
+            props.onChoose(
+              moveKeyChoice(row, choice === "variable" ? "secret" : "variable"),
+            )
           }
         >
           Leave as a variable
@@ -635,7 +637,9 @@ function LooksLikeAKeyRow(props: {
           variant={choice === "stays" ? "secondary" : "outline"}
           aria-pressed={choice === "stays"}
           onClick={() =>
-            props.onChoose(choice === "stays" ? "secret" : "stays")
+            props.onChoose(
+              moveKeyChoice(row, choice === "stays" ? "secret" : "stays"),
+            )
           }
         >
           Leave on this computer only

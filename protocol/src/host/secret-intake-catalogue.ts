@@ -10,6 +10,9 @@
  * Data only: no schema, no I/O.
  */
 
+/** Names accepted by secret intake, shared with forms and move choices. */
+export const SANDBOX_SECRET_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
+
 /** Every protocol a route can carry. */
 export const SANDBOX_ROUTE_PROTOCOLS = [
   "https",
