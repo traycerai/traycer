@@ -7912,8 +7912,8 @@ describe("useRenderedMessages: object artifact creation cards", () => {
       segmentOrder([
         plainTextBlock("t1", 2001, "Working"),
         commandBlockAt("c1", 2002),
-        plainTextBlock("t2", 2003, "Done"),
-        artifactBlockAt("a1", 2004, "html", "create"),
+        plainTextBlock("t2", 2005, "Done"),
+        artifactBlockAt("a1", 2003, "html", "create"),
       ]),
     ).toEqual(["text:Working", "command", "card:html", "text:Done"]);
   });
@@ -7922,22 +7922,105 @@ describe("useRenderedMessages: object artifact creation cards", () => {
     expect(
       segmentOrder([
         commandBlockAt("c1", 2001),
-        plainTextBlock("t1", 2003, "Done"),
-        artifactBlockAt("a1", 2004, "html", "create"),
-        artifactBlockAt("a2", 2005, "canvas", "create"),
+        plainTextBlock("t1", 2005, "Done"),
+        artifactBlockAt("a1", 2002, "html", "create"),
+        artifactBlockAt("a2", 2002, "canvas", "create"),
       ]),
     ).toEqual(["command", "card:html", "card:canvas", "text:Done"]);
   });
 
-  it("leaves a card that precedes all activity, and non-object or non-create cards, in place", () => {
+  it("leaves non-object and non-create cards in place", () => {
     expect(
       segmentOrder([
-        artifactBlockAt("a0", 2000, "html", "create"),
         commandBlockAt("c1", 2001),
         plainTextBlock("t1", 2002, "Done"),
         artifactBlockAt("a1", 2003, "spec", "create"),
         artifactBlockAt("a2", 2004, "html", "update"),
       ]),
-    ).toEqual(["card:html", "command", "text:Done", "card:spec", "card:html"]);
+    ).toEqual(["command", "text:Done", "card:spec", "card:html"]);
+  });
+
+  function readToolBlockAt(blockId: string, timestamp: number): AssistantBlock {
+    return {
+      type: "tool_call",
+      blockId,
+      toolName: "read_file",
+      ...toolCallInputFields("read_file", { path: "/repo/src/app.ts" }),
+      error: null,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      agentMessageDelivery: null,
+      artifact: null,
+      mcpApp: null,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      stopped: false,
+      status: "completed",
+      timestamp,
+      startedAt: timestamp,
+      endedAt: timestamp,
+      imageResults: [],
+    };
+  }
+
+  it("anchors a card after the last preceding block of any kind, so a closing reply that streamed before the create is still last", () => {
+    expect(
+      segmentOrder([
+        readToolBlockAt("r1", 10),
+        plainTextBlock("w1", 20, "writing"),
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("a1", 30, "html", "create"),
+      ]),
+    ).toEqual(["tool", "text:writing", "card:html", "text:closing"]);
+  });
+
+  it("anchors a card after text when only text precedes it (a hidden Write has no tool block)", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("w1", 20, "writing"),
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("a1", 30, "html", "create"),
+      ]),
+    ).toEqual(["text:writing", "card:html", "text:closing"]);
+  });
+
+  it("puts a card with no preceding block before the final text", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("a1", 30, "html", "create"),
+      ]),
+    ).toEqual(["card:html", "text:closing"]);
+  });
+
+  it("places a legacy terminal-sweep card after the last activity before the closing text, not by its drain timestamp", () => {
+    expect(
+      segmentOrder([
+        commandBlockAt("c1", 10),
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("artifact-create-sweep:x", 900, "html", "create"),
+      ]),
+    ).toEqual(["command", "card:html", "text:closing"]);
+  });
+
+  it("puts a legacy terminal-sweep card before the final text when no activity precedes it", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("t-final", 40, "closing"),
+        artifactBlockAt("artifact-create-sweep:x", 900, "canvas", "create"),
+      ]),
+    ).toEqual(["card:canvas", "text:closing"]);
+  });
+
+  it("keeps an on-time canvas create after the text that preceded it when closing text follows", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("w1", 20, "writing"),
+        artifactBlockAt("a1", 30, "canvas", "create"),
+        plainTextBlock("t-final", 40, "closing"),
+      ]),
+    ).toEqual(["text:writing", "card:canvas", "text:closing"]);
   });
 });

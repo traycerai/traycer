@@ -3,7 +3,10 @@ import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
+import {
+  deriveArtifactPathLayoutRootAgnostic,
+  EPIC_ARTIFACT_INDEX_FILENAME,
+} from "@traycer/protocol/common/artifact-path";
 import {
   candidateWorkspaceFileRefsForAbsoluteLinkPath,
   candidateWorkspaceFileRefsForRelativeLinkPath,
@@ -305,8 +308,21 @@ function resolveAndOpenArtifactLink(
   const fallbackToFilePreview = (): void => {
     if (lifecycle.isDisposed()) return;
     if (!lifecycle.isCurrent(clickToken)) return;
-    if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false)) {
-      lifecycle.onAsyncFailure();
+    if (deriveArtifactPathLayoutRootAgnostic(link.path, null) !== null) {
+      if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false))
+        lifecycle.onAsyncFailure();
+      return;
+    }
+    // Newly recognized bundle links may address ordinary files, or a host
+    // that does not yet resolve object artifacts. Preserve plain-file opening.
+    if (isAbsolutePath(link.path)) {
+      void resolveAndOpenAbsoluteWorkspaceFile(deps, lifecycle, link, {
+        clickToken,
+      });
+    } else {
+      void resolveAndOpenRelativeWorkspaceFile(deps, lifecycle, link, {
+        clickToken,
+      });
     }
   };
   return fetchResolveArtifactByPath({
@@ -335,14 +351,6 @@ function resolveAndOpenArtifactLink(
       });
     })
     .catch(() => {
-      // Mirror the success path's guards: a tab torn down mid-flight, or a
-      // newer click that already superseded this one, must NOT let a slow
-      // rejected resolve open a fallback preview over the user's latest
-      // selection (latest-click-wins). `openChatWorkspaceFilePreview` already
-      // no-ops once disposed, but the supersession check only exists here.
-      // Transport error on an artifact-shaped link: keep the safe no-op (D5) —
-      // out-of-root synthesis stays disabled, so a missing artifact does not
-      // open a raw / error tile.
       fallbackToFilePreview();
     });
 }

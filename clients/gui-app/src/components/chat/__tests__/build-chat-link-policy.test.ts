@@ -553,14 +553,15 @@ describe("buildChatLinkPolicy", () => {
   });
 
   it.each([
-    ["an artifact directory", "report", true],
-    ["a file inside an html bundle", "report/assets/app.js", false],
-  ])(
+    ["an artifact directory", "report", true, "html"],
+    ["a file inside an html bundle", "report/assets/app.js", false, "html"],
+    ["a canvas.json file", "board/canvas.json", false, "canvas"],
+  ] as const)(
     "resolves %s through the artifact RPC and opens it via the projection waiter",
-    async (_name, relative, isDirectory) => {
+    async (_name, relative, isDirectory, kind) => {
       mocks.resolveArtifactByPath.mockResolvedValue({
-        artifactId: "artifact-html",
-        kind: "html",
+        artifactId: "artifact-object",
+        kind,
       });
       const run = buildChatLinkPolicy(makeDeps({}));
       const path = `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/${relative}`;
@@ -574,7 +575,7 @@ describe("buildChatLinkPolicy", () => {
       expect(
         mocks.openProjectedSidebarNodeInTabWhenAvailable,
       ).toHaveBeenCalledWith(
-        expect.objectContaining({ nodeId: "artifact-html" }),
+        expect.objectContaining({ nodeId: "artifact-object" }),
       );
     },
   );
@@ -802,8 +803,26 @@ describe("buildChatLinkPolicy", () => {
     );
   });
 
-  it("opens a non-resolving file inside an artifact folder as a plain file preview", async () => {
+  it("opens the direct absolute candidate when a non-index.md artifact-tree file does not resolve, instead of coercing it into a directory reference (A)", async () => {
+    const directRef = {
+      id: "readme-content",
+      workspacePath: "/repo/epics/e1/artifacts/spec",
+      filePath: "README.md",
+    };
+    const dirIndexRef = {
+      id: "readme-index-content",
+      workspacePath: "/repo/epics/e1/artifacts/spec/README.md",
+      filePath: "index.md",
+    };
     mocks.resolveArtifactByPath.mockResolvedValue(null);
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      directRef,
+      dirIndexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockImplementation(
+      (args: { readonly workspacePath: string }) =>
+        Promise.resolve(args.workspacePath === directRef.workspacePath),
+    );
     const run = buildChatLinkPolicy(makeDeps({}));
 
     run(
@@ -812,13 +831,52 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
-      expect.objectContaining({
-        epicId: "e1",
-        filePath: "/repo/epics/e1/artifacts/spec/README.md",
-      }),
+    // README.md is a real file - not the `index.md` fallback, even though
+    // BOTH candidates were probed.
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
+  });
+
+  it("synthesizes an out-of-root ref when a non-index.md artifact-tree file does not resolve and no root contains it", async () => {
+    const synthesized = { id: "synth-content" };
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
+    mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue(synthesized);
+    const run = buildChatLinkPolicy(makeDeps({}));
+    const path = `/Users/them/.traycer/epics/${OPEN_EPIC_ID}/artifacts/report/assets/app.js`;
+
+    run(fileLink({ path }), lifecycle);
+    await flush();
+
+    expect(mocks.workspaceFileRefFromAbsoluteFilePath).toHaveBeenCalledWith(
+      CHAT_HOST_ID,
+      path,
     );
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent({ id: "content-1" }));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(synthesized));
+    expect(onAsyncFailure).not.toHaveBeenCalled();
+  });
+
+  it("probes relative candidates when a non-index.md artifact-tree file does not resolve", async () => {
+    const winner = {
+      id: "relative-winner",
+      workspacePath: "/repo",
+      filePath: "epics/other-epic/artifacts/report/app.js",
+    };
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      winner,
+    ]);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({
+        path: "../../.traycer/epics/other-epic/artifacts/report/app.js",
+      }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(mocks.fetchWorkspaceFileExists).toHaveBeenCalled();
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner));
   });
 
   it("falls back to the index.md candidate when the direct absolute target doesn't exist (A, C1)", async () => {
@@ -1049,7 +1107,7 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent({ id: "content-1" }));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner));
   });
 
   it("keeps the artifact-null fallback a no-op with out-of-root synthesis disabled (D5)", async () => {
@@ -1066,6 +1124,26 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.workspaceFileRefFromAbsoluteFilePath).not.toHaveBeenCalled();
     expect(openTile).not.toHaveBeenCalled();
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an index.md artifact link that resolves null from synthesizing an out-of-root ref, unlike other artifact-tree files", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
+    mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue({
+      id: "must-not-open",
+    });
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({
+        path: `/Users/them/.traycer/epics/${OPEN_EPIC_ID}/artifacts/some-spec/index.md`,
+      }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(mocks.workspaceFileRefFromAbsoluteFilePath).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("reports a rejected artifact resolution when its safe fallback cannot open", async () => {
