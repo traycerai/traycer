@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
@@ -147,18 +147,16 @@ function mountViewer(
   return harness;
 }
 
-function everyRequestWentToTheWindowsHost(
+function everyRequestWentToThePool(
   harness: TeamPageHarness,
   method: string,
 ): void {
   expect(hostIdsOf(harness, method)).not.toHaveLength(0);
-  expect(new Set(hostIdsOf(harness, method))).toEqual(
-    new Set([mockLocalHostEntry.hostId]),
-  );
+  expect(new Set(hostIdsOf(harness, method))).toEqual(new Set([POOL_HOST_ID]));
 }
 
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
-  it("shows the item's values, read from the window's host", async () => {
+  it("shows the item's values, read through the server pool", async () => {
     const harness = mountViewer(() => ({ items: [SANDBOX_DEFAULTS_ITEM] }));
 
     await waitFor(() => {
@@ -169,17 +167,14 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toContain(
       "45",
     );
-    everyRequestWentToTheWindowsHost(
-      harness,
-      "environment.configuration.items",
-    );
+    everyRequestWentToThePool(harness, "environment.configuration.items");
   });
 
-  it("names the editors a viewer can ask, read from the window's host", async () => {
+  it("names the editors a viewer can ask, read through the server pool", async () => {
     const harness = mountViewer(() => ({ items: [SANDBOX_DEFAULTS_ITEM] }));
 
     expect(await screen.findByText("Ada, Bo can change them")).toBeTruthy();
-    everyRequestWentToTheWindowsHost(harness, "environment.members");
+    everyRequestWentToThePool(harness, "environment.members");
   });
 
   it("says the defaults could not be read, with Retry and none of the value rows", async () => {

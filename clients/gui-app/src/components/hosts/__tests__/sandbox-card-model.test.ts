@@ -88,10 +88,17 @@ const THAWED_ACTIONS: Record<HostSandboxState, readonly SandboxCardAction[]> = {
   released: [],
 };
 
+const TEAM_POD_ACTIONS: Record<HostSandboxState, readonly SandboxCardAction[]> =
+  {
+    ...THAWED_ACTIONS,
+    awake: ["stop", "destroy"],
+    released: ["start", "destroy"],
+  };
+
 describe("sandboxCardActions", () => {
   it("offers each state exactly the verbs the control plane accepts from it", () => {
     for (const state of HOST_SANDBOX_STATES) {
-      expect(sandboxCardActions(state, false, "agent")).toEqual(
+      expect(sandboxCardActions(state, false, "agent", false)).toEqual(
         THAWED_ACTIONS[state],
       );
     }
@@ -106,7 +113,9 @@ describe("sandboxCardActions", () => {
       "stopped",
       "failed",
     ] as const) {
-      expect(sandboxCardActions(state, true, "agent")).toEqual(["destroy"]);
+      expect(sandboxCardActions(state, true, "agent", false)).toEqual([
+        "destroy",
+      ]);
     }
   });
 
@@ -119,28 +128,43 @@ describe("sandboxCardActions", () => {
       "destroyed",
       "released",
     ] as const) {
-      expect(sandboxCardActions(state, true, "agent")).toEqual([]);
+      expect(sandboxCardActions(state, true, "agent", false)).toEqual([]);
     }
   });
 
   it("never offers a wake verb to a frozen row, which would only answer sandbox_frozen", () => {
     for (const state of HOST_SANDBOX_STATES) {
-      const actions = sandboxCardActions(state, true, "agent");
+      const actions = sandboxCardActions(state, true, "agent", false);
       expect(actions).not.toContain("resume");
       expect(actions).not.toContain("start");
     }
   });
 
-  it("offers the Automations row no card action in any state, frozen or not", () => {
-    for (const state of ["awake", "released", "starting", "failed"] as const) {
-      expect(sandboxCardActions(state, false, "automation")).toEqual([]);
+  it("offers the person's own Automations row no card action in any state, frozen or not", () => {
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxCardActions(state, false, "automation", false)).toEqual([]);
+      expect(sandboxCardActions(state, true, "automation", false)).toEqual([]);
     }
-    expect(sandboxCardActions("released", true, "automation")).toEqual([]);
-    expect(sandboxCardActions("awake", true, "automation")).toEqual([]);
+  });
+
+  it("offers a team pod Stop and Start in place of suspend, with Destroy, in each state", () => {
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxCardActions(state, false, "automation", true)).toEqual(
+        TEAM_POD_ACTIONS[state],
+      );
+    }
+  });
+
+  it("offers a frozen team pod Destroy and nothing else wherever its state has Destroy", () => {
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxCardActions(state, true, "automation", true)).toEqual(
+        TEAM_POD_ACTIONS[state].includes("destroy") ? ["destroy"] : [],
+      );
+    }
   });
 
   it("leaves an awake agent row suspend, stop and destroy", () => {
-    expect(sandboxCardActions("awake", false, "agent")).toEqual([
+    expect(sandboxCardActions("awake", false, "agent", false)).toEqual([
       "suspend",
       "stop",
       "destroy",
@@ -148,8 +172,8 @@ describe("sandboxCardActions", () => {
   });
 
   it("offers an unknown state nothing, frozen or not", () => {
-    expect(sandboxCardActions(null, false, "agent")).toEqual([]);
-    expect(sandboxCardActions(null, true, "agent")).toEqual([]);
+    expect(sandboxCardActions(null, false, "agent", false)).toEqual([]);
+    expect(sandboxCardActions(null, true, "agent", false)).toEqual([]);
   });
 });
 

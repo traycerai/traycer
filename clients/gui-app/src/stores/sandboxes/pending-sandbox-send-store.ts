@@ -1,6 +1,8 @@
 import {
   decodePendingSandboxObservation,
+  pendingSandboxOperationResultCurrent,
   type PendingSandboxObservation,
+  type PendingSandboxPresence,
 } from "@/lib/sandboxes/pending-sandbox-observation";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -133,6 +135,8 @@ export interface PendingSandboxSend {
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
+  /** A create response names a row; only a successful read proves it was listed. */
+  readonly createdSandbox?: PendingSandboxPresence;
   /** Original-account observation survives auth clearing the transient stage. */
   readonly stopStage?: StagedSandbox;
   readonly retryRequest?: PendingDispatchRetryRequest;
@@ -151,14 +155,26 @@ interface PendingSandboxSendStoreState {
     plan: PendingSendTransition,
   ) => number | null;
   readonly ensureObservationBoundary: (id: string) => void;
+  readonly recordCreatedSandbox: (id: string, sandboxId: string) => boolean;
+  readonly markSandboxRowSeen: (
+    id: string,
+    sandboxId: string,
+    observation: PendingSandboxObservation,
+  ) => boolean;
   readonly confirmEpic: (id: string) => void;
   readonly beginDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
   ) => boolean;
-  readonly markDispatchUncertain: (id: string) => void;
+  readonly markDispatchUncertain: (
+    id: string,
+    dispatch: PendingSandboxSendDispatch,
+  ) => void;
   readonly requestDispatchRetry: (id: string) => string | null;
-  readonly refuseDispatch: (id: string) => void;
+  readonly refuseDispatch: (
+    id: string,
+    dispatch: PendingSandboxSendDispatch,
+  ) => void;
   readonly endDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch | null,
@@ -191,18 +207,21 @@ export function pendingSandboxSendFacts(
   const send = sends[id];
   const stored = storedSend(id);
   const dispatch = send.dispatch ?? null;
+  const authoritativeSend = {
+    ...send,
+    createdSandbox:
+      storedSandboxPresence(stored) ?? unobservedCreatedSandbox(id),
+    observationRequestedAt:
+      typeof stored?.observationRequestedAt === "number"
+        ? stored.observationRequestedAt
+        : undefined,
+    stopRequestedAt:
+      typeof stored?.stopRequestedAt === "number"
+        ? stored.stopRequestedAt
+        : undefined,
+  };
   const observedHost = decodePendingSandboxObservation(
-    {
-      ...send,
-      observationRequestedAt:
-        typeof stored?.observationRequestedAt === "number"
-          ? stored.observationRequestedAt
-          : undefined,
-      stopRequestedAt:
-        typeof stored?.stopRequestedAt === "number"
-          ? stored.stopRequestedAt
-          : undefined,
-    },
+    authoritativeSend,
     environment.host,
     environment.observation,
   );
@@ -211,8 +230,10 @@ export function pendingSandboxSendFacts(
     host: observedHost,
     current:
       durableSendMatches(send, stored, dispatch) &&
-      (environment.observation.kind !== "dispatch-result" ||
-        observedHost !== "unknown"),
+      pendingSandboxOperationResultCurrent(
+        authoritativeSend,
+        environment.observation,
+      ),
     terminalDisposition: stored?.ended === true,
     stopRequested: stored?.stopRequested === true,
     accountActive:
@@ -225,6 +246,79 @@ export function pendingSandboxSendFacts(
         ? pendingSandboxDispatchCurrent(id, dispatch)
         : pendingSandboxSendWithdrawalState(id) === "claimed",
   };
+}
+
+function storedSandboxPresence(
+  stored: Record<string, unknown> | null,
+): PendingSandboxPresence | undefined {
+  const presence = stored?.createdSandbox;
+  if (
+    typeof presence !== "object" ||
+    presence === null ||
+    !("sandboxId" in presence) ||
+    typeof presence.sandboxId !== "string" ||
+    !("rowSeen" in presence) ||
+    typeof presence.rowSeen !== "boolean"
+  )
+    return undefined;
+  return { sandboxId: presence.sandboxId, rowSeen: presence.rowSeen };
+}
+
+/** A resumed creating stage may know its id only from the old create response. */
+function unobservedCreatedSandbox(
+  id: string,
+): PendingSandboxPresence | undefined {
+  const stage = readStagedSandbox(pendingSendSurfaceKey(id));
+  return stage?.phase === "creating" &&
+    stage.target.kind === "new" &&
+    stage.createdSandboxId !== null
+    ? { sandboxId: stage.createdSandboxId, rowSeen: false }
+    : undefined;
+}
+
+/** A stale progress writer cannot erase a read already proved for this identity. */
+function sandboxPresenceForWrite(
+  send: PendingSandboxSend,
+): PendingSandboxPresence | undefined {
+  const stored = storedSandboxPresence(storedSend(send.id));
+  if (send.createdSandbox === undefined) return stored;
+  return stored?.sandboxId === send.createdSandbox.sandboxId && stored.rowSeen
+    ? stored
+    : send.createdSandbox;
+}
+
+/** Presence is owner metadata; failed persistence never authorizes absence. */
+function persistSandboxPresence(
+  id: string,
+  presence: PendingSandboxPresence,
+): boolean {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return false;
+  const send = sends[id];
+  const facts = pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS);
+  if (!facts.current || !facts.accountActive || !facts.owns) return false;
+  try {
+    usePendingSandboxSendStore.setState({
+      sends: {
+        ...sends,
+        [id]: { ...send, createdSandbox: presence },
+      },
+    });
+  } catch {
+    /* A partial header write may still have persisted the record. */
+  }
+  const stored = storedSandboxPresence(storedSend(id));
+  if (
+    stored?.sandboxId === presence.sandboxId &&
+    stored.rowSeen === presence.rowSeen
+  )
+    return true;
+  try {
+    usePendingSandboxSendStore.setState({ sends });
+  } catch {
+    /* The prior record retains the send and its last proven presence. */
+  }
+  return false;
 }
 
 /** Progress may be stale, but no changed claim, receipt or Stop identity can be acted on. */
@@ -324,6 +418,36 @@ export function holdPendingSandboxStageObservation(
     }),
   );
   return usePendingSandboxSendStore.getState().holdObservation(id, plan);
+}
+
+/** A newly accepted create is persisted before the runner publishes its id. */
+export function recordPendingSandboxStageCreated(
+  surfaceKey: string,
+  sandboxId: string,
+): boolean {
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
+  return usePendingSandboxSendStore
+    .getState()
+    .recordCreatedSandbox(
+      surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
+      sandboxId,
+    );
+}
+
+/** Core runner reads share the same durable presence evidence as visible watchers. */
+export function markPendingSandboxStageRowSeen(
+  surfaceKey: string,
+  sandboxId: string,
+  observation: PendingSandboxObservation,
+): boolean {
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
+  const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
+  const presence =
+    storedSandboxPresence(storedSend(id)) ?? unobservedCreatedSandbox(id);
+  if (presence === undefined) return true;
+  return usePendingSandboxSendStore
+    .getState()
+    .markSandboxRowSeen(id, sandboxId, observation);
 }
 
 function pendingDecision(
@@ -545,6 +669,29 @@ export const usePendingSandboxSendStore =
           }
           return null;
         },
+        recordCreatedSandbox: (id, sandboxId) => {
+          const prior = storedSandboxPresence(storedSend(id));
+          if (prior?.sandboxId === sandboxId) return true;
+          return persistSandboxPresence(id, { sandboxId, rowSeen: false });
+        },
+        markSandboxRowSeen: (id, sandboxId, observation) => {
+          const prior =
+            storedSandboxPresence(storedSend(id)) ??
+            unobservedCreatedSandbox(id);
+          if (prior?.sandboxId !== sandboxId) return false;
+          if (prior.rowSeen) return true;
+          if (
+            observation.kind !== "list" ||
+            observation.missingSandboxId !== undefined ||
+            pendingSandboxSendFacts(id, {
+              ...UNKNOWN_PENDING_SEND_FACTS,
+              host: "awake",
+              observation,
+            }).host === "unknown"
+          )
+            return false;
+          return persistSandboxPresence(id, { sandboxId, rowSeen: true });
+        },
         confirmEpic: (id) =>
           set((state) => {
             if (!Object.hasOwn(state.sends, id)) return state;
@@ -610,15 +757,18 @@ export const usePendingSandboxSendStore =
             storedSend(id)?.observationRequestedAt === boundary
           );
         },
-        markDispatchUncertain: (id) => {
+        markDispatchUncertain: (id, captured) => {
           try {
             set((state) => ({
               sends: withDispatch(state.sends, id, (dispatch) =>
-                pendingDecision(
-                  state.sends[id],
-                  "transport-fail",
-                  UNKNOWN_PENDING_SEND_FACTS,
-                ).effects.includes("uncertain")
+                pendingDecision(state.sends[id], "transport-fail", {
+                  ...UNKNOWN_PENDING_SEND_FACTS,
+                  observation: {
+                    kind: "dispatch-result",
+                    chatId: captured.input.chatId,
+                    hostId: captured.input.hostId,
+                  },
+                }).effects.includes("uncertain")
                   ? { ...dispatch, status: "uncertain" }
                   : dispatch,
               ),
@@ -652,14 +802,17 @@ export const usePendingSandboxSendStore =
             void usePendingSandboxSendStore.persist.rehydrate();
           return request;
         },
-        refuseDispatch: (id) =>
+        refuseDispatch: (id, captured) =>
           set((state) => ({
             sends: withDispatch(state.sends, id, (dispatch) =>
-              pendingDecision(
-                state.sends[id],
-                "known-refusal",
-                UNKNOWN_PENDING_SEND_FACTS,
-              ).effects.includes("known-refusal")
+              pendingDecision(state.sends[id], "known-refusal", {
+                ...UNKNOWN_PENDING_SEND_FACTS,
+                observation: {
+                  kind: "dispatch-result",
+                  chatId: captured.input.chatId,
+                  hostId: captured.input.hostId,
+                },
+              }).effects.includes("known-refusal")
                 ? null
                 : dispatch,
             ),
@@ -869,7 +1022,11 @@ export const usePendingSandboxSendStore =
           sends: Object.fromEntries(
             Object.entries(state.sends).map(([id, send]) => [
               id,
-              { ...send, content: stripBase64ImageNodes(send.content) },
+              {
+                ...send,
+                createdSandbox: sandboxPresenceForWrite(send),
+                content: stripBase64ImageNodes(send.content),
+              },
             ]),
           ),
         }),

@@ -415,6 +415,24 @@ describe("runStagedSandbox through the query cache", () => {
   });
 });
 
+describe("runStagedSandbox on a created sandbox the list has not shown yet", () => {
+  const awake = listOf(row({ state: "awake", guestConfigured: true }));
+  const missing: SandboxListFetchResult = {
+    kind: "ok",
+    response: { sandboxes: [] },
+  };
+
+  it("keeps the old reading for a stage that is no pending send's: no record of an accepted create, so a missing row is gone", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness({ lists: [missing, missing, awake] }, true);
+
+    await run(false, deps);
+
+    expect(auth.listReads).toBe(1);
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+  });
+});
+
 describe("runStagedSandbox refusals", () => {
   it("stops on a create that threw instead of waiting forever", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
@@ -960,6 +978,142 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     onTestFinished(ownership.release);
     await ownership.ready;
   }
+
+  it("records the accepted create on the pending send before any read, waits through two fresh misses, then marks its row seen on the read that lists it", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const miss = (): SandboxListFetchResult => ({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    const { auth, deps } = harness(
+      {
+        lists: [
+          miss(),
+          miss(),
+          listOf(row({ state: "awake", guestConfigured: true })),
+        ],
+      },
+      true,
+    );
+    const request = usePendingSandboxSendStore.getState().sends[SEND];
+    const boundary = Math.max(
+      request.createdAt,
+      request.observationRequestedAt ?? 0,
+    );
+    // Every clock sample from here on is later than the last: each read's
+    // send time is after the request boundary by construction.
+    let clock = boundary + 1_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => (clock += 1));
+    onTestFinished(() => now.mockRestore());
+    const recordAtRead: Array<unknown> = [];
+    const read = auth.listSandboxes.bind(auth);
+    vi.spyOn(auth, "listSandboxes").mockImplementation(() => {
+      recordAtRead.push(
+        usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+      );
+      return read();
+    });
+
+    await run(false, deps);
+
+    expect(auth.listReads).toBeGreaterThanOrEqual(3);
+    // The accepted create is on the record before the first read, and the
+    // two misses leave it unseen rather than calling the sandbox gone.
+    expect(recordAtRead.slice(0, 3)).toEqual([
+      { sandboxId: SANDBOX_ID, rowSeen: false },
+      { sandboxId: SANDBOX_ID, rowSeen: false },
+      { sandboxId: SANDBOX_ID, rowSeen: false },
+    ]);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+    expect(stageOf()).toMatchObject({ phase: "handoff" });
+    expect(stageOf().failure).toBeNull();
+  });
+
+  it("calls the sandbox gone when a fresh read misses a row an earlier read had seen, with rowSeen kept true", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { deps } = harness(
+      {
+        lists: [
+          listOf(row({ state: "creating" })),
+          { kind: "ok", response: { sandboxes: [] } },
+        ],
+      },
+      true,
+    );
+
+    // Each read is sent strictly after the one before and the request boundary.
+    const request = usePendingSandboxSendStore.getState().sends[SEND];
+    let clock = Math.max(
+      request.createdAt,
+      request.observationRequestedAt ?? 0,
+    );
+    const now = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (clock += 1_000));
+    onTestFinished(() => now.mockRestore());
+
+    await run(false, deps);
+
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+  });
+
+  it("does not hand off while the seen marker cannot be stored, and does once storage takes it", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    // Quota: the record takes the unseen marker, then refuses the seen one.
+    const failedWrite = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key.includes(SEND) && value.includes('"rowSeen":true'))
+          throw new Error("quota exceeded");
+        originalSetItem.call(this, key, value);
+      });
+    onTestFinished(() => failedWrite.mockRestore());
+    const read = auth.listSandboxes.bind(auth);
+    vi.spyOn(auth, "listSandboxes").mockImplementation(() => {
+      // The third read finds storage working again.
+      if (auth.listReads === 2) failedWrite.mockRestore();
+      return read();
+    });
+
+    await run(false, deps);
+
+    // Handing off on the first read would leave a claim that can never use absence.
+    expect(auth.listReads).toBeGreaterThanOrEqual(3);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+    expect(stageOf()).toMatchObject({ phase: "handoff" });
+  });
+
+  it("times out a never-seen create after its budget ends, rather than calling it gone", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, deps } = harness(
+      { lists: [{ kind: "ok", response: { sandboxes: [] } }] },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.listReads).toBeGreaterThan(1);
+    expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
+    ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+  });
 
   it("runs a stage for a pending send that holds no Stop, which is what makes the Stop cases below a real difference", async () => {
     await pendingOwnerWith(false);

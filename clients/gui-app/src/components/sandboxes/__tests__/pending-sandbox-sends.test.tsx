@@ -73,6 +73,7 @@ import {
 import { PERSONAL_CONFIGURATION_ID } from "@/lib/settings-environment-pages";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -181,7 +182,7 @@ const mocks = vi.hoisted(() => ({
     (
       hostId: string,
       gesture: SandboxVerbGesture,
-    ) => Promise<{ readonly kind: "awake" }>
+    ) => Promise<{ readonly kind: "awake" } | null>
   >(),
   /** What reached the sandbox's client, in order: puts, then the create. */
   wire: [] as string[],
@@ -1872,7 +1873,11 @@ describe("a send whose sandbox cannot take it", () => {
     async (kind) => {
       seed({
         ...SEEDED,
-        send: kind === "fork" ? { request: FORK_REQUEST } : {},
+        send: {
+          ...(kind === "fork" ? { request: FORK_REQUEST } : {}),
+          // A row the list once showed: its absence now is real.
+          createdSandbox: { sandboxId: SANDBOX_ID, rowSeen: true },
+        },
         phase: "creating",
         created: true,
       });
@@ -2100,6 +2105,84 @@ describe("a send whose task may not exist yet", () => {
       ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
       expect(createChatCalls()).toEqual([]);
     } finally {
+      restoreLocks();
+    }
+  });
+
+  it("waits through reads that have not listed the accepted create yet, and calls it gone only after a read has seen it", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      const fresh = Date.now() + 60_000;
+      // An accepted create still booting (not the handoff, which implies a seen row).
+      seed({ ...SEEDED, phase: "creating", created: true });
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+      // Reads so far predate the request, so they prove nothing either way.
+      mocks.listReadSentAt = 0;
+      answerSandboxRows([], 0);
+      mount();
+      // The runner records the accepted create under the owner the driver holds.
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore
+            .getState()
+            .recordCreatedSandbox(SEND_ID, SANDBOX_ID),
+        ).toBe(true);
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.createdSandbox,
+      ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+
+      mocks.listReadSentAt = fresh;
+      answerSandboxRows([], fresh);
+      // Fresh reads miss the row: it has never been seen, so it is not gone.
+      mocks.listReadSentAt = fresh + 1;
+      answerSandboxRows([], fresh + 1);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+
+      const row = sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "awake",
+      });
+      mocks.listSandboxes.mockResolvedValue(listAnswers([row]));
+      mocks.listReadSentAt = fresh + 2;
+      answerSandboxRows([row], fresh + 2);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.createdSandbox,
+        ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+      });
+
+      // Seen once, then missing: now it is gone.
+      mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+      mocks.listReadSentAt = fresh + 3;
+      answerSandboxRows([], fresh + 3);
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(createChatCalls()).toEqual([]);
+    } finally {
+      cleanup();
+      // The run the driver took up must end before the shared surface is reused.
+      await waitFor(
+        () => {
+          expect(stagedRunActive(SURFACE)).toBe(false);
+        },
+        { timeout: 8000 },
+      );
       restoreLocks();
     }
   });
@@ -4218,7 +4301,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       if (requestId === null) throw new Error("the request was not recorded");
 
       // A window holding the older record persists its own progress afterwards.
-      usePendingSandboxSendStore.getState().markDispatchUncertain(SEND_ID);
+      const saved =
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch ?? null;
+      if (saved === null) throw new Error("the claim was not saved");
+      usePendingSandboxSendStore
+        .getState()
+        .markDispatchUncertain(SEND_ID, saved);
       await reloadPendingSandboxStores();
 
       expect(
@@ -4227,6 +4315,206 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
       ).toMatchObject({ status: "uncertain" });
+    },
+  );
+
+  /** Retry on an uncertain claim whose sandbox rests: the owner starts one wake we hold open. */
+  async function startClaimedWake(kind: Kind): Promise<{
+    readonly input: PendingSandboxSendDispatch["input"];
+    readonly wake: Deferred<{ readonly kind: "awake" } | null>;
+  }> {
+    const input = await seedClaim(kind, "uncertain", SANDBOX_ID);
+    answerSandboxRows([rowIn("suspended")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const wake = deferred<{ readonly kind: "awake" } | null>();
+    mocks.wake.mockReturnValue(wake.promise);
+    mount();
+    fireEvent.click(
+      await screen.findByTestId("pending-sandbox-dispatch-retry"),
+    );
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    return { input, wake };
+  }
+
+  it.each(KINDS)(
+    "latches the wake remedy when the %s claim's own wake fails",
+    async (kind) => {
+      const { wake } = await startClaimedWake(kind);
+
+      await act(async () => {
+        wake.resolve(null);
+        await wake.promise;
+      });
+
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+        ).toMatchObject({ blocker: "wake" });
+      });
+    },
+  );
+
+  it.each(KINDS)(
+    "ignores a %s claim's wake failure whose boundary a later request superseded: no wake remedy, and fresh work continues",
+    async (kind) => {
+      const { input, wake } = await startClaimedWake(kind);
+      // A later accepted request moves the observation boundary on.
+      const superseding = Date.now() + 60_000;
+      usePendingSandboxSendStore.setState((state) => ({
+        sends: {
+          ...state.sends,
+          [SEND_ID]: {
+            ...state.sends[SEND_ID],
+            observationRequestedAt: superseding,
+          },
+        },
+      }));
+
+      await act(async () => {
+        wake.resolve(null);
+        await wake.promise;
+      });
+
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).not.toMatchObject({ blocker: "wake" });
+      expect(screen.queryByText("Couldn't resume this sandbox.")).toBeNull();
+
+      // A row sent after the newer boundary lets the newer work go on.
+      mocks.listReadSentAt = superseding + 1;
+      answerSandboxRows([rowIn("awake")], FRESH + 1);
+      await waitForCreateChats(1);
+      expect(createChatCalls()[0]?.input).toEqual(input);
+    },
+  );
+
+  it.each(KINDS)(
+    "issues the newer request's own wake when a superseded %s wake fails and a fresh read still shows the sandbox resting",
+    async (kind) => {
+      const { input, wake } = await startClaimedWake(kind);
+      const superseding = Date.now() + 60_000;
+      usePendingSandboxSendStore.setState((state) => ({
+        sends: {
+          ...state.sends,
+          [SEND_ID]: {
+            ...state.sends[SEND_ID],
+            observationRequestedAt: superseding,
+          },
+        },
+      }));
+      const second = deferred<{ readonly kind: "awake" } | null>();
+      mocks.wake.mockReturnValue(second.promise);
+
+      await act(async () => {
+        wake.resolve(null);
+        await wake.promise;
+      });
+      // A read sent after the newer boundary: still resting.
+      mocks.listReadSentAt = superseding + 1;
+      answerSandboxRows([rowIn("suspended")], FRESH + 1);
+
+      // The old flag must not hold the newer intent's wake back.
+      await waitFor(() => {
+        expect(mocks.wake).toHaveBeenCalledTimes(2);
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).not.toMatchObject({ blocker: "wake" });
+
+      await act(async () => {
+        second.resolve({ kind: "awake" });
+        await second.promise;
+      });
+      mocks.listReadSentAt = superseding + 2;
+      answerSandboxRows([rowIn("awake")], FRESH + 2);
+      await waitForCreateChats(1);
+      expect(createChatCalls()).toHaveLength(1);
+      expect(createChatCalls()[0]?.input).toEqual(input);
+      expect(mocks.wake).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  /** A different claim now holds the record; the captured one belongs to an older request. */
+  async function seedCurrentClaimOther(kind: Kind): Promise<{
+    readonly captured: PendingSandboxSendDispatch;
+    readonly current: PendingSandboxSendDispatch;
+  }> {
+    const input = await seedClaim(kind, "sending", SANDBOX_ID);
+    const captured: PendingSandboxSendDispatch = {
+      input,
+      status: "sending",
+      delivery: {
+        chatId: input.chatId,
+        hostId: SANDBOX_HOST,
+        sandboxId: SANDBOX_ID,
+        readySeconds: 24,
+      },
+    };
+    const current: PendingSandboxSendDispatch = {
+      ...captured,
+      input: { ...input, chatId: `other-${kind}-chat-id` },
+      delivery: {
+        chatId: `other-${kind}-chat-id`,
+        hostId: SANDBOX_HOST,
+        sandboxId: SANDBOX_ID,
+        readySeconds: 24,
+      },
+    };
+    usePendingSandboxSendStore.setState((state) => ({
+      sends: {
+        ...state.sends,
+        [SEND_ID]: { ...state.sends[SEND_ID], dispatch: current },
+      },
+    }));
+    return { captured, current };
+  }
+
+  it.each(KINDS)(
+    "a stale transport failure of a captured %s claim leaves the current claim as it is",
+    async (kind) => {
+      const { captured, current } = await seedCurrentClaimOther(kind);
+
+      usePendingSandboxSendStore
+        .getState()
+        .markDispatchUncertain(SEND_ID, captured);
+
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).toEqual(current);
+    },
+  );
+
+  it.each(KINDS)(
+    "a stale refusal of a captured %s claim keeps the current claim",
+    async (kind) => {
+      const { captured, current } = await seedCurrentClaimOther(kind);
+
+      usePendingSandboxSendStore.getState().refuseDispatch(SEND_ID, captured);
+
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).toEqual(current);
+    },
+  );
+
+  it.each(KINDS)(
+    "a transport failure and a refusal of the current %s claim still apply",
+    async (kind) => {
+      const { current } = await seedCurrentClaimOther(kind);
+
+      usePendingSandboxSendStore
+        .getState()
+        .markDispatchUncertain(SEND_ID, current);
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).toMatchObject({ status: "uncertain" });
+
+      usePendingSandboxSendStore.getState().refuseDispatch(SEND_ID, current);
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).toBeNull();
     },
   );
 
@@ -4310,9 +4598,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
 
       expect(createChatCalls()).toEqual([]);
       expect(mocks.wake).not.toHaveBeenCalled();
-      expect(
-        usePendingSandboxSendStore.getState().sends[SEND_ID].dispatch,
-      ).toMatchObject({ input, status: "uncertain" });
+      // The view projects the missing client at once; the owner records it next.
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID].dispatch,
+        ).toMatchObject({ input, status: "uncertain" });
+      });
       expect(useLandingDraftStore.getState().drafts).toEqual([]);
       expect(useNewConversationModalOpenStore.getState().request).toBeNull();
 
@@ -6000,5 +6291,190 @@ describe("an owner that takes up each kind of retry request", () => {
       expect(mocks.wake).toHaveBeenCalledTimes(1);
     });
     expect(atWake[0]).toBeGreaterThan(before);
+  });
+});
+
+describe("the record of an accepted create and the row it was seen as", () => {
+  let restoreLocks: () => void;
+  const freshList = (sentAt: number) =>
+    ({ kind: "list", sentAt, mountedAt: 0 }) as const;
+
+  /** The accepted create still booting, held by this window's driver. */
+  function ownedWithHandedSend(sendFields: Partial<PendingSandboxSend>): void {
+    seed({ ...SEEDED, phase: "creating", created: true, send: sendFields });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.listReadSentAt = 0;
+    answerSandboxRows([], 0);
+    mount();
+  }
+  const record = (sandboxId: string) =>
+    usePendingSandboxSendStore
+      .getState()
+      .recordCreatedSandbox(SEND_ID, sandboxId);
+  const markSeen = (
+    sandboxId: string,
+    observation: PendingSandboxObservation,
+  ) =>
+    usePendingSandboxSendStore
+      .getState()
+      .markSandboxRowSeen(SEND_ID, sandboxId, observation);
+  const stored = () =>
+    usePendingSandboxSendStore.getState().sends[SEND_ID]?.createdSandbox;
+
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(async () => {
+    cleanup();
+    // A run a case started on the shared surface must end before the next.
+    await waitFor(
+      () => {
+        expect(stagedRunActive(SURFACE)).toBe(false);
+      },
+      { timeout: 8000 },
+    );
+    restoreLocks();
+  });
+
+  it("is written unseen by the owner and read back, and a fresh present read marks it seen", async () => {
+    ownedWithHandedSend({});
+    await waitFor(() => {
+      expect(record(SANDBOX_ID)).toBe(true);
+    });
+    expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+    expect(markSeen(SANDBOX_ID, freshList(Date.now() + 60_000))).toBe(true);
+    expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+  });
+
+  it("survives a reload, seen or not", async () => {
+    ownedWithHandedSend({});
+    await waitFor(() => {
+      expect(record(SANDBOX_ID)).toBe(true);
+    });
+    await reloadPendingSandboxStores();
+    expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+    mount();
+    await waitFor(() => {
+      expect(markSeen(SANDBOX_ID, freshList(Date.now() + 60_000))).toBe(true);
+    });
+    await reloadPendingSandboxStores();
+    expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+  });
+
+  it("is not undone by a stale window's snapshot of the same sandbox, but a new sandbox id still starts unseen", async () => {
+    ownedWithHandedSend({});
+    await waitFor(() => {
+      expect(record(SANDBOX_ID)).toBe(true);
+    });
+    const stale = usePendingSandboxSendStore.getState().sends;
+    expect(markSeen(SANDBOX_ID, freshList(Date.now() + 60_000))).toBe(true);
+
+    // A window holding the unseen record persists its own change afterwards.
+    usePendingSandboxSendStore.setState({
+      sends: {
+        ...stale,
+        [SEND_ID]: { ...stale[SEND_ID], observationRequestedAt: Date.now() },
+      },
+    });
+    await reloadPendingSandboxStores();
+    expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
+
+    mount();
+    await waitFor(() => {
+      expect(record("sbx_next")).toBe(true);
+    });
+    await reloadPendingSandboxStores();
+    expect(stored()).toEqual({ sandboxId: "sbx_next", rowSeen: false });
+  });
+
+  it("is about one sandbox: another id is not marked seen, and a new create id starts unseen again", async () => {
+    ownedWithHandedSend({});
+    await waitFor(() => {
+      expect(record(SANDBOX_ID)).toBe(true);
+    });
+    expect(markSeen("sbx_other", freshList(Date.now() + 60_000))).toBe(false);
+    expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+    expect(markSeen(SANDBOX_ID, freshList(Date.now() + 60_000))).toBe(true);
+    expect(record("sbx_next")).toBe(true);
+    expect(stored()).toEqual({ sandboxId: "sbx_next", rowSeen: false });
+  });
+
+  it.each([
+    ["a read sent before the request", freshList(0)],
+    [
+      "a read of unknown provenance",
+      { kind: "list", sentAt: null, mountedAt: 0 },
+    ],
+    [
+      "an absence",
+      {
+        kind: "list",
+        sentAt: Date.now() + 60_000,
+        mountedAt: 0,
+        missingSandboxId: SANDBOX_ID,
+      },
+    ],
+    ["a non-list observation", { kind: "intent" }],
+  ] as const)(
+    "does not mark the row seen on %s",
+    async (_name, observation) => {
+      ownedWithHandedSend({});
+      await waitFor(() => {
+        expect(record(SANDBOX_ID)).toBe(true);
+      });
+      expect(markSeen(SANDBOX_ID, observation)).toBe(false);
+      expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+    },
+  );
+
+  it("is never written for another account's send, or for a send nobody owns", async () => {
+    ownedWithHandedSend({ userId: "user-other" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(record(SANDBOX_ID)).toBe(false);
+    expect(stored()).toBeUndefined();
+    expect(
+      usePendingSandboxSendStore
+        .getState()
+        .recordCreatedSandbox("no-such-send", SANDBOX_ID),
+    ).toBe(false);
+  });
+
+  it("registers a resumed creating stage's learned id that has no record yet, and keeps waiting through misses instead of calling it gone", async () => {
+    const fresh = Date.now() + 60_000;
+    // Written before the record existed: created id on the stage, no metadata.
+    seed({ ...SEEDED, phase: "creating", created: true });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.listReadSentAt = fresh;
+    answerSandboxRows([], fresh);
+    mount();
+    mocks.listReadSentAt = fresh + 1;
+    answerSandboxRows([], fresh + 1);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(stored()).toEqual({ sandboxId: SANDBOX_ID, rowSeen: false });
+    });
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("is absent on a legacy record, which keeps the old reading and is not marked seen by a stranger id", async () => {
+    seed(SEEDED);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.listReadSentAt = 0;
+    answerSandboxRows([], 0);
+    mount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(stored()).toBeUndefined();
+    expect(markSeen(SANDBOX_ID, freshList(Date.now() + 60_000))).toBe(false);
+    expect(stored()).toBeUndefined();
   });
 });

@@ -58,21 +58,42 @@ const ACTIONS_BY_STATE: Record<HostSandboxState, readonly SandboxCardAction[]> =
     destroying: NO_ACTIONS,
     destroyed: NO_ACTIONS,
     failed: ["destroy"],
-    // Only the Automations host rests here, and it offers none.
+    // Only an Automations row rests here; a team pod's own table covers it.
     released: NO_ACTIONS,
   };
 
 /**
- * The Automations host (`kind: "automation"`) offers no lifecycle verb: its
- * actions are Open terminal and Rename, and the next shell starts it.
+ * A team pod's verbs (`kind: "automation"` on a team's row): it is `released`
+ * or `awake`, never suspended. `stop` releases it (scaled to zero, disk kept),
+ * `start` opens it, and a suspend would answer `409`, so it is never offered.
+ * The server destroys it like any row.
+ */
+const TEAM_POD_ACTIONS_BY_STATE: Record<
+  HostSandboxState,
+  readonly SandboxCardAction[]
+> = {
+  ...ACTIONS_BY_STATE,
+  awake: ["stop", "destroy"],
+  released: ["start", "destroy"],
+};
+
+/**
+ * The person's own Automations host (`kind: "automation"`, not a team's)
+ * offers no lifecycle verb: its actions are Open terminal and Rename, and the
+ * next shell starts it.
  */
 export function sandboxCardActions(
   state: HostSandboxState | null,
   frozen: boolean,
   kind: SandboxKind,
+  teamOwned: boolean,
 ): readonly SandboxCardAction[] {
-  if (state === null || kind === "automation") return NO_ACTIONS;
-  const actions = ACTIONS_BY_STATE[state];
+  if (state === null) return NO_ACTIONS;
+  if (kind === "automation" && !teamOwned) return NO_ACTIONS;
+  const actions =
+    kind === "automation"
+      ? TEAM_POD_ACTIONS_BY_STATE[state]
+      : ACTIONS_BY_STATE[state];
   if (frozen) {
     return actions.includes("destroy") ? FROZEN_ACTIONS : NO_ACTIONS;
   }

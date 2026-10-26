@@ -274,7 +274,7 @@ describe("useSandboxAutomationOpen", () => {
 
     expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
     expect(state.toastFromAuthError.mock.calls[0][1]).toBe(
-      "Couldn't start Automations.",
+      "Couldn't start Automations. Retry it from Settings ▸ Sandboxes.",
     );
     expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(invalidatedKeys(invalidate)).toEqual([REGISTERED_HOSTS_KEY]);

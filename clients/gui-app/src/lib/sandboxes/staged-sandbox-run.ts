@@ -19,6 +19,8 @@ import {
   pendingSandboxStageRunAllowed,
   holdPendingSandboxStageObservation,
   pendingSandboxStageObservation,
+  recordPendingSandboxStageCreated,
+  markPendingSandboxStageRowSeen,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
@@ -333,6 +335,11 @@ async function startStagedRun(
   const made = sandboxAlreadyMade(stage, fresh);
   if (made === null) return startTarget(run, stage.target, deps);
   if (
+    stage.target.kind === "new" &&
+    !recordPendingSandboxStageCreated(run.surfaceKey, made.sandboxId)
+  )
+    return null;
+  if (
     stage.failure?.kind === "failed" &&
     stage.failure.code === "wake" &&
     !(await wakeCurrentStage(
@@ -414,6 +421,7 @@ async function startTarget(
     return null;
   }
   const { sandboxId, hostId } = result.accepted;
+  if (!recordPendingSandboxStageCreated(surfaceKey, sandboxId)) return null;
   useStagedSandboxStore.getState().report(surfaceKey, {
     createdSandboxId: sandboxId,
     createdHostId: hostId,
@@ -629,11 +637,19 @@ async function readRow(
   else if (row.state === "awake") host = "awake";
   else if (row.state === "stopped" || row.state === "suspended")
     host = "resting";
-  return pendingSandboxStageObservation(surfaceKey, host, {
+  const observation = {
     kind: "list",
     sentAt: sandboxListReadSentAt(response),
     mountedAt: 0,
-  }) === "unknown"
+    missingSandboxId: row === null ? sandboxId : undefined,
+  } as const;
+  if (
+    row !== null &&
+    !markPendingSandboxStageRowSeen(surfaceKey, sandboxId, observation)
+  )
+    return undefined;
+  return pendingSandboxStageObservation(surfaceKey, host, observation) ===
+    "unknown"
     ? undefined
     : row;
 }

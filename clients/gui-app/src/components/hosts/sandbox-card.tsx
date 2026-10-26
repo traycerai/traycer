@@ -119,7 +119,9 @@ export function SandboxCard(props: {
   const { summary, state, frozen, teamOwned } = props.sandbox;
   const word = sandboxStateWord(props.sandbox);
   const actions =
-    summary === null ? [] : sandboxCardActions(state, frozen, summary.kind);
+    summary === null
+      ? []
+      : sandboxCardActions(state, frozen, summary.kind, teamOwned);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   return (
     <Card

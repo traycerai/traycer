@@ -785,11 +785,6 @@ function usePendingSandboxRowFacts(
   const send = usePendingSandboxSendStore((state) =>
     sendId === null ? null : (state.sends[sendId] ?? null),
   );
-  const observation: PendingSandboxObservation = {
-    kind: "list",
-    sentAt: sandboxListReadSentAt(sandboxList.data),
-    mountedAt,
-  };
   const rows = authoritativeSandboxRows({
     sandboxId,
     owner: userId,
@@ -799,8 +794,42 @@ function usePendingSandboxRowFacts(
   });
   const row =
     rows === null ? null : (rows.find((item) => item.id === sandboxId) ?? null);
+  const observation: PendingSandboxObservation = {
+    kind: "list",
+    sentAt: sandboxListReadSentAt(sandboxList.data),
+    mountedAt,
+    missingSandboxId: row === null ? (sandboxId ?? undefined) : undefined,
+  };
   const identityMatches =
     rows !== null && (row === null || row.hostId === hostId);
+  useEffect(() => {
+    if (
+      sendId !== null &&
+      sandboxId !== null &&
+      row !== null &&
+      identityMatches
+    )
+      usePendingSandboxSendStore
+        .getState()
+        .markSandboxRowSeen(sendId, sandboxId, {
+          kind: "list",
+          sentAt: sandboxListReadSentAt(sandboxList.data),
+          mountedAt,
+        });
+  }, [sendId, sandboxId, row, identityMatches, sandboxList.data, mountedAt]);
+  return {
+    ...pendingSandboxRowProjection(send, row, observation, identityMatches),
+    refetch,
+  };
+}
+
+/** A row's identity and decoded provenance must both admit its visible projection. */
+function pendingSandboxRowProjection(
+  send: PendingSandboxSend | null,
+  row: SandboxSummary | null,
+  observation: PendingSandboxObservation,
+  identityMatches: boolean,
+): Omit<PendingSandboxRowFacts, "refetch"> {
   const host = identityMatches ? pendingRowHost(row) : "unknown";
   const observedHost =
     send === null
@@ -821,7 +850,6 @@ function usePendingSandboxRowFacts(
     ready: verdict?.kind === "awake",
     failure: matching ? pendingSandboxFailure(row) : null,
     terminal,
-    refetch,
   };
 }
 
@@ -1529,7 +1557,9 @@ async function runPendingDispatch(
     ) {
       refusePendingDispatch(send, dispatch);
     } else {
-      usePendingSandboxSendStore.getState().markDispatchUncertain(send.id);
+      usePendingSandboxSendStore
+        .getState()
+        .markDispatchUncertain(send.id, dispatch);
     }
   } finally {
     dispatchesInFlight.delete(send.id);
@@ -1566,7 +1596,14 @@ function refusePendingDispatch(
   const decision = transitionPendingSend(
     pendingSendState(send, "none"),
     "known-refusal",
-    pendingSandboxSendFacts(send.id, UNKNOWN_PENDING_SEND_FACTS),
+    pendingSandboxSendFacts(send.id, {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      observation: {
+        kind: "dispatch-result",
+        chatId: dispatch.input.chatId,
+        hostId: dispatch.input.hostId,
+      },
+    }),
   );
   if (!decision.effects.includes("known-refusal")) return;
   if (decision.effects.includes("report-not-sent")) {
@@ -1590,7 +1627,7 @@ function refusePendingDispatch(
       );
     }
   }
-  usePendingSandboxSendStore.getState().refuseDispatch(send.id);
+  usePendingSandboxSendStore.getState().refuseDispatch(send.id, dispatch);
 }
 
 function finishDispatchUi(
@@ -1966,7 +2003,10 @@ function pendingStopDecision(
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
       host,
-      observation: { kind: "stop-result", requestedAt: boundary },
+      observation:
+        event === "stop"
+          ? { kind: "none" }
+          : { kind: "stop-result", requestedAt: boundary },
       sandboxKnown: (stage?.createdSandboxId ?? null) !== null,
       inFlight: stopsInFlight.has(id),
     }),

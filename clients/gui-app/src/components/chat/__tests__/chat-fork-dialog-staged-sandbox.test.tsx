@@ -59,6 +59,10 @@ const dialogMocks = vi.hoisted(() => ({
   selectHost: null as ((hostId: string) => void) | null,
   /** Whether the forked harness is available on the selected host. */
   harnessAvailable: true,
+  /** What the selected host's model catalog answers: a read that failed has no data. */
+  catalog: "loaded" as "loaded" | "failed" | "empty" | "loading",
+  /** The model the fork seeds; `""` is no picked model slug. */
+  seedModel: "claude-opus-4-7",
   /** The harness's sign-in on the dialog's host. */
   authStatus: "authenticated" as "authenticated" | "unauthenticated",
   publication: { kind: "unknown" } as ChatForkPublicationState,
@@ -289,24 +293,33 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     isPending: false,
   }),
   useGuiHarnessModelsQueryForClient: () => ({
-    data: {
-      models: [
-        {
-          harnessId: "claude",
-          slug: "claude-opus-4-7",
-          label: "Claude Opus",
-          description: null,
-          contextWindow: null,
-          maxOutputTokens: null,
-          defaultReasoningEffort: null,
-          supportedReasoningEfforts: [],
-          defaultServiceTier: null,
-          supportedServiceTiers: [],
-          metadata: {},
-        },
-      ],
-    },
-    isPending: false,
+    // `undefined` is how the toolbar store learns a catalog has not answered:
+    // still loading, or a read that failed.
+    data:
+      dialogMocks.catalog === "failed" || dialogMocks.catalog === "loading"
+        ? undefined
+        : {
+            models:
+              dialogMocks.catalog === "empty"
+                ? []
+                : [
+                    {
+                      harnessId: "claude",
+                      slug: "claude-opus-4-7",
+                      label: "Claude Opus",
+                      description: null,
+                      contextWindow: null,
+                      maxOutputTokens: null,
+                      defaultReasoningEffort: null,
+                      supportedReasoningEfforts: [],
+                      defaultServiceTier: null,
+                      supportedServiceTiers: [],
+                      metadata: {},
+                    },
+                  ],
+          },
+    isError: dialogMocks.catalog === "failed",
+    isPending: dialogMocks.catalog === "loading",
   }),
 }));
 
@@ -384,7 +397,7 @@ function forkTarget(): ChatForkDialogTarget {
     assistantMessageId: "assistant-message-1",
     interviewBlockId: null,
     parentId: null,
-    settingsSeed: SETTINGS_SEED,
+    settingsSeed: { ...SETTINGS_SEED, model: dialogMocks.seedModel },
     workspaceSeed: {
       workspace: {
         folders: [SOURCE_FOLDER.path],
@@ -488,6 +501,8 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     dialogMocks.stagingSeen.length = 0;
     dialogMocks.selectHost = null;
     dialogMocks.harnessAvailable = true;
+    dialogMocks.catalog = "loaded";
+    dialogMocks.seedModel = "claude-opus-4-7";
     dialogMocks.authStatus = "authenticated";
     dialogMocks.publication = { kind: "unknown" };
     dialogMocks.publicationReads.length = 0;
@@ -579,6 +594,71 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     expect(readStagedSandbox(pendingSendSurfaceKey(send.id))?.target).toEqual(
       NEW_SANDBOX,
     );
+  });
+
+  it.each(["failed", "empty", "loading"] as const)(
+    "hands Fork to the task as a pending fork though the selected host's model catalog is %s, and sends nothing on the tab's host",
+    async (catalog) => {
+      dialogMocks.publication = { kind: "covered" };
+      dialogMocks.catalog = catalog;
+      renderStaged(NEW_SANDBOX);
+      fillTitle();
+
+      expect(forkButton().disabled).toBe(false);
+      fireEvent.click(forkButton());
+
+      await waitFor(() => {
+        expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+      });
+      expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+      expect(onlyPendingSend().request.kind).toBe("fork");
+    },
+  );
+
+  it("hands Fork to the task with no picked model slug, leaving the model to the destination", async () => {
+    dialogMocks.publication = { kind: "covered" };
+    dialogMocks.catalog = "failed";
+    dialogMocks.seedModel = "";
+    renderStaged(NEW_SANDBOX);
+    fillTitle();
+
+    expect(forkButton().disabled).toBe(false);
+    fireEvent.click(forkButton());
+
+    await waitFor(() => {
+      expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+    expect(onlyPendingSend().request.kind).toBe("fork");
+  });
+
+  it("hands Fork to the task though the catalog of a selected EXISTING host failed", async () => {
+    dialogMocks.publication = { kind: "covered" };
+    dialogMocks.catalog = "failed";
+    dialogMocks.directoryHosts = [
+      directoryEntry(TAB_HOST_ID, "Tab host"),
+      directoryEntry(OLD_HOST_ID, "Old host"),
+    ];
+    dialogMocks.clientsByHostId.set(OLD_HOST_ID, buildHostClient(OLD_HOST_ID));
+    recordNegotiatedHostManifest(TAB_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    recordNegotiatedHostManifest(OLD_HOST_ID, {
+      "epic.createChat": { major: 1, minor: 1 },
+    });
+    renderStaged(NEW_SANDBOX);
+    act(() => {
+      dialogMocks.selectHost?.(OLD_HOST_ID);
+    });
+    fillTitle();
+
+    expect(forkButton().disabled).toBe(false);
+    fireEvent.click(forkButton());
+
+    await waitFor(() => {
+      expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(onlyPendingSend().request.kind).toBe("fork");
   });
 
   it("uses the staged sandbox as the unknown destination despite v1.0 source and selected hosts, then restores the selected host refusal when cleared", () => {

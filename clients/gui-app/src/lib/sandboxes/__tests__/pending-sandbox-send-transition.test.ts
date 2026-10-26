@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decodePendingSandboxObservation,
+  pendingSandboxOperationResultCurrent,
   type PendingSandboxObservation,
 } from "../pending-sandbox-observation";
 import {
@@ -3287,5 +3288,142 @@ describe("guard: only evidence tied to its own request settles a held send", () 
   it("no observation settles anything", () => {
     expect(decodeAtRest(held, { kind: "none" })).toBe("unknown");
     expect(decodeAtRest(null, { kind: "none" })).toBe("unknown");
+  });
+});
+
+describe("guard: a stale operation result is ignored; a matching failure stays current", () => {
+  const LIVE = ROWS.filter(
+    (row) =>
+      !["staged", "delivered", "cancelled", "returned"].includes(row.phase),
+  ).map((row) => row.id);
+  const RESULTS = [
+    "host-accept",
+    "known-refusal",
+    "transport-fail",
+    "late-accept",
+    "stop-result",
+    "stop-failed",
+  ] as const;
+
+  it.each(LIVE.flatMap((id) => RESULTS.map((event) => [id, event] as const)))(
+    "PS.%s.%s whose captured request no longer holds changes nothing",
+    (rowId, event) => {
+      const transition = run(stateOf("chat", rowId), event, {
+        ...factsFor(rowId, event),
+        current: false,
+      });
+      expect(transition.effects).toEqual([]);
+    },
+  );
+
+  const held = { createdAt: 100, observationRequestedAt: 200 };
+  const stopped = { createdAt: 100, stopRequested: true, stopRequestedAt: 300 };
+  const dispatching = {
+    createdAt: 100,
+    dispatch: { input: { chatId: "chat-1", hostId: "host-1" } },
+  };
+  it.each([
+    [stopped, { kind: "stop-result", requestedAt: 300 }, true],
+    [stopped, { kind: "stop-result", requestedAt: 299 }, false],
+    [stopped, { kind: "stop-result", requestedAt: null }, false],
+    [held, { kind: "stop-result", requestedAt: 200 }, false],
+    [held, { kind: "wake-result", requestedAt: 200 }, true],
+    [held, { kind: "wake-result", requestedAt: 199 }, false],
+    [stopped, { kind: "wake-result", requestedAt: 300 }, false],
+    [null, { kind: "wake-result", requestedAt: 200 }, false],
+    [
+      dispatching,
+      { kind: "dispatch-result", chatId: "chat-1", hostId: "host-1" },
+      true,
+    ],
+    [
+      dispatching,
+      { kind: "dispatch-result", chatId: "chat-2", hostId: "host-1" },
+      false,
+    ],
+    [
+      dispatching,
+      { kind: "dispatch-result", chatId: "chat-1", hostId: "host-2" },
+      false,
+    ],
+    [held, { kind: "list", sentAt: null, mountedAt: 0 }, true],
+    [held, { kind: "none" }, true],
+  ] as const)(
+    "request %j with result %j is current: %s",
+    (request, observation, expected) => {
+      expect(pendingSandboxOperationResultCurrent(request, observation)).toBe(
+        expected,
+      );
+    },
+  );
+
+  it("a matching failure stays current although it proves no host state", () => {
+    expect(
+      pendingSandboxOperationResultCurrent(stopped, {
+        kind: "stop-result",
+        requestedAt: 300,
+      }),
+    ).toBe(true);
+    expect(
+      decodePendingSandboxObservation(stopped, "unknown", {
+        kind: "stop-result",
+        requestedAt: 300,
+      }),
+    ).toBe("unknown");
+    expect(
+      decodePendingSandboxObservation(held, "unknown", {
+        kind: "wake-result",
+        requestedAt: 200,
+      }),
+    ).toBe("unknown");
+  });
+});
+
+describe("guard: a missing row is no evidence of absence for a create never seen", () => {
+  type Request = Parameters<typeof decodePendingSandboxObservation>[0];
+  const created = (rowSeen: boolean): Request => ({
+    createdAt: 100,
+    createdSandbox: { sandboxId: "sbx-1", rowSeen },
+  });
+  const fresh = 10_000;
+  const missing = (id: string): PendingSandboxObservation => ({
+    kind: "list",
+    sentAt: fresh,
+    mountedAt: 0,
+    missingSandboxId: id,
+  });
+
+  it.each([
+    ["a never-seen create's own absence", created(false), "sbx-1", "unknown"],
+    ["a seen create's absence", created(true), "sbx-1", "resting"],
+    ["another sandbox's absence", created(false), "sbx-2", "resting"],
+    [
+      "an absence for a legacy record without metadata",
+      { createdAt: 100 },
+      "sbx-1",
+      "resting",
+    ],
+    ["an absence with no request", null, "sbx-1", "resting"],
+  ] as const)("%s settles to %s", (_name, request, id, expected) => {
+    expect(
+      decodePendingSandboxObservation(request, "resting", missing(id)),
+    ).toBe(expected);
+  });
+
+  it("a present read of a never-seen create still settles, and a stale one never does", () => {
+    const present: PendingSandboxObservation = {
+      kind: "list",
+      sentAt: fresh,
+      mountedAt: 0,
+    };
+    expect(
+      decodePendingSandboxObservation(created(false), "awake", present),
+    ).toBe("awake");
+    expect(
+      decodePendingSandboxObservation(created(false), "awake", {
+        ...present,
+        sentAt: 50,
+      }),
+    ).toBe("unknown");
   });
 });

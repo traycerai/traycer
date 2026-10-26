@@ -6,6 +6,7 @@ export type PendingSandboxObservation =
       readonly kind: "list";
       readonly sentAt: number | null;
       readonly mountedAt: number;
+      readonly missingSandboxId?: string;
     }
   | { readonly kind: "stop-result"; readonly requestedAt: number | null }
   | { readonly kind: "wake-result"; readonly requestedAt: number | null }
@@ -16,11 +17,17 @@ export type PendingSandboxObservation =
     };
 
 type HostObservation = "unknown" | "awake" | "resting" | "waking" | "ended";
+export interface PendingSandboxPresence {
+  readonly sandboxId: string;
+  readonly rowSeen: boolean;
+}
+
 interface HeldSandboxRequest {
   readonly createdAt: number;
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
+  readonly createdSandbox?: PendingSandboxPresence;
   readonly delivery?: {
     readonly chatId: string;
     readonly hostId: string;
@@ -77,6 +84,23 @@ function confirmedObservationMatches(
   }
 }
 
+/** A matching failure remains current even when it proves no host state. */
+export function pendingSandboxOperationResultCurrent(
+  request: HeldSandboxRequest | null,
+  observation: PendingSandboxObservation,
+): boolean {
+  switch (observation.kind) {
+    case "stop-result":
+    case "wake-result":
+    case "dispatch-result":
+      return (
+        request !== null && confirmedObservationMatches(request, observation)
+      );
+    default:
+      return true;
+  }
+}
+
 /** All settlement evidence crosses this boundary, including confirmed operation results. */
 export function decodePendingSandboxObservation(
   request: HeldSandboxRequest | null,
@@ -86,7 +110,12 @@ export function decodePendingSandboxObservation(
   if (observation.kind === "list")
     return observation.sentAt !== null &&
       observation.sentAt >
-        pendingRequestBoundary(request, observation.mountedAt)
+        pendingRequestBoundary(request, observation.mountedAt) &&
+      !(
+        observation.missingSandboxId !== undefined &&
+        request?.createdSandbox?.sandboxId === observation.missingSandboxId &&
+        !request.createdSandbox.rowSeen
+      )
       ? host
       : "unknown";
   if (request === null) return "unknown";

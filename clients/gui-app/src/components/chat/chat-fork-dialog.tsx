@@ -569,7 +569,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagedSurfaceKey: forkSurfaceKey,
     },
   );
-  // Cross-host asks a DIFFERENT question from same-host, and only cross-host.
+  // An existing cross-host destination asks a DIFFERENT question from same-host.
   //
   // The toolbar store retains the previous host's slug across a retarget while
   // the new target's harness/model queries load, so a bare slug-length check
@@ -640,9 +640,12 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       client: selectedHostClient,
       harnessId: forkHarnessId,
     }) && forkStage === null;
+  // A stage's destination does not exist yet. Its driver validates the picked
+  // model there, or reads that sandbox's default when no slug was picked.
   const modelResolved =
-    modelSlugPresent &&
-    (!isCrossHost || catalogConfirmed || catalogSubstituted);
+    forkStage !== null ||
+    (modelSlugPresent &&
+      (!isCrossHost || catalogConfirmed || catalogSubstituted));
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"
