@@ -33,6 +33,11 @@ import {
   teamHostBoundary,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const reads = vi.hoisted(
   (): {
     scope: HostScope | null;

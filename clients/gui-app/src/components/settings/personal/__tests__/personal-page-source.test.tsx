@@ -73,6 +73,11 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const HOST_ID = "host-a";
 /** The window host's scope status; a case sets it before it mounts. */
 let windowScopeStatus: "ready" | "unreachable" | "vanished" = "ready";

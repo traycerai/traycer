@@ -9,6 +9,7 @@ import {
 } from "@/stores/auth/auth-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 export function useEnvironmentSecretsQuery(
   client: HostClient<HostRpcRegistry>,
@@ -18,6 +19,9 @@ export function useEnvironmentSecretsQuery(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // Secrets are an environment's: none are read without environments, and
+  // none while unread, which every page that shows them waits out anyway.
+  const environments = usePreviewFeature("environments");
   return useHostQuery({
     cacheKeyIdentity: environmentId === null ? undefined : [viewerId],
     client: usePoolTierHostClient(client),
@@ -36,6 +40,7 @@ export function useEnvironmentSecretsQuery(
           },
     options: {
       enabled:
+        environments === "on" &&
         resolved &&
         (environmentId === null || (viewerId.length > 0 && authorized)),
     },

@@ -49,6 +49,11 @@ import {
   pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const HOST_ID = "host-a";
 const HOST_NAME = "dev-box";
 const STATUS_METHODS = ["environment.status", "environment.localOverrides"];

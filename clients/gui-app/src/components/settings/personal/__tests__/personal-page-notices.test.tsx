@@ -89,6 +89,11 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();

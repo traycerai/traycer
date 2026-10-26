@@ -67,6 +67,7 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { providerRailStateWord } from "./provider-rail-state-word";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
@@ -1897,14 +1898,17 @@ function ProviderTabBody({
 
 /**
  * The MCP tab. On Personal, read here through the window's host that runs
- * it, it switches Personal's own servers for this provider; a Local row
- * keeps that computer's own list.
+ * it, it switches Personal's own servers for this provider; a Local row,
+ * and every pick without environments, keeps that computer's own list.
  */
 function ProviderMcpTabBody(props: {
   readonly state: ProviderCliState;
 }): ReactNode {
   const { state } = props;
-  const personal = useEnvironmentPick().kind === "personal";
+  // Unread keeps the host's own tab, a rendering the read can replace.
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  const personal = pick.kind === "personal" && environments === "on";
   const mcp = state.nativeCapabilities.mcp;
   if (mcp === null) {
     return (
@@ -1934,11 +1938,17 @@ function ProviderMcpTabBody(props: {
   );
 }
 
-/** The Skills tab: Personal's skills for this provider, or a Local row's own. */
+/**
+ * The Skills tab: Personal's skills for this provider, or the computer's own
+ * on a Local row and on every pick without environments.
+ */
 function ProviderSkillsTabBody(props: {
   readonly state: ProviderCliState;
 }): ReactNode {
-  const personal = useEnvironmentPick().kind === "personal";
+  // Unread keeps the host's own tab, a rendering the read can replace.
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  const personal = pick.kind === "personal" && environments === "on";
   if (personal)
     return (
       <ConfigurationSourceBoundary target={{ kind: "personal" }}>

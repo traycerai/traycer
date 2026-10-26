@@ -103,6 +103,11 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const HOST_ID = "host-a";
 const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
   // Pending, so a ready page says so ("Applying EXISTING on host-a."), which

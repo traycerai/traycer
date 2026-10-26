@@ -4,6 +4,7 @@ import { useConfigurationSource } from "@/components/settings/environment/config
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /**
  * The environment an `environment.*` call names. `null` names the host's own,
@@ -49,12 +50,16 @@ export function usePersonalEnvironment(
 /**
  * What a Settings page's `environment.*` calls name: a team's id on its
  * pages, Personal's id on the Personal pick, and the host's own on a Local
- * pick.
+ * pick or without environments, when no Personal exists to look up.
  */
 export function useAddressedEnvironment(): AddressedEnvironment {
   const source = useConfigurationSource();
   const pick = useEnvironmentPick();
-  const onPersonal = source.kind === "host" && pick.kind === "personal";
+  // Unread names the host's own too: nothing is looked up until the read
+  // lands on.
+  const environments = usePreviewFeature("environments");
+  const onPersonal =
+    source.kind === "host" && pick.kind === "personal" && environments === "on";
   const personal = usePersonalEnvironment(useHostClient(), onPersonal);
   if (source.kind === "pool") {
     return { environmentId: source.environmentId, resolved: true };

@@ -25,6 +25,11 @@ import {
   type TeamPageHarness,
 } from "./team-configuration-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // A team page reads its hosts from the host list; this window's own host
 // scope has no hosts here.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
