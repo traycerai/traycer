@@ -10,6 +10,7 @@ import {
   authenticatedUserResponseRecordV100,
   authenticatedUserResponseRecordV200,
   authenticatedUserResponseRecordV300,
+  authenticatedUserResponseRecordV310,
   exchangeTokenResponseRecordV100,
   exchangeTokenResponseRecordV200,
   listAllMcpServersResponseRecordV100,
@@ -20,6 +21,7 @@ import {
   userRecordV200,
 } from "@traycer/protocol/auth/registry";
 import type { ProviderType, User } from "@traycer/protocol/auth";
+import { PREVIEW_FEATURES_OFF } from "@traycer/protocol/auth/preview-features";
 
 /**
  * Bridge coverage for the two records that actually downgrade: `user` owns
@@ -34,7 +36,8 @@ import type { ProviderType, User } from "@traycer/protocol/auth";
  *
  * `User` is the registry's latest-major (2) type and the envelope fixtures
  * are typed at major 2, the source side of the 2-to-1 bridge; the major-3
- * fixtures add the two fields that major introduces.
+ * fixtures add the two fields that major introduces, and the 3.1 fixture
+ * adds the preview-features verdict on top.
  */
 
 function userFixture(providerType: ProviderType): User {
@@ -60,6 +63,9 @@ type AuthenticatedUserV200 = ValueOf<
 >;
 type AuthenticatedUserV300 = ValueOf<
   typeof authenticatedUserResponseRecordV300
+>;
+type AuthenticatedUserV310 = ValueOf<
+  typeof authenticatedUserResponseRecordV310
 >;
 
 function subscriptionFixture(): AuthenticatedUserV200["userSubscription"] {
@@ -238,8 +244,17 @@ function authenticatedUserResponseFixtureV300(
   };
 }
 
+function authenticatedUserResponseFixtureV310(
+  providerType: ProviderType,
+): AuthenticatedUserV310 {
+  return {
+    ...authenticatedUserResponseFixtureV300(providerType),
+    previewFeatures: { environments: true, sandboxes: false, bots: true },
+  };
+}
+
 describe("authenticated-user-response major 3 bridges", () => {
-  it("upgrades a loaded major-2 body to the no-environments value", () => {
+  it("upgrades a loaded major-2 body to the no-environments, preview-off value", () => {
     const v200 = authenticatedUserResponseFixtureWithHostId("GITHUB", "host-1");
     const loaded = loadRecord(
       authRecordRegistry,
@@ -251,16 +266,28 @@ describe("authenticated-user-response major 3 bridges", () => {
       ...v200,
       environments: { personal: null, teams: [] },
       actingAs: null,
+      previewFeatures: PREVIEW_FEATURES_OFF,
     });
   });
 
-  it("downgrades 3 to 2 to exactly the major-2 value, without either new field", () => {
-    const v300 = authenticatedUserResponseFixtureV300("APPLE");
+  it("upgrades a loaded 3.0 body to the off verdict", () => {
+    const v300 = authenticatedUserResponseFixtureV300("GITHUB");
+    const loaded = loadRecord(
+      authRecordRegistry,
+      "authenticated-user-response",
+      v300,
+      { major: 3, minor: 0 },
+    );
+    expect(loaded).toEqual({ ...v300, previewFeatures: PREVIEW_FEATURES_OFF });
+  });
+
+  it("downgrades 3 to 2 to exactly the major-2 value, without any major-3 field", () => {
+    const v310 = authenticatedUserResponseFixtureV310("APPLE");
     const result = downgradeRecordAcrossMajors(
       authRecordRegistry["authenticated-user-response"],
       3,
       2,
-      v300,
+      v310,
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -269,13 +296,13 @@ describe("authenticated-user-response major 3 bridges", () => {
     );
   });
 
-  it("downgrades 3 to 1 to exactly the major-1 value, APPLE as EMAIL and without either new field", () => {
-    const v300 = authenticatedUserResponseFixtureV300("APPLE");
+  it("downgrades 3 to 1 to exactly the major-1 value, APPLE as EMAIL and without any major-3 field", () => {
+    const v310 = authenticatedUserResponseFixtureV310("APPLE");
     const result = downgradeRecordAcrossMajors(
       authRecordRegistry["authenticated-user-response"],
       3,
       1,
-      v300,
+      v310,
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -286,15 +313,15 @@ describe("authenticated-user-response major 3 bridges", () => {
     });
   });
 
-  it("round-trips a major-3 body with a team environment and actingAs through loadRecord", () => {
-    const v300 = authenticatedUserResponseFixtureV300("GITHUB");
+  it("round-trips a 3.1 body with a team environment, actingAs and a verdict through loadRecord", () => {
+    const v310 = authenticatedUserResponseFixtureV310("GITHUB");
     const loaded = loadRecord(
       authRecordRegistry,
       "authenticated-user-response",
-      v300,
-      { major: 3, minor: 0 },
+      v310,
+      { major: 3, minor: 1 },
     );
-    expect(loaded).toEqual(v300);
+    expect(loaded).toEqual(v310);
   });
 });
 

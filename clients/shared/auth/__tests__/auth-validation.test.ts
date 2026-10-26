@@ -14,6 +14,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import {
+  PREVIEW_FEATURES_OFF,
+  readPreviewFeatures,
+} from "@traycer/protocol/auth/preview-features";
+import {
   removeNativeAbortHelpers,
   signalOfLastFetch,
   stubHangingFetch,
@@ -610,6 +614,90 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
       "1,2,3",
     );
+  });
+
+  it.each([
+    ["absent, served at 3.0", "3.0", undefined],
+    ["absent, served at 3.1", "3.1", undefined],
+    ["malformed", "3.1", { environments: "yes", sandboxes: false, bots: true }],
+    ["unparseable", "3.1", "environments"],
+    [
+      "unsupported (environments without bots)",
+      "3.1",
+      { environments: true, sandboxes: true, bots: false },
+    ],
+  ])(
+    "1a1: a previewFeatures verdict that is %s still validates and reads as off",
+    async (_label, servedVersion, previewFeatures) => {
+      installUrlKeyedMockFetch(
+        new Map([
+          [
+            NEGOTIATED_URL,
+            [
+              {
+                status: 200,
+                headers: {
+                  "content-type": "application/json",
+                  [USER_RECORD_VERSION_RESPONSE_HEADER]: servedVersion,
+                },
+                body: {
+                  ...authenticatedUserRawBody("GITHUB"),
+                  environments: { personal: null, teams: [] },
+                  actingAs: null,
+                  ...(previewFeatures === undefined ? {} : { previewFeatures }),
+                },
+              },
+            ],
+          ],
+        ]),
+      );
+
+      const result = await validateAuthTokenIdentityAccessOnly(
+        AUTHN_BASE_URL,
+        "token",
+      );
+
+      expect(result.kind).toBe("valid");
+      if (result.kind !== "valid") throw new Error("expected valid");
+      expect(readPreviewFeatures(result.user.previewFeatures)).toEqual(
+        PREVIEW_FEATURES_OFF,
+      );
+    },
+  );
+
+  it("1a2: a served 3.1 body keeps a supported previewFeatures verdict", async () => {
+    const previewFeatures = { environments: true, sandboxes: false, bots: true };
+    installUrlKeyedMockFetch(
+      new Map([
+        [
+          NEGOTIATED_URL,
+          [
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                [USER_RECORD_VERSION_RESPONSE_HEADER]: "3.1",
+              },
+              body: {
+                ...authenticatedUserRawBody("GITHUB"),
+                environments: { personal: null, teams: [] },
+                actingAs: null,
+                previewFeatures,
+              },
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await validateAuthTokenIdentityAccessOnly(
+      AUTHN_BASE_URL,
+      "token",
+    );
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") throw new Error("expected valid");
+    expect(result.user.previewFeatures).toEqual(previewFeatures);
   });
 
   it("1b: a served major-2 body still validates and reads as no environments", async () => {

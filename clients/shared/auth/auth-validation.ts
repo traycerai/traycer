@@ -109,8 +109,10 @@ type AuthenticatedUserResponseMajor =
  * The majors are the ENVELOPE's, not the nested `user` the header is named
  * after, because what this build can PARSE is the envelope. They have
  * drifted once: major 3 adds the caller's environments to the envelope and
- * leaves `user` at major 2. This build parses major 3 and reads none of its
- * new fields.
+ * leaves `user` at major 2. This build parses major 3 at its latest minor,
+ * 3.1, whose `previewFeatures` is authn's preview-features verdict: a body
+ * served at 3.0, or below major 3, carries none, and an unreadable one parses
+ * as off (`@traycer/protocol/auth/preview-features`).
  */
 export const SUPPORTED_USER_RECORD_MAJORS: readonly AuthenticatedUserResponseMajor[] =
   [1, 2, 3];
