@@ -89,6 +89,11 @@ import {
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();

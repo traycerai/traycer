@@ -1,5 +1,10 @@
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useSettingsSectionOffered } from "@/hooks/settings/use-settings-section-offered";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
+import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
+import type { PreviewFeature } from "@traycer/protocol/auth/preview-features";
 import { ChevronRight, Search, X } from "lucide-react";
 import {
   InputGroup,
@@ -27,6 +32,14 @@ import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-region
 
 /** Scopes the highlight's scroll query to this list. See `moveHighlight`. */
 const RESULTS_SELECTOR = "[data-settings-search-results]";
+
+/** Rows on an offered page that are drawn only with a preview feature on. */
+const PREVIEW_FEATURE_ANCHORS: ReadonlyMap<string | null, PreviewFeature> =
+  new Map([
+    [GENERAL.definitions.bots.anchor, "bots"],
+    [GENERAL.definitions.showTracy.anchor, "bots"],
+    [GETTING_STARTED.definitions.install.anchor, "environments"],
+  ]);
 
 export interface SettingsSearchProps {
   readonly query: string;
@@ -67,10 +80,20 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   // renders inside the settings modal as well as in the tab.
   const navigate = useNavigate();
 
-  const results = useMemo(
-    () => searchSettings(query, availability),
-    [query, availability],
-  );
+  // Nor a page, or a row, whose preview feature is not on for this person
+  // (unread included).
+  const offered = useSettingsSectionOffered();
+  const environments = usePreviewFeature("environments") === "on";
+  const bots = usePreviewFeature("bots") === "on";
+  const results = useMemo(() => {
+    const on = { environments, sandboxes: true, bots };
+    return searchSettings(query, availability).filter((result) => {
+      const feature = PREVIEW_FEATURE_ANCHORS.get(result.entry.anchor);
+      return (
+        offered(result.entry.section) && (feature === undefined || on[feature])
+      );
+    });
+  }, [query, availability, offered, environments, bots]);
   const active = isSettingsSearchActive(query);
   // Clamped rather than stored-and-corrected: `results` shrinks as the user
   // types, and a highlight index kept in state would spend a render pointing

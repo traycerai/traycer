@@ -154,6 +154,11 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const HOST_ID = "host-a";
 const HOST_NAME = "dev-box";
 const LOCKED_TESTID = "mcp-server-toggle-locked";

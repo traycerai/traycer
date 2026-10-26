@@ -114,6 +114,22 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: sandboxes.catalogue ?? undefined }),
 }));
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 // The real header mounts the tab strip, notifications and menus - none of which
 // this gate is about, and all of which need their own provider stack.
 vi.mock("@/components/layout/header/app-header", () => ({
@@ -359,6 +375,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   useAuthStore.getState().setSignedOut();
   useDesktopDialogStore.setState({
     activeDialog: null,
@@ -520,6 +537,38 @@ describe("<HostReadyGate />", () => {
       renderGate({ kind: "mobile-no-host" }, PRESENTATION);
       expect(screen.getByRole("main")).toBeTruthy();
     });
+
+    it.each(["off", "unread"] as const)(
+      "keeps the no-host screen, staged sandbox or not, while sandboxes read %s",
+      (state) => {
+        previewVerdict.current = {
+          environments: state,
+          sandboxes: state,
+          bots: state,
+        };
+        useStagedSandboxStore.getState().stage("landing:window-test", {
+          kind: "new",
+          configuration: { kind: "personal" },
+          shape: {
+            os: "linux",
+            cpus: 2,
+            memoryMb: 4096,
+            diskMb: null,
+            region: "us-east",
+            idleMinutes: 30,
+            destroyAfterRestingMinutes: 10_080,
+          },
+          name: "",
+          wakeString: null,
+        });
+        renderGate({ kind: "mobile-no-host" }, PRESENTATION);
+
+        expect(screen.queryByRole("main")).toBeNull();
+        expect(screen.getByTestId("host-ready-gate").dataset.readiness).toBe(
+          "mobile-no-host",
+        );
+      },
+    );
 
     it("keeps the no-host screen when no sandbox can be created", () => {
       sandboxes.catalogue = { providers: [] };

@@ -92,6 +92,14 @@ const NO_FLAGS = {
   unreadDone: false,
 };
 
+/**
+ * The signed-in user record the verdict is read from: `undefined` is a record
+ * that has not answered, anything else is what authn answered.
+ */
+const scriptedUser = vi.hoisted((): { record: unknown } => ({
+  record: undefined,
+}));
+
 /** What the scripted host boundaries answer; each test sets what it needs. */
 const scripted = vi.hoisted(
   (): {
@@ -108,6 +116,22 @@ const scripted = vi.hoisted(
     stream: null,
   }),
 );
+
+// The user record is a real query over the test's client cache, so a refetch
+// moves it from one answer to the next as the app's does.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () =>
+    useQuery(
+      queryOptions({
+        queryKey: ["scripted-auth-user"],
+        queryFn: () =>
+          scriptedUser.record === undefined
+            ? new Promise<never>(() => undefined)
+            : Promise.resolve(scriptedUser.record),
+        initialData: scriptedUser.record,
+      }),
+    ),
+}));
 
 // The list is a real query over the test's client cache, answering what the
 // test scripted, so a `bot.list` invalidation refetches it as it does in the
@@ -316,7 +340,19 @@ function setHomeTabEnabled(enabled: boolean): void {
     .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
 }
 
+const BOTS_ON_RECORD = {
+  userId: "user-1",
+  previewFeatures: { environments: true, sandboxes: false, bots: true },
+};
+const ALL_OFF_RECORD = {
+  userId: "user-1",
+  previewFeatures: { environments: false, sandboxes: false, bots: false },
+};
+/** A record the way a body served below 3.1 parses: no verdict key at all. */
+const RECORD_WITHOUT_VERDICT = { userId: "user-1" };
+
 function resetStores(): void {
+  scriptedUser.record = BOTS_ON_RECORD;
   __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -1094,5 +1130,116 @@ describe("the Show Tracy setting", () => {
       expect(screen.queryByTestId("tab-tracy")).toBeNull();
     });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+});
+
+describe("the fixed Tracy entry - closing bot tabs follows a verdict the record carries", () => {
+  const TEAM_TAB = TEAM_BOT;
+
+  /** A persisted entry and one more bot tab, as a restored session has them. */
+  function seedRestoredBotTabs(): void {
+    const store = useBotTabsStore.getState();
+    store.openBotTab({ botId: TRACY, hostId: "host-a", title: "Tracy" });
+    store.openBotTab({
+      botId: TEAM_TAB,
+      hostId: "host-a",
+      title: "Release Bot",
+    });
+    store.setFixedBotId(TRACY);
+  }
+
+  function botTabsKept(): boolean {
+    const state = useBotTabsStore.getState();
+    return (
+      state.fixedBotId === TRACY &&
+      lookupBotTab(state.tabs, TRACY) !== null &&
+      lookupBotTab(state.tabs, TEAM_TAB) !== null
+    );
+  }
+
+  // Waits for the user record's own refetch (the mount's, on initial data) to
+  // finish, so a "nothing was closed" assertion follows the controller's
+  // handling of the answer rather than a sleep. A record that never answers
+  // has no fetch to wait for.
+  async function settle(): Promise<void> {
+    if (scriptedUser.record !== undefined) {
+      await waitFor(() => {
+        expect(
+          queryClient.isFetching({ queryKey: ["scripted-auth-user"] }),
+        ).toBe(0);
+      });
+    }
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  }
+
+  beforeEach(() => {
+    tracyIsMainBot();
+    seedRestoredBotTabs();
+  });
+
+  it("closes nothing while the user record has not answered, and draws no entry", async () => {
+    scriptedUser.record = undefined;
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await settle();
+
+    expect(botTabsKept()).toBe(true);
+    expect(screen.queryByTestId("tab-tracy")).toBeNull();
+  });
+
+  it("closes nothing for a record with no previewFeatures key, and draws no entry", async () => {
+    scriptedUser.record = RECORD_WITHOUT_VERDICT;
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await settle();
+
+    expect(botTabsKept()).toBe(true);
+    expect(screen.queryByTestId("tab-tracy")).toBeNull();
+  });
+
+  it("releases the entry and closes both bot tabs for a record that reads bots off", async () => {
+    scriptedUser.record = ALL_OFF_RECORD;
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    await waitFor(() => {
+      expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+    });
+    const tabs = useBotTabsStore.getState().tabs;
+    expect(lookupBotTab(tabs, TRACY)).toBeNull();
+    expect(lookupBotTab(tabs, TEAM_TAB)).toBeNull();
+    expect(screen.queryByTestId("tab-tracy")).toBeNull();
+  });
+
+  it("closes neither tab through the verdict path with bots on", async () => {
+    scriptedUser.record = BOTS_ON_RECORD;
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    await settle();
+
+    expect(botTabsKept()).toBe(true);
+  });
+
+  it("closes the tabs at the second answer, not the first, when a record without a verdict is refetched as off", async () => {
+    scriptedUser.record = RECORD_WITHOUT_VERDICT;
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await settle();
+    expect(botTabsKept()).toBe(true);
+
+    scriptedUser.record = ALL_OFF_RECORD;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["scripted-auth-user"] });
+    });
+
+    await waitFor(() => {
+      expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+    });
+    expect(useBotTabsStore.getState().tabs).toEqual({});
   });
 });

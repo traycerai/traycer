@@ -180,6 +180,27 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
   openNewEpicDraft: () => ({ kind: "draft" }),
 }));
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+// The entry's unread and replying marks read notifications and bot activity
+// through a host runtime this suite does not mount; only the row is asserted.
+vi.mock("@/components/layout/tabs/use-tracy-entry-signals", () => ({
+  useTracyEntrySignals: () => ({ unread: false }),
+}));
+
 vi.mock("@/lib/tab-navigation", () => ({
   draftTabIntent: (value: unknown) => value,
   navigateToTabIntent: () => undefined,
@@ -198,6 +219,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 import {
   MobileDrawerHistoryGateProvider,
@@ -342,6 +366,81 @@ function drawerWithVisibleTileReporter(props: {
   );
 }
 
+describe("MobileNavDrawer Tracy row", () => {
+  const TRACY = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW_MS);
+    testState.items = [];
+    testState.activity = {};
+    testState.indicators = {};
+    queryClient.clear();
+    useMobileNavStore.setState({ open: true });
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: TRACY, hostId: "host-a", title: "Tracy" });
+    useBotTabsStore.getState().setFixedBotId(TRACY);
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "bot", id: TRACY }),
+          ref: { kind: "bot", id: TRACY },
+        },
+      ],
+      activeItemId: null,
+      stripOrder: [{ kind: "bot", id: TRACY }],
+      systemTabs: { history: null, settings: null },
+    });
+    useAuthStore.setState({
+      profile: {
+        userId: "u1",
+        userName: "devansh",
+        email: "devansh@traycer.ai",
+        avatarUrl: null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useMobileNavStore.setState({ open: false });
+    useAuthStore.setState({ profile: null, shareableTeams: [] });
+  });
+
+  it("draws the entry's row with bots on", async () => {
+    renderDrawer();
+
+    expect(await screen.findByTestId("mobile-nav-tracy")).toBeTruthy();
+  });
+
+  it.each(["off", "unread"] as const)(
+    "draws no row for a restored entry while bots read %s",
+    async (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      renderDrawer();
+
+      // The drawer itself is up, so the row's absence is not an unmounted drawer.
+      await screen.findByTestId("mobile-nav-new-task");
+      expect(screen.queryByTestId("mobile-nav-tracy")).toBeNull();
+    },
+  );
+});
+
 describe("MobileNavDrawer", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -379,6 +478,12 @@ describe("MobileNavDrawer", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
     useMobileNavStore.setState({ open: false });
     useAuthStore.setState({ profile: null, shareableTeams: [] });
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });

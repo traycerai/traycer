@@ -385,6 +385,22 @@ import {
   renderWithFallbackQueryClient,
 } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
 }

@@ -82,6 +82,7 @@ import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { defaultStageShape } from "@/lib/sandboxes/sandbox-stage-model";
 import { useStagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
@@ -637,7 +638,10 @@ export function DefaultHostReadyGate(props: {
  * other readiness is the gate's as before.
  */
 function useHostlessSandboxBootstrap(readiness: SurfaceReadiness): boolean {
-  const noHost = readiness.kind === "mobile-no-host";
+  // Without sandboxes (unread included) none can be the first host: the gate
+  // stays until a read lands on.
+  const offered = usePreviewFeature("sandboxes") === "on";
+  const noHost = readiness.kind === "mobile-no-host" && offered;
   const staged = useStagedSandbox(useComposerSurfaceHostKey()) !== null;
   const catalogue = useSandboxCatalogue(noHost).data ?? null;
   if (!noHost) return false;

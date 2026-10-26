@@ -30,6 +30,22 @@ import type {
   EnvironmentHostRecord,
 } from "@traycer/protocol/host/environment/contracts";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 const mocks = vi.hoisted(() => {
   const initialSupport = (): boolean | null => true;
   const hostClient = { stub: "host-client" };
@@ -296,6 +312,36 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+});
+
+describe("HomeBotsSection without the bots preview feature", () => {
+  it.each(["off", "unread"] as const)(
+    "renders no band and no update notice, and reads nothing, while bots read %s, even on a host without bot.list",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      mocks.state.support = false;
+      mountSection();
+
+      expect(screen.queryByTestId("home-bots")).toBeNull();
+      expect(screen.queryByTestId("home-bots-unavailable")).toBeNull();
+      expect(screen.queryByTestId("home-bots-group")).toBeNull();
+      expect(mocks.useEnvironmentListQuery).not.toHaveBeenCalled();
+      expect(mocks.useBotListQuery).not.toHaveBeenCalled();
+      expect(mocks.useBotListChangedSubscriptionForApp).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows the update notice on a host without bot.list with bots on", () => {
+    mocks.state.support = false;
+    mountSection();
+
+    expect(screen.getByTestId("home-bots-unavailable")).toBeTruthy();
+  });
 });
 
 describe("HomeBotsSection capability gate", () => {

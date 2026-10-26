@@ -254,6 +254,22 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 function renderPanel() {
   return render(
     <StrictMode>
@@ -587,6 +603,41 @@ describe("AgentSelectionGuideSection", () => {
       expect(screen.getByTestId("confirm-action").textContent).toBe(
         "Reset to default",
       );
+    },
+  );
+
+  it.each(["off", "unread"] as const)(
+    "confirms a reset under a Personal pick in this host's words while environments read %s",
+    (state) => {
+      guideMocks.queryData = {
+        content: "claude guide",
+        generatedDefaultContent: "codex guide",
+      };
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      try {
+        useSettingsEnvironmentPickStore.setState({
+          pick: { kind: "personal" },
+        });
+        renderPanel();
+
+        fireEvent.click(screen.getByTestId("agents-selection-guide-revert"));
+
+        const dialog = screen.getByRole("dialog");
+        expect(dialog.textContent).toContain(
+          "This replaces your agent selection instructions with defaults based on the providers currently available on",
+        );
+        expect(dialog.textContent).not.toContain("running Personal");
+      } finally {
+        previewVerdict.current = {
+          environments: "on",
+          sandboxes: "on",
+          bots: "on",
+        };
+      }
     },
   );
 

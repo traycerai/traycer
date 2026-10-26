@@ -173,6 +173,11 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { MASTER_TOGGLE_DESCRIPTION } from "@/components/settings/panels/fallback-settings.definitions";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
 }

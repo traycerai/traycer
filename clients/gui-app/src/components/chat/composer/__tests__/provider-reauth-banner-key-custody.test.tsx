@@ -54,6 +54,24 @@ vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
 
 import { ProviderReauthBanner } from "../provider-reauth-banner";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
+const statusReads = { count: 0 };
+
 const CUSTODY_SENTENCE =
   "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
 
@@ -78,7 +96,10 @@ function hostRunning(principal: EnvironmentStatusResponseV11["principal"]) {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.status": () => environmentStatusFixture({ principal }),
+      "environment.status": () => {
+        statusReads.count += 1;
+        return environmentStatusFixture({ principal });
+      },
     },
   });
   hostState.client = client;
@@ -157,6 +178,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  statusReads.count = 0;
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   hostState.client = null;
   resetNegotiatedManifests();
 });
@@ -170,6 +193,27 @@ describe("<ProviderReauthBanner /> key custody and the host's configuration", ()
     expect(screen.getByText("How Traycer handles this")).toBeDefined();
     expect(screen.queryByText(/Stored encrypted on /)).toBeNull();
   });
+
+  it.each(["off", "unread"] as const)(
+    "reads no environment.status and keeps the key on the one host, even from a host that would answer Personal, while environments read %s",
+    async (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      hostRunning({ kind: "personal" });
+      renderBanner("amp", AMP);
+
+      expect(
+        await screen.findByText(
+          "Stored encrypted on Work Mac only. When no key is saved here, Amp uses AMP_API_KEY from Work Mac's shell.",
+        ),
+      ).toBeDefined();
+      expect(screen.queryByText(CUSTODY_SENTENCE)).toBeNull();
+      expect(statusReads.count).toBe(0);
+    },
+  );
 
   it("names the host that keeps a Droid key on Personal, and claims no Personal custody", async () => {
     hostRunning({ kind: "personal" });

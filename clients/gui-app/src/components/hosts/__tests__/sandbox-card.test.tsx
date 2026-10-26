@@ -147,6 +147,10 @@ import {
   type HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 const NAME = "build-box";
 
 function renderCard(sandbox: HostScopeSandbox): void {

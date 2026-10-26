@@ -1,6 +1,7 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback } from "react";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -47,7 +48,10 @@ export function useHostsRunningConfiguration(
     | { readonly kind: "team"; readonly environmentId: string },
 ): HostsRunningConfiguration {
   const client = usePoolTierHostClient(useHostClient());
-  const personalTarget = target.kind === "personal";
+  // Without environments (unread included) no configuration runs anywhere:
+  // nothing is read and the list stays empty.
+  const environments = usePreviewFeature("environments") === "on";
+  const personalTarget = target.kind === "personal" && environments;
   const personal = usePersonalEnvironment(client, personalTarget);
   const environmentId =
     target.kind === "team" ? target.environmentId : personal.environmentId;
@@ -57,7 +61,10 @@ export function useHostsRunningConfiguration(
     method: "environment.host.list",
     params: { environmentId: environmentId ?? "" },
     cacheKeyIdentity: [viewerUserId],
-    options: { enabled: environmentId !== null && viewerUserId.length > 0 },
+    options: {
+      enabled:
+        environments && environmentId !== null && viewerUserId.length > 0,
+    },
   });
   const scope = useHostScope();
   const computers = usePersonalComputers(personalTarget);

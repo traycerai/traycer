@@ -55,6 +55,11 @@ vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
 
 import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 function QueryWrapper({ children }: { readonly children: ReactNode }) {
   return (
     <QueryClientProvider client={new QueryClient()}>

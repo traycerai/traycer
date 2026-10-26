@@ -1,3 +1,8 @@
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // The Overview re-provides a scoped STREAM binding beside its unary one (for
 // the Data & migration group), and the real hook reads `useAuthService` -
 // which this suite deliberately does not stand up. `null` keeps the panel on

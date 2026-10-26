@@ -20,6 +20,11 @@ import {
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // The window's host scope and the per-host status reads are the boundary;
 // the account's environment list and host list go through the real client,
 // and the chip's own host rule runs for real.

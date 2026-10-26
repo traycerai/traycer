@@ -44,6 +44,10 @@ import {
   useSettingsStore,
 } from "@/stores/settings/settings-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 interface MockSummariesQuery {
   readonly data:
     | {

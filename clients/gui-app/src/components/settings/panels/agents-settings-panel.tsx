@@ -8,6 +8,7 @@ import { AGENT_SELECTION } from "@/components/settings/panels/agents-settings.de
 import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definitions-tab";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
 
 const AGENTS_TABS = ["guide", "definitions"] as const;
@@ -23,6 +24,17 @@ const AGENTS_TAB_LABELS: Readonly<Record<AgentsTab, string>> = {
 const AGENTS_GUIDE_CAPTION =
   "The guide agents read when they pick a coding agent, model and effort for work they hand off.";
 
+function AgentsGuideCaption(): ReactNode {
+  return (
+    <p
+      className="text-ui-xs text-muted-foreground"
+      data-testid="agents-guide-caption"
+    >
+      {AGENTS_GUIDE_CAPTION}
+    </p>
+  );
+}
+
 function isAgentsTab(value: string): value is AgentsTab {
   return AGENTS_TABS.some((tab) => tab === value);
 }
@@ -31,10 +43,27 @@ function isAgentsTab(value: string): value is AgentsTab {
  * Settings ▸ Agents: two tabs over the configuration's room files. Selection
  * guide is the markdown guide agents read to pick a harness, model and effort,
  * and keeps the full panel height for its editor; Definitions is one file per
- * agent definition a harness can start.
+ * agent definition a harness can start. Without environments there are no
+ * definitions to read, so the page is the selection guide alone.
  */
 export function AgentsSettingsPanel(): ReactNode {
   const [tab, setTab] = useState<AgentsTab>("guide");
+  // Unread shows the guide alone too; the tabs appear when the read lands on.
+  const environments = usePreviewFeature("environments");
+  if (environments !== "on") {
+    return (
+      <SettingsPanelShell
+        title={AGENT_SELECTION.page.label}
+        description={AGENT_SELECTION.page.description}
+        fillHeight
+      >
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+          <AgentsGuideCaption />
+          <AgentSelectionGuideSection />
+        </div>
+      </SettingsPanelShell>
+    );
+  }
   return (
     <SettingsPanelShell
       title={AGENT_SELECTION.page.label}
@@ -67,12 +96,7 @@ export function AgentsSettingsPanel(): ReactNode {
           value="guide"
           className="flex min-h-0 flex-1 flex-col gap-3 pt-5"
         >
-          <p
-            className="text-ui-xs text-muted-foreground"
-            data-testid="agents-guide-caption"
-          >
-            {AGENTS_GUIDE_CAPTION}
-          </p>
+          <AgentsGuideCaption />
           <AgentSelectionGuideSection />
         </TabsContent>
         <TabsContent value="definitions" className="pt-5">

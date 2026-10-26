@@ -32,6 +32,11 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
 const REMOTE_HOST_ID = mockRemoteHostEntry.hostId;
 

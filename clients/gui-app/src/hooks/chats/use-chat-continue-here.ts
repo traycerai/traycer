@@ -19,6 +19,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useOptionalHostClient } from "@/lib/host";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { chatContinueMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import {
@@ -153,7 +154,10 @@ export function useChatContinueHere(args: {
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
+  // Without environments (unread included) there is no team to look up.
+  const environmentsOn = usePreviewFeature("environments") === "on";
+  const listApplies =
+    authorized && environmentsOn && readProcessHostRpcTierPlan().pool !== null;
   const environments = useEnvironmentListQuery(
     useOptionalHostClient(),
     listApplies,

@@ -50,6 +50,11 @@ import type { OpenLink } from "@/lib/links/open-link";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const listMock = vi.hoisted(() => vi.fn<() => void>());
 // While set, `environment.list` does not answer until it resolves.
 const listGate = vi.hoisted((): { current: Promise<void> | null } => ({

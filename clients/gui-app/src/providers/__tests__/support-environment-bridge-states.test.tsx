@@ -62,6 +62,11 @@ import {
 import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 type Rotation = NonNullable<EnvironmentSecretsRotationResponse["rotation"]>;
 
 const EARLIER_HOST_SECTION: SupportEnvironmentSection = {

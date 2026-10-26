@@ -10,6 +10,7 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 export function sandboxListQueryOptions(
   auth: AuthService | null,
@@ -58,7 +59,9 @@ export function useSandboxList(): UseQueryResult<SandboxListResponse | null> {
   // A build that cannot reach the control plane reads nothing: its answer
   // stays "not known", so no picker or banner reports a failed list.
   const unavailable = useSandboxControlUnavailableReason() !== null;
+  // Without sandboxes (unread included) the control plane is never asked.
+  const offered = usePreviewFeature("sandboxes") === "on";
   return useQuery(
-    sandboxListQueryOptions(auth, userId, signedIn && !unavailable),
+    sandboxListQueryOptions(auth, userId, signedIn && !unavailable && offered),
   );
 }

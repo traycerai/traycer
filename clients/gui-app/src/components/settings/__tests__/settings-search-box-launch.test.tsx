@@ -6,6 +6,11 @@ import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 const openLayoutEditorMock = vi.hoisted(() => vi.fn());
 const navigateMock = vi.hoisted(() => vi.fn());

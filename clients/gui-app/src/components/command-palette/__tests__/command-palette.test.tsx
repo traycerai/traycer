@@ -17,6 +17,11 @@ import { runCommandItem } from "@/lib/commands/dispatch";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 function resetStore(): void {
   useCommandPaletteStore.setState({
     open: false,

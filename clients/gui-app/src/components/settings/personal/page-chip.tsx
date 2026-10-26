@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
@@ -256,9 +257,20 @@ function TeamPageChip(props: {
   );
 }
 
-/** One delivery status for the page's configuration; Local has no delivery. */
+/**
+ * One delivery status for the page's configuration; Local has no delivery,
+ * and neither does any page without environments: there is no configuration
+ * to deliver, and the host's status would read as one needing an update.
+ */
 export function PageChip(props: PageChipProps): ReactNode {
-  if (props.pick.kind === "local" || props.section === "sandboxes") return null;
+  // Unread shows no chip either; it appears when the read lands on.
+  const environments = usePreviewFeature("environments");
+  if (
+    environments !== "on" ||
+    props.pick.kind === "local" ||
+    props.section === "sandboxes"
+  )
+    return null;
   if (props.pick.kind === "team")
     return (
       <TeamPageChip

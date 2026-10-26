@@ -81,6 +81,11 @@ const rowRenders = vi.hoisted(() => new Map<string, number>());
  * disables the queries beneath it, so no fetch, retry or settle can add a render
  * this suite would then count as churn.
  */
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
   const actual =
     await importOriginal<

@@ -40,6 +40,7 @@ import {
   useSettingsEnvironmentPickStore,
 } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import {
   acknowledgeSettingsOpenIntent,
   useSettingsOpenIntent,
@@ -137,9 +138,19 @@ function PermissionsBrowserAgentAccess(): ReactNode {
 const PERSONAL_PERMISSIONS_DESCRIPTION =
   "What your agents may do without asking, on every computer and sandbox.";
 
+function usePermissionsDescription(): string {
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the page is this host's own, so
+  // it never speaks for every computer.
+  return pick.kind === "personal" && environments === "on"
+    ? PERSONAL_PERMISSIONS_DESCRIPTION
+    : "How much an agent may do on its own, and who reviews the rest.";
+}
+
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
-  const pick = useEnvironmentPick();
+  const description = usePermissionsDescription();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
   const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);
@@ -211,11 +222,7 @@ function HostPermissionsSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Permissions"
-      description={
-        pick.kind === "personal"
-          ? PERSONAL_PERMISSIONS_DESCRIPTION
-          : "How much an agent may do on its own, and who reviews the rest."
-      }
+      description={description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <Tabs

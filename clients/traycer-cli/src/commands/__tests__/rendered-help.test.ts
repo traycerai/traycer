@@ -1129,7 +1129,6 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
-  { path: "bot", options: [], args: [] },
   {
     path: "bot list",
     options: [
@@ -1487,6 +1486,16 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
     }
   });
 
+  it("leaves the bot group out of the root --help, yet `bot --help` still lists its subcommands", () => {
+    const program = freshProgram();
+
+    expect(helpListsCommandName(renderHelp(program), "bot")).toBe(false);
+    const botHelp = renderHelp(findByPath(program, ["bot"]));
+    for (const name of ["list", "post", "threads", "reply", "checkins"]) {
+      expect(helpListsCommandName(botHelp, name)).toBe(true);
+    }
+  });
+
   it("host update --help (real render) shows the public '--version <version>' spelling and never the internal '--host-update-version' spelling", () => {
     const program = freshProgram();
     const hostUpdate = findByPath(program, ["host", "update"]);
@@ -1548,6 +1557,9 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "agent activity-from-hook",
         "agent turn-ended-from-hook",
         "agent session-observed-from-hook",
+        // The CLI holds no preview-features verdict, so the bot group is
+        // offered to no one; its subcommands still run when typed.
+        "bot",
       ].sort(),
     );
   });

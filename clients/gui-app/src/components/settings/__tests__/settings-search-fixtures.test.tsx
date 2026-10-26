@@ -31,6 +31,11 @@ import {
 } from "@/stores/layout/layout-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // Layout's provider list is read through the WATCHED host's scope. It carries
 // no anchors - the set exists only for providers a host has reported - so the
 // contract needs the page mounted, not connected, and resolving a real scope

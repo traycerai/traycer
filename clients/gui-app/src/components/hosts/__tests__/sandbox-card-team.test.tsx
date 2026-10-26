@@ -128,6 +128,10 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 import { SandboxCard } from "@/components/hosts/sandbox-card";
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 /**
  * A TEAM sandbox's card names who created it and
  * whose bundle the running wake is on, has no personal cost view, says its

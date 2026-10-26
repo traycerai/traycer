@@ -61,6 +61,7 @@ import {
   type BotTabPausedReason,
 } from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 type BotTabView = "messages" | "under-the-hood";
 
@@ -105,6 +106,7 @@ export function BotTabSurface(props: {
 }): ReactNode {
   const { botId, hostId } = props;
   const connectable = useConnectableHostIds();
+  const bots = usePreviewFeature("bots");
   // A tab is created only from Home's bots band, which draws nothing until
   // the host advertises `bot.list`; a RESTORED tab (the store persists per
   // window) meets whatever that host advertises now. `bot.open` is the
@@ -112,7 +114,10 @@ export function BotTabSurface(props: {
   // write the tab offers; without it the tab shows the update notice and no
   // control that would call a method the host lacks.
   const support = useHostMethodSupport(hostId, "bot.open");
-  if (support === null) return <BotTabConnecting />;
+  // Without bots a restored tab reads nothing and shows no update notice:
+  // unread waits as a connect does, and a read off closes the tab
+  // (`TracyEntryController`).
+  if (bots !== "on" || support === null) return <BotTabConnecting />;
   if (!support) {
     return (
       <div

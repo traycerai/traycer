@@ -5,6 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 
 // The navigator reaches for the modal bridge or the router; which one is not
@@ -39,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   navigateToSettingsSectionMock.mockClear();
   Reflect.deleteProperty(Element.prototype, "scrollIntoView");
 });
@@ -94,6 +111,43 @@ describe("<SettingsSearch /> keyboard exposure", () => {
     });
     expect(combobox().getAttribute("aria-controls")).toBe(listbox.id);
     expect(listbox.textContent).toContain("Nothing in settings matches");
+  });
+});
+
+describe("<SettingsSearch /> without the preview features", () => {
+  function optionTexts(): string[] {
+    return screen.queryAllByRole("option").map((option) => option.textContent);
+  }
+
+  it.each(["off", "unread"] as const)(
+    "finds nothing for Tracy, the install row or a gated page while the verdict reads %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      for (const query of ["tracy", "install traycer", "secrets"]) {
+        const { unmount } = render(<Harness />);
+        type(query);
+        const texts = optionTexts();
+        expect(
+          texts.filter((text) => /show tracy|install traycer/i.test(text)),
+        ).toEqual([]);
+        if (query === "secrets") {
+          expect(texts.filter((text) => /^secrets/i.test(text.trim()))).toEqual(
+            [],
+          );
+        }
+        unmount();
+      }
+    },
+  );
+
+  it("finds Show Tracy and the install row with bots and environments on", () => {
+    render(<Harness />);
+    type("tracy");
+    expect(optionTexts().some((text) => /show tracy/i.test(text))).toBe(true);
   });
 });
 

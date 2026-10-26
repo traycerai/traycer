@@ -21,6 +21,22 @@ import type {
 import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 type OpenResult =
   | { readonly kind: "answer"; readonly response: BotOpenResponse }
   | { readonly kind: "error"; readonly message: string };
@@ -377,8 +393,29 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   // A case that signs a viewer in leaves no one signed in for the next.
   useAuthStore.setState({ profile: null });
+});
+
+describe("<BotTabSurface /> without the bots preview feature", () => {
+  it.each(["off", "unread"] as const)(
+    "waits as a connect does, never saying the host is out of date, and opens nothing while bots read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      mocks.state.support = false;
+      render(surface());
+
+      expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
+      expect(screen.queryByTestId("bot-tab-unavailable")).toBeNull();
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      expect(mocks.open).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("<BotTabSurface /> on a host without bot.open", () => {

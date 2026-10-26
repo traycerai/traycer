@@ -15,6 +15,7 @@ import { PersonalPageNotices } from "@/components/settings/personal/personal-pag
 import { PageChip } from "@/components/settings/personal/page-chip";
 import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
@@ -59,19 +60,30 @@ interface WindowHostEnvironment {
   readonly review: readonly EnvironmentReviewEntry[];
 }
 
-/** Read through the window's own host, like every Personal page. */
+/**
+ * Read through the window's own host, like every Personal page. Without
+ * environments the host's pages are the only source and the person has no
+ * settings to report, so nothing is read and the page works as it always
+ * has: `not-set-up`, never `unsupported`, which would make it read-only.
+ */
 function useWindowHostEnvironmentState(
   kinds: ReadonlySet<string>,
+  environments: boolean,
 ): WindowHostEnvironment {
   const scope = usePersonalHostScope();
-  const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
+  const status = useEnvironmentStatusRead(
+    scope.client,
+    scope.hostId,
+    environments,
+  );
   const overrides = useEnvironmentLocalOverridesRead(
     scope.client,
     scope.hostId,
-    true,
+    environments,
   );
   let state: PersonalHostState = { kind: "unknown" };
-  if (status.supported === false) state = { kind: "unsupported" };
+  if (!environments) state = { kind: "not-set-up" };
+  else if (status.supported === false) state = { kind: "unsupported" };
   else if (status.data !== null) {
     state =
       status.data.principal === null
@@ -131,6 +143,9 @@ function teamNameOf(state: PersonalHostState): string | null {
  * (`hostRunsPersonal`, the dropdown's own rule), when that host's pages stay;
  * MCP servers and Skills read the cloud on Personal always.
  *
+ * Without environments every pick reads the window host's own pages: no
+ * cloud configuration exists to read, and a cloud frame there fails its read.
+ *
  * Mounted once per page by `SettingsPanelForSection`, which both settings
  * surfaces render through, so neither can show a Personal page without it.
  */
@@ -139,6 +154,16 @@ export function PersonalPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Unread takes the host pages too: they are only a rendering, and the
+  // cloud frame takes over when the read lands on.
+  if (environments !== "on") {
+    return (
+      <HostPageFrame section={props.section} environments={false}>
+        {props.children}
+      </HostPageFrame>
+    );
+  }
   const environmentPage = SETTINGS_SECTIONS.some(
     (section) => section.id === props.section && section.group === "personal",
   );
@@ -173,7 +198,9 @@ export function PersonalPageFrame(props: {
     );
   }
   return (
-    <HostPageFrame section={props.section}>{props.children}</HostPageFrame>
+    <HostPageFrame section={props.section} environments>
+      {props.children}
+    </HostPageFrame>
   );
 }
 
@@ -209,7 +236,9 @@ function PersonalSourceFrame(props: {
   }
   if (runs) {
     return (
-      <HostPageFrame section={props.section}>{props.children}</HostPageFrame>
+      <HostPageFrame section={props.section} environments>
+        {props.children}
+      </HostPageFrame>
     );
   }
   return (
@@ -251,9 +280,13 @@ function useWindowHostRunsPersonal(): boolean | null {
   );
 }
 
-/** A page whose source is a host's own: Personal on its host, or a Local row. */
+/**
+ * A page whose source is a host's own: Personal on its host, a Local row, or
+ * every page without environments.
+ */
 function HostPageFrame(props: {
   readonly section: SettingsSectionId;
+  readonly environments: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
@@ -288,7 +321,11 @@ function HostPageFrame(props: {
       </PersonalPageContext.Provider>
     );
   return (
-    <PersonalPageFrameForKinds section={props.section} kinds={kinds}>
+    <PersonalPageFrameForKinds
+      section={props.section}
+      kinds={kinds}
+      environments={props.environments}
+    >
       {props.children}
     </PersonalPageFrameForKinds>
   );
@@ -350,10 +387,14 @@ function TeamPageFrame(props: {
 function PersonalPageFrameForKinds(props: {
   readonly section: SettingsSectionId;
   readonly kinds: ReadonlySet<string>;
+  readonly environments: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
-  const environment = useWindowHostEnvironmentState(props.kinds);
+  const environment = useWindowHostEnvironmentState(
+    props.kinds,
+    props.environments,
+  );
   const { state, hostName } = environment;
   // A save on this page that lost to a change made elsewhere re-reads it.
   useRereadOnStaleWrite(environment.hostId, null);

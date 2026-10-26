@@ -32,6 +32,7 @@ import {
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);
@@ -48,6 +49,8 @@ export function GeneralSettingsPanel() {
   );
   const showTracy = useSettingsStore((s) => s.showTracy);
   const setShowTracy = useSettingsStore((s) => s.setShowTracy);
+  // Without bots (unread included) there is no Tracy to show.
+  const bots = usePreviewFeature("bots") === "on";
   const compact = useSettingsDensity() === "compact";
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
@@ -143,27 +146,29 @@ export function GeneralSettingsPanel() {
           <ChatAutoArchiveSettingsRow />
         </SettingsGroup>
 
-        <SettingsGroup
-          group={GENERAL.definitions.bots}
-          showTitle
-          tone="default"
-          dataTestId="settings-general-bots"
-          fill={false}
-        >
-          <SettingsRow
-            row={GENERAL.definitions.showTracy}
-            control={
-              <Switch
-                checked={showTracy}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("showTracy");
-                  setShowTracy(value);
-                }}
-                aria-label="Show Tracy"
-              />
-            }
-          />
-        </SettingsGroup>
+        {bots ? (
+          <SettingsGroup
+            group={GENERAL.definitions.bots}
+            showTitle
+            tone="default"
+            dataTestId="settings-general-bots"
+            fill={false}
+          >
+            <SettingsRow
+              row={GENERAL.definitions.showTracy}
+              control={
+                <Switch
+                  checked={showTracy}
+                  onCheckedChange={(value) => {
+                    trackGeneralSetting("showTracy");
+                    setShowTracy(value);
+                  }}
+                  aria-label="Show Tracy"
+                />
+              }
+            />
+          </SettingsGroup>
+        ) : null}
 
         <DangerZoneSection />
       </div>

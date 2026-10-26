@@ -38,6 +38,10 @@ import {
 } from "@/stores/layout/layout-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 /** Live registrations per action id, and the most ever live at once. */
 const registrations = vi.hoisted(
   (): {

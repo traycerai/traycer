@@ -1,3 +1,8 @@
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // The panel reads through the window's own host. Mocked at the scope boundary,
 // as the other Personal suites do, because they render bare, without the host
 // runtime the real scope composes.

@@ -24,6 +24,10 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 const bindingRef = vi.hoisted(() => ({
   value: null as {
     readonly hostClient: HostClient<HostRpcRegistry>;

@@ -78,6 +78,7 @@ import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
@@ -196,8 +197,11 @@ function HostShellSettingsPanel() {
   // that is not an explicit, resolved pick.
   const scopedBinding = useScopedHostBinding(scope);
   const fallbackReason = localConfigFallbackReason(scope.host, supported);
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the page is this host's own.
   const description =
-    useEnvironmentPick().kind === "personal"
+    pick.kind === "personal" && environments === "on"
       ? PERSONAL_PANEL_DESCRIPTION
       : PANEL_DESCRIPTION;
   // Both `false` outcomes below — the bridge fallback and the remote capability
@@ -1013,7 +1017,10 @@ function HostEnvironmentGroup(props: {
       />,
     );
   }
-  const personal = useEnvironmentPick().kind === "personal";
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the variables are this host's own.
+  const personal = pick.kind === "personal" && environments === "on";
   const onHold = useHeldValueReviews("variable", "");
   const claimedBy = useSecretClaimedNames(VARIABLE_CLAIMS);
   return (

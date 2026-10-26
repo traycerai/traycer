@@ -226,6 +226,11 @@ import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-set
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 function modelOption(
   harnessId: string,
   slug: string,

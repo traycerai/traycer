@@ -37,6 +37,10 @@ import { HostOverviewAccessTab } from "@/components/settings/panels/host-overvie
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();

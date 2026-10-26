@@ -10,6 +10,7 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /** How often the balance and the cost view refresh while something accrues. */
 const ACCRUING_REFRESH_MS = 60_000;
@@ -103,7 +104,9 @@ export function useSandboxCosts(): UseQueryResult<UserSandboxCost | null> {
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const unavailable = useSandboxControlUnavailableReason() !== null;
+  // Without sandboxes (unread included) the control plane is never asked.
+  const offered = usePreviewFeature("sandboxes") === "on";
   return useQuery(
-    sandboxCostsQueryOptions(auth, userId, signedIn && !unavailable),
+    sandboxCostsQueryOptions(auth, userId, signedIn && !unavailable && offered),
   );
 }

@@ -67,6 +67,7 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { providerRailStateWord } from "./provider-rail-state-word";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
@@ -206,6 +207,8 @@ const VIEW_COPY: Readonly<
     {
       readonly title: string;
       readonly description: string;
+      /** Without environments the page is this host's own. */
+      readonly hostDescription: string;
       readonly empty: string;
     }
   >
@@ -214,18 +217,22 @@ const VIEW_COPY: Readonly<
     title: "Providers",
     description:
       "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+    hostDescription:
+      "Sign-ins, keys and tools for each coding agent on this host.",
     empty: "No providers on this host.",
   },
   "mcp-servers": {
     title: "MCP servers",
     description:
       "The MCP servers each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+    hostDescription: "The MCP servers each coding agent can use on this host.",
     empty: "No provider on this host supports MCP servers.",
   },
   skills: {
     title: "Skills",
     description:
       "The skills each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+    hostDescription: "The skills each coding agent can use on this host.",
     empty: "No provider on this host supports skills.",
   },
 };
@@ -236,6 +243,17 @@ const VIEW_COPY: Readonly<
  */
 function localProvidersDescription(hostName: string): string {
   return `Sign-ins, keys and tools for each coding agent on ${hostName}.`;
+}
+
+function useProvidersPanelDescription(view: ProvidersPanelView): string {
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the page is this host's own.
+  if (environments !== "on") return VIEW_COPY[view].hostDescription;
+  if (view === "providers" && pick.kind === "local") {
+    return localProvidersDescription(pick.hostName);
+  }
+  return VIEW_COPY[view].description;
 }
 
 /**
@@ -525,11 +543,7 @@ function ProvidersSettingsPanelInner({
   const isMobile = useIsMobileViewport();
   const view = useContext(ProvidersPanelViewContext);
   const copy = VIEW_COPY[view];
-  const pick = useEnvironmentPick();
-  const description =
-    view === "providers" && pick.kind === "local"
-      ? localProvidersDescription(pick.hostName)
-      : copy.description;
+  const description = useProvidersPanelDescription(view);
   return (
     <SettingsPanelShell
       title={copy.title}
@@ -1897,14 +1911,17 @@ function ProviderTabBody({
 
 /**
  * The MCP tab. On Personal, read here through the window's host that runs
- * it, it switches Personal's own servers for this provider; a Local row
- * keeps that computer's own list.
+ * it, it switches Personal's own servers for this provider; a Local row,
+ * and every pick without environments, keeps that computer's own list.
  */
 function ProviderMcpTabBody(props: {
   readonly state: ProviderCliState;
 }): ReactNode {
   const { state } = props;
-  const personal = useEnvironmentPick().kind === "personal";
+  // Unread keeps the host's own tab, a rendering the read can replace.
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  const personal = pick.kind === "personal" && environments === "on";
   const mcp = state.nativeCapabilities.mcp;
   if (mcp === null) {
     return (
@@ -1934,11 +1951,17 @@ function ProviderMcpTabBody(props: {
   );
 }
 
-/** The Skills tab: Personal's skills for this provider, or a Local row's own. */
+/**
+ * The Skills tab: Personal's skills for this provider, or the computer's own
+ * on a Local row and on every pick without environments.
+ */
 function ProviderSkillsTabBody(props: {
   readonly state: ProviderCliState;
 }): ReactNode {
-  const personal = useEnvironmentPick().kind === "personal";
+  // Unread keeps the host's own tab, a rendering the read can replace.
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  const personal = pick.kind === "personal" && environments === "on";
   if (personal)
     return (
       <ConfigurationSourceBoundary target={{ kind: "personal" }}>

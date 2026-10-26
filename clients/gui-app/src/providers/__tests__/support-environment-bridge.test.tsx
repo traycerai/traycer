@@ -50,6 +50,22 @@ import {
 import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 const HOST_ID = "host-env";
 const TEAM_NAME = "Acme Robotics ZZ_TEAM_NAME";
 
@@ -132,6 +148,73 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetSupportContextRegistryForTests();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+});
+
+describe("SupportEnvironmentBridge without environments", () => {
+  const READS = [
+    "environment.status",
+    "environment.setup.attempts",
+    "environment.secrets.list",
+    "environment.reachDiagnostics",
+  ] as const;
+
+  function serveAllReads() {
+    for (const method of READS) harness.methods.add(method);
+    const served = {
+      status: vi.fn(() => environmentStatusFixture({ principal: null })),
+      attempts: vi.fn(() => ({ attempts: [] })),
+      secrets: vi.fn(() => ({ removed: [], secrets: [] })),
+      reach: vi.fn(() => ({ denials: [], servedTask: null })),
+    };
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": served.status,
+        "environment.setup.attempts": served.attempts,
+        "environment.secrets.list": served.secrets,
+        "environment.reachDiagnostics": served.reach,
+      },
+    });
+    return { client, served };
+  }
+
+  it.each(["off", "unread"] as const)(
+    "sends none of the four reads and leaves the section unavailable while environments read %s",
+    async (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      setSupportEnvironmentSection(knownField(STALE_SECTION));
+      const { client, served } = serveAllReads();
+
+      renderBridge(client);
+
+      await waitFor(() => {
+        expect(getSupportEnvironmentSection()).toEqual({
+          status: "unavailable",
+        });
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      for (const handler of Object.values(served)) {
+        expect(handler).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("reads environment.status for the same host with environments on", async () => {
+    const { client, served } = serveAllReads();
+
+    renderBridge(client);
+
+    await waitFor(() => {
+      expect(served.status).toHaveBeenCalled();
+    });
+  });
 });
 
 describe("SupportEnvironmentBridge", () => {

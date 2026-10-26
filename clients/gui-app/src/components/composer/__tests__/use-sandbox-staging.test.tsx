@@ -53,6 +53,22 @@ const mocks = vi.hoisted(() => ({
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
 }));
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
 }));
@@ -240,7 +256,30 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+});
+
+describe("useSandboxStaging without the sandboxes preview feature", () => {
+  it.each(["off", "unread"] as const)(
+    "stages nothing for a composer's picker while sandboxes read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      render(<Harness surfaceKey={SURFACE} hosts={[LAPTOP, SUSPENDED]} />);
+
+      expect(latest).toBeNull();
+    },
+  );
+
+  it("stages with sandboxes on, over the same surface and hosts", () => {
+    mount([LAPTOP, SUSPENDED]);
+
+    expect(staging().composer.newRows.length).toBeGreaterThan(0);
+  });
 });
 
 describe("useSandboxStaging New rows", () => {

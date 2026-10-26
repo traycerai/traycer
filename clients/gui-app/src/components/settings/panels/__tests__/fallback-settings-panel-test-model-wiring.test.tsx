@@ -352,6 +352,11 @@ import {
   renderWithFallbackQueryClient,
 } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const FLAGSHIP: TierGroup = {
   id: "flagship",
   candidates: [

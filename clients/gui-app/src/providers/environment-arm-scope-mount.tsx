@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import {
   publishEnvironmentArmScope,
   type EnvironmentArmMethod,
@@ -45,7 +46,13 @@ function PoolEnvironmentArmScope(): null {
     client,
     "environment.communicationGraph.subscribe",
   );
-  const environments = useEnvironmentListQuery(useHostClient(), authorized);
+  // Without environments (unread included) no team environment is read, so
+  // no arm is published.
+  const offered = usePreviewFeature("environments") === "on";
+  const environments = useEnvironmentListQuery(
+    useHostClient(),
+    authorized && offered,
+  );
   const environmentData = environments.data;
   const scope = useMemo(() => {
     const teams = (environmentData?.environments ?? []).filter(
@@ -57,6 +64,7 @@ function PoolEnvironmentArmScope(): null {
     if (
       pool === null ||
       !authorized ||
+      !offered ||
       viewerId === null ||
       client === null ||
       environmentIds.length === 0
@@ -87,6 +95,7 @@ function PoolEnvironmentArmScope(): null {
     };
   }, [
     authorized,
+    offered,
     chats,
     client,
     environmentData,

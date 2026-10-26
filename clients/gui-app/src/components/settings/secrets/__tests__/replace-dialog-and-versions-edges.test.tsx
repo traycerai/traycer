@@ -42,6 +42,11 @@ import {
 
 // The writes name their environment through the surface's client.
 const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => hostBoundary.client,

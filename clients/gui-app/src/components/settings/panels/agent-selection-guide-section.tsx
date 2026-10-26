@@ -27,6 +27,7 @@ import {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -254,6 +255,9 @@ function AgentsGuideEditor(props: {
 }) {
   const { hostLabel, initialContent, generatedDefaultContent } = props;
   const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the guide is this host's own.
+  const personal = pick.kind === "personal" && environments === "on";
   const setMutation = useAgentSelectionGuideSetGlobalMutation();
   const resetMutation = useAgentSelectionGuideResetGlobalMutation();
   const [state, dispatch] = useReducer(
@@ -416,7 +420,7 @@ function AgentsGuideEditor(props: {
         }
         title="Reset to default instructions?"
         description={
-          pick.kind === "personal"
+          personal
             ? "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost."
             : `This replaces your agent selection instructions with defaults based on the providers currently available on ${hostLabel}. Your custom instructions will be lost.`
         }

@@ -172,6 +172,11 @@ import { consumeSettingsEscape } from "@/components/settings/settings-escape-con
 import { settingsOverlayModule } from "@/stores/tabs/overlays/settings";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
 }

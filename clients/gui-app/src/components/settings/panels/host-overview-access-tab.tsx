@@ -22,6 +22,7 @@ import {
   SETUP_STEPS,
   setupView,
   TERMINAL_ACCOUNT_SENTENCE,
+  TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS,
   teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
@@ -43,6 +44,7 @@ import {
 } from "@/hooks/environment/use-environment-reads";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetProfileEnabledForClient } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -105,6 +107,25 @@ function AccessTabBody(props: {
   readonly hostName: string;
 }): ReactNode {
   const status = useEnvironmentStatusRead(props.client, props.hostId, true);
+  // Unread takes this branch too: it drops sections, which the read restores.
+  const environments = usePreviewFeature("environments");
+  if (environments !== "on") {
+    return (
+      <>
+        {status.data === null ? null : (
+          <RemoteAccessSection
+            client={props.client}
+            hostId={props.hostId}
+            status={status.data.remoteAccess}
+          />
+        )}
+        <TerminalAccountsSection
+          client={props.client}
+          sentence={TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS}
+        />
+      </>
+    );
+  }
   if (status.supported === false) {
     return (
       <p

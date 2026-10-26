@@ -12,6 +12,7 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /**
  * The environment sheets, mounted once for the whole app rather than inside
@@ -51,7 +52,11 @@ function RetrospectiveShowOnce(): ReactNode {
     computer.client,
     "environment.status",
   );
-  const enabled = !checked && statusPlanesSupported(version);
+  // Without environments (unread included) nothing was shared to review; a
+  // read that lands on decides then.
+  const environments = usePreviewFeature("environments");
+  const enabled =
+    !checked && statusPlanesSupported(version) && environments === "on";
   const status = useEnvironmentStatusRead(
     computer.client,
     computer.hostId,

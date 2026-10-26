@@ -70,6 +70,11 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { buildOverviewManagement } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();

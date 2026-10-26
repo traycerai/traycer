@@ -40,6 +40,10 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // A Personal pick on a computer whose own settings have not moved: the host
 // keeps no environment of its own to answer for, so a secrets call that does
 // not name Personal's environment is refused. Every call goes through the real

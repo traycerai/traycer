@@ -1,5 +1,6 @@
 import { Coins, Download, KeyRound, Lock, SquarePen } from "lucide-react";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
@@ -53,6 +54,8 @@ export type GettingStartedCard = (typeof CARDS)[number];
 export type GettingStartedCardId = GettingStartedCard["id"];
 
 export interface GettingStartedFacts {
+  /** Whether environments read on; Secrets and a second computer need them. */
+  readonly environments: boolean;
   readonly providerSetUp: boolean;
   readonly hasTask: boolean;
   readonly hasSecret: boolean;
@@ -94,7 +97,13 @@ function stepIsDone(
 export function gettingStartedVisibleCards(
   facts: GettingStartedFacts,
 ): readonly GettingStartedCard[] {
-  return CARDS.filter((card) => card.id !== "credits" || facts.sandboxStaged);
+  return CARDS.filter((card) => {
+    if (card.id === "credits") return facts.sandboxStaged;
+    if (card.id === "secret" || card.id === "install") {
+      return facts.environments;
+    }
+    return true;
+  });
 }
 
 /**
@@ -129,6 +138,9 @@ export function useGettingStartedFacts(): GettingStartedFacts {
     enabled: client !== null,
     subscribed: true,
   });
+  // Unread shows neither environment card: a card that appears and then
+  // leaves reads worse than one that arrives with the read.
+  const environments = usePreviewFeature("environments") === "on";
   const secretsSupported = useHostMethodSupport(
     hostId,
     "environment.secrets.list",
@@ -138,7 +150,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
     client,
     method: "environment.secrets.list",
     params: { environmentId: null },
-    options: { enabled: secretsSupported === true },
+    options: { enabled: environments && secretsSupported === true },
   });
   const { tasks } = useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, {
     enabled: true,
@@ -150,6 +162,7 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   const user = useAuthUser().data ?? null;
   const staged = useStagedSandboxInThisWindow();
   return {
+    environments,
     providerSetUp:
       providers.data !== undefined && providerSetUp(providers.data.providers),
     hasTask: tasks.length > 0,

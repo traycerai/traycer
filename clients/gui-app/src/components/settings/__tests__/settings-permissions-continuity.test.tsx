@@ -33,6 +33,10 @@ import {
   resetSettingsOpenIntentForTests,
 } from "@/stores/tabs/settings-open-intent-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // ---- surface boundary -----------------------------------------------------
 
 const route = vi.hoisted((): { pathname: string; mobile: boolean } => ({

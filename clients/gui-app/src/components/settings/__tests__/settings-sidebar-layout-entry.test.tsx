@@ -10,6 +10,11 @@ import {
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // The sidebar's host group is headed by the one host switcher, which composes
 // several host-runtime hooks. This suite is about NAVIGATION, so it mocks at
 // the scope boundary rather than standing up a host runtime.

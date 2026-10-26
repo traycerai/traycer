@@ -31,6 +31,22 @@ import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-shee
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { OpenSettingsModalOpts } from "@/stores/tabs/use-system-tab-modal";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 // The host directory is the boundary: which computer this is, and the client
 // that names a host id. The reads and the sheet stay real.
 const directory = vi.hoisted(
@@ -133,6 +149,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   setSystemTabModalApi(null);
   resetNegotiatedManifests();
   directory.computer = {
@@ -155,6 +172,30 @@ describe("<EnvironmentSheetsHost /> show-once", () => {
       hostName: "Old laptop",
     });
   });
+
+  it.each(["off", "unread"] as const)(
+    "reads neither the status nor the review and opens nothing while environments read %s",
+    async (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      const reads = thisComputerAnswering(SHARED, null);
+      renderHost();
+
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      });
+      expect(reads.status).toBe(0);
+      expect(reads.review).toBe(0);
+      expect(reads.recorded).toEqual([]);
+      expect(screen.queryByTestId("retrospective-sheet")).toBeNull();
+      expect(useRetrospectiveSheetStore.getState().target).toBeNull();
+    },
+  );
 
   it("opens nothing once the review says it was shown", async () => {
     const reads = thisComputerAnswering(SHARED, Date.UTC(2026, 9, 15, 12));

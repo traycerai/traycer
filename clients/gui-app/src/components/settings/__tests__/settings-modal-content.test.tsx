@@ -16,6 +16,16 @@ vi.mock("@/components/settings/panels/usage-settings-panel", () => ({
   UsageSettingsPanel: () => <div data-testid="settings-panel-probe" />,
 }));
 
+vi.mock("@/components/settings/panels/general-settings-panel", () => ({
+  GeneralSettingsPanel: () => <div data-testid="general-page-probe" />,
+}));
+vi.mock("@/components/settings/panels/secrets-settings-panel", () => ({
+  SecretsSettingsPanel: () => <div data-testid="secrets-page-probe" />,
+}));
+vi.mock("@/components/settings/panels/sandboxes-settings-panel", () => ({
+  SandboxesSettingsPanel: () => <div data-testid="sandboxes-page-probe" />,
+}));
+
 // The Personal pages' frame reads the host runtime and has its own suite.
 vi.mock("@/components/settings/personal/personal-page-frame", () => ({
   PersonalPageFrame: (props: { readonly children: React.ReactNode }) =>
@@ -30,9 +40,50 @@ vi.mock("@/components/settings/panels/permissions-settings-panel", () => ({
 
 import { SettingsModalContent } from "@/components/settings/settings-modal-content";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 describe("<SettingsModalContent />", () => {
   afterEach(() => {
     cleanup();
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
+  });
+
+  it.each(["off", "unread"] as const)(
+    "opens General for a section that needs a preview feature while environments read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      render(<SettingsModalContent section="secrets" />);
+
+      expect(screen.getByTestId("general-page-probe")).toBeTruthy();
+      expect(screen.queryByTestId("secrets-page-probe")).toBeNull();
+    },
+  );
+
+  it("opens the gated page itself with its preview feature on", () => {
+    render(<SettingsModalContent section="secrets" />);
+    expect(screen.getByTestId("secrets-page-probe")).toBeTruthy();
   });
 
   // A page result scrolls the pane the SURFACE owns, so every section has one

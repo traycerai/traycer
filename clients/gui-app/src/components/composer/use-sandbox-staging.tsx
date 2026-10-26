@@ -33,6 +33,7 @@ import {
   type EpicCollaboratorsView,
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
   configurationStageShape,
@@ -187,6 +188,13 @@ interface NewRowFacts {
   readonly needsCredits: boolean;
 }
 
+/** `surface`, or `null` without sandboxes (unread included). */
+function useOfferedStagingSurface(
+  surface: SandboxStagingSurface | null,
+): SandboxStagingSurface | null {
+  return usePreviewFeature("sandboxes") === "on" ? surface : null;
+}
+
 /**
  * The composer and new-terminal pickers' staging (sandboxes redesign D9): the
  * New rows, what a pick stages, the staged chip's label, the consequences
@@ -197,7 +205,7 @@ interface NewRowFacts {
  * person's remembered pick only seeds their gear. `memoryHostId` buckets
  * those picks, as every composer memory is bucketed by the composer's host.
  * A `null` surface stages nothing (a picker that is not a composer's) and
- * returns `null`.
+ * returns `null`; so does every surface without sandboxes (unread included).
  */
 export function useSandboxStaging(input: {
   readonly surface: SandboxStagingSurface | null;
@@ -205,12 +213,13 @@ export function useSandboxStaging(input: {
   readonly hosts: readonly HostScopeOption[];
 }): SandboxStaging | null {
   const { memoryHostId } = input;
-  const surfaceKey = input.surface === null ? "" : input.surface.surfaceKey;
-  const task = input.surface === null ? null : input.surface.task;
+  const surface = useOfferedStagingSurface(input.surface);
+  const surfaceKey = surface === null ? "" : surface.surfaceKey;
+  const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
-  const catalogue = useSandboxCatalogue(input.surface !== null).data ?? null;
-  const defaultsFor = useSandboxDefaultsLookup(input.surface !== null);
+  const catalogue = useSandboxCatalogue(surface !== null).data ?? null;
+  const defaultsFor = useSandboxDefaultsLookup(surface !== null);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,
@@ -452,7 +461,7 @@ export function useSandboxStaging(input: {
       />
     );
 
-  if (input.surface === null) return null;
+  if (surface === null) return null;
   return { composer, stage, consequences, sheet };
 }
 

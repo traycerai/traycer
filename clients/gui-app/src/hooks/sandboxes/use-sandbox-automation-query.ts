@@ -15,6 +15,7 @@ import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 function sandboxAutomationQueryOptions(
   auth: AuthService | null,
@@ -60,12 +61,14 @@ export function useSandboxAutomation(
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const unavailable = useSandboxControlUnavailableReason() !== null;
+  // Without sandboxes (unread included) the control plane is never asked.
+  const offered = usePreviewFeature("sandboxes") === "on";
   return useQuery(
     sandboxAutomationQueryOptions(
       auth,
       userId,
       environmentId,
-      signedIn && !unavailable,
+      signedIn && !unavailable && offered,
     ),
   );
 }
@@ -84,6 +87,8 @@ export function useSandboxTeamPods(
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const unavailable = useSandboxControlUnavailableReason() !== null;
+  // Without sandboxes (unread included) the control plane is never asked.
+  const offered = usePreviewFeature("sandboxes") === "on";
   // Stable per id list, so the map is rebuilt only when a read answers.
   const combine = useCallback(
     (
@@ -104,7 +109,7 @@ export function useSandboxTeamPods(
         auth,
         userId,
         environmentId,
-        signedIn && !unavailable,
+        signedIn && !unavailable && offered,
       ),
     ),
     combine,

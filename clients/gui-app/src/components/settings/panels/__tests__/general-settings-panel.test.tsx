@@ -151,6 +151,22 @@ const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   ],
 }));
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): {
+    current: Record<
+      "environments" | "sandboxes" | "bots",
+      "on" | "off" | "unread"
+    >;
+  } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
     getActiveHostId: hostQueryMocks.getActiveHostId,
@@ -283,6 +299,11 @@ describe("GeneralSettingsPanel", () => {
 
   afterEach(() => {
     cleanup();
+    previewVerdict.current = {
+      environments: "on",
+      sandboxes: "on",
+      bots: "on",
+    };
     vi.restoreAllMocks();
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
@@ -541,6 +562,28 @@ describe("GeneralSettingsPanel", () => {
     expect(clearAllPersistedStoresMock.mock.calls[0]?.[0]).toEqual({
       hostClear: null,
     });
+  });
+
+  it.each(["off", "unread"] as const)(
+    "draws no Bots group and no Show Tracy switch while bots read %s",
+    (state) => {
+      previewVerdict.current = {
+        environments: state,
+        sandboxes: state,
+        bots: state,
+      };
+      renderPanel();
+
+      expect(screen.queryByTestId("settings-general-bots")).toBeNull();
+      expect(screen.queryByRole("switch", { name: "Show Tracy" })).toBeNull();
+    },
+  );
+
+  it("draws the Bots group and the Show Tracy switch with bots on", () => {
+    renderPanel();
+
+    expect(screen.getByTestId("settings-general-bots")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Show Tracy" })).toBeTruthy();
   });
 
   it("renders the three named section headers in order", () => {

@@ -26,6 +26,11 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const HOST_ID = "old";
 const ENVIRONMENT_ID = "env-personal";
 

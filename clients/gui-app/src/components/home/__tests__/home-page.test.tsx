@@ -460,6 +460,10 @@ import { HomePage } from "@/components/home/home-page";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // The workspace-folders store buckets by host; every fixture in this suite
 // resolves the active host through `homeMocks.getActiveHostId()`, so seed and
 // read that same host's bucket.

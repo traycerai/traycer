@@ -82,6 +82,11 @@ import {
   resetSettingsOpenIntentForTests,
 } from "@/stores/tabs/settings-open-intent-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 const OVERVIEW_METHODS = [
   "host.status",
   "host.identity.get",

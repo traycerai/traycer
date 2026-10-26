@@ -33,6 +33,10 @@ import {
   resetSettingsOpenIntentForTests,
 } from "@/stores/tabs/settings-open-intent-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // ---- the scope, as a subscribable store -----------------------------------
 
 type ScopeStatus = "following" | "unreachable";

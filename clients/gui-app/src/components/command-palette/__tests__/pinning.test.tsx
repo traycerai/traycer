@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -10,6 +10,11 @@ import type { ReactNode } from "react";
 import { CommandPaletteRoot } from "@/providers/command-palette-provider";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
+
+// These cases are about the preview features' on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
 
 function noopRouter(): KeybindingRouter {
   return {

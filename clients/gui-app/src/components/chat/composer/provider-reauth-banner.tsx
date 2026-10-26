@@ -74,6 +74,7 @@ import { CredentialRefusalNote } from "@/components/providers/credential-refusal
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
@@ -443,10 +444,12 @@ export function ProviderReauthBanner({
   // offered, because each one would send a credential to it.
   const credentialRefusal = useHostCredentialRefusal(tabHostId);
   // The configuration the tab's host runs, which the sentence names and which
-  // decides where a pasted key is stored.
+  // decides where a pasted key is stored. Without environments (unread
+  // included) there is none to read: the key stays on this host.
+  const environments = usePreviewFeature("environments");
   const principal =
-    useEnvironmentStatusRead(tabClient, tabHostId, true).data?.principal ??
-    null;
+    useEnvironmentStatusRead(tabClient, tabHostId, environments === "on").data
+      ?.principal ?? null;
 
   const tabEntry = useMemo(
     () =>

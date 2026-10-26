@@ -63,6 +63,10 @@ import {
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // One-time, real reconciliation install - mirrors `tab-navigation.test.ts`,
 // the only other suite that drives `activateTabIntent` against real stores.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
