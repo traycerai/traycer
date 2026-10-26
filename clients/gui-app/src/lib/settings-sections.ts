@@ -563,7 +563,38 @@ const PREVIEW_FEATURE_SECTIONS: Readonly<
   "machine-setup": "environments",
   "agent-definitions": "environments",
   sandboxes: "sandboxes",
+  credits: "sandboxes",
 };
+
+/** The Environment group's heading when there is no configuration to pick. */
+const AGENT_SETTINGS_GROUP_LABEL = "Agent settings";
+
+/**
+ * A group's heading. Without environments the Environment group has no
+ * configuration to pick and holds this computer's agent settings alone.
+ */
+export function settingsGroupLabel(
+  group: SettingsSectionGroup,
+  environments: boolean,
+): string {
+  return group.id === "personal" && !environments
+    ? AGENT_SETTINGS_GROUP_LABEL
+    : group.label;
+}
+
+/** The heading of the group `sectionId` sits in, as the rail shows it. */
+export function settingsSectionScopeLabel(
+  sectionId: SettingsSectionId,
+  environments: boolean,
+): string {
+  const groupId = SETTINGS_SECTIONS.find(
+    (section) => section.id === sectionId,
+  )?.group;
+  const group = SETTINGS_SECTION_GROUPS.find(
+    (candidate) => candidate.id === groupId,
+  );
+  return group === undefined ? "" : settingsGroupLabel(group, environments);
+}
 
 /** The preview feature `sectionId` needs on, or `null` for none. */
 export function settingsSectionPreviewFeature(

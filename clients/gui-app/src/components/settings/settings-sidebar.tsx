@@ -11,6 +11,7 @@ import { AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
   SETTINGS_SECTION_GROUPS,
+  settingsGroupLabel,
   visibleSettingsSections,
   type SettingsSection,
   type SettingsSectionId,
@@ -143,11 +144,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
               {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
               {group.id !== "guide" ? (
                 <SettingsSidebarGroupHeader
-                  label={
-                    group.id === "personal" && !environments
-                      ? AGENT_SETTINGS_GROUP_LABEL
-                      : group.label
-                  }
+                  label={settingsGroupLabel(group, environments)}
                 />
               ) : null}
               {group.id === "personal" && environments ? (
@@ -194,9 +191,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
     </aside>
   );
 }
-
-/** The Environment group's heading when there is no configuration to pick. */
-const AGENT_SETTINGS_GROUP_LABEL = "Agent settings";
 
 /**
  * The Environment dropdown, between the "Environment" heading and the pages
