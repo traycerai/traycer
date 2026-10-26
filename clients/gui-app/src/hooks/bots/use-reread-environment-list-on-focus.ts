@@ -1,4 +1,8 @@
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type Query,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useEffect } from "react";
 import { hostQueryKeys } from "@/lib/query-keys";
 
@@ -10,6 +14,13 @@ const ENVIRONMENT_LIST_METHOD = "environment.list";
  * them all.
  */
 const rereadFocus = new WeakMap<QueryClient, Event>();
+
+function isEnvironmentList(query: Query): boolean {
+  return hostQueryKeys.matchesMethodOnAnyHost(
+    query.queryKey,
+    ENVIRONMENT_LIST_METHOD,
+  );
+}
 
 /**
  * Re-reads the environment list when the window gains focus, for the bot
@@ -30,13 +41,11 @@ export function useRereadEnvironmentListOnFocus(enabled: boolean): void {
     const listener = (event: Event): void => {
       if (rereadFocus.get(queryClient) === event) return;
       rereadFocus.set(queryClient, event);
-      void queryClient.invalidateQueries({
-        predicate: (query) =>
-          hostQueryKeys.matchesMethodOnAnyHost(
-            query.queryKey,
-            ENVIRONMENT_LIST_METHOD,
-          ),
-      });
+      const filters = { predicate: isEnvironmentList };
+      // An invalidation cancels a running read only once the list has data;
+      // a first read still running would be joined, so it is cancelled here.
+      void queryClient.cancelQueries(filters);
+      void queryClient.invalidateQueries(filters);
     };
     window.addEventListener("focus", listener);
     return () => {
