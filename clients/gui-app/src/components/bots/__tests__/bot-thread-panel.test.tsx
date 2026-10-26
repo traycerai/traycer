@@ -35,6 +35,7 @@ import type {
   BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   AgentSender,
   Message,
@@ -49,6 +50,8 @@ import type {
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
+import type { BotActivity } from "@/hooks/bots/use-bot-activity";
+import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 type ThreadTranscriptState = Pick<
@@ -106,10 +109,11 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ): ChatSessionStoreHandle | null =>
     chatId === CONVERSATION_ID ? mocks.channelHandle : mocks.handle,
 }));
-// The thread's typing line is `bot-channel-typing.test.tsx`'s; here the bot
-// is idle.
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
-  useBotActivity: () => null,
+// The thread's typing line is `bot-channel-typing.test.tsx`'s; the bot is
+// idle unless a case says its thread's session failed.
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
+  useBotActivity: () => activityStore((state) => state.activity),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
@@ -150,6 +154,11 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ),
   };
 });
+
+/** What the bot is doing, as the scripted `useBotActivity` reads it. */
+const activityStore = create<{ activity: BotActivity | null }>()(() => ({
+  activity: null,
+}));
 
 import { BotThreadPanel } from "@/components/bots/bot-thread-panel";
 import type { BotThreadPanelThread } from "@/components/bots/bot-thread-panel";
@@ -288,6 +297,7 @@ const channelHold = vi.fn<(ordinal: number) => () => void>(
 const channelRelease = vi.fn<() => void>();
 
 let sent: ReadonlyArray<BotConversationSendRequest>;
+const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
 /** What the host answers the next `bot.conversation.send` with. */
 let sendAnswer: () => Promise<BotConversationSendResponse>;
 
@@ -344,6 +354,7 @@ function mountPanel(
               resolveMember={resolveMember}
               onClose={vi.fn()}
               onOpenUnderTheHood={vi.fn()}
+              onEditPost={onEditPost}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
@@ -358,6 +369,8 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 
 beforeEach(() => {
   sent = [];
+  onEditPost.mockClear();
+  activityStore.setState({ activity: null });
   channelMessages = [];
   mocks.locatedOrdinal = null;
   mocks.locateTargets = [];
@@ -404,6 +417,8 @@ describe("<BotThreadPanel /> a question or proposal nobody has replied under", (
         text: "Ship it",
         threadId: null,
         announcementId: "question-1",
+        redeliver: null,
+        supersedes: null,
       },
     ]);
   });
@@ -431,6 +446,8 @@ describe("<BotThreadPanel /> a listed thread", () => {
         text: "Hold",
         threadId: THREAD_ID,
         announcementId: null,
+        redeliver: null,
+        supersedes: null,
       },
     ]);
   });
@@ -508,6 +525,8 @@ describe("<BotThreadPanel /> a listed thread", () => {
         text: "Hold for now",
         threadId: THREAD_ID,
         announcementId: null,
+        redeliver: null,
+        supersedes: null,
       },
     ]);
   });
@@ -620,5 +639,222 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
     expect(within(anchor).queryByTestId("conversation-request")).toBeNull();
     expect(within(anchor).queryByText("Open")).toBeNull();
+  });
+});
+
+describe("<BotThreadPanel /> a message the bot failed to answer", () => {
+  const REPLY_REQUEST = "req-reply";
+  const POST_REQUEST = "req-1";
+
+  function textDoc(text: string): JsonContent {
+    return {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    };
+  }
+
+  /** A member's message in the thread (or the channel), its request open. */
+  function memberMessage(
+    messageId: string,
+    requestId: string,
+    text: string,
+  ): Message {
+    return {
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: "user-teammate" },
+      message: { kind: "user", content: textDoc(text), browserAnnotations: [] },
+      timestamp: 3_000,
+      sessionAnchor: null,
+      conversationRequest: {
+        requestId,
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      },
+    };
+  }
+
+  /** The thread's own session failed answering `requestId`. */
+  function threadFailedOn(requestId: string): BotActivity {
+    return {
+      trunk: null,
+      threads: {
+        [THREAD_ID]: {
+          state: "failed",
+          startedAt: 1_000,
+          step: null,
+          requestId,
+          reason: null,
+        },
+      },
+    };
+  }
+
+  function mountFailedReply(): void {
+    activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
+    mountPanel(listed("user-teammate"), [
+      memberMessage("member-reply-1", REPLY_REQUEST, "Hold for now"),
+    ]);
+  }
+
+  it("retries a failed reply as it is in its own thread, with Retry unavailable while it is being sent", async () => {
+    const user = userEvent.setup();
+    let land: (response: BotConversationSendResponse) => void = () => {};
+    sendAnswer = () =>
+      new Promise<BotConversationSendResponse>((resolve) => {
+        land = resolve;
+      });
+    mountFailedReply();
+    const row = screen.getByTestId("bot-member-row");
+    expect(
+      within(screen.getByTestId("bot-thread-anchor")).queryByTestId(
+        "bot-message-retry",
+      ),
+    ).toBeNull();
+
+    await user.click(within(row).getByTestId("bot-message-retry"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Hold for now",
+        threadId: THREAD_ID,
+        announcementId: null,
+        redeliver: { requestId: REPLY_REQUEST },
+        supersedes: null,
+      },
+    ]);
+    await waitFor(() => {
+      expect(
+        within(row).getByTestId("bot-message-retry").hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    expect(
+      within(row).getByTestId("bot-message-edit").hasAttribute("disabled"),
+    ).toBe(false);
+
+    land(SEND_RESPONSE);
+
+    await waitFor(() => {
+      expect(
+        within(row).getByTestId("bot-message-retry").hasAttribute("disabled"),
+      ).toBe(false);
+    });
+  });
+
+  it("puts a failed reply back in the thread's box, and what is sent replaces it", async () => {
+    const user = userEvent.setup();
+    mountFailedReply();
+    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+
+    expect((box as HTMLTextAreaElement).value).toBe("Hold for now");
+    expect(
+      screen.getByTestId("bot-thread-composer-editing").textContent,
+    ).toContain("Sending replaces your message that failed.");
+
+    await user.type(box, " please");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Hold for now please",
+        threadId: THREAD_ID,
+        announcementId: null,
+        redeliver: null,
+        supersedes: REPLY_REQUEST,
+      },
+    ]);
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    });
+    expect((box as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("drops the edit and its text when the person cancels it", async () => {
+    const user = userEvent.setup();
+    mountFailedReply();
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+
+    await user.click(screen.getByTestId("bot-thread-composer-edit-cancel"));
+
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
+    if (!(box instanceof HTMLTextAreaElement))
+      throw new Error("not a textarea");
+    expect(box.value).toBe("");
+    expect(sent).toEqual([]);
+  });
+
+  it("retries the post the thread answers as a channel post, and hands its edit to the channel's box", async () => {
+    const user = userEvent.setup();
+    channelMessages = [
+      memberMessage("anchor-1", POST_REQUEST, "Ship the release today?"),
+    ];
+    activityStore.setState({ activity: threadFailedOn(POST_REQUEST) });
+    mountPanel(listed("user-teammate"), []);
+    const anchor = screen.getByTestId("bot-thread-anchor");
+
+    await user.click(within(anchor).getByTestId("bot-message-edit"));
+
+    expect(onEditPost).toHaveBeenCalledWith({
+      requestId: POST_REQUEST,
+      text: "Ship the release today?",
+    });
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+
+    await user.click(within(anchor).getByTestId("bot-message-retry"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Ship the release today?",
+        threadId: null,
+        announcementId: null,
+        redeliver: { requestId: POST_REQUEST },
+        supersedes: null,
+      },
+    ]);
+  });
+
+  it("takes Retry and Edit away once the thread's session has moved on", () => {
+    mountFailedReply();
+    expect(screen.getByTestId("bot-message-retry")).toBeTruthy();
+    expect(screen.getByTestId("bot-message-edit")).toBeTruthy();
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: null,
+          threads: {
+            [THREAD_ID]: {
+              state: "idle",
+              startedAt: null,
+              step: null,
+              requestId: null,
+              reason: null,
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.getByText("Hold for now")).toBeTruthy();
   });
 });

@@ -109,6 +109,7 @@ function channelPresentation(
     openThread,
     openAnnouncementThread: null,
     chooseOption: null,
+    failedRequest: null,
   };
 }
 
@@ -432,6 +433,7 @@ describe("<ChatMessage /> in a bot thread", () => {
         openThread: null,
         openAnnouncementThread: null,
         chooseOption: null,
+        failedRequest: null,
         replyFollowsPost: null,
         repliedPost: null,
       },
@@ -450,6 +452,92 @@ describe("<ChatMessage /> in a bot thread", () => {
   });
 });
 
+describe("<ChatMessage /> a message the bot failed to answer", () => {
+  const OPEN_REQUEST: ConversationRequest = {
+    requestId: "req-failed",
+    resolvedAt: null,
+    resolvedByMessageId: null,
+  };
+
+  function failing(
+    retry: (text: string) => void,
+    retrying: boolean,
+    edit: (text: string) => void,
+  ): ChatBotPresentation {
+    return {
+      ...channelPresentation(NO_THREAD_LINE, vi.fn()),
+      failedRequest: (requestId) =>
+        requestId === OPEN_REQUEST.requestId ? { retry, retrying, edit } : null,
+    };
+  }
+
+  it("offers Retry and Edit beside Reply in thread, each handing the message's own text back", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, edit));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Edit", "Reply in thread"]);
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    expect(edit).not.toHaveBeenCalled();
+
+    await user.click(actions.getByRole("button", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("Please review the release");
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds Retry while a retry is being sent, and leaves Edit", () => {
+    renderRow(memberPost(OPEN_REQUEST), failing(vi.fn(), true, vi.fn()));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      actions.getByRole("button", { name: "Edit" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("offers neither on a message the session did not fail on, and none on the bot's own row", () => {
+    renderRow(
+      memberPost({ ...OPEN_REQUEST, requestId: "req-answered" }),
+      failing(vi.fn(), false, vi.fn()),
+    );
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.getByTestId("bot-message-reply-in-thread")).toBeTruthy();
+    cleanup();
+
+    renderRow(botRow(undefined), failing(vi.fn(), false, vi.fn()));
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+  });
+
+  it("shows no See reply on a request a later message of the member's took over", () => {
+    renderRow(
+      memberPost({
+        requestId: "req-replaced",
+        resolvedAt: 5_000,
+        resolvedByMessageId: "conversation-request:req-new",
+      }),
+      {
+        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
+        scrollToMessage: vi.fn(),
+      },
+    );
+
+    expect(screen.getByText("Please review the release")).toBeTruthy();
+    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+  });
+});
+
 describe("<ChatMessage /> bot rows", () => {
   const presentation: ChatBotPresentation = {
     botTitle: "Release Bot",
@@ -460,6 +548,7 @@ describe("<ChatMessage /> bot rows", () => {
     openThread: null,
     openAnnouncementThread: null,
     chooseOption: null,
+    failedRequest: null,
   };
 
   it("labels a bot's reply with the bot's current title and the APP tag", () => {
@@ -595,6 +684,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       openThread: null,
       openAnnouncementThread: input.openAnnouncementThread,
       chooseOption: input.chooseOption,
+      failedRequest: null,
     };
   }
 
@@ -764,6 +854,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     openThread: null,
     openAnnouncementThread: null,
     chooseOption: null,
+    failedRequest: null,
   };
 
   function resolvedPost(direct: boolean): ChatMessageModel {
@@ -1267,6 +1358,7 @@ describe("<ChatEmptyState /> in a bot channel", () => {
       openThread: null,
       openAnnouncementThread: null,
       chooseOption: null,
+      failedRequest: null,
     });
 
     expect(screen.getByText("No replies yet.")).toBeTruthy();

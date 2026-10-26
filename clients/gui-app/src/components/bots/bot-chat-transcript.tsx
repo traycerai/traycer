@@ -35,6 +35,7 @@ import {
 } from "@/components/chat/chat-messages";
 import {
   ChatBotPresentationContext,
+  type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
 } from "@/components/chat/chat-bot-presentation-context";
@@ -86,6 +87,10 @@ export type BotTranscriptSurface =
         | null;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** A post the bot failed to answer, by its request id, and what can be done about it. */
+      readonly failedRequest: (
+        requestId: string,
+      ) => ChatBotFailedRequest | null;
       /** What the top of the channel says while nobody has written in it. */
       readonly intro: {
         readonly botTitle: string;
@@ -96,6 +101,10 @@ export type BotTranscriptSurface =
       readonly kind: "thread";
       /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** A message the bot failed to answer, by its request id, and what can be done about it. */
+      readonly failedRequest: (
+        requestId: string,
+      ) => ChatBotFailedRequest | null;
     };
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
@@ -520,6 +529,7 @@ function BotChatTranscriptBody(props: {
         openThread: null,
         openAnnouncementThread: null,
         chooseOption: surface.chooseOption,
+        failedRequest: surface.failedRequest,
       };
     }
     return {
@@ -533,6 +543,7 @@ function BotChatTranscriptBody(props: {
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
       chooseOption: surface.chooseOption,
+      failedRequest: surface.failedRequest,
     };
   }, [messages, scrollToMessage, surface, title]);
 

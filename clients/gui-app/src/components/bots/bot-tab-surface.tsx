@@ -473,6 +473,7 @@ function BotTabContent(props: {
                 openThread={openThread}
                 onOpenThread={setOpenThread}
                 onOpenUnderTheHood={openUnderTheHood}
+                onOpenTrunkUnderTheHood={openBotActivity}
               />
             </TabsContent>
             <TabsContent

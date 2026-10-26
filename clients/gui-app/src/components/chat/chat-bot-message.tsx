@@ -1,9 +1,10 @@
 import { useContext, type ReactElement, type ReactNode } from "react";
-import { MessageSquareText } from "lucide-react";
-import type {
-  BotAnnouncement,
-  BotAnnouncementKind,
-  ConversationRequest,
+import { MessageSquareText, Pencil, RotateCcw } from "lucide-react";
+import {
+  isConversationRequestMessageId,
+  type BotAnnouncement,
+  type BotAnnouncementKind,
+  type ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,8 @@ import { TextSegment } from "./segments/text-segment";
  * Slack offers it on every message: a member's post and a question or
  * proposal open their own thread, and a direct reply opens the thread under
  * the post it answers, since a thread hangs off a post or a question, not
- * off a reply. Any other announcement takes no thread.
+ * off a reply. Any other announcement takes no thread. A member's message
+ * the bot failed to answer adds Retry and Edit to them.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
@@ -101,6 +103,7 @@ export function ChatBotMessage(props: {
       instanceId={message.id}
       testId="bot-member-row"
       replyInThread={replyInThread}
+      failed={failedActionsOf(message, presentation)}
     >
       {body}
       {message.conversationRequest === undefined ? null : (
@@ -119,6 +122,27 @@ export function ChatBotMessage(props: {
       )}
     </BotMessageFrame>
   );
+}
+
+/**
+ * Retry and Edit on a member's message the bot failed to answer, bound to
+ * the message's text; `null` on any other.
+ */
+function failedActionsOf(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation,
+): FailedMessageActions | null {
+  const request = message.conversationRequest;
+  const failed =
+    request === undefined || presentation.failedRequest === null
+      ? null
+      : presentation.failedRequest(request.requestId);
+  if (failed === null) return null;
+  return {
+    onRetry: () => failed.retry(message.content),
+    retrying: failed.retrying,
+    onEdit: () => failed.edit(message.content),
+  };
 }
 
 /**
@@ -145,6 +169,7 @@ function BotRow(props: {
       instanceId={message.id}
       testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
       replyInThread={replyInThread}
+      failed={null}
     >
       {repliesTo === null ? null : (
         <RepliedPostLine postId={repliesTo} presentation={presentation} />
@@ -221,6 +246,8 @@ export function BotMessageFrame(props: {
   readonly testId: string;
   /** Opens the row's thread, from its hover actions; `null` for a row that takes none. */
   readonly replyInThread: (() => void) | null;
+  /** Retry and Edit, among the hover actions of a message the bot failed to answer. */
+  readonly failed: FailedMessageActions | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
@@ -277,12 +304,22 @@ export function BotMessageFrame(props: {
         </div>
         {props.children}
       </div>
-      {props.replyInThread === null ? null : (
-        <MessageActions onReplyInThread={props.replyInThread} />
+      {props.replyInThread === null && props.failed === null ? null : (
+        <MessageActions
+          onReplyInThread={props.replyInThread}
+          failed={props.failed}
+        />
       )}
     </div>
   );
 }
+
+/** A failed message's actions, bound to the row. */
+export type FailedMessageActions = {
+  readonly onRetry: () => void;
+  readonly retrying: boolean;
+  readonly onEdit: () => void;
+};
 
 /**
  * Slack's message actions, floating at the row's top right while it is
@@ -290,31 +327,75 @@ export function BotMessageFrame(props: {
  * which has no hover.
  */
 function MessageActions(props: {
-  readonly onReplyInThread: () => void;
+  readonly onReplyInThread: (() => void) | null;
+  readonly failed: FailedMessageActions | null;
 }): ReactElement {
+  const { onReplyInThread, failed } = props;
   return (
     <div
       data-testid="bot-message-actions"
       className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
     >
-      <TooltipWrapper
-        label="Reply in thread"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Reply in thread"
-          data-testid="bot-message-reply-in-thread"
-          onClick={props.onReplyInThread}
+      {failed === null ? null : (
+        <>
+          <MessageAction
+            label="Retry"
+            testId="bot-message-retry"
+            disabled={failed.retrying}
+            onClick={failed.onRetry}
+          >
+            <RotateCcw aria-hidden="true" />
+          </MessageAction>
+          <MessageAction
+            label="Edit"
+            testId="bot-message-edit"
+            disabled={false}
+            onClick={failed.onEdit}
+          >
+            <Pencil aria-hidden="true" />
+          </MessageAction>
+        </>
+      )}
+      {onReplyInThread === null ? null : (
+        <MessageAction
+          label="Reply in thread"
+          testId="bot-message-reply-in-thread"
+          disabled={false}
+          onClick={onReplyInThread}
         >
           <MessageSquareText aria-hidden="true" />
-        </Button>
-      </TooltipWrapper>
+        </MessageAction>
+      )}
     </div>
+  );
+}
+
+function MessageAction(props: {
+  readonly label: string;
+  readonly testId: string;
+  readonly disabled: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <TooltipWrapper
+      label={props.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={props.label}
+        data-testid={props.testId}
+        disabled={props.disabled}
+        onClick={props.onClick}
+      >
+        {props.children}
+      </Button>
+    </TooltipWrapper>
   );
 }
 
@@ -517,7 +598,15 @@ function AnsweredReplyLink(props: {
       : (presentation?.scrollToMessage ?? null);
   const replyId =
     request.resolvedAt === null ? null : request.resolvedByMessageId;
-  if (replyId === null || scrollToMessage === null) return null;
+  // A message the person replaced with an edit was not answered: the new
+  // message carries the request now.
+  if (
+    replyId === null ||
+    scrollToMessage === null ||
+    isConversationRequestMessageId(replyId)
+  ) {
+    return null;
+  }
   if (
     postId !== null &&
     presentation?.replyFollowsPost?.(postId, replyId) === true

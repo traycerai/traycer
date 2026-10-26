@@ -53,6 +53,8 @@ const SEND: BotConversationSendRequest = {
   text: "Please review the release",
   threadId: null,
   announcementId: null,
+  redeliver: null,
+  supersedes: null,
 };
 
 function hostOver(

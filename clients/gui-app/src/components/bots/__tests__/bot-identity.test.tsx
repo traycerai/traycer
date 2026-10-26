@@ -82,6 +82,7 @@ const PRESENTATION: ChatBotPresentation = {
   openThread: null,
   openAnnouncementThread: null,
   chooseOption: null,
+  failedRequest: null,
 };
 
 const PERSON: BotOwner = {
@@ -111,6 +112,7 @@ function replying(step: string | null): BotSessionActivity {
     startedAt: Date.now() - 83_500,
     step,
     requestId: "req-1",
+    reason: null,
   };
 }
 
@@ -309,6 +311,7 @@ describe("the bot's card", () => {
           startedAt: null,
           step: null,
           requestId: null,
+          reason: null,
         },
         hasBinaryPayload: false,
       }),

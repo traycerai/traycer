@@ -54,12 +54,14 @@ const REPLYING: BotSessionActivity = {
   startedAt: 1_760_000_000_000,
   step: "Ran bun test",
   requestId: "req-1",
+  reason: null,
 };
 const FAILED: BotSessionActivity = {
   state: "failed",
   startedAt: null,
   step: null,
   requestId: "req-2",
+  reason: null,
 };
 
 function snapshot(activity: BotActivity | null): BotSubscribeServerFrame {
@@ -249,6 +251,7 @@ describe("replyingSessionOf and botWorkingOf", () => {
     startedAt: null,
     step: null,
     requestId: null,
+    reason: null,
   };
   const LATER: BotSessionActivity = {
     ...REPLYING,

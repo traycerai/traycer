@@ -643,6 +643,8 @@ import {
   botClaimAuthorityV10,
   botConversationListV10,
   botConversationSendV10,
+  botConversationSendV11,
+  botConversationSendUpgradeV10ToV11,
   botThreadListV10,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
@@ -656,6 +658,7 @@ import {
   botOpenV10,
   botReadV10,
   botSubscribeV10,
+  botSubscribeV11,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -9150,11 +9153,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botConversationSendV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 retries a failed post (`redeliver`) or replaces it
+        // (`supersedes`, T69).
+        1: {
+          contract: botConversationSendV11,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -15408,10 +15417,15 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
   // no baseline moves. See `bot/contracts.ts`.
   "bot.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 says why a session failed or parked (`reason`, T69); @1.0 stays
+      // bound to its frozen frames so an older peer's re-parse strips it.
+      latestMinor: 1,
       versions: {
         0: {
           contract: botSubscribeV10,
+        },
+        1: {
+          contract: botSubscribeV11,
         },
       },
     },

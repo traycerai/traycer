@@ -304,7 +304,7 @@ function replying(
   requestId: string | null,
   step: string | null,
 ): BotSessionActivity {
-  return { state: "replying", startedAt: 3, step, requestId };
+  return { state: "replying", startedAt: 3, step, requestId, reason: null };
 }
 
 const IDLE_ACTIVITY: BotSessionActivity = {
@@ -312,6 +312,7 @@ const IDLE_ACTIVITY: BotSessionActivity = {
   startedAt: null,
   step: null,
   requestId: null,
+  reason: null,
 };
 
 let botStream = new StubSession();
@@ -459,6 +460,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
         useBotOpenThreadStore.getState().setOpenThread(BOT_ID, open)
       }
       onOpenUnderTheHood={vi.fn()}
+      onOpenTrunkUnderTheHood={vi.fn()}
     />
   );
 }

@@ -84,3 +84,27 @@ function startedBefore(a: BotSessionActivity, b: BotSessionActivity): boolean {
   if (a.startedAt === null) return false;
   return b.startedAt === null || a.startedAt < b.startedAt;
 }
+
+/**
+ * Whether one of the bot's sessions, its trunk or a thread's, failed
+ * answering `requestId` and still holds it: what Retry and Edit are offered
+ * on.
+ */
+export function failedOnRequest(
+  activity: BotActivity | null,
+  requestId: string,
+): boolean {
+  if (activity === null) return false;
+  if (failedOn(activity.trunk, requestId)) return true;
+  return Object.values(activity.threads).some((thread) =>
+    failedOn(thread, requestId),
+  );
+}
+
+/** Whether `session` failed answering `requestId`. */
+export function failedOn(
+  session: BotSessionActivity | null,
+  requestId: string,
+): boolean {
+  return session?.state === "failed" && session.requestId === requestId;
+}
