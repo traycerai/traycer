@@ -490,6 +490,52 @@ describe("buildCurrentEpicArtifactMentionEntries", () => {
     ]);
   });
 
+  it("projects html and canvas artifacts but never a file artifact", () => {
+    const entries = buildCurrentEpicArtifactMentionEntries(
+      artifactsSlice([
+        artifact("c1", "canvas", {
+          title: "Checkout screens",
+          updatedAt: 300,
+          status: null,
+        }),
+        artifact("h1", "html", {
+          title: "Architecture page",
+          updatedAt: 200,
+          status: null,
+        }),
+        artifact("f1", "file", {
+          title: "report.pdf",
+          updatedAt: 100,
+          status: null,
+        }),
+      ]),
+      "epic-1",
+      "My Epic",
+      "",
+    );
+    expect(
+      entries.map((entry) => ({
+        id: entry.id,
+        token: entry.token,
+        artifactType: entry.artifactType,
+        status: entry.status,
+      })),
+    ).toEqual([
+      {
+        id: "canvas:epic-1:c1",
+        token: "canvas:epic-1/c1",
+        artifactType: "canvas",
+        status: null,
+      },
+      {
+        id: "html:epic-1:h1",
+        token: "html:epic-1/h1",
+        artifactType: "html",
+        status: null,
+      },
+    ]);
+  });
+
   it("filters by a case-insensitive subsequence query", () => {
     const entries = buildCurrentEpicArtifactMentionEntries(
       artifactsSlice([

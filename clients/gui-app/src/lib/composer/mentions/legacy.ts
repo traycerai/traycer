@@ -1,15 +1,15 @@
-import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  mentionableArtifactKindSchema,
+  type MentionableArtifactKind,
+} from "@traycer/protocol/common/registry";
 import { basenameOfPath } from "@/lib/path";
 
-// Set membership beats `markdownArtifactKindSchema.safeParse(value).success`
+// Set membership beats `mentionableArtifactKindSchema.safeParse(value).success`
 // on the per-render mention paths (`createLegacyMentionAttachment` runs
 // for every mention segment in every chat-message render).
-const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set<MarkdownArtifactKind>([
-  "spec",
-  "ticket",
-  "story",
-  "review",
-]);
+const EPIC_ARTIFACT_KINDS: ReadonlySet<string> = new Set(
+  mentionableArtifactKindSchema.options,
+);
 import type { MentionAttachment, PathKind } from "@/lib/composer/types";
 
 export function inferPathKind(path: string): PathKind {
@@ -165,7 +165,7 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
   }
 
   const artifactMatch = path.match(
-    /^(spec|ticket|story|review):([^/\s]+)\/([^\s]+)$/u,
+    /^(spec|ticket|story|review|html|canvas):([^/\s]+)\/([^\s]+)$/u,
   );
   if (artifactMatch === null) return null;
   const artifactType = artifactMatch[1];
@@ -192,6 +192,6 @@ function legacyEntityMentionAttachment(path: string): MentionAttachment | null {
   };
 }
 
-function isEpicArtifactKind(value: string): value is MarkdownArtifactKind {
+function isEpicArtifactKind(value: string): value is MentionableArtifactKind {
   return EPIC_ARTIFACT_KINDS.has(value);
 }

@@ -944,6 +944,8 @@ describe("mention provider registry", () => {
       "epic.mentionTickets",
       "epic.mentionStories",
       "epic.mentionReviews",
+      "epic.mentionHtmlArtifacts",
+      "epic.mentionCanvases",
     ]);
 
     const artifactStep: MentionFlowStep = {
@@ -961,6 +963,8 @@ describe("mention provider registry", () => {
       "epic.mentionTickets",
       "epic.mentionStories",
       "epic.mentionReviews",
+      "epic.mentionHtmlArtifacts",
+      "epic.mentionCanvases",
     ]);
   });
 

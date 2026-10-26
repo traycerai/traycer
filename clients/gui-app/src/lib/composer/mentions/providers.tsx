@@ -12,7 +12,10 @@ import type {
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  mentionableArtifactKindSchema,
+  type MentionableArtifactKind,
+} from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   GithubMentionRepository,
@@ -193,7 +196,9 @@ export type EpicMentionMethod =
   | "epic.mentionSpecs"
   | "epic.mentionTickets"
   | "epic.mentionStories"
-  | "epic.mentionReviews";
+  | "epic.mentionReviews"
+  | "epic.mentionHtmlArtifacts"
+  | "epic.mentionCanvases";
 
 export type EpicArtifactMentionMethod = Exclude<
   EpicMentionMethod,
@@ -929,21 +934,19 @@ class TerminalMentionProvider extends ComposerMentionProvider {
 }
 
 const EPIC_ARTIFACT_MENTION_METHODS: Record<
-  MarkdownArtifactKind,
+  MentionableArtifactKind,
   EpicArtifactMentionMethod
 > = {
   spec: "epic.mentionSpecs",
   ticket: "epic.mentionTickets",
   story: "epic.mentionStories",
   review: "epic.mentionReviews",
+  html: "epic.mentionHtmlArtifacts",
+  canvas: "epic.mentionCanvases",
 };
 
-const ALL_ARTIFACT_KINDS: ReadonlyArray<MarkdownArtifactKind> = [
-  "spec",
-  "ticket",
-  "story",
-  "review",
-];
+const ALL_ARTIFACT_KINDS: ReadonlyArray<MentionableArtifactKind> =
+  mentionableArtifactKindSchema.options;
 
 export function isArtifactMentionStep(step: MentionFlowStep): boolean {
   return step.kind === "provider" && step.providerId === "artifacts";

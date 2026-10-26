@@ -21,7 +21,9 @@ import type { TreeNodeNested } from "@/lib/tree-types";
 import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
 import {
   markdownArtifactKindSchema,
+  mentionableArtifactKindSchema,
   type MarkdownArtifactKind,
+  type MentionableArtifactKind,
   type EpicArtifactKind,
 } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
@@ -59,7 +61,7 @@ export function isEpicArtifactKind(
   );
 }
 
-// Markdown editing, sidebar comments and composer mentions require a Markdown body.
+// Markdown editing and sidebar comments require a Markdown body.
 export function isMarkdownArtifactKind(
   value: string | null | undefined,
 ): value is MarkdownArtifactKind {
@@ -69,6 +71,35 @@ export function isMarkdownArtifactKind(
     value === "story" ||
     value === "review"
   );
+}
+
+const MENTIONABLE_ARTIFACT_KIND_SET: ReadonlySet<string> = new Set(
+  mentionableArtifactKindSchema.options,
+);
+
+// Kinds the composer can `@` mention: the markdown kinds plus html and canvas.
+// A `file` artifact has no mention arm yet.
+export function isMentionableArtifactKind(
+  value: string | null | undefined,
+): value is MentionableArtifactKind {
+  return (
+    value !== null &&
+    value !== undefined &&
+    MENTIONABLE_ARTIFACT_KIND_SET.has(value)
+  );
+}
+
+/**
+ * Kinds the create menus author themselves: a markdown body, or an empty
+ * canvas the host seeds and projects to disk. HTML and file artifacts still
+ * need a source file, so they are created by writing files.
+ */
+export type CreatableArtifactKind = MarkdownArtifactKind | "canvas";
+
+export function isCreatableArtifactKind(
+  value: string | null | undefined,
+): value is CreatableArtifactKind {
+  return isMarkdownArtifactKind(value) || value === "canvas";
 }
 
 const EPIC_NODE_KIND_SET: ReadonlySet<string> = new Set(EPIC_NODE_KINDS);

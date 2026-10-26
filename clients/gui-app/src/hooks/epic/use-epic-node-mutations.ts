@@ -1,5 +1,5 @@
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { CreateArtifactRequest } from "@traycer/protocol/host/epic/unary-schemas";
+import type { CreatableArtifactKind } from "@/lib/artifacts/node-display";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -114,14 +114,15 @@ async function enqueueAndWait(
  * Pending state is on the affordance; success is silent (the Y.Doc
  * stream delivers the new row); failure shows a toast.
  */
-// The create menu currently authors Markdown bodies only.
 export function useEpicCreateArtifact() {
   const client = useEpicSessionHostClient();
   return useHostMutation({
     client,
     method: "epic.createArtifact",
     mapVariables: (
-      variables: CreateArtifactRequest & { artifactType: MarkdownArtifactKind },
+      variables: CreateArtifactRequest & {
+        artifactType: CreatableArtifactKind;
+      },
     ) => variables,
     options: {
       onSuccess: (_data, variables) => {

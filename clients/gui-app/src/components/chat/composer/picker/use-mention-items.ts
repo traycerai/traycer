@@ -1,4 +1,4 @@
-import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
+import { isMentionableArtifactKind } from "@/lib/artifacts/node-display";
 import {
   useCallback,
   useEffect,
@@ -1286,8 +1286,8 @@ function localArtifactSuggestion(
   epicTitle: string,
   label: string,
 ): EpicMentionArtifactSuggestion | null {
-  // The composer protocol still has mention arms only for Markdown artifacts.
-  if (!isMarkdownArtifactKind(artifact.kind)) return null;
+  // A `file` artifact has no composer mention arm yet.
+  if (!isMentionableArtifactKind(artifact.kind)) return null;
   // Mirrors the host resolver's id/token format so a current-epic artifact
   // returned by BOTH the cloud list and the local store de-dupes to one entry.
   const common = {
@@ -1310,6 +1310,10 @@ function localArtifactSuggestion(
       return { kind: "epic-artifact", artifactType: "story", ...common };
     case "review":
       return { kind: "epic-artifact", artifactType: "review", ...common };
+    case "html":
+      return { kind: "epic-artifact", artifactType: "html", ...common };
+    case "canvas":
+      return { kind: "epic-artifact", artifactType: "canvas", ...common };
   }
 }
 

@@ -1,6 +1,6 @@
 import type { WorkspaceMentionGitType } from "@traycer/protocol/host/workspace/unary-schemas";
 
-import type { MarkdownArtifactKind } from "./registry";
+import type { MentionableArtifactKind } from "./registry";
 import { DEFAULT_GITHUB_MENTION_HOST } from "./github-mention-host";
 import { githubMentionTokenReference } from "./github-mention-identity";
 
@@ -84,7 +84,7 @@ export type EntityMentionContextType =
   | "chat"
   | "terminal-agent"
   | "terminal"
-  | MarkdownArtifactKind;
+  | MentionableArtifactKind;
 
 /**
  * Wire spelling, not a local one: these strings ARE `ContextType` members in
@@ -150,7 +150,7 @@ export type EntityMentionAttachment = {
   description: string;
   epicId: string;
   artifactId: string | null;
-  artifactType: MarkdownArtifactKind | null;
+  artifactType: MentionableArtifactKind | null;
   chatId: string | null;
   terminalAgentId: string | null;
   /** Session id of a plain terminal mention; null for every other entity. */
@@ -221,12 +221,15 @@ export type MentionAttachment =
   | BrowserTabMentionAttachment;
 
 /** Same shape and same reason as {@link GIT_TYPES} - a subset would compile. */
-const ARTIFACT_CONTEXT_TYPES: Readonly<Record<MarkdownArtifactKind, true>> = {
-  spec: true,
-  ticket: true,
-  story: true,
-  review: true,
-};
+const ARTIFACT_CONTEXT_TYPES: Readonly<Record<MentionableArtifactKind, true>> =
+  {
+    spec: true,
+    ticket: true,
+    story: true,
+    review: true,
+    html: true,
+    canvas: true,
+  };
 
 /**
  * A RECORD keyed by the union, not an array of it.
@@ -506,7 +509,7 @@ function pathKindValue(value: unknown): PathKind | null {
   return value === "file" || value === "folder" ? value : null;
 }
 
-function artifactKindValue(value: unknown): MarkdownArtifactKind | null {
+function artifactKindValue(value: unknown): MentionableArtifactKind | null {
   return isArtifactContextType(value) ? value : null;
 }
 
@@ -545,7 +548,9 @@ function statusValue(value: unknown): string | number | null {
   return null;
 }
 
-function isArtifactContextType(value: unknown): value is MarkdownArtifactKind {
+function isArtifactContextType(
+  value: unknown,
+): value is MentionableArtifactKind {
   return (
     typeof value === "string" && Object.hasOwn(ARTIFACT_CONTEXT_TYPES, value)
   );

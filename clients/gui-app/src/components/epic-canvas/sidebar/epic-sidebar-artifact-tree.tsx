@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_EPIC_NODE_NAMES,
   EPIC_NODE_ICONS,
+  isCreatableArtifactKind,
   isEpicArtifactKind,
   isMarkdownArtifactKind,
   type EpicNodeKind,
@@ -1047,8 +1048,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const performAddChild = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate || isFileLayout) return;
-      // The create menu still authors Markdown bodies only.
-      if (!isMarkdownArtifactKind(type)) {
+      if (!isCreatableArtifactKind(type)) {
         return;
       }
       ensureExpanded(nodeId);
@@ -1064,7 +1064,9 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
         {
           onSuccess: (result) => {
             openProjectedChildInTab(result.artifactId, (node) => {
-              requestArtifactEditorFocus(node.id, node.instanceId);
+              // Only a markdown tile mounts the editor that consumes the mark.
+              if (isMarkdownArtifactKind(type))
+                requestArtifactEditorFocus(node.id, node.instanceId);
             });
           },
           onError: () => {

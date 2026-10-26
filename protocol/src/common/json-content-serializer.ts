@@ -16,6 +16,12 @@ export enum ContextType {
   Ticket = "ticket",
   Story = "story",
   Review = "review",
+  /**
+   * An HTML artifact or a canvas. Both are folders on the host's disk, so the
+   * agent form points at the folder rather than at a body file.
+   */
+  Html = "html",
+  Canvas = "canvas",
   WorkflowCommand = "workflow_command",
   Chat = "chat",
   /**
@@ -817,6 +823,14 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const title = attrs.label || attrs.id || "";
       return `review:${title}`;
     }
+    case ContextType.Html: {
+      const title = attrs.label || attrs.id || "";
+      return `html:${title}`;
+    }
+    case ContextType.Canvas: {
+      const title = attrs.label || attrs.id || "";
+      return `canvas:${title}`;
+    }
     case ContextType.Epic: {
       const title = attrs.label || attrs.id || "";
       return `epic:${title}`;
@@ -946,6 +960,12 @@ function formatMentionForLLMQuery(
       return atRef(requiredArtifactRelPath(attrs));
     }
     case ContextType.Review: {
+      return atRef(requiredArtifactRelPath(attrs));
+    }
+    case ContextType.Html: {
+      return atRef(requiredArtifactRelPath(attrs));
+    }
+    case ContextType.Canvas: {
       return atRef(requiredArtifactRelPath(attrs));
     }
     case ContextType.Epic:

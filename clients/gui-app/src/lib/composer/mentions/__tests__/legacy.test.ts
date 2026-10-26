@@ -20,6 +20,17 @@ describe("createLegacyMentionAttachment browser-tab rehydration", () => {
     });
   });
 
+  it("rebuilds a canvas artifact mention from its LLM token", () => {
+    const mention = createLegacyMentionAttachment("canvas:epic-1/canvas-1");
+    expect(mention).toMatchObject({
+      kind: "mention",
+      contextType: "canvas",
+      artifactType: "canvas",
+      epicId: "epic-1",
+      artifactId: "canvas-1",
+    });
+  });
+
   it("falls back to a plain file mention for an unrelated path", () => {
     const mention = createLegacyMentionAttachment("src/index.ts");
     expect(mention.contextType).toBe("file");

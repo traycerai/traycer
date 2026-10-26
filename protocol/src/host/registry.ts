@@ -879,7 +879,9 @@ import {
   epicListTasksUpgradeV16ToV17,
   epicListTasksUpgradeV17ToV18,
   epicListTasksUpgradeV18ToV19,
+  epicMentionCanvasesV10,
   epicMentionEpicsV10,
+  epicMentionHtmlArtifactsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
   epicMentionStoriesV10,
@@ -8694,6 +8696,34 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: epicMentionReviewsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Added after the released floor was frozen: a host without them lists no
+  // HTML artifacts or canvases in the picker, and nothing else changes.
+  "epic.mentionHtmlArtifacts": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicMentionHtmlArtifactsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "epic.mentionCanvases": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicMentionCanvasesV10,
           upgradeFromPreviousVersion: null,
         },
       },

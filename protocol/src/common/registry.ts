@@ -14,6 +14,7 @@ import {
   harnessIdSchema,
   harnessIdSchemaPreReasonix,
   markdownArtifactKindSchema,
+  mentionableArtifactKindSchema,
   permissionRoleSchema,
   ticketStatusSchema,
 } from "@traycer/protocol/common/_internal/schemas";
@@ -113,6 +114,10 @@ export const epicArtifactKindRecordV100 = defineRecordContract({
 
 // Kinds that carry a markdown body.
 export { markdownArtifactKindSchema };
+
+// Kinds a composer `@` mention can name: the markdown kinds plus html and
+// canvas, which the agent reaches as a folder.
+export { mentionableArtifactKindSchema };
 
 // Frozen copy for every released line. New lines read the latest record.
 // It shares the domain schema today; the two names can diverge if a markdown
@@ -330,4 +335,7 @@ export type EpicArtifactKind = RecordValue<
   "epic-artifact-kind"
 >;
 export type MarkdownArtifactKind = z.infer<typeof markdownArtifactKindSchema>;
+export type MentionableArtifactKind = z.infer<
+  typeof mentionableArtifactKindSchema
+>;
 export type HarnessId = RecordValue<CommonRecordRegistry, "harness-id">;

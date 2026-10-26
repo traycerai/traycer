@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   hostRpcRegistry,
   epicMentionArtifactsRequestSchema,
+  epicMentionCanvasesResponseSchema,
   epicMentionEpicsRequestSchema,
   epicMentionEpicsResponseSchema,
+  epicMentionHtmlArtifactsResponseSchema,
   epicMentionSpecsResponseSchema,
 } from "@traycer/protocol/host/index";
 
@@ -82,5 +84,55 @@ describe("epic mention host schemas", () => {
       hostRpcRegistry["epic.mentionReviews"][1].versions[0].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
+  });
+
+  it("lists html artifacts and canvases through their own optional methods", () => {
+    for (const method of [
+      "epic.mentionHtmlArtifacts",
+      "epic.mentionCanvases",
+    ] as const) {
+      expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
+      expect(
+        hostRpcRegistry[method][1].versions[0].contract.schemaVersion,
+      ).toEqual({ major: 1, minor: 0 });
+    }
+    expect(
+      epicMentionCanvasesResponseSchema.safeParse({
+        entries: [
+          {
+            kind: "epic-artifact",
+            id: "canvas:epic-1:canvas-1",
+            token: "canvas:epic-1/canvas-1",
+            epicId: "epic-1",
+            epicTitle: "Login flow",
+            artifactId: "canvas-1",
+            artifactType: "canvas",
+            label: "Checkout screens",
+            description: "Login flow",
+            status: null,
+            updatedAt: 123,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    // Each method answers its own kind only.
+    expect(
+      epicMentionHtmlArtifactsResponseSchema.safeParse({
+        entries: [
+          {
+            kind: "epic-artifact",
+            id: "canvas:epic-1:canvas-1",
+            token: "canvas:epic-1/canvas-1",
+            epicId: "epic-1",
+            epicTitle: "Login flow",
+            artifactId: "canvas-1",
+            artifactType: "canvas",
+            label: "Checkout screens",
+            description: "Login flow",
+            status: null,
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 });
