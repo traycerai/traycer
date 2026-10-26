@@ -25,6 +25,10 @@ import {
 } from "./team-configuration-test-support";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // The computers holding a copy are covered by `secret-remove-preview-computers`.
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",

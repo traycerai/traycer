@@ -14,6 +14,10 @@ import {
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
   secrets: [] as EnvironmentSecretV12[],
