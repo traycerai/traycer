@@ -1,18 +1,19 @@
-// macOS trackpad scroll PHASE for the Electron main process.
+// macOS trackpad scroll stream for the Electron main process.
 //
 // Chromium drops NSEvent's scroll phase before a wheel event reaches
 // JavaScript in either process: the DOM `WheelEvent` has no phase, and
 // Electron's `MouseWheelInputEvent` converter copies deltas only. Without the
 // phase a renderer cannot tell "fingers still resting on the trackpad" from
 // "fingers lifted", and macOS momentum ticks after a lift look like live
-// input - which is exactly the signal a swipe-back gesture needs. Native
-// apps read it straight off NSEvent; this addon does the same from an
-// AppKit local event monitor and hands the TRANSITIONS to JavaScript.
+// input - which is exactly the signal a swipe-back gesture needs. Native apps
+// read it straight off NSEvent; this addon does the same from an AppKit local
+// event monitor.
 //
-// Only transitions are forwarded (began / ended / cancelled, plus the
-// momentum equivalents). Deltas and the "changed" stream stay with the DOM
-// wheel events, which know which element is under the pointer; this addon
-// only answers when a finger sequence starts and stops.
+// Every trackpad scroll event is forwarded WITH its deltas, as one ordered
+// stream: began, changed..., ended, then the momentum equivalents. A
+// recognizer fed from this stream alone never has to reconcile it with the
+// DOM wheel stream, whose delivery order against IPC is not guaranteed. Mouse
+// wheels carry no phase and are not forwarded.
 #import <AppKit/AppKit.h>
 #include <node_api.h>
 #include <stdlib.h>
@@ -20,19 +21,25 @@
 
 typedef struct {
   const char *kind;
-  double deltaX;
-  double deltaY;
-  double windowNumber;
-} ScrollPhaseTransition;
+  double fingerDeltaX;
+  double fingerDeltaY;
+  double timestamp;
+  bool precise;
+  bool modified;
+} TrackpadScrollEvent;
 
-static napi_threadsafe_function transitionSink = NULL;
+static napi_threadsafe_function eventSink = NULL;
 static id scrollMonitor = nil;
 
-static const char *TransitionKind(NSEventPhase phase, NSEventPhase momentum) {
+// `MayBegin` (fingers resting, no scroll yet) and `Stationary` carry nothing a
+// recognizer acts on and are dropped.
+static const char *EventKind(NSEventPhase phase, NSEventPhase momentum) {
   if (phase & NSEventPhaseBegan) return "began";
+  if (phase & NSEventPhaseChanged) return "changed";
   if (phase & NSEventPhaseEnded) return "ended";
   if (phase & NSEventPhaseCancelled) return "cancelled";
   if (momentum & NSEventPhaseBegan) return "momentum-began";
+  if (momentum & NSEventPhaseChanged) return "momentum-changed";
   if (momentum & NSEventPhaseEnded) return "momentum-ended";
   if (momentum & NSEventPhaseCancelled) return "momentum-cancelled";
   return NULL;
@@ -45,23 +52,32 @@ static void SetNumber(napi_env env, napi_value target, const char *key,
   napi_set_named_property(env, target, key, number);
 }
 
+static void SetBool(napi_env env, napi_value target, const char *key,
+                    bool value) {
+  napi_value boolean;
+  napi_get_boolean(env, value, &boolean);
+  napi_set_named_property(env, target, key, boolean);
+}
+
 // Runs on the JavaScript thread: the threadsafe function queues it there, so
 // the AppKit handler never re-enters V8 mid-dispatch.
-static void DeliverTransition(napi_env env, napi_value callback, void *context,
-                              void *data) {
-  ScrollPhaseTransition *transition = (ScrollPhaseTransition *)data;
+static void DeliverEvent(napi_env env, napi_value callback, void *context,
+                         void *data) {
+  TrackpadScrollEvent *event = (TrackpadScrollEvent *)data;
   if (env != NULL) {
-    napi_value event, kind, undefined;
-    napi_create_object(env, &event);
-    napi_create_string_utf8(env, transition->kind, NAPI_AUTO_LENGTH, &kind);
-    napi_set_named_property(env, event, "kind", kind);
-    SetNumber(env, event, "deltaX", transition->deltaX);
-    SetNumber(env, event, "deltaY", transition->deltaY);
-    SetNumber(env, event, "windowNumber", transition->windowNumber);
+    napi_value object, kind, undefined;
+    napi_create_object(env, &object);
+    napi_create_string_utf8(env, event->kind, NAPI_AUTO_LENGTH, &kind);
+    napi_set_named_property(env, object, "kind", kind);
+    SetNumber(env, object, "fingerDeltaX", event->fingerDeltaX);
+    SetNumber(env, object, "fingerDeltaY", event->fingerDeltaY);
+    SetNumber(env, object, "timestamp", event->timestamp);
+    SetBool(env, object, "precise", event->precise);
+    SetBool(env, object, "modified", event->modified);
     napi_get_undefined(env, &undefined);
-    napi_call_function(env, undefined, callback, 1, &event, NULL);
+    napi_call_function(env, undefined, callback, 1, &object, NULL);
   }
-  free(transition);
+  free(event);
 }
 
 static napi_value Start(napi_env env, napi_callback_info info) {
@@ -75,36 +91,42 @@ static napi_value Start(napi_env env, napi_callback_info info) {
     return NULL;
   }
   if (scrollMonitor != nil) {
-    napi_throw_error(env, NULL, "trackpad scroll phase monitor already started");
+    napi_throw_error(env, NULL, "trackpad scroll monitor already started");
     return NULL;
   }
   napi_value resourceName;
-  napi_create_string_utf8(env, "trackpadScrollPhase", NAPI_AUTO_LENGTH,
+  napi_create_string_utf8(env, "trackpadScroll", NAPI_AUTO_LENGTH,
                           &resourceName);
   napi_create_threadsafe_function(env, argv[0], NULL, resourceName, 0, 1, NULL,
-                                  NULL, NULL, DeliverTransition,
-                                  &transitionSink);
+                                  NULL, NULL, DeliverEvent, &eventSink);
   // The monitor must not keep the process alive on its own; `stop()` and
   // process exit are the only ways it goes away.
-  napi_unref_threadsafe_function(env, transitionSink);
+  napi_unref_threadsafe_function(env, eventSink);
 
+  const NSEventModifierFlags modifierMask =
+      NSEventModifierFlagCommand | NSEventModifierFlagOption |
+      NSEventModifierFlagControl | NSEventModifierFlagShift;
   scrollMonitor = [NSEvent
       addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel
                                    handler:^NSEvent *(NSEvent *event) {
-                                     const char *kind = TransitionKind(
+                                     const char *kind = EventKind(
                                          event.phase, event.momentumPhase);
-                                     if (kind != NULL && transitionSink != NULL) {
-                                       ScrollPhaseTransition *transition =
-                                           (ScrollPhaseTransition *)malloc(
-                                               sizeof(ScrollPhaseTransition));
-                                       transition->kind = kind;
-                                       transition->deltaX = event.scrollingDeltaX;
-                                       transition->deltaY = event.scrollingDeltaY;
-                                       transition->windowNumber =
-                                           (double)event.windowNumber;
+                                     if (kind != NULL && eventSink != NULL) {
+                                       TrackpadScrollEvent *copy =
+                                           (TrackpadScrollEvent *)malloc(
+                                               sizeof(TrackpadScrollEvent));
+                                       copy->kind = kind;
+                                       // AppKit sign: positive X means the
+                                       // fingers moved right.
+                                       copy->fingerDeltaX = event.scrollingDeltaX;
+                                       copy->fingerDeltaY = event.scrollingDeltaY;
+                                       copy->timestamp = event.timestamp;
+                                       copy->precise =
+                                           event.hasPreciseScrollingDeltas;
+                                       copy->modified =
+                                           (event.modifierFlags & modifierMask) != 0;
                                        napi_call_threadsafe_function(
-                                           transitionSink, transition,
-                                           napi_tsfn_nonblocking);
+                                           eventSink, copy, napi_tsfn_nonblocking);
                                      }
                                      // Never swallow: Chromium still needs the
                                      // event for the DOM wheel stream.
@@ -118,9 +140,9 @@ static napi_value Stop(napi_env env, napi_callback_info info) {
     [NSEvent removeMonitor:scrollMonitor];
     scrollMonitor = nil;
   }
-  if (transitionSink != NULL) {
-    napi_release_threadsafe_function(transitionSink, napi_tsfn_release);
-    transitionSink = NULL;
+  if (eventSink != NULL) {
+    napi_release_threadsafe_function(eventSink, napi_tsfn_release);
+    eventSink = NULL;
   }
   return NULL;
 }

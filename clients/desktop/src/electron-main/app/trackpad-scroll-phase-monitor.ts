@@ -2,13 +2,22 @@ import { app } from "electron";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
-  isTrackpadScrollPhaseKind,
-  type TrackpadScrollPhaseTransition,
+  isTrackpadScrollKind,
+  type TrackpadScrollEvent,
 } from "../../ipc-contracts/trackpad-scroll-phase-types";
 import { log } from "./logger";
 
-interface TrackpadScrollPhaseAddon {
-  start(listener: (event: { readonly kind: unknown }) => void): void;
+interface AddonScrollEvent {
+  readonly kind: unknown;
+  readonly fingerDeltaX: unknown;
+  readonly fingerDeltaY: unknown;
+  readonly timestamp: unknown;
+  readonly precise: unknown;
+  readonly modified: unknown;
+}
+
+interface TrackpadScrollAddon {
+  start(listener: (event: AddonScrollEvent) => void): void;
   stop(): void;
 }
 
@@ -24,18 +33,18 @@ function addonPath(): string {
 const addonRequire = createRequire(__filename);
 
 /**
- * Forwards macOS trackpad finger-sequence transitions to `emit`. Returns the
- * teardown. A no-op off macOS or when the addon is missing: the gesture that
- * depends on it simply stays unavailable, which the renderer reads from the
- * preload surface, not from here.
+ * Forwards the macOS trackpad scroll stream to `emit`. Returns the teardown.
+ * A no-op off macOS or when the addon is missing: the gesture that depends on
+ * it simply stays unavailable, which the renderer reads from the preload
+ * surface, not from here.
  */
 export function installTrackpadScrollPhaseMonitor(
-  emit: (transition: TrackpadScrollPhaseTransition) => void,
+  emit: (event: TrackpadScrollEvent) => void,
 ): () => void {
   if (process.platform !== "darwin") return () => {};
-  let addon: TrackpadScrollPhaseAddon;
+  let addon: TrackpadScrollAddon;
   try {
-    addon = addonRequire(addonPath()) as TrackpadScrollPhaseAddon;
+    addon = addonRequire(addonPath()) as TrackpadScrollAddon;
   } catch (error) {
     log.warn("[trackpad-scroll-phase] addon unavailable; swipe gesture off", {
       packaged: app.isPackaged,
@@ -44,8 +53,23 @@ export function installTrackpadScrollPhaseMonitor(
     return () => {};
   }
   addon.start((event) => {
-    if (!isTrackpadScrollPhaseKind(event.kind)) return;
-    emit({ kind: event.kind });
+    if (!isTrackpadScrollKind(event.kind)) return;
+    // Pixel deltas are the input contract; a wheel that reports lines would
+    // read as a huge pull.
+    if (event.precise !== true) return;
+    if (
+      typeof event.fingerDeltaX !== "number" ||
+      typeof event.fingerDeltaY !== "number" ||
+      typeof event.timestamp !== "number"
+    )
+      return;
+    emit({
+      kind: event.kind,
+      fingerDeltaX: event.fingerDeltaX,
+      fingerDeltaY: event.fingerDeltaY,
+      timestamp: event.timestamp,
+      modified: event.modified === true,
+    });
   });
   log.info("[trackpad-scroll-phase] monitor started");
   return () => addon.stop();

@@ -200,7 +200,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
-import type { TrackpadScrollPhaseTransition } from "../ipc-contracts/trackpad-scroll-phase-types";
+import type { TrackpadScrollEvent } from "../ipc-contracts/trackpad-scroll-phase-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -655,8 +655,8 @@ export interface DesktopPowerBridge {
 }
 
 export interface DesktopTrackpadScrollPhaseBridge {
-  onTransition(
-    handler: (transition: TrackpadScrollPhaseTransition) => void,
+  onEvent(
+    handler: (event: TrackpadScrollEvent) => void,
   ): { dispose: () => void };
 }
 
@@ -931,8 +931,8 @@ export class DesktopRunnerHost implements IRunnerHost {
       trackpadScrollPhase === null
         ? null
         : {
-            onTransition: (handler) =>
-              toDisposable(trackpadScrollPhase.onTransition(handler)),
+            onEvent: (handler) =>
+              toDisposable(trackpadScrollPhase.onEvent(handler)),
           };
 
     this.bridgeSubscriptions.push(

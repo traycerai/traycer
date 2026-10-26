@@ -1,5 +1,11 @@
-import { desktopHistoryLayerBlocksNavigation } from "./desktop-history-gesture-ownership";
-import { ownsDesktopHorizontalWheel } from "./desktop-history-gesture-ownership";
+import type {
+  DesktopTrackpadScrollEvent,
+  DesktopTrackpadScrollPhaseBridge,
+} from "@/lib/windows/types";
+import {
+  desktopHistoryLayerBlocksNavigation,
+  ownsDesktopHorizontalWheel,
+} from "./desktop-history-gesture-ownership";
 
 export { ownsDesktopHorizontalWheel } from "./desktop-history-gesture-ownership";
 
@@ -11,80 +17,91 @@ export interface DesktopHistoryGestureView {
   readonly phase: "pulling" | "ready" | "canceling" | "committed";
 }
 
-/**
- * Finger-sequence transitions from the shell (macOS NSEvent scroll phase).
- * The DOM `wheel` stream has no finger-up: Chromium strips the phase, macOS
- * sends no end tick (measured: none across ~1900 real trackpad ticks), and
- * Electron's main-process wheel event carries deltas only. This source is the
- * missing half, and the gesture is not installed without it.
- */
-export type DesktopHistoryFingerTransition =
-  | "began"
-  | "ended"
-  | "cancelled"
-  | "momentum-began"
-  | "momentum-ended"
-  | "momentum-cancelled";
-
-export interface DesktopHistoryFingerSource {
-  onTransition(
-    handler: (transition: {
-      readonly kind: DesktopHistoryFingerTransition;
-    }) => void,
-  ): { dispose: () => void };
-}
-
 interface DesktopHistoryGestureOptions {
   readonly destination: (direction: DesktopHistoryDirection) => string | null;
   readonly currentEntry: () => string;
   readonly navigate: (direction: DesktopHistoryDirection) => void;
-  readonly render: (view: DesktopHistoryGestureView | null) => void;
-  readonly fingers: DesktopHistoryFingerSource;
+  /**
+   * Every pull ends in exactly one `committed` or `canceling` view; the view
+   * owns the exit timing from there.
+   */
+  readonly render: (view: DesktopHistoryGestureView) => void;
+  readonly trackpad: DesktopTrackpadScrollPhaseBridge;
 }
 
-// Two inputs, one gesture. Wheel ticks carry the deltas and know which element
-// is under the pointer, so they drive ownership, progress and the scroll
-// cancel. Finger transitions say when the sequence starts and stops, so the
-// LIFT is the confirmation: a pull past `commitPx` commits on `ended`, a pull
-// that stops short retracts on `ended`, and a finger resting on the trackpad
-// holds the preview for as long as it rests. Momentum after a lift is drained,
-// swallowed after a claimed gesture and left to scroll after content.
+// One ordered stream decides. The shell's trackpad stream carries phase and
+// deltas together (macOS NSEvent), so the recognizer never has to guess
+// whether a tick belongs to the fingers that just lifted or the fingers that
+// just landed. The LIFT is the confirmation: a pull past `commitPx`, or a
+// flick, commits on `ended`; anything shorter retracts; fingers resting on
+// the trackpad hold the preview. Momentum after a lift is swallowed after a
+// claimed gesture and left to scroll after content.
 //
-// Keep the feel constants together so trackpad trials can tune them.
-// These are wheel deltas, not the mobile recognizer's finger travel: require a
-// stronger horizontal bias to keep trackpad scroll jitter out of navigation.
-// Unmodified pixel-mode wheel is the input contract, including compatible
-// horizontal mice. Wheel deltas cannot reliably identify a finger count.
+// The DOM `wheel` stream has two jobs only: it names the element under the
+// pointer (ownership) and it is where content scrolling is suppressed.
+//
+// Keep the feel constants together so trackpad trials can tune them. These
+// are finger pixels, not the mobile recognizer's touch travel: a stronger
+// horizontal bias keeps trackpad scroll jitter out of navigation.
 export const DESKTOP_HISTORY_GESTURE = {
   intentPx: 12,
   axisRatio: 1.8,
   commitPx: 180,
   maxTravelPx: 240,
+  // A flick: a short, fast pull that lifts before `commitPx`. Measured over
+  // the last `flickWindowMs` before the lift, from the trackpad's own
+  // timestamps. Set `flickPxPerMs` to Infinity to commit on distance only.
+  flickMinPx: 60,
+  flickPxPerMs: 0.9,
+  flickWindowMs: 100,
   settleMs: 220,
   tailMs: 300,
   // Safety net only, never the mechanism: a sequence whose lift never arrives
-  // (a mouse wheel has no phases; a transition can be lost) is let go after
-  // this much silence, and a live pull is cancelled, never committed.
+  // is let go after this much silence, and a live pull is cancelled, never
+  // committed.
   idleCancelMs: 800,
 } as const;
 
-interface WheelSequence {
-  ownership: "pending" | "content" | "navigation" | "draining";
-  /** A drained tail is swallowed after a claimed gesture and scrolls after content. */
-  consumeTail: boolean;
+interface PendingSequence {
+  readonly stage: "pending";
   x: number;
   y: number;
-  travel: number;
-  direction: DesktopHistoryDirection;
-  destination: string | null;
   readonly origin: string;
+  /** DOM ticks seen when the fingers landed; the window being scrolled sees more. */
+  readonly domTicksAtBegan: number;
 }
+
+interface NavigationSequence {
+  readonly stage: "navigation";
+  readonly direction: DesktopHistoryDirection;
+  readonly destination: string;
+  readonly origin: string;
+  travel: number;
+  /** Inward travel per tick, trackpad timestamps in seconds; feeds the flick rule. */
+  readonly recent: Array<{ readonly at: number; readonly inward: number }>;
+}
+
+interface ContentSequence {
+  readonly stage: "content";
+}
+
+interface DrainingSequence {
+  readonly stage: "draining";
+  /** A drained tail is swallowed after a claimed gesture and scrolls after content. */
+  readonly consume: boolean;
+}
+
+type Sequence =
+  | PendingSequence
+  | NavigationSequence
+  | ContentSequence
+  | DrainingSequence;
 
 function modifiedWheel(event: WheelEvent): boolean {
   return event.ctrlKey || event.metaKey || event.altKey || event.shiftKey;
 }
 
-function blocksNavigation(event: WheelEvent): boolean {
+function wheelBlocksNavigation(event: WheelEvent): boolean {
   return (
     modifiedWheel(event) ||
     event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
@@ -95,146 +112,83 @@ function blocksNavigation(event: WheelEvent): boolean {
   );
 }
 
-function advanceSequence(
-  sequence: WheelSequence,
-  event: WheelEvent,
-  destination: DesktopHistoryGestureOptions["destination"],
-): boolean {
-  if (sequence.ownership !== "pending") {
-    const inward = sequence.direction === "back" ? -event.deltaX : event.deltaX;
-    sequence.travel = Math.max(
-      0,
-      Math.min(DESKTOP_HISTORY_GESTURE.maxTravelPx, sequence.travel + inward),
-    );
-    return true;
+function flicked(sequence: NavigationSequence): boolean {
+  if (sequence.travel < DESKTOP_HISTORY_GESTURE.flickMinPx) return false;
+  const last = sequence.recent.at(-1);
+  if (last === undefined) return false;
+  const windowStart = last.at - DESKTOP_HISTORY_GESTURE.flickWindowMs / 1000;
+  let inward = 0;
+  let first = last.at;
+  for (const sample of sequence.recent) {
+    if (sample.at < windowStart) continue;
+    inward += sample.inward;
+    first = Math.min(first, sample.at);
   }
-  sequence.x += event.deltaX;
-  sequence.y += Math.abs(event.deltaY);
-  const x = Math.abs(sequence.x);
-  if (sequence.y >= DESKTOP_HISTORY_GESTURE.intentPx && sequence.y >= x) {
-    sequence.ownership = "content";
-    return false;
-  }
-  if (
-    x < DESKTOP_HISTORY_GESTURE.intentPx ||
-    x < sequence.y * DESKTOP_HISTORY_GESTURE.axisRatio
-  )
-    return false;
-  sequence.direction = sequence.x < 0 ? "back" : "forward";
-  sequence.destination = destination(sequence.direction);
-  if (sequence.destination === null || !event.cancelable) {
-    sequence.ownership = "content";
-    return false;
-  }
-  sequence.ownership = "navigation";
-  sequence.travel = Math.min(x, DESKTOP_HISTORY_GESTURE.maxTravelPx);
-  return true;
+  const elapsedMs = (last.at - first) * 1000;
+  // One tick has no velocity.
+  if (elapsedMs < 8) return false;
+  return inward / elapsedMs >= DESKTOP_HISTORY_GESTURE.flickPxPerMs;
 }
 
 /** One window's recognizer; the renderer owns the history semantics. */
 export function installDesktopHistoryGesture(
   options: DesktopHistoryGestureOptions,
 ): () => void {
-  let sequence: WheelSequence | null = null;
+  let sequence: Sequence | null = null;
+  // What the DOM wheel stream last reported. `domArmed` means this sequence's
+  // opening tick was canceled, so Chromium keeps every later tick cancelable
+  // (wheel scroll latching, Chrome 65+); without it a claimed gesture could
+  // not stop the page from scrolling too.
+  let domTicks = 0;
+  let domTarget: EventTarget | null = null;
+  let domTickAlreadyCanceled = false;
+  let domArmed = false;
   let tailTimer: number | undefined;
   let idleTimer: number | undefined;
-  let settleTimer: number | undefined;
-  const clearIdle = (): void => window.clearTimeout(idleTimer);
+
+  /** Only ever reached after `cancel()`, so no live pull is dropped unseen. */
   const reset = (): void => {
-    clearIdle();
     window.clearTimeout(tailTimer);
-    window.clearTimeout(settleTimer);
-    if (sequence === null) return;
+    window.clearTimeout(idleTimer);
+    domArmed = false;
     sequence = null;
-    options.render(null);
   };
   // The tail is whatever the same finger sequence still delivers after the
-  // decision: momentum ticks, or nothing. It ends on `momentum-ended` or on
-  // silence, and no new gesture is admitted until it has.
+  // lift: momentum ticks, or nothing. With momentum it ends on
+  // `momentum-ended`; without, on silence.
   const armTail = (): void => {
     window.clearTimeout(tailTimer);
     tailTimer = window.setTimeout(reset, DESKTOP_HISTORY_GESTURE.tailMs);
   };
   const settle = (commit: boolean): void => {
-    if (sequence === null || sequence.ownership !== "navigation") return;
-    clearIdle();
-    const direction = sequence.direction;
-    sequence.ownership = "draining";
-    sequence.consumeTail = true;
+    if (sequence?.stage !== "navigation") return;
+    window.clearTimeout(idleTimer);
+    const { direction, travel } = sequence;
+    sequence = { stage: "draining", consume: true };
+    domArmed = false;
     options.render({
       direction,
       progress: commit
         ? 1
-        : Math.min(1, sequence.travel / DESKTOP_HISTORY_GESTURE.commitPx),
+        : Math.min(1, travel / DESKTOP_HISTORY_GESTURE.commitPx),
       phase: commit ? "committed" : "canceling",
     });
-    settleTimer = window.setTimeout(
-      () => options.render(null),
-      DESKTOP_HISTORY_GESTURE.settleMs,
-    );
     armTail();
     // Set draining BEFORE navigating: history subscribers may synchronously
     // cancel the gesture when the route changes. A completed step is one step.
     if (commit) options.navigate(direction);
   };
   const cancel = (): void => {
-    if (sequence?.ownership === "navigation") settle(false);
-    else if (sequence?.ownership !== "draining") reset();
-  };
-  const idle = (): void => {
-    if (sequence?.ownership === "navigation") settle(false);
-    else if (sequence?.ownership !== "draining") reset();
+    if (sequence === null) return;
+    if (sequence.stage === "navigation") settle(false);
+    else if (sequence.stage !== "draining") reset();
   };
   const armIdle = (): void => {
-    clearIdle();
-    idleTimer = window.setTimeout(idle, DESKTOP_HISTORY_GESTURE.idleCancelMs);
-  };
-  // The finger left the trackpad: the one moment the pull is decided.
-  const lift = (mayCommit: boolean): void => {
-    if (sequence === null) return;
-    if (sequence.ownership === "navigation") {
-      settle(
-        mayCommit &&
-          sequence.travel >= DESKTOP_HISTORY_GESTURE.commitPx &&
-          !desktopHistoryLayerBlocksNavigation() &&
-          sequence.origin === options.currentEntry() &&
-          sequence.destination === options.destination(sequence.direction),
-      );
-      return;
-    }
-    if (sequence.ownership === "draining") return;
-    // A content scroll or an undecided start: its momentum must scroll, and
-    // must not open a gesture of its own.
-    clearIdle();
-    sequence.ownership = "draining";
-    sequence.consumeTail = false;
-    armTail();
-  };
-  const onTransition = (transition: {
-    readonly kind: DesktopHistoryFingerTransition;
-  }): void => {
-    switch (transition.kind) {
-      case "began":
-        // Fresh fingers end whatever tail was still draining. A live sequence
-        // is left alone: its first tick can outrun this transition.
-        if (sequence?.ownership === "draining") reset();
-        return;
-      case "ended":
-        lift(true);
-        return;
-      case "cancelled":
-        lift(false);
-        return;
-      case "momentum-began":
-        return;
-      case "momentum-ended":
-      case "momentum-cancelled":
-        if (sequence?.ownership === "draining") reset();
-        return;
-    }
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(cancel, DESKTOP_HISTORY_GESTURE.idleCancelMs);
   };
   const updateView = (): void => {
-    if (sequence === null) return;
+    if (sequence?.stage !== "navigation") return;
     const progress = Math.min(
       1,
       sequence.travel / DESKTOP_HISTORY_GESTURE.commitPx,
@@ -245,72 +199,199 @@ export function installDesktopHistoryGesture(
       phase: progress >= 1 ? "ready" : "pulling",
     });
   };
+
+  const begin = (): void => {
+    // Fresh fingers end whatever came before: a draining tail, a content
+    // sequence whose lift was lost, even a live pull.
+    cancel();
+    reset();
+    sequence = {
+      stage: "pending",
+      x: 0,
+      y: 0,
+      origin: options.currentEntry(),
+      domTicksAtBegan: domTicks,
+    };
+    armIdle();
+  };
+  const pull = (
+    live: NavigationSequence,
+    event: DesktopTrackpadScrollEvent,
+  ): void => {
+    const inward =
+      live.direction === "back" ? event.fingerDeltaX : -event.fingerDeltaX;
+    live.travel = Math.max(
+      0,
+      Math.min(DESKTOP_HISTORY_GESTURE.maxTravelPx, live.travel + inward),
+    );
+    live.recent.push({ at: event.timestamp, inward });
+    const keepFrom =
+      event.timestamp - (2 * DESKTOP_HISTORY_GESTURE.flickWindowMs) / 1000;
+    while (live.recent.length > 0 && live.recent[0].at < keepFrom)
+      live.recent.shift();
+    updateView();
+  };
+  /** Still pending, content, or the claimed navigation. */
+  const decide = (
+    pending: PendingSequence,
+    event: DesktopTrackpadScrollEvent,
+  ): Sequence => {
+    pending.x += event.fingerDeltaX;
+    pending.y += Math.abs(event.fingerDeltaY);
+    const x = Math.abs(pending.x);
+    if (pending.y >= DESKTOP_HISTORY_GESTURE.intentPx && pending.y >= x)
+      return { stage: "content" };
+    if (
+      x < DESKTOP_HISTORY_GESTURE.intentPx ||
+      x < pending.y * DESKTOP_HISTORY_GESTURE.axisRatio
+    )
+      return pending;
+    // Every window receives the stream, but only the window under the pointer
+    // receives DOM wheel ticks for it. Until one arrives this window cannot
+    // name the element being scrolled, and may not be the one scrolled at all.
+    if (domTicks === pending.domTicksAtBegan) return pending;
+    // Fingers moving right reveal what is to the left: back.
+    const direction: DesktopHistoryDirection =
+      pending.x > 0 ? "back" : "forward";
+    const destination = options.destination(direction);
+    if (
+      destination === null ||
+      !domArmed ||
+      domTickAlreadyCanceled ||
+      ownsDesktopHorizontalWheel(domTarget)
+    )
+      return { stage: "content" };
+    return {
+      stage: "navigation",
+      direction,
+      destination,
+      origin: pending.origin,
+      travel: Math.min(x, DESKTOP_HISTORY_GESTURE.maxTravelPx),
+      recent: [{ at: event.timestamp, inward: x }],
+    };
+  };
+  const advance = (event: DesktopTrackpadScrollEvent): void => {
+    if (sequence === null) return;
+    if (sequence.stage === "content" || sequence.stage === "draining") return;
+    armIdle();
+    if (
+      event.modified ||
+      sequence.origin !== options.currentEntry() ||
+      desktopHistoryLayerBlocksNavigation()
+    ) {
+      if (sequence.stage === "navigation") settle(false);
+      else sequence = { stage: "content" };
+      return;
+    }
+    if (sequence.stage === "navigation") {
+      pull(sequence, event);
+      return;
+    }
+    sequence = decide(sequence, event);
+    if (sequence.stage === "navigation") updateView();
+  };
+  // The fingers left the trackpad: the one moment the pull is decided.
+  const lift = (mayCommit: boolean): void => {
+    domArmed = false;
+    if (sequence === null || sequence.stage === "draining") return;
+    if (sequence.stage === "navigation") {
+      settle(
+        mayCommit &&
+          (sequence.travel >= DESKTOP_HISTORY_GESTURE.commitPx ||
+            flicked(sequence)) &&
+          !desktopHistoryLayerBlocksNavigation() &&
+          sequence.origin === options.currentEntry() &&
+          sequence.destination === options.destination(sequence.direction),
+      );
+      return;
+    }
+    // A content scroll or an undecided start: its momentum must scroll, and
+    // must not open a gesture of its own.
+    window.clearTimeout(idleTimer);
+    sequence = { stage: "draining", consume: false };
+    armTail();
+  };
+  const onTrackpad = (event: DesktopTrackpadScrollEvent): void => {
+    switch (event.kind) {
+      case "began":
+        begin();
+        return;
+      case "changed":
+        advance(event);
+        return;
+      case "ended":
+        lift(true);
+        return;
+      case "cancelled":
+        lift(false);
+        return;
+      case "momentum-began":
+        // The drain now ends with the momentum, not with silence.
+        window.clearTimeout(tailTimer);
+        return;
+      case "momentum-changed":
+        return;
+      case "momentum-ended":
+      case "momentum-cancelled":
+        if (sequence?.stage === "draining") reset();
+        return;
+    }
+  };
+
   const consume = (event: WheelEvent): void => {
-    if (event.cancelable) event.preventDefault();
+    if (event.cancelable) {
+      event.preventDefault();
+      domArmed = true;
+    }
     // xterm and custom scrollers have their own wheel listeners. A claimed
     // horizontal gesture must not also deliver its diagonal noise to them.
     event.stopImmediatePropagation();
   };
+  // Idle or pending. Chromium lets a page cancel only the FIRST wheel event of
+  // a scroll sequence: once that one passes uncanceled, every later event of
+  // the same swipe arrives with `cancelable === false`, and a claimed gesture
+  // could no longer stop the page scrolling under it. A trackpad's first tick
+  // carries under a pixel, far short of `intentPx`, so the opening tick is
+  // canceled whenever there is somewhere to navigate; a scroll that follows
+  // loses only that sub-pixel tick.
+  const opensCancelableSequence = (event: WheelEvent): boolean =>
+    !domArmed &&
+    event.cancelable &&
+    !wheelBlocksNavigation(event) &&
+    !ownsDesktopHorizontalWheel(domTarget) &&
+    (options.destination("back") !== null ||
+      options.destination("forward") !== null);
   const onWheel = (event: WheelEvent): void => {
     if (event.deltaX === 0 && event.deltaY === 0) return;
-    if (sequence?.ownership === "draining") {
+    domTicks++;
+    domTarget = event.composedPath()[0] ?? event.target;
+    domTickAlreadyCanceled = event.defaultPrevented;
+    const stage = sequence === null ? "idle" : sequence.stage;
+    if (stage === "navigation") {
+      consume(event);
+      return;
+    }
+    if (stage === "draining") {
+      // After a claimed gesture: its momentum, its late ticks, and the opening
+      // ticks of the next sequence when they outrun its `began`, all swallowed.
+      // After content: its momentum flows.
       if (
-        sequence.consumeTail &&
+        sequence?.stage === "draining" &&
+        sequence.consume &&
         Math.abs(event.deltaX) > Math.abs(event.deltaY) &&
         !modifiedWheel(event)
       )
         consume(event);
-      armTail();
       return;
     }
-    const blocked = blocksNavigation(event);
-    if (sequence === null) {
-      sequence = {
-        ownership:
-          blocked ||
-          ownsDesktopHorizontalWheel(event.composedPath()[0] ?? event.target)
-            ? "content"
-            : "pending",
-        consumeTail: false,
-        x: 0,
-        y: 0,
-        travel: 0,
-        direction: "back",
-        destination: null,
-        origin: options.currentEntry(),
-      };
-      // Chromium lets a page cancel only the FIRST wheel event of a scroll
-      // sequence (wheel scroll latching, Chrome 65+): once that one passes
-      // uncanceled, every later event of the same swipe arrives with
-      // `cancelable === false`, and `advanceSequence` must then yield to
-      // content. A trackpad's first tick carries under a pixel, far short of
-      // `intentPx`, so a recognizer that decides late forfeits every real
-      // swipe (measured on a MacBook: 9 of 350 events cancelable, all of them
-      // first ticks). Cancel that first tick whenever there is somewhere to
-      // navigate; a scroll that follows loses only that sub-pixel tick.
-      if (
-        sequence.ownership === "pending" &&
-        event.cancelable &&
-        (options.destination("back") !== null ||
-          options.destination("forward") !== null)
-      )
-        event.preventDefault();
+    if (stage === "content") return;
+    if (opensCancelableSequence(event)) {
+      event.preventDefault();
+      domArmed = true;
     }
-    if (blocked || sequence.origin !== options.currentEntry()) {
-      if (sequence.ownership === "navigation") {
-        settle(false);
-        return;
-      }
-      sequence.ownership = "content";
-    }
-    armIdle();
-    if (sequence.ownership === "content") return;
-    if (!advanceSequence(sequence, event, options.destination)) return;
-    consume(event);
-    updateView();
   };
   const onKey = (event: KeyboardEvent): void => {
-    if (sequence?.ownership !== "navigation") return;
+    if (sequence?.stage !== "navigation") return;
     // Escape cancels the preview only, not the Settings route underneath it.
     if (event.key === "Escape") {
       event.preventDefault();
@@ -321,7 +402,7 @@ export function installDesktopHistoryGesture(
   const onVisibility = (): void => {
     if (document.hidden) cancel();
   };
-  const fingers = options.fingers.onTransition(onTransition);
+  const trackpad = options.trackpad.onEvent(onTrackpad);
   document.addEventListener("wheel", onWheel, {
     capture: true,
     passive: false,
@@ -332,8 +413,9 @@ export function installDesktopHistoryGesture(
   window.addEventListener("blur", cancel);
   window.addEventListener("resize", cancel);
   return () => {
+    cancel();
     reset();
-    fingers.dispose();
+    trackpad.dispose();
     document.removeEventListener("wheel", onWheel, true);
     document.removeEventListener("pointerdown", cancel, true);
     document.removeEventListener("keydown", onKey, true);

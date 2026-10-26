@@ -133,7 +133,7 @@ function isDesktopPowerBridge(value: unknown): value is DesktopPowerBridge {
 function isDesktopTrackpadScrollPhaseBridge(
   value: unknown,
 ): value is DesktopTrackpadScrollPhaseBridge {
-  return isRecord(value) && typeof value.onTransition === "function";
+  return isRecord(value) && typeof value.onEvent === "function";
 }
 
 function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {

@@ -215,21 +215,35 @@ export interface DesktopZoomBridge {
 }
 
 /**
- * macOS finger-sequence transitions from the shell's NSEvent scroll-phase
- * monitor. Absent everywhere else (Windows, Linux, browser, mobile), which is
- * how the history swipe knows it has no lift signal and stays off.
+ * The macOS trackpad scroll stream from the shell's NSEvent monitor: phase and
+ * deltas in one ordered sequence. Absent everywhere else (Windows, Linux,
+ * browser, mobile), which is how the history swipe knows it has no lift
+ * signal and stays off.
  */
-export type DesktopTrackpadScrollPhaseKind =
+export type DesktopTrackpadScrollKind =
   | "began"
+  | "changed"
   | "ended"
   | "cancelled"
   | "momentum-began"
+  | "momentum-changed"
   | "momentum-ended"
   | "momentum-cancelled";
 
+export interface DesktopTrackpadScrollEvent {
+  readonly kind: DesktopTrackpadScrollKind;
+  /** AppKit sign: positive means the fingers moved right. Pixels. */
+  readonly fingerDeltaX: number;
+  /** AppKit sign: positive means the fingers moved down. Pixels. */
+  readonly fingerDeltaY: number;
+  /** Seconds, exact to the input event. */
+  readonly timestamp: number;
+  readonly modified: boolean;
+}
+
 export interface DesktopTrackpadScrollPhaseBridge {
-  onTransition(
-    handler: (transition: { readonly kind: DesktopTrackpadScrollPhaseKind }) => void,
+  onEvent(
+    handler: (event: DesktopTrackpadScrollEvent) => void,
   ): { dispose: () => void };
 }
 

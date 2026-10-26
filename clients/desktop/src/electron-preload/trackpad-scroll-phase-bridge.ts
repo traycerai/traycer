@@ -1,9 +1,9 @@
 import { RunnerHostEvent } from "../ipc-contracts/ipc-channels";
-import type { TrackpadScrollPhaseTransition } from "../ipc-contracts/trackpad-scroll-phase-types";
+import type { TrackpadScrollEvent } from "../ipc-contracts/trackpad-scroll-phase-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 export interface TrackpadScrollPhaseBridge {
-  onTransition(handler: Listener<TrackpadScrollPhaseTransition>): Disposable;
+  onEvent(handler: Listener<TrackpadScrollEvent>): Disposable;
 }
 
 export interface TrackpadScrollPhaseBridgeSurface {
@@ -17,8 +17,8 @@ export function buildTrackpadScrollPhaseBridge(
   if (platform !== "darwin") return { trackpadScrollPhase: null };
   return {
     trackpadScrollPhase: {
-      onTransition: (handler) =>
-        subscribe<TrackpadScrollPhaseTransition>(
+      onEvent: (handler) =>
+        subscribe<TrackpadScrollEvent>(
           RunnerHostEvent.trackpadScrollPhase,
           handler,
         ),

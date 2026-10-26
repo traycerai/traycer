@@ -994,12 +994,12 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   installScreenMonitor((reason, topology) => {
     bridge.fanOut(RunnerHostEvent.displayTopologyChange, { reason, topology });
   });
-  // Every window gets the transition; AppKit already routed the wheel ticks
-  // to the window under the pointer, and a window that saw no ticks has no
-  // gesture for the transition to finish.
+  // Every window gets the stream; AppKit already routed the wheel ticks to
+  // the window under the pointer, and the renderer only claims a sequence
+  // once its own DOM wheel ticks confirm it is that window.
   bridge.disposeFns.push(
-    installTrackpadScrollPhaseMonitor((transition) => {
-      bridge.fanOut(RunnerHostEvent.trackpadScrollPhase, transition);
+    installTrackpadScrollPhaseMonitor((event) => {
+      bridge.fanOut(RunnerHostEvent.trackpadScrollPhase, event);
     }),
   );
 

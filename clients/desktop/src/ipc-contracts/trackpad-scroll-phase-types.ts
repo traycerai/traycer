@@ -1,32 +1,42 @@
 /**
- * Finger-sequence transitions read off macOS `NSEvent` scroll phases in main.
+ * The macOS trackpad scroll stream, read off `NSEvent` in main.
  *
- * Chromium strips the phase before a wheel event reaches JavaScript in either
- * process, so a renderer cannot tell resting fingers from lifted ones, and
- * momentum ticks after a lift look like live input. These transitions are the
- * missing half: deltas and targeting stay with the DOM `wheel` stream, and
- * this only says when a finger sequence starts and stops. macOS only.
+ * Chromium strips the scroll phase before a wheel event reaches JavaScript in
+ * either process, so a renderer cannot tell resting fingers from lifted ones,
+ * and momentum ticks after a lift look like live input. This stream carries
+ * phase AND deltas in one ordered sequence, so a recognizer never has to
+ * reconcile it against the DOM `wheel` stream. macOS only.
  */
-export const TRACKPAD_SCROLL_PHASE_KINDS = [
+export const TRACKPAD_SCROLL_KINDS = [
   "began",
+  "changed",
   "ended",
   "cancelled",
   "momentum-began",
+  "momentum-changed",
   "momentum-ended",
   "momentum-cancelled",
 ] as const;
 
-export type TrackpadScrollPhaseKind = (typeof TRACKPAD_SCROLL_PHASE_KINDS)[number];
+export type TrackpadScrollKind = (typeof TRACKPAD_SCROLL_KINDS)[number];
 
-export interface TrackpadScrollPhaseTransition {
-  readonly kind: TrackpadScrollPhaseKind;
+export interface TrackpadScrollEvent {
+  readonly kind: TrackpadScrollKind;
+  /** AppKit sign: positive means the fingers moved right. Pixels. */
+  readonly fingerDeltaX: number;
+  /** AppKit sign: positive means the fingers moved down. Pixels. */
+  readonly fingerDeltaY: number;
+  /** `NSEvent.timestamp`: seconds since boot, exact to the input event. */
+  readonly timestamp: number;
+  /** Command, Option, Control or Shift was held. */
+  readonly modified: boolean;
 }
 
-export function isTrackpadScrollPhaseKind(
+export function isTrackpadScrollKind(
   value: unknown,
-): value is TrackpadScrollPhaseKind {
+): value is TrackpadScrollKind {
   return (
     typeof value === "string" &&
-    (TRACKPAD_SCROLL_PHASE_KINDS as readonly string[]).includes(value)
+    (TRACKPAD_SCROLL_KINDS as readonly string[]).includes(value)
   );
 }
