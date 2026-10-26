@@ -693,6 +693,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
         liveStore().getState().setCatalog({
           hostId: "host-1",
           chatLineCarriesAutoMode: null,
+          keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",
           models: [],

@@ -8,6 +8,7 @@ describe("terminalSessionTitle", () => {
         title: "Manual name",
         activeProcessName: "vim",
         currentCwd: "/work/very-long-directory-name",
+        taskHome: null,
       }),
     ).toBe("Manual name");
   });
@@ -18,6 +19,7 @@ describe("terminalSessionTitle", () => {
         title: null,
         activeProcessName: "vim",
         currentCwd: "/work/repo",
+        taskHome: null,
       }),
     ).toBe("repo · vim");
   });
@@ -28,6 +30,7 @@ describe("terminalSessionTitle", () => {
         title: null,
         activeProcessName: "vim",
         currentCwd: null,
+        taskHome: null,
       }),
     ).toBe("vim");
   });
@@ -38,6 +41,7 @@ describe("terminalSessionTitle", () => {
         title: null,
         activeProcessName: "  ",
         currentCwd: "/work/repo/",
+        taskHome: null,
       }),
     ).toBe("repo · New Terminal");
   });
@@ -48,6 +52,7 @@ describe("terminalSessionTitle", () => {
         title: null,
         activeProcessName: null,
         currentCwd: null,
+        taskHome: null,
       }),
     ).toBe("New Terminal");
   });
@@ -58,6 +63,7 @@ describe("terminalSessionTitle", () => {
         title: null,
         activeProcessName: "vim",
         currentCwd: "",
+        taskHome: null,
       }),
     ).toBe("vim");
     expect(
@@ -65,6 +71,7 @@ describe("terminalSessionTitle", () => {
         title: null,
         activeProcessName: null,
         currentCwd: "",
+        taskHome: null,
       }),
     ).toBe("New Terminal");
   });
@@ -77,6 +84,7 @@ describe("terminalSessionTitle", () => {
           title: null,
           activeProcessName: "vim",
           currentCwd,
+          taskHome: null,
         }),
       ).toBe(`${currentCwd} · vim`);
       expect(
@@ -84,8 +92,47 @@ describe("terminalSessionTitle", () => {
           title: null,
           activeProcessName: null,
           currentCwd,
+          taskHome: null,
         }),
       ).toBe(`${currentCwd} · New Terminal`);
     },
   );
+
+  describe("in the task's own directory", () => {
+    const taskHome = { epicId: "epic-7", hostName: "e2e-sbx-p1" };
+    const cwd = "/home/traycer/.traycer/epics/epic-7";
+
+    it("names an idle terminal by its host, never the task id", () => {
+      expect(
+        terminalSessionTitle({
+          title: null,
+          activeProcessName: null,
+          currentCwd: cwd,
+          taskHome,
+        }),
+      ).toBe("e2e-sbx-p1");
+    });
+
+    it("prefixes a running process with the host's name", () => {
+      expect(
+        terminalSessionTitle({
+          title: null,
+          activeProcessName: "vim",
+          currentCwd: cwd,
+          taskHome,
+        }),
+      ).toBe("e2e-sbx-p1 · vim");
+    });
+
+    it("keeps another directory's name beside New Terminal", () => {
+      expect(
+        terminalSessionTitle({
+          title: null,
+          activeProcessName: null,
+          currentCwd: "/work/repo",
+          taskHome,
+        }),
+      ).toBe("repo · New Terminal");
+    });
+  });
 });

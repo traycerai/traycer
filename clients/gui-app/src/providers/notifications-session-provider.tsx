@@ -97,7 +97,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationEntryV24,
+  HostNotificationEntryV25,
   HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -448,7 +448,7 @@ function NotificationsSessionBody(
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
-        readonly entry: HostNotificationEntryV24;
+        readonly entry: HostNotificationEntryV25;
         readonly originHostId: string;
         readonly semanticId: string;
       }>,

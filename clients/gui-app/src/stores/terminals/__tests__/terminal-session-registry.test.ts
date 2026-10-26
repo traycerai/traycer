@@ -12,6 +12,12 @@ import {
   TerminalSessionRegistry,
 } from "@/stores/terminals/terminal-session-registry";
 import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
   DESKTOP_RETENTION_PROFILE,
   MOBILE_RETENTION_PROFILE,
   setRetentionProfile,
@@ -888,5 +894,79 @@ describe("TerminalSessionRegistry", () => {
       expect(entry.closeCount()).toBe(1);
       expect(registry.get(`terminal-${index + 1}`)).toBe(entry.handle);
     });
+  });
+});
+
+describe("TerminalSessionRegistry on a sandbox host", () => {
+  const SANDBOX_HOST = "sbx-host";
+  const COMPUTER_HOST = "computer-host";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    installHostDirectoryRows([
+      sandboxHostEntry(SANDBOX_HOST, null),
+      plainHostEntry(COMPUTER_HOST),
+    ]);
+  });
+
+  afterEach(() => {
+    resetHostDirectoryRows();
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    vi.useRealTimers();
+  });
+
+  it.each(["terminal", "terminal-agent"] as const)(
+    "closes a released running %s on a sandbox at once, reopening no cache stream and keeping nothing",
+    (kind) => {
+      const registry = new TerminalSessionRegistry();
+      const owned = createHandle(kind);
+      registry.acquire(
+        "terminal-1",
+        () => owned.handle,
+        SANDBOX_HOST,
+        "presentation",
+      );
+
+      registry.release("terminal-1", owned.handle, true);
+
+      expect(owned.closeCount()).toBe(1);
+      expect(owned.viewers()).toEqual(["presentation"]);
+      expect(registry.get("terminal-1")).toBeNull();
+    },
+  );
+
+  it("still lingers a released running plain terminal on a computer until the window expires", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal");
+    registry.acquire(
+      "terminal-1",
+      () => owned.handle,
+      COMPUTER_HOST,
+      "presentation",
+    );
+
+    registry.release("terminal-1", owned.handle, true);
+
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
+    expect(registry.get("terminal-1")).toBe(owned.handle);
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
+    expect(registry.get("terminal-1")).toBeNull();
+  });
+
+  it("still keeps a released running terminal-agent warm on a computer", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+    registry.acquire(
+      "terminal-1",
+      () => owned.handle,
+      COMPUTER_HOST,
+      "presentation",
+    );
+
+    registry.release("terminal-1", owned.handle, true);
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS * 3);
+
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
+    expect(registry.get("terminal-1")).toBe(owned.handle);
   });
 });

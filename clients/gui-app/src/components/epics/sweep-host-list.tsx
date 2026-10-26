@@ -202,7 +202,7 @@ function SweepHostOption(props: {
         aria-current={row.isDefault ? "true" : undefined}
         onClick={() => {
           // A pick of a sleeping sandbox wakes it, as in every `pin` picker.
-          wakeSandboxOnPick(row.host);
+          wakeSandboxOnPick(row.host, null);
           props.onPick(row.host.hostId);
         }}
         data-testid={`sweep-host-option-${row.host.hostId}`}
@@ -230,6 +230,7 @@ function SweepHostOption(props: {
           surfaceState={surfaceState}
           updateView={null}
           nameRef={null}
+          nameWraps={false}
           environmentLabel={null}
         />
         {row.isDefault ? (

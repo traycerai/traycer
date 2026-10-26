@@ -9,6 +9,13 @@ import {
 } from "vitest";
 import type { ReactNode } from "react";
 import { createElement } from "react";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
@@ -101,6 +108,10 @@ const {
     }),
   };
 });
+const { invalidateDraftBlobConfirmations, putDraftBlobs } = vi.hoisted(() => ({
+  invalidateDraftBlobConfirmations: vi.fn(),
+  putDraftBlobs: vi.fn(() => Promise.resolve()),
+}));
 // The pending-creation registry is the open-epic store's seam
 // (`stores/epics/open-epic/pending-chat-creations.ts`), covered on its own
 // terms in that store's tests. Mocked at its facade leaf here so these tests
@@ -109,6 +120,11 @@ const {
 vi.mock("@/lib/chats/pending-chat-creations", () => ({
   beginPendingChatCreation,
   clearPendingChatCreation,
+}));
+vi.mock("@/lib/drafts/draft-blob-transport", () => ({
+  currentDraftBlobOwnerId: () => "user-1",
+  invalidateDraftBlobConfirmations,
+  putDraftBlobs,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ request: vi.fn() }),
@@ -135,6 +151,11 @@ interface CapturedMutationArgs {
   readonly method: string;
   readonly options: unknown;
   readonly mapVariables: ((variables: never) => unknown) | undefined;
+  readonly resolveResponse?: (
+    response: CreateChatResponseV12,
+    variables: CreateChatMutationInput,
+    redispatch: () => Promise<CreateChatResponseV12>,
+  ) => Promise<CreateChatResponseV12>;
 }
 
 const capturedMutations: Partial<Record<string, CapturedMutationArgs>> = {};
@@ -160,6 +181,7 @@ import {
   useEpicArchiveChat,
   useEpicArchiveChats,
   useEpicCreateChatForHostClient,
+  useEpicCreateChatForPendingSandbox,
   useEpicRenameChat,
   useEpicDeleteChat,
   useEpicDeleteChatInBatch,
@@ -174,10 +196,12 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type {
   CreateChatResponse,
+  CreateChatResponseV12,
   SetChatArchivedRequest,
   SetChatArchivedResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
   EPIC_CREATE_SEED_HOLD_TIMEOUT_MS,
@@ -289,9 +313,71 @@ function resolveCapturedClient(method: string, hostId: string | null): unknown {
   return client({ hostId });
 }
 
+function isCreateChatMapper(
+  mapper: CapturedMutationArgs["mapVariables"],
+): mapper is (variables: CreateChatMutationInput) => unknown {
+  return mapper !== undefined;
+}
+
+function signInAs(userId: string): void {
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId, userName: userId, email: `${userId}@example.com` },
+      { userId, username: userId },
+      [],
+    );
+}
+
+function makeChatMutationClient(
+  hostId: string,
+  queryClient: QueryClient,
+): HostClient<HostRpcRegistry> {
+  const entry = { ...mockLocalHostEntry, hostId };
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (requestedHostId) =>
+      requestedHostId === hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-pending-create",
+      handlers: {},
+    }),
+  });
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "pending-create-token",
+    }),
+  );
+  return client.createRequester(entry);
+}
+
+function hashOnlyAttachmentDoc(hash: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "imageAttachment",
+        attrs: {
+          id: "img-1",
+          fileName: "image.png",
+          mimeType: "image/png",
+          size: 10,
+          hash,
+          b64content: null,
+          byHashEligible: true,
+        },
+      },
+    ],
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   namedHostClients.reset();
+  useAuthStore.getState().setSignedOut();
   for (const method of Object.keys(capturedMutations)) {
     delete capturedMutations[method];
   }
@@ -457,6 +543,128 @@ describe("useEpicCreateChatForHostClient", () => {
     expect(readEpicCreateSeed("e2", "c2")).toBeNull();
     vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
     expect(released).toEqual([]);
+  });
+});
+
+describe("useEpicCreateChatForPendingSandbox", () => {
+  it("fences mapping, attachment repair, and lifecycle effects to the captured account", async () => {
+    signInAs("user-1");
+    const { wrapper, queryClient } = makeWrapperWithClient();
+    const client = makeChatMutationClient("host-test", queryClient);
+    renderHook(() => useEpicCreateChatForPendingSandbox(client, "user-1"), {
+      wrapper,
+    });
+    const mutation = getCapturedMutation("epic.createChat");
+    const mapVariables = mutation.mapVariables;
+    if (!isCreateChatMapper(mapVariables)) {
+      throw new Error("expected createChat mapVariables");
+    }
+    const callbacks = mutation.options as {
+      readonly onSuccess: (
+        data: CreateChatResponseV12,
+        variables: CreateChatMutationInput,
+        context: {
+          readonly hostId: string | null;
+          readonly ownerUserId: string | null;
+        },
+      ) => void;
+      readonly onError: (
+        error: HostRpcError,
+        variables: CreateChatMutationInput,
+      ) => void;
+    };
+    const variables: CreateChatMutationInput = {
+      epicId: "epic-2",
+      hostId: "host-test",
+      parentId: null,
+      title: "",
+      chatId: "chat-2",
+      settings: {
+        harnessId: "codex",
+        model: "gpt-6.1-sol",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      },
+      initialMessage: {
+        messageId: "message-2",
+        clientActionId: "action-2",
+        content: hashOnlyAttachmentDoc("a".repeat(64)),
+        sender: { type: "user", userId: "user-1" },
+        settings: {
+          harnessId: "codex",
+          model: "gpt-6.1-sol",
+          permissionMode: "supervised",
+          reasoningEffort: "high",
+          serviceTier: null,
+          agentMode: "regular",
+          profileId: null,
+        },
+        accountContext: { type: "PERSONAL" },
+        attachmentsByHash: true,
+        sentFromHostId: null,
+      },
+    };
+    const invalidation = vi.spyOn(queryClient, "invalidateQueries");
+    const refusal = {
+      chatId: "chat-2",
+      refusal: {
+        kind: "missing-attachment-bytes" as const,
+        message: "The host could not find the image bytes.",
+        remedy: "Retry the upload.",
+      },
+    };
+    const redispatch = vi.fn(() => Promise.resolve({ chatId: "chat-2" }));
+
+    signInAs("user-2");
+    expect(() => mapVariables(variables)).toThrow(HostRpcError);
+    callbacks.onSuccess({ chatId: "chat-2" }, variables, {
+      hostId: "host-test",
+      ownerUserId: "user-1",
+    });
+    callbacks.onError(makeError("RPC_ERROR"), variables);
+    const resolveResponse = mutation.resolveResponse;
+    if (resolveResponse === undefined) {
+      throw new Error("expected createChat response repair");
+    }
+    const result = await resolveResponse(refusal, variables, redispatch);
+
+    expect(result).toEqual(refusal);
+    expect(redispatch).not.toHaveBeenCalled();
+    expect(invalidateDraftBlobConfirmations).not.toHaveBeenCalled();
+    expect(putDraftBlobs).not.toHaveBeenCalled();
+    expect(beginPendingChatCreation).not.toHaveBeenCalled();
+    expect(clearPendingChatCreation).not.toHaveBeenCalled();
+    expect(invalidation).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+
+    signInAs("user-1");
+    const upload = Promise.withResolvers<void>();
+    putDraftBlobs.mockImplementationOnce(() => upload.promise);
+    const repair = resolveResponse(refusal, variables, redispatch);
+    await waitFor(() => expect(putDraftBlobs).toHaveBeenCalledTimes(1));
+
+    signInAs("user-2");
+    await act(async () => {
+      upload.resolve();
+      await repair;
+    });
+
+    expect(await repair).toEqual(refusal);
+    expect(redispatch).not.toHaveBeenCalled();
+    expect(invalidateDraftBlobConfirmations).toHaveBeenCalledTimes(1);
+    expect(putDraftBlobs).toHaveBeenCalledTimes(1);
+    callbacks.onSuccess(refusal, variables, {
+      hostId: "host-test",
+      ownerUserId: "user-1",
+    });
+    callbacks.onError(makeError("RPC_ERROR"), variables);
+    expect(beginPendingChatCreation).not.toHaveBeenCalled();
+    expect(clearPendingChatCreation).not.toHaveBeenCalled();
+    expect(invalidation).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });
 

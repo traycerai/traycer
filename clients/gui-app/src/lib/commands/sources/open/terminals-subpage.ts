@@ -48,6 +48,7 @@ import {
 } from "@/lib/worktree/worktree-folder-disabled-reason";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 import {
   openerActionLeaf,
   openerExistingLeaf,
@@ -347,7 +348,7 @@ function useHostWorkspaceSubpageItems(
   host: HostScopeOption,
 ): ReadonlyArray<CommandItem> {
   useEffect(() => {
-    wakeSandboxOnPick(host);
+    wakeSandboxOnPick(host, "open-terminal");
   }, [host]);
   return useHostTerminalWorkspaceItems(ctx, host.hostId);
 }
@@ -468,6 +469,7 @@ export function useTerminalsOpenerItems(
   const hostClient = useHostClientForHostId(activeEpicHostId);
   const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };
   const terminals = useTerminalList(scope, hostClient);
+  const taskHome = useTaskHomeDirectory(ctx.activeEpicId, activeEpicHostId);
   const sessionsData = terminals.data;
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
@@ -490,6 +492,7 @@ export function useTerminalsOpenerItems(
         hostId: defaultHostId,
         instanceId: uuidv4(),
         durable: false,
+        taskHome,
       });
       return openerExistingLeaf(
         "terminals",
@@ -500,6 +503,7 @@ export function useTerminalsOpenerItems(
             title: session.title,
             activeProcessName: session.activeProcessName,
             currentCwd: session.currentCwd,
+            taskHome,
           }),
         },
         // `terminal.list` is issued against the epic's host client
@@ -511,5 +515,5 @@ export function useTerminalsOpenerItems(
       );
     });
     return [newTerminal, ...existing];
-  }, [ctx, defaultHostId, scope.epicId, sessionsData]);
+  }, [ctx, defaultHostId, scope.epicId, sessionsData, taskHome]);
 }

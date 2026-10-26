@@ -8,11 +8,13 @@ import {
   consequencesShownSubject,
   priceClause,
   type ConsequencesInput,
+  type StageConfiguration,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   ADD_CREDITS_LINK,
   CONSEQUENCES_WORDING_VERSION,
   MOVE_THEM_FIRST,
+  OPEN_TERMINAL_INSTEAD,
   SHOW_LESS,
   WHAT_THIS_MEANS,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -35,6 +37,8 @@ export function ConsequencesBlock(props: {
   readonly input: ConsequencesInput;
   /** Opens the move flow for the unmoved computer; `null` offers none. */
   readonly onMoveFirst: (() => void) | null;
+  /** `Open terminal instead`, beside Send; `null` offers none. */
+  readonly onOpenTerminalInstead: (() => void) | null;
 }): ReactNode {
   const viewerUserId = useCloudChatViewerId();
   const subject = consequencesShownSubject(
@@ -51,6 +55,7 @@ export function ConsequencesBlock(props: {
       subject={subject}
       viewerUserId={viewerUserId}
       onMoveFirst={props.onMoveFirst}
+      onOpenTerminalInstead={props.onOpenTerminalInstead}
     />
   );
 }
@@ -60,6 +65,7 @@ function ConsequencesBlockBody(props: {
   readonly subject: string;
   readonly viewerUserId: string;
   readonly onMoveFirst: (() => void) | null;
+  readonly onOpenTerminalInstead: (() => void) | null;
 }): ReactNode {
   const markSeen = useTeamHostDisclosureSeenStore((s) => s.markSeen);
   // Decided once per context: recording the full render must not collapse
@@ -91,7 +97,10 @@ function ConsequencesBlockBody(props: {
           {price.text}
         </span>
         {props.input.needsCredits ? (
-          <AddCreditsLink input={props.input} />
+          <AddCreditsLink
+            configuration={props.input.configuration}
+            testId="consequences-add-credits"
+          />
         ) : null}
         {!expanded && rest.length > 0 ? (
           <Button
@@ -104,6 +113,17 @@ function ConsequencesBlockBody(props: {
             {`· ${WHAT_THIS_MEANS}`}
           </Button>
         ) : null}
+        {props.onOpenTerminalInstead === null ? null : (
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            data-testid="consequences-open-terminal-instead"
+            onClick={props.onOpenTerminalInstead}
+          >
+            {OPEN_TERMINAL_INSTEAD}
+          </Button>
+        )}
       </p>
       {expanded
         ? rest.map((clause) => (
@@ -145,17 +165,23 @@ function ConsequencesBlockBody(props: {
   );
 }
 
-function AddCreditsLink(props: {
-  readonly input: ConsequencesInput;
+/**
+ * `Add credits ↗` beside the price clause at a zero or short balance: the
+ * configuration's billing page, in the browser. The shape sheet repeats it
+ * where it repeats the clause.
+ */
+export function AddCreditsLink(props: {
+  readonly configuration: StageConfiguration;
+  readonly testId: string;
 }): ReactNode {
-  const billingUrl = useConfigurationBillingUrl(props.input.configuration);
+  const billingUrl = useConfigurationBillingUrl(props.configuration);
   const openLink = useOpenLink();
   return (
     <Button
       type="button"
       variant="link"
       size="inline-xs"
-      data-testid="consequences-add-credits"
+      data-testid={props.testId}
       onClick={(event) => void openLink(billingUrl, "account", event)}
     >
       {ADD_CREDITS_LINK}

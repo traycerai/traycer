@@ -245,6 +245,12 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
+// The attach is what this suite is about: the team sandbox's own agent check
+// (`sandbox-send-gates.test.tsx`) holds nothing here.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+}));
+
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
@@ -477,6 +483,7 @@ function forkTarget(): ChatForkDialogTarget {
     forkMode: "plain",
     initialHostId: TEAM_HOST_ID,
     onlyHostIds: null,
+    stagedSandbox: null,
   };
 }
 

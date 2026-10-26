@@ -43,6 +43,16 @@ const testState = vi.hoisted(() => ({
   credentialRefusal: null as string | null,
 }));
 
+// A terminal's task directory is named by its host's directory row; this
+// suite has no host directory and no task terminal in the task's own folder.
+// The tile asks whether its host is a stopped sandbox; none is.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
+  useTaskHomeDirectory: () => null,
+  useTaskHomeDirectoryFor: () => () => null,
+}));
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => testState.credentialRefusal,
 }));

@@ -1185,6 +1185,7 @@ describe("<CreateBotForm /> Max Mode label", () => {
         store.getState().setCatalog({
           hostId: LOCAL,
           chatLineCarriesAutoMode: null,
+          keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",
           models: [],

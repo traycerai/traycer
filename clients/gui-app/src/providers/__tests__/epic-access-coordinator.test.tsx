@@ -650,10 +650,10 @@ describe("EpicAccessCoordinator", () => {
     // The real discriminator: ONE call carrying both ids, not two single-id
     // calls looped over the notification's array.
     expect(handleEpicAccessLossSpy).toHaveBeenCalledTimes(1);
-    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith([
-      "epic-left",
-      "epic-right",
-    ]);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith(
+      ["epic-left", "epic-right"],
+      "user-1",
+    );
   });
 
   it("removes a split whole when its sides fall in different deletion scopes of one batch", async () => {
@@ -706,10 +706,10 @@ describe("EpicAccessCoordinator", () => {
     // placeholders.
     expect(useTabsStore.getState().items).toEqual([]);
     expect(handleEpicAccessLossSpy).toHaveBeenCalledTimes(1);
-    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith([
-      "epic-left",
-      "epic-right",
-    ]);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith(
+      ["epic-left", "epic-right"],
+      "user-1",
+    );
   });
 
   it("starts the next test from the selection-authority store's initial state", () => {

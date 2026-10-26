@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import {
   acceptEpicTerminalDurableCreate,
@@ -17,16 +17,24 @@ export interface MintNewEpicTerminalTileTarget extends TerminalLaunchTarget {
   readonly epicId: string;
 }
 
+interface EpicTerminalTileIdentity {
+  readonly terminalId: string;
+  readonly instanceId: string;
+}
+
 /**
  * Mints a canonical host-authority ref for a user-created epic terminal.
  * `legacyFallback` keeps the released local fields so a downgraded host can
  * still spawn through the legacy tile path.
  */
-function buildTerminalTileRef(target: TerminalLaunchTarget): EpicTerminalRef {
+function buildTerminalTileRef(
+  target: TerminalLaunchTarget,
+  identity: EpicTerminalTileIdentity,
+): EpicTerminalRef {
   const name = DEFAULT_TERMINAL_TITLE;
   return {
-    id: `term-${uuidv4()}`,
-    instanceId: uuidv4(),
+    id: identity.terminalId,
+    instanceId: identity.instanceId,
     type: "terminal",
     name,
     hostId: target.hostId,
@@ -48,7 +56,31 @@ function buildTerminalTileRef(target: TerminalLaunchTarget): EpicTerminalRef {
 export function mintNewEpicTerminalTile(
   target: MintNewEpicTerminalTileTarget,
 ): EpicTerminalRef {
-  const ref = buildTerminalTileRef(target);
+  return acceptNewEpicTerminalTile(target, {
+    terminalId: `term-${uuidv4()}`,
+    instanceId: uuidv4(),
+  });
+}
+
+/** A pending send replayed by another window opens the same terminal. */
+export function mintPendingSandboxTerminalTile(
+  target: MintNewEpicTerminalTileTarget,
+  sendId: string,
+): EpicTerminalRef {
+  return acceptNewEpicTerminalTile(target, {
+    terminalId: `term-${uuidv5(`pending-sandbox-send:${sendId}:terminal`, uuidv5.URL)}`,
+    instanceId: uuidv5(
+      `pending-sandbox-send:${sendId}:terminal-tile`,
+      uuidv5.URL,
+    ),
+  });
+}
+
+function acceptNewEpicTerminalTile(
+  target: MintNewEpicTerminalTileTarget,
+  identity: EpicTerminalTileIdentity,
+): EpicTerminalRef {
+  const ref = buildTerminalTileRef(target, identity);
   useEpicCanvasStore.getState().markTerminalPendingCreate(ref.hostId, ref.id);
   acceptEpicTerminalDurableCreate({
     hostId: ref.hostId,

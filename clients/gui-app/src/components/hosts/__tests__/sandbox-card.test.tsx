@@ -132,6 +132,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs, isError: false }),
 }));
+vi.mock("@/hooks/home-focus/use-focus-model", async () => {
+  const { EMPTY_FOCUS_MODEL } =
+    await import("@/lib/home-focus/build-focus-model");
+  return { useFocusModel: () => EMPTY_FOCUS_MODEL };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-runway-warning", () => ({
   useSandboxRunwayWarning: () => mocks.warning,
 }));
@@ -217,7 +222,17 @@ const COST: SandboxCost = {
   pendingMillicredits: 500,
   segments: [],
   todayMillicredits: 0,
+  history: [],
 };
+
+/** A cost whose ledger posted `millicredits` in the last millisecond. */
+function costToday(millicredits: number): SandboxCost {
+  const now = Date.now();
+  return {
+    ...COST,
+    segments: [{ state: "awake", fromAt: now - 1, toAt: now, millicredits }],
+  };
+}
 
 beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
@@ -255,7 +270,7 @@ describe("<SandboxCard /> per state", () => {
     destroying: [],
     destroyed: [],
     failed: ["destroy"],
-    released: ["destroy"],
+    released: [],
   };
 
   it("renders every state's copy, badge word and exactly its allowed actions", () => {
@@ -330,16 +345,16 @@ describe("<SandboxCard /> per state", () => {
         cpus: 4,
         memoryMb: 8192,
         region: "eu-west",
+        regionLabel: null,
       }),
     );
     expect(screen.getByTestId("sandbox-card-shape").textContent).toContain(
       "4 vCPU",
     );
-    expect(screen.getByTestId("sandbox-card-region").textContent).toBe(
-      "eu-west",
-    );
-    expect(screen.getByTestId("sandbox-card-rate").textContent).toContain(
-      "credits/hour awake",
+    // The server sent no label for "eu-west": the raw id is not shown.
+    expect(screen.queryByTestId("sandbox-card-region")).toBeNull();
+    expect(screen.getByTestId("sandbox-card-rate").textContent).toBe(
+      "$0.12 an hour while awake · under $0.01 an hour while resting",
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toBe(
       "Destroyed after 2 h idle",
@@ -372,6 +387,47 @@ describe("<SandboxCard /> per state", () => {
     expect(
       screen.queryByTestId("sandbox-card-guest-config-failure"),
     ).toBeNull();
+  });
+
+  it("names the region by the server's label, never its id", () => {
+    renderCard(
+      sandboxOf("awake", false, {
+        region: "us-west-3",
+        regionLabel: "United States (West)",
+      }),
+    );
+    expect(screen.getByTestId("sandbox-card-region").textContent).toBe(
+      "United States (West)",
+    );
+  });
+
+  it("reads a day's cost below a cent as under $0.01, with no credits in the Charged row", () => {
+    mocks.costs = {
+      sandboxes: [costToday(3)],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandboxOf("awake", false, {}));
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "under $0.01",
+    );
+    expect(
+      screen.getByTestId("sandbox-card-cost-charged").textContent,
+    ).not.toContain("credits");
+  });
+
+  it("reads a cent or more of today's cost in dollars", () => {
+    mocks.costs = {
+      sandboxes: [costToday(20)],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
+    renderCard(sandboxOf("awake", false, {}));
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "$0.02",
+    );
   });
 
   it("says what a suspend keeps from the provider's catalogue, but not on a burst sandbox", () => {
@@ -472,18 +528,19 @@ describe("<SandboxCard /> per state", () => {
       sandboxes: [COST],
       awakeBurnMillicreditsPerHour: 120,
       todayYoursMillicredits: 0,
+      todayByEnvironment: [],
     };
     mocks.warning = { kind: "critical", runwayMinutes: 20 };
     renderCard(sandboxOf("awake", false, {}));
     expect(screen.getByTestId("sandbox-card-cost-now").textContent).toBe(
-      "0.12 credits/hour",
+      "$0.12 an hour",
     );
     expect(
       screen.getByTestId("sandbox-card-cost-charged").textContent,
-    ).toContain("6.00 credits since");
+    ).toContain("$6.00 since");
     expect(
       screen.getByTestId("sandbox-card-cost-charged").textContent,
-    ).toContain("0.50 pending");
+    ).toContain("$0.50 pending");
     const warning = screen.getByTestId("sandbox-balance-warning");
     expect(warning.getAttribute("data-level")).toBe("critical");
     expect(warning.textContent).toContain("20 min");
@@ -540,6 +597,7 @@ function resolvedSandbox(input: {
     localHostId: null,
     activeHostId: null,
     localService: undefined,
+    localPlatform: null,
     hasLiveSession: () => false,
     localHostSettingUp: false,
     localHostTerminalRunNote: null,
@@ -737,6 +795,7 @@ describe("<SandboxCard /> verbs", () => {
     expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "suspend",
+      null,
       SANDBOX_VERB_FETCH_TIMEOUT_MS,
     );
     expect(mocks.toastInfo).not.toHaveBeenCalled();
@@ -824,13 +883,21 @@ describe("<SandboxCard /> verbs", () => {
 });
 
 describe("<SandboxCard /> Automations row", () => {
-  it("offers an awake row stop and destroy, never suspend, and says it is free", () => {
+  it("offers an awake row no action, and says it is free", () => {
+    mocks.costs = {
+      sandboxes: [costToday(3)],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+      todayByEnvironment: [],
+    };
     renderCard(sandboxOf("awake", false, { kind: "automation" }));
-    expect(actionTestIds()).toEqual([
-      "sandbox-card-stop",
-      "sandbox-card-destroy",
-    ]);
+    expect(actionTestIds()).toEqual([]);
+    expect(screen.queryByTestId("sandbox-card-stop")).toBeNull();
+    expect(screen.queryByTestId("sandbox-card-destroy")).toBeNull();
     expect(screen.getByTestId("sandbox-card-rate").textContent).toBe("Free");
+    expect(screen.getByTestId("sandbox-card-cost-today").textContent).toBe(
+      "Free",
+    );
     expect(screen.getByTestId("sandbox-card-state-line").textContent).toBe(
       "Running. Automations aren't billed.",
     );
@@ -839,21 +906,9 @@ describe("<SandboxCard /> Automations row", () => {
     );
   });
 
-  it("offers a released row start and destroy; Start sends the start verb", async () => {
+  it("offers a released row no action", () => {
     renderCard(sandboxOf("released", false, { kind: "automation" }));
-    expect(actionTestIds()).toEqual([
-      "sandbox-card-start",
-      "sandbox-card-destroy",
-    ]);
-    fireEvent.click(screen.getByTestId("sandbox-card-start"));
-    await waitFor(() => {
-      expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
-    });
-    expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
-      "sbx_1",
-      "start",
-      SANDBOX_VERB_FETCH_TIMEOUT_MS,
-    );
+    expect(actionTestIds()).toEqual([]);
   });
 });
 

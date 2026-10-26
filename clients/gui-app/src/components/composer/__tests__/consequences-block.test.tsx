@@ -48,7 +48,13 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
 }
 
 function block(value: ConsequencesInput) {
-  return <ConsequencesBlock input={value} onMoveFirst={null} />;
+  return (
+    <ConsequencesBlock
+      input={value}
+      onMoveFirst={null}
+      onOpenTerminalInstead={null}
+    />
+  );
 }
 
 function subjectOf(value: ConsequencesInput): string {
@@ -178,11 +184,11 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
   });
 
-  it("at a short balance asks for credits and links to the configuration's billing page", () => {
+  it("at a short balance asks for the team's credits and links to the configuration's billing page", () => {
     render(block(input({ needsCredits: true })));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Add credits to start a sandbox · from $0.12 an hour while awake",
+      "Add Acme credits to start a sandbox · from $0.12 an hour while awake",
     );
     const link = within(screen.getByTestId("consequences-block")).getByRole(
       "button",
@@ -192,6 +198,22 @@ describe("<ConsequencesBlock />", () => {
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://billing.test/acme",
       "account",
+    );
+  });
+
+  it("at a short balance on Personal asks for credits, without a team's name", () => {
+    render(
+      block(
+        input({
+          configuration: { kind: "personal" },
+          audience: "private",
+          needsCredits: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("consequences-price").textContent).toBe(
+      "Add credits to start a sandbox · from $0.12 an hour while awake",
     );
   });
 
@@ -214,7 +236,13 @@ describe("<ConsequencesBlock />", () => {
       audience: "private",
       unmovedComputer: "MacBook",
     });
-    render(<ConsequencesBlock input={withMove} onMoveFirst={onMoveFirst} />);
+    render(
+      <ConsequencesBlock
+        input={withMove}
+        onMoveFirst={onMoveFirst}
+        onOpenTerminalInstead={null}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Move them first" }));
     expect(onMoveFirst).toHaveBeenCalledTimes(1);

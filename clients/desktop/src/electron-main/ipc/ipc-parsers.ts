@@ -40,11 +40,13 @@ export {
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
 import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import {
+  SANDBOX_VERB_GESTURES,
   sandboxPatchRequestSchema,
   type SandboxAutomationOpenTarget,
   type SandboxCreateRequest,
   type SandboxLifecycleVerb,
   type SandboxPatchRequest,
+  type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   SECRET_REQUEST_DECISIONS,
@@ -730,6 +732,17 @@ export function parseSandboxLifecycleVerb(
   }
   throw new Error(
     'runSandboxVerb.verb must be "suspend", "resume", "stop" or "start"',
+  );
+}
+
+export function parseSandboxVerbGesture(
+  value: unknown,
+): SandboxVerbGesture | null {
+  if (value === null) return null;
+  const gesture = SANDBOX_VERB_GESTURES.find((g) => g === value);
+  if (gesture !== undefined) return gesture;
+  throw new Error(
+    'runSandboxVerb.gesture must be null, "open-terminal", "send" or "open-files"',
   );
 }
 

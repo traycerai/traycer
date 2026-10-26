@@ -5,6 +5,7 @@ import type {
   SandboxOs,
   SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
+import { AddCreditsLink } from "@/components/composer/consequences-block";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -388,13 +389,14 @@ function ShapeSheetForm(props: {
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);
   const wake = wakeString(provider.suspendFidelity);
+  const needsCredits = stageNeedsCredits(
+    stageBalanceMc(user, props.configuration),
+    price,
+  );
   const clauses = consequenceClauses({
     configuration: props.configuration,
     price,
-    needsCredits: stageNeedsCredits(
-      stageBalanceMc(user, props.configuration),
-      price,
-    ),
+    needsCredits,
     ...props.context,
   });
   const offered = offeredOses(props.catalogue);
@@ -594,16 +596,26 @@ function ShapeSheetForm(props: {
         className="flex flex-col gap-1 rounded-md border border-border/60 p-3 text-ui-xs text-muted-foreground"
         data-testid="sandbox-shape-sheet-price"
       >
-        {clauses.map((clause) => (
-          <p
-            key={clause.kind}
-            className={
-              clause.kind === "price" ? "m-0 text-foreground/85" : "m-0"
-            }
-          >
-            {clause.text}
-          </p>
-        ))}
+        {clauses.map((clause) =>
+          clause.kind === "price" ? (
+            <p
+              key={clause.kind}
+              className="m-0 flex flex-wrap items-baseline gap-x-1.5"
+            >
+              <span className="text-foreground/85">{clause.text}</span>
+              {needsCredits ? (
+                <AddCreditsLink
+                  configuration={props.configuration}
+                  testId="sandbox-shape-sheet-add-credits"
+                />
+              ) : null}
+            </p>
+          ) : (
+            <p key={clause.kind} className="m-0">
+              {clause.text}
+            </p>
+          ),
+        )}
       </div>
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={props.onCancel}>
@@ -690,7 +702,18 @@ function ShapeSelect(props: {
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={props.id}>{props.label}</Label>
-      <Select value={props.value} onValueChange={props.onChange}>
+      <Select
+        value={props.value}
+        onValueChange={(value) => {
+          // The OS switch replaces the region and size options in the same
+          // render as their values; Radix's hidden select reads the new
+          // value before its option exists and reports "". Only an offered
+          // value is a pick.
+          if (props.options.some((option) => option.value === value)) {
+            props.onChange(value);
+          }
+        }}
+      >
         <SelectTrigger id={props.id} className="w-full">
           <SelectValue />
         </SelectTrigger>

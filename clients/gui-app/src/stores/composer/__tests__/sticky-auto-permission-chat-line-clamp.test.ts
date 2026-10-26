@@ -59,6 +59,7 @@ function createStickyAutoStore(
   store.getState().setCatalog({
     hostId: HOST_ID,
     chatLineCarriesAutoMode,
+    keepsUnavailablePick: false,
     harnesses: [AUTO_HONORING_CLAUDE],
     modelsHarnessId: "claude",
     models: [],
@@ -122,6 +123,7 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
     const catalog: ComposerToolbarCatalog = {
       hostId: HOST_ID,
       chatLineCarriesAutoMode: true,
+      keepsUnavailablePick: false,
       harnesses: [AUTO_HONORING_CLAUDE],
       modelsHarnessId: "claude",
       models: [],

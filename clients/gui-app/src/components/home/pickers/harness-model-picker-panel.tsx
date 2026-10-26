@@ -392,6 +392,7 @@ export function HarnessModelPickerPanelBody(
                 named={activeProviderProfiles.some(
                   (profile) => profile.kind === "ambient",
                 )}
+                runTargetHostId={runTargetHostId}
               />
             </div>
           ) : (

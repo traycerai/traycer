@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
@@ -9,6 +10,7 @@ import { formatStopwatch } from "@/lib/format-duration";
 import { useOpenLink } from "@/lib/links/open-link";
 import { STAGED_TAKING_LONGER_MS } from "@/lib/sandboxes/staged-sandbox-run";
 import { stageConfigurationCopy } from "@/lib/sandboxes/sandbox-stage-model";
+import { sandboxSupportReferenceLine } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   ADD_CREDITS_LINK,
   CANCEL_AND_KEEP_THE_DRAFT,
@@ -47,8 +49,11 @@ import {
   openProvidersLabel,
   settingsDidntApplyLine,
   shapeNotOfferedLine,
-  awakeButNoCodingAgentLine,
   readyButNotSentLine,
+  readySecondsLabel,
+  idleRuleLine,
+  SANDBOX_READY,
+  signInToCodingAgentLine,
   stepApplyingSettings,
   takingLongerDetail,
   teamAllowanceShortLine,
@@ -64,9 +69,9 @@ import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 /** What the line's buttons do, wired by the surface that owns the stage. */
 export interface SandboxSetupLineActions {
   readonly onKeepWaiting: () => void;
-  /** Cancel and keep the draft; Cancel the message. Withdraws nothing at the provider. */
-  readonly onCancel: () => void;
-  readonly onChooseAnotherHost: () => void;
+  /** Before dispatch: Cancel and keep the draft; never destroys the sandbox. */
+  readonly onCancel: (() => void) | null;
+  readonly onChooseAnotherHost: (() => void) | null;
   /** A new create with a new key, after a terminal failure. */
   readonly onRetryCreation: () => void;
   /** The same create or wake again, with the same key. */
@@ -74,10 +79,10 @@ export interface SandboxSetupLineActions {
   /** The send handed to the ready sandbox, made again from its draft. */
   readonly onSendAgain: () => void;
   /** The shape sheet: Change shape or region, Choose a smaller shape. */
-  readonly onChangeShape: () => void;
+  readonly onChangeShape: (() => void) | null;
   /** Repairs the settings on the new host, then waits again. */
   readonly onRetryApplying: () => void;
-  readonly onStop: () => void;
+  readonly onStop: (() => void) | null;
   /**
    * A folderless terminal on the new host: Open terminal on the Booting step
    * and the settings branch, Open terminal instead on the no-provider
@@ -113,8 +118,23 @@ export function SandboxSetupLine(props: {
   readonly name: string;
   readonly facts: SandboxSetupLineFacts;
   readonly actions: SandboxSetupLineActions;
+  /** Only an undispatched send with exclusive ownership can be withdrawn. */
+  readonly withdrawalAllowed?: boolean;
 }): ReactNode {
   const { stage } = props;
+  const actions =
+    props.withdrawalAllowed === false
+      ? {
+          ...props.actions,
+          onCancel: null,
+          onChooseAnotherHost: null,
+          onStop: null,
+          onChangeShape: null,
+        }
+      : {
+          ...props.actions,
+          onStop: stage.createdSandboxId === null ? null : props.actions.onStop,
+        };
   const failure = stage.failure;
   if (failure !== null && isRefusal(failure)) {
     return (
@@ -123,7 +143,7 @@ export function SandboxSetupLine(props: {
         name={props.name}
         failure={failure}
         facts={props.facts}
-        actions={props.actions}
+        actions={actions}
       />
     );
   }
@@ -134,7 +154,7 @@ export function SandboxSetupLine(props: {
       name={props.name}
       startedAt={stage.startedAt}
       facts={props.facts}
-      actions={props.actions}
+      actions={actions}
     />
   );
 }
@@ -149,6 +169,7 @@ type RefusalFailure = Extract<
       | "unavailable"
       | "refused"
       | "no-provider"
+      | "agent-setup-failed"
       | "not-sent";
   }
 >;
@@ -161,6 +182,7 @@ function isRefusal(failure: StagedSandboxFailure): failure is RefusalFailure {
     failure.kind === "unavailable" ||
     failure.kind === "refused" ||
     failure.kind === "no-provider" ||
+    failure.kind === "agent-setup-failed" ||
     failure.kind === "not-sent"
   );
 }
@@ -197,11 +219,6 @@ function SandboxRefusalLine(props: {
             label={ADD_CREDITS_LINK}
             testId="sandbox-refusal-add-credits"
             onClick={() => void openLink(billingUrl, "account", null)}
-          />
-          <LineButton
-            label={RETRY}
-            testId="sandbox-refusal-retry"
-            onClick={actions.onRetry}
           />
           {chooseAnother}
           {props.facts.smallerShapeAffordable ? (
@@ -260,21 +277,27 @@ function SandboxRefusalLine(props: {
       sentence = failure.message;
       remedies = chooseAnother;
       break;
-    case "no-provider": {
-      // Awake and kept: the draft waits for an agent to sign in there, or
-      // goes to another host.
+    case "no-provider":
+    case "agent-setup-failed": {
+      // Awake and kept, the message pending: the agent asked for cannot run
+      // there. Another agent is never put in its place; a terminal on the
+      // same sandbox needs no agent sign-in.
       const label = configurationLabel(stageConfigurationCopy(configuration));
       const sandboxId = props.stage.createdSandboxId;
-      sentence = awakeButNoCodingAgentLine(props.name, label);
+      sentence =
+        failure.kind === "no-provider"
+          ? signInToCodingAgentLine(label)
+          : failure.detail;
       remedies = (
         <>
-          {actions.onOpenProviders === null ? null : (
+          {failure.kind === "no-provider" &&
+          actions.onOpenProviders !== null ? (
             <LineButton
               label={openProvidersLabel(label)}
               testId="sandbox-refusal-open-providers"
               onClick={actions.onOpenProviders}
             />
-          )}
+          ) : null}
           {actions.onOpenTerminal === null ? null : (
             <LineButton
               label={OPEN_TERMINAL_INSTEAD}
@@ -331,7 +354,9 @@ function SandboxProgressLine(props: {
 }): ReactNode {
   const { stage } = props;
   const failure = stage.failure;
-  const resuming = stage.target.kind === "existing";
+  const resuming =
+    stage.target.kind === "existing" ||
+    (failure?.kind === "failed" && failure.code === "wake");
   const name = props.name;
   const configuration = configurationLabel(
     stageConfigurationCopy(stage.target.configuration),
@@ -507,6 +532,10 @@ function FailureSentence(props: {
   readonly resuming: boolean;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
+    // A sandbox that failed after it woke was charged while it was awake.
+    if (stepAfterWake(props.failure.step)) {
+      return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
+    }
     return (
       <p className="m-0">
         {props.resuming
@@ -540,11 +569,19 @@ function ProgressBranchButtons(props: {
   if (failure?.kind === "settings") {
     return (
       <>
-        <LineButton
-          label={RETRY_APPLYING}
-          testId="sandbox-setup-retry-applying"
-          onClick={actions.onRetryApplying}
-        />
+        {props.view.stage.createdSandboxId === null ? (
+          <LineButton
+            label={CANCEL_AND_KEEP_THE_DRAFT}
+            testId="sandbox-setup-cancel"
+            onClick={actions.onCancel}
+          />
+        ) : (
+          <LineButton
+            label={RETRY_APPLYING}
+            testId="sandbox-setup-retry-applying"
+            onClick={actions.onRetryApplying}
+          />
+        )}
         {actions.onOpenTerminal === null ? null : (
           <LineButton
             label={OPEN_TERMINAL}
@@ -600,7 +637,10 @@ function FailedButtons(props: {
     onError: null,
   });
   // The failed row's id goes in the reference, for support to find it.
-  const supportReference = `${props.failure.code} · sandbox ${props.stage.createdSandboxId ?? "none"}`;
+  const supportReference = sandboxSupportReferenceLine(
+    props.failure.code,
+    props.stage.createdSandboxId,
+  );
   return (
     <>
       {resuming ? (
@@ -637,11 +677,11 @@ function FailedButtons(props: {
   );
 }
 
-/** A closed code for the line, never guest text. */
+/** The failure's support reference for the line, never its raw code. */
 function failureCode(failure: StagedSandboxFailure | null): string | null {
   if (failure === null) return null;
   if (failure.kind === "failed" || failure.kind === "settings") {
-    return failure.code;
+    return sandboxSupportReference(failure.code);
   }
   return null;
 }
@@ -675,9 +715,15 @@ function TakingLongerDetail(props: {
       {takingLongerDetail(
         stepLabel(props.step, props.resuming, props.configuration),
         formatStopwatch(age),
+        stepAfterWake(props.step),
       )}
     </p>
   );
+}
+
+/** The sandbox had woken by this step, so its compute was being charged. */
+function stepAfterWake(step: StagedSandboxStep): boolean {
+  return step === "applying" || step === "delivering";
 }
 
 const STEP_ORDER: readonly StagedSandboxStep[] = [
@@ -755,8 +801,9 @@ function SetupSteps(props: {
 function LineButton(props: {
   readonly label: string;
   readonly testId: string;
-  readonly onClick: () => void;
+  readonly onClick: (() => void) | null;
 }): ReactNode {
+  if (props.onClick === null) return null;
   return (
     <Button
       type="button"
@@ -778,4 +825,71 @@ function failedStepOf(
   if (failure.kind === "settings") return "applying";
   if (failure.kind === "failed") return failure.step;
   return null;
+}
+
+/**
+ * The setup line once the message was handed to the agent (sandboxes
+ * redesign Flow 1 step 2): `Sandbox ready · name · 24 s`, collapsed, above the
+ * chat's first message. Expanded, the idle rule with the sandbox's own idle
+ * period, once its row says it.
+ */
+export function SandboxReadyLine(props: {
+  readonly name: string;
+  readonly readySeconds: number;
+  /** The sandbox's idle period in minutes; `null` until its row is read. */
+  readonly idleMinutes: number | null;
+}): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const ChevronIcon = expanded ? ChevronDown : ChevronRight;
+  return (
+    <div
+      className="flex w-full flex-col gap-1 px-3 py-2"
+      data-testid="sandbox-ready-line"
+    >
+      <div className="flex items-center gap-3">
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <button
+          type="button"
+          aria-expanded={expanded}
+          data-testid="sandbox-ready-line-toggle"
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 rounded-sm text-ui-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <Check
+            aria-hidden
+            className="size-3.5 shrink-0 text-success-foreground"
+          />
+          <span className="text-foreground/85">{SANDBOX_READY}</span>
+          <HeadPart text={props.name} />
+          <HeadPart text={readySecondsLabel(props.readySeconds)} />
+          <ChevronIcon aria-hidden className="size-3 shrink-0" />
+        </button>
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      </div>
+      {expanded && props.idleMinutes !== null ? (
+        <p
+          className="m-0 text-center text-ui-xs text-muted-foreground"
+          data-testid="sandbox-ready-line-detail"
+        >
+          {idleRuleLine(props.idleMinutes)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** The message waiting behind the setup line, as the person sent it. */
+export function PendingSandboxMessage(props: {
+  readonly text: string;
+}): ReactNode {
+  return (
+    <div
+      className="flex w-full justify-end"
+      data-testid="pending-sandbox-message"
+    >
+      <p className="m-0 max-w-full whitespace-pre-wrap break-words rounded-md border border-border/60 px-3 py-2 text-ui-sm text-foreground">
+        {props.text}
+      </p>
+    </div>
+  );
 }

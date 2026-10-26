@@ -26,6 +26,7 @@ import {
   SandboxStopDialog,
   SandboxSuspendDialog,
 } from "@/components/hosts/sandbox-confirm-dialogs";
+import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
 import { restingVerb } from "@/components/composer/use-sandbox-staging";
 import {
   startStagedTerminal,
@@ -95,6 +96,17 @@ export function SandboxRowActions(props: {
   const openLink = useOpenLink();
   const runnerHost = useRunnerHost();
   const openOnLanding = useOpenSandboxOnLanding();
+  const openAutomationTerminal = useOpenAutomationTerminal({
+    existing: {
+      hostId: summary.hostId,
+      sandboxId: summary.id,
+      awake: summary.state === "awake",
+    },
+    teamEnvironmentId:
+      summary.kind === "automation" && configuration.kind === "team"
+        ? summary.environmentId
+        : null,
+  });
   const now = useSampledNow();
   const actions = sandboxRowActions({
     summary,
@@ -103,7 +115,11 @@ export function SandboxRowActions(props: {
   });
   const giveAnother = sandboxGiveAnotherLabel(summary, now);
   const busy =
-    verb.isPending || patch.isPending || create.isPending || repair.isPending;
+    verb.isPending ||
+    patch.isPending ||
+    create.isPending ||
+    repair.isPending ||
+    openAutomationTerminal.starting;
 
   // A team wake no longer asks first: its payer is said where it is picked.
   const wake = (pressed: SandboxLifecycleVerb): void => {
@@ -124,37 +140,42 @@ export function SandboxRowActions(props: {
         "account",
         null,
       ),
+    // A failed Automations start is retried by starting it again; any other
+    // failed row by its create.
     retry: () =>
-      create.mutate(
-        {
-          request: {
-            os: summary.os,
-            cpus: summary.cpus,
-            memoryMb: summary.memoryMb,
-            diskMb: summary.diskMb,
-            region: summary.region,
-            displayName: summary.displayName,
-            idleMinutes: summary.idleMinutes,
-            burst: false,
-            createdByHostId: null,
-            createdByAgentId: null,
-            environmentId: summary.environmentId,
-            // The row's `null` is never; on a create `null` is the
-            // configuration's default and `0` is never.
-            destroyAfterRestingMinutes: summary.destroyAfterRestingMinutes ?? 0,
-            createdByTaskId: null,
-            clientRequestId: retryKey,
-          },
-          teamName:
-            configuration.kind === "team" ? configuration.teamName : null,
-        },
-        {
-          onSuccess: () => setRetryKey(uuidv4()),
-          onError: (error) => {
-            if (createErrorNeedsFreshKey(error)) setRetryKey(uuidv4());
-          },
-        },
-      ),
+      summary.kind === "automation"
+        ? openAutomationTerminal.retry()
+        : create.mutate(
+            {
+              request: {
+                os: summary.os,
+                cpus: summary.cpus,
+                memoryMb: summary.memoryMb,
+                diskMb: summary.diskMb,
+                region: summary.region,
+                displayName: summary.displayName,
+                idleMinutes: summary.idleMinutes,
+                burst: false,
+                createdByHostId: null,
+                createdByAgentId: null,
+                environmentId: summary.environmentId,
+                // The row's `null` is never; on a create `null` is the
+                // configuration's default and `0` is never.
+                destroyAfterRestingMinutes:
+                  summary.destroyAfterRestingMinutes ?? 0,
+                createdByTaskId: null,
+                clientRequestId: retryKey,
+              },
+              teamName:
+                configuration.kind === "team" ? configuration.teamName : null,
+            },
+            {
+              onSuccess: () => setRetryKey(uuidv4()),
+              onError: (error) => {
+                if (createErrorNeedsFreshKey(error)) setRetryKey(uuidv4());
+              },
+            },
+          ),
     "retry-applying": () =>
       repair.mutate(
         {},
@@ -171,7 +192,9 @@ export function SandboxRowActions(props: {
     "open-tab": () =>
       openOnLanding(summary, configuration, { terminal: false }),
     "open-terminal": () =>
-      openOnLanding(summary, configuration, { terminal: true }),
+      summary.kind === "automation"
+        ? openAutomationTerminal.run()
+        : openOnLanding(summary, configuration, { terminal: true }),
   };
 
   const run = (action: SandboxRowAction): void => {
@@ -386,6 +409,7 @@ function useOpenSandboxOnLanding(): (
           runStaged(surfaceKey, fresh, {
             fallbackName: summary.displayName,
             taskId: null,
+            resume: false,
           }),
         );
       }

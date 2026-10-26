@@ -12,6 +12,17 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  forgetEndedSandboxHost,
+  recordEndedSandboxHost,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 interface TestBootstrapState {
   reachability: {
@@ -22,6 +33,7 @@ interface TestBootstrapState {
   };
   createIsError: boolean;
   createError: { readonly message: string } | null;
+  entry: HostDirectoryEntry | null;
 }
 
 const testState = vi.hoisted<TestBootstrapState>(() => ({
@@ -35,6 +47,11 @@ const testState = vi.hoisted<TestBootstrapState>(() => ({
   createError: {
     message: "secret-token-should-never-render /Users/hostile/path",
   },
+  entry: null,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => testState.entry,
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
@@ -151,6 +168,7 @@ describe("<TerminalTile /> bootstrap error report action", () => {
     testState.createError = {
       message: "secret-token-should-never-render /Users/hostile/path",
     };
+    testState.entry = null;
   });
 
   afterEach(() => {
@@ -189,5 +207,107 @@ describe("<TerminalTile /> bootstrap error report action", () => {
     const context = useDesktopDialogStore.getState().reportIssueContext;
     expect(JSON.stringify(context)).not.toContain("secret-token");
     expect(JSON.stringify(context)).not.toContain("/Users/hostile/path");
+  });
+});
+
+function sandboxEntry(
+  sandboxState: HostListItem["sandboxState"],
+): HostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    {
+      hostId: HOST_ID,
+      displayName: "e2e-sbx-p1",
+      platform: "linux",
+      kind: "sandbox",
+      sandboxState,
+      publicKey: "pk",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "offline",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+      owner: { kind: "user", id: "user-1" },
+    },
+    "wss://relay.example.test",
+  );
+}
+
+describe("<TerminalTile /> on an unreachable host", () => {
+  beforeEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    testState.createIsError = false;
+    testState.createError = null;
+    testState.reachability = {
+      status: "unreachable",
+      hostLabel: "e2e-sbx-p1",
+      basis: "directory",
+      unavailability: null,
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetAppLocalNotificationsStoreForTests();
+    forgetEndedSandboxHost(HOST_ID);
+  });
+
+  function closedMessage(): string {
+    const entries = Object.values(
+      useAppLocalNotificationsStore.getState().byId,
+    );
+    return entries.map((entry) => entry.message).join("\n");
+  }
+
+  it("says a stopped sandbox is stopped, in the banner and the notification", () => {
+    testState.entry = sandboxEntry("stopped");
+
+    renderErroredTile();
+
+    expect(
+      screen.getByText(
+        "e2e-sbx-p1 is stopped. Start it to use this terminal again.",
+      ),
+    ).toBeTruthy();
+    expect(closedMessage()).toBe("Terminal closed: e2e-sbx-p1 was stopped.");
+  });
+
+  it("says who destroyed a sandbox a member destroyed, and raises no terminal-closed notification", () => {
+    testState.entry = sandboxEntry("destroyed");
+    recordEndedSandboxHost(HOST_ID, {
+      name: "e2e-sbx-p1",
+      at: new Date(2026, 9, 25, 11, 1).getTime(),
+      actor: { userId: "user-2", displayName: "Priya" },
+    });
+
+    renderErroredTile();
+
+    expect(
+      screen.getByText("e2e-sbx-p1 was destroyed by Priya at 11:01."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/permanently closed/)).toBeNull();
+    expect(closedMessage()).toBe("");
+  });
+
+  it("keeps saying the host is unreachable for a host that is not a stopped sandbox", () => {
+    testState.entry = sandboxEntry("awake");
+
+    renderErroredTile();
+
+    expect(
+      screen.getByText(
+        'Host "e2e-sbx-p1" is unreachable. This terminal is permanently closed.',
+      ),
+    ).toBeTruthy();
+    expect(closedMessage()).toBe(
+      'Terminal closed: host "e2e-sbx-p1" is unreachable.',
+    );
   });
 });

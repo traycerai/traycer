@@ -3,10 +3,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import {
-  useProvidersList,
-  useProvidersListForClient,
-} from "@/hooks/providers/use-providers-list-query";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
   providerPackBlocksExecution,
   providerPackPreparingByHarnessId,
@@ -43,38 +40,19 @@ const NOT_BLOCKED: ProviderPackGate = {
 };
 
 /**
- * "Can this harness start a turn right now?" for the app-wide default host.
+ * "Can this harness start a turn right now?" on the composer's own host.
  *
  * The settled UX decision, applied at send time: a provider that CANNOT RUN
  * gates the AFFORDANCE - the submit button is disabled and says
  * `Preparing… X%` - rather than accepting the turn and failing, or queueing it
- * and hoping. The dictation mic does exactly this while its on-device model
- * downloads.
+ * and hoping. "Cannot run" is the whole condition, and it is not the same as
+ * "a download is in flight": a host with bundled bytes, a PATH install or a
+ * custom path spawns while the managed pack downloads, so it blocks nothing.
  *
- * "Cannot run" is the whole condition, and it is not the same as "a download
- * is in flight". A host with bundled bytes, a PATH install or a custom path
- * resolves and spawns while the managed pack downloads in the background, so
- * it blocks nothing. Reading the gate off `managedInstallState` alone made
- * boot convergence - which enqueues EVERY enabled pack - dim every provider on
- * the machine behind `Preparing… 0%`, including the ones the user could have
- * used all along, and it took away the only send button that would have
- * promoted a pack up the install queue.
- *
- * This is UX only. The host resolver is the authoritative backstop and throws a
- * typed `preparing` outcome regardless of what any client does, which is what
- * keeps old GUIs, terminal launches and direct RPCs honest. So this gate fails
- * OPEN by construction: while `providers.list` is still loading there is no
- * data, nothing blocks, and the host has the final word.
- */
-export function useProviderPackGate(
-  harnessId: GuiHarnessId | null,
-): ProviderPackGate {
-  const providersQuery = useProvidersList({ enabled: true, subscribed: true });
-  return usePackGateFromProviders(providersQuery.data?.providers, harnessId);
-}
-
-/**
- * Client-scoped variant, for tab-bound surfaces that must gate on THEIR host.
+ * This is UX only. The host resolver is the authoritative backstop and throws
+ * a typed `preparing` outcome regardless of what any client does. So this
+ * gate fails OPEN by construction: while `providers.list` is still loading
+ * nothing blocks, and the host has the final word.
  *
  * `active` carries the caller's focus state, and it gates the `providers.list`
  * SUBSCRIPTION rather than the gate's answer - the same treatment

@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
@@ -7,6 +14,12 @@ import {
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
+import type { HostStatusSessions } from "@traycer/protocol/host/status/contracts";
+import {
+  agentSessionFixture,
+  terminalSessionFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import {
   listEpicTerminalDurableCreateJobsForEpic,
@@ -30,11 +43,17 @@ import {
  * section are the real ones.
  */
 const h = vi.hoisted(() => {
+  const NO_CONFIGURATIONS: SandboxConfigurations = {
+    configurations: [{ kind: "personal" }],
+    teamEnvironmentIds: new Set(),
+    complete: false,
+  };
   const state: {
     sandboxes: object[];
     taskHosts: object;
     cost: object[];
     busySessionCount: number | null;
+    sessions: HostStatusSessions | null;
     statusUpdatedAt: number | null;
     listUpdatedAt: number | null;
     listFetching: boolean;
@@ -43,6 +62,8 @@ const h = vi.hoisted(() => {
     agents: object[];
     terminals: object[];
     teams: object[];
+    registryOwner: object | null;
+    configurations: SandboxConfigurations;
     setPanel: Mock;
     openDetails: Mock;
     openTile: Mock;
@@ -51,6 +72,7 @@ const h = vi.hoisted(() => {
     taskHosts: { kind: "none" },
     cost: [],
     busySessionCount: null,
+    sessions: null,
     statusUpdatedAt: null,
     listUpdatedAt: null,
     listFetching: false,
@@ -59,6 +81,8 @@ const h = vi.hoisted(() => {
     agents: [],
     terminals: [],
     teams: [],
+    registryOwner: { kind: "team", name: "Acme" },
+    configurations: NO_CONFIGURATIONS,
     setPanel: vi.fn(),
     openDetails: vi.fn(),
     openTile: vi.fn(),
@@ -90,10 +114,20 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
 vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
   useRegisteredHosts: () => ({
     data: {
-      hosts: [{ hostId: "host-sbx", owner: { kind: "team", name: "Acme" } }],
+      hosts: [{ hostId: "host-sbx", owner: h.registryOwner ?? undefined }],
     },
   }),
 }));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return { ...actual, useSandboxConfigurations: () => h.configurations };
+  },
+);
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -106,7 +140,10 @@ vi.mock("@/hooks/host/use-host-query", () => ({
         data:
           h.busySessionCount === null
             ? undefined
-            : { busySessionCount: h.busySessionCount },
+            : {
+                busySessionCount: h.busySessionCount,
+                sessions: h.sessions,
+              },
       };
     }
     const snapshot = {
@@ -246,6 +283,7 @@ afterEach(() => {
   h.taskHosts = { kind: "none" };
   h.cost = [];
   h.busySessionCount = null;
+  h.sessions = null;
   h.statusUpdatedAt = null;
   h.listUpdatedAt = null;
   h.listFetching = false;
@@ -255,6 +293,12 @@ afterEach(() => {
   h.agents = [];
   h.terminals = [];
   h.teams = [];
+  h.registryOwner = { kind: "team", name: "Acme" };
+  h.configurations = {
+    configurations: [{ kind: "personal" }],
+    teamEnvironmentIds: new Set(),
+    complete: false,
+  };
   h.setPanel.mockClear();
   h.openDetails.mockClear();
   h.openTile.mockClear();
@@ -616,6 +660,179 @@ describe("AgentHoverTooltip host section", () => {
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
     ).toBeNull();
+  });
+
+  describe("the configuration line under the name", () => {
+    const configuration = () =>
+      screen.queryByTestId("agent-host-configuration")?.textContent;
+    const renderHostSandbox = () => {
+      h.sandboxes = [sandboxRow({})];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+    };
+
+    it("reads Personal for a sandbox with no registry owner whose environment is outside every team's", () => {
+      h.registryOwner = null;
+      h.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-1",
+            teamName: "Acme",
+            environmentId: "env-acme",
+          },
+        ],
+        teamEnvironmentIds: new Set(["env-acme"]),
+        complete: true,
+      };
+      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(configuration()).toBe("Personal");
+    });
+
+    it("reads the team's name for a team environment's sandbox with no registry owner", () => {
+      h.registryOwner = null;
+      h.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-1",
+            teamName: "Acme",
+            environmentId: "env-acme",
+          },
+        ],
+        teamEnvironmentIds: new Set(["env-acme"]),
+        complete: true,
+      };
+      h.sandboxes = [sandboxRow({ environmentId: "env-acme" })];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(configuration()).toBe("Acme");
+    });
+
+    it("reads Personal for a registry owner of kind user", () => {
+      h.registryOwner = { kind: "user", userId: "user-1" };
+      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(configuration()).toBe("Personal");
+    });
+
+    it("shows no configuration while a team has not answered", () => {
+      h.registryOwner = null;
+      h.sandboxes = [sandboxRow({ environmentId: "env-elsewhere" })];
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(configuration()).toBeUndefined();
+    });
+
+    it("is a line under the name, not a badge beside it", () => {
+      renderHostSandbox();
+      const line = screen.getByTestId("agent-host-configuration");
+      expect(line.textContent).toBe("Acme");
+      expect(line.tagName).toBe("P");
+      expect(screen.getByText("build-box").parentElement?.contains(line)).toBe(
+        false,
+      );
+    });
+  });
+
+  it("reads a day's cost below a cent as under $0.01 and a cent or more in dollars", () => {
+    h.sandboxes = [sandboxRow({})];
+    h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 3 }];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+    expect(screen.getByTestId("worktree-host-section").textContent).toContain(
+      " · under $0.01 today",
+    );
+    cleanup();
+    h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 20 }];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+    expect(screen.getByTestId("worktree-host-section").textContent).toContain(
+      " · $0.02 today",
+    );
+  });
+
+  describe("what runs on the host", () => {
+    function renderAwake(): void {
+      h.sandboxes = [sandboxRow({})];
+      h.busySessionCount = 2;
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+    }
+
+    it("says how many agents and terminals run on the host, after the idle policy", () => {
+      h.sessions = {
+        agents: [agentSessionFixture({})],
+        terminals: [terminalSessionFixture({})],
+      };
+      renderAwake();
+
+      const section = screen.getByTestId("worktree-host-section");
+      const activity = screen.getByTestId("agent-host-activity");
+      expect(activity.textContent).toBe("1 agent and 1 terminal on it");
+      const idle = within(section).getByText("Suspends after 30 idle min", {
+        exact: false,
+      });
+      expect(
+        idle.compareDocumentPosition(activity) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("counts an idle terminal the busy count leaves out", () => {
+      h.sessions = {
+        agents: [],
+        terminals: [terminalSessionFixture({})],
+      };
+      renderAwake();
+
+      expect(screen.getByTestId("agent-host-activity").textContent).toBe(
+        "1 terminal on it",
+      );
+    });
+
+    it("draws no host-wide line when the host sends no list", () => {
+      h.sessions = null;
+      renderAwake();
+
+      expect(screen.queryByTestId("agent-host-activity")).toBeNull();
+    });
+
+    it("draws no host-wide line when nothing runs", () => {
+      h.sessions = { agents: [], terminals: [] };
+      renderAwake();
+
+      expect(screen.queryByTestId("agent-host-activity")).toBeNull();
+    });
   });
 
   it("opens a terminal tile on a resting sandbox, whose create waits for the host's cwd", async () => {

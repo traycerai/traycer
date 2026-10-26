@@ -123,10 +123,6 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
 vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
   SandboxBalanceBanner: () => null,
 }));
-// Same reasoning: the Automations entry reads its own `useQuery`.
-vi.mock("@/components/hosts/automations-host-entry", () => ({
-  AutomationsHostEntry: () => <div data-testid="automations-entry-probe" />,
-}));
 
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({

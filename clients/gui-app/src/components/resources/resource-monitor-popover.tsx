@@ -4942,6 +4942,7 @@ function ownerLabel(
       title: null,
       activeProcessName: snapshot.activeProcessName,
       currentCwd: null,
+      taskHome: null,
     });
   }
   if (snapshot.owner.kind === "chat") {

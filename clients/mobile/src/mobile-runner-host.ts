@@ -156,6 +156,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobilePushRegistration } from "./push-registration";
@@ -773,6 +774,7 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult> {
     return runSandboxVerbViaHttp(
@@ -781,6 +783,7 @@ export class MobileRunnerHost implements IRunnerHost {
       null,
       sandboxId,
       verb,
+      gesture,
       timeoutMs,
     );
   }

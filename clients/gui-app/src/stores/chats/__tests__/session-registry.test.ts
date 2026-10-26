@@ -10,6 +10,12 @@ import {
   ChatSessionRegistry,
   MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
 } from "@/stores/chats/session-registry";
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
 import {
@@ -1290,3 +1296,99 @@ function markRunningOnBackgroundOnly(handle: ChatSessionStoreHandle): void {
     turnInProgress: false,
   });
 }
+
+describe("ChatSessionRegistry on a sandbox host", () => {
+  const SANDBOX_HOST = "sbx-host";
+  const COMPUTER_HOST = "computer-host";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    installHostDirectoryRows([
+      sandboxHostEntry(SANDBOX_HOST, null),
+      plainHostEntry(COMPUTER_HOST),
+    ]);
+  });
+
+  afterEach(() => {
+    resetHostDirectoryRows();
+    __resetAgentActivityStoreForTests();
+    vi.useRealTimers();
+  });
+
+  function acquireOn(hostId: string) {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+    const owned = createHandle("epic-1", "chat-1");
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-1", hostId, scopeKey: SCOPE },
+      () => owned.handle,
+    );
+    return { registry, owned };
+  }
+
+  it("closes the stream the moment the last lease is released, with no timer advance, and forgets the session", () => {
+    const { registry, owned } = acquireOn(SANDBOX_HOST);
+    expect(owned.closeCount()).toBe(0);
+
+    registry.release("epic-1", "chat-1", SANDBOX_HOST);
+
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.peek("epic-1", "chat-1", SANDBOX_HOST)).toBeNull();
+  });
+
+  it("keeps a session on a computer warm until the idle TTL, as before", () => {
+    const { registry, owned } = acquireOn(COMPUTER_HOST);
+
+    registry.release("epic-1", "chat-1", COMPUTER_HOST);
+
+    expect(owned.closeCount()).toBe(0);
+    vi.advanceTimersByTime(TTL_MS - 1);
+    expect(owned.closeCount()).toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.peek("epic-1", "chat-1", COMPUTER_HOST)).toBeNull();
+  });
+
+  it("does not close it while another lease still holds it", () => {
+    const { registry, owned } = acquireOn(SANDBOX_HOST);
+    registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: SANDBOX_HOST,
+        scopeKey: SCOPE,
+      },
+      () => createHandle("epic-1", "chat-1").handle,
+    );
+
+    registry.release("epic-1", "chat-1", SANDBOX_HOST);
+    expect(owned.closeCount()).toBe(0);
+
+    registry.release("epic-1", "chat-1", SANDBOX_HOST);
+    expect(owned.closeCount()).toBe(1);
+  });
+
+  it("keeps a chat holding a prompt not yet recorded, though it is on a sandbox", () => {
+    const { registry, owned } = acquireOn(SANDBOX_HOST);
+    const acquired = registry.peek("epic-1", "chat-1", SANDBOX_HOST);
+    if (acquired === null) throw new Error("expected the acquired session");
+    acquired.store.setState({
+      failedSendRestoration: {
+        clientActionId: "action-1",
+        messageId: null,
+        content: { type: "doc", content: [] },
+        browserAnnotations: [],
+        reason: "The host did not take the message.",
+        stated: true,
+        displacedReason: "The host did not take the message.",
+      },
+    });
+
+    registry.release("epic-1", "chat-1", SANDBOX_HOST);
+
+    expect(owned.closeCount()).toBe(0);
+    expect(registry.peek("epic-1", "chat-1", SANDBOX_HOST)).not.toBeNull();
+  });
+});

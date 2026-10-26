@@ -100,6 +100,13 @@ import {
  * footer, what a confirm sends, and where each answer goes.
  */
 
+// The picker's Terminal account sentence reads the fleet's rows for the run
+// target's name; this suite has no fleet.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+});
 vi.mock("@/hooks/host/use-host-client-for-host-id", async () =>
   (await import("./routing-picker-kit")).hostClientModule(),
 );

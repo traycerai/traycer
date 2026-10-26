@@ -3,6 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import type { SandboxVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import { SANDBOX_REFUSAL_CODE_NOT_FOUND } from "@traycer/protocol/host/sandbox-control";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
 import { useHostBinding, type HostDirectoryService } from "@/lib/host";
@@ -20,6 +21,10 @@ import {
   settledForStartingAccount,
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
+import {
+  forgetEndedSandboxHost,
+  recordEndedSandboxHost,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 /** One target's own outcome: a batch never reports for the set as a whole. */
 export type SandboxBatchOutcome =
@@ -45,6 +50,20 @@ export interface SandboxDestroyBatchRequest {
   readonly targets: readonly SandboxBatchTarget[];
   /** The account signed in when the person confirmed the batch. */
   readonly startedBy: string | null;
+}
+
+/** A destroy's answer as its target's outcome: a sandbox already gone is gone. */
+function destroyOutcome(result: SandboxVerbFetchResult): SandboxBatchOutcome {
+  if (result.kind === "ok") {
+    return { kind: result.settled ? "destroyed" : "destroying" };
+  }
+  if (
+    result.kind === "refused" &&
+    result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+  ) {
+    return { kind: "gone" };
+  }
+  return { kind: "failed", message: sandboxFailureMessage(result) };
 }
 
 interface SandboxDestroyBatchContext {
@@ -116,23 +135,18 @@ export function useSandboxDestroyBatch(): UseMutationResult<
           continue;
         }
         stopIfAccountChanged();
-        const result = await binding.auth.destroySandbox(target.sandboxId);
-        if (result.kind === "ok") {
-          results.push({
-            ...target,
-            outcome: { kind: result.settled ? "destroyed" : "destroying" },
-          });
-        } else if (
-          result.kind === "refused" &&
-          result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
-        ) {
-          results.push({ ...target, outcome: { kind: "gone" } });
-        } else {
-          results.push({
-            ...target,
-            outcome: { kind: "failed", message: sandboxFailureMessage(result) },
+        if (startedBy !== null) {
+          recordEndedSandboxHost(row.hostId, {
+            name: row.displayName,
+            at: Date.now(),
+            actor: { userId: startedBy, displayName: null },
           });
         }
+        const outcome = destroyOutcome(
+          await binding.auth.destroySandbox(target.sandboxId),
+        );
+        if (outcome.kind === "failed") forgetEndedSandboxHost(row.hostId);
+        results.push({ ...target, outcome });
       }
       return results;
     },
