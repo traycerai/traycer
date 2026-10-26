@@ -62,7 +62,8 @@ const mocks = vi.hoisted(() => {
       support: initialSupport(),
       environments: {
         data: undefined as
-          { environments: EnvironmentDescriptor[] } | undefined,
+          | { environments: EnvironmentDescriptor[] }
+          | undefined,
         isError: false,
         refetch: environmentRefetch,
       },

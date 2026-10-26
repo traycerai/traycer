@@ -189,7 +189,9 @@ const providerMocks = vi.hoisted(() => {
       isError: false,
       isFetching: false,
       error: undefined as
-        HostRpcError | { message: string; code: string } | undefined,
+        | HostRpcError
+        | { message: string; code: string }
+        | undefined,
       refetch: vi.fn(() => Promise.resolve({})),
     },
     setSelectionMutate: vi.fn(),
@@ -212,7 +214,8 @@ const providerMocks = vi.hoisted(() => {
     submitLoginCodePending: false,
     submitLoginCodeSuccess: false,
     submitLoginCodeData: undefined as
-      { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+      | { readonly outcome: "accepted" | "noActiveLogin" }
+      | undefined,
     submitLoginCodeError: null as Error | null,
     touchLoginMutate: vi.fn(),
     touchLoginReset: vi.fn(),
@@ -717,7 +720,8 @@ const DEFAULT_CATALOG_HARNESSES: ReadonlyArray<CatalogHarnessFixture> = [
 ];
 const guiHarnessesCatalogMock = vi.hoisted(() => ({
   data: undefined as
-    { harnesses: ReadonlyArray<CatalogHarnessFixture> } | undefined,
+    | { harnesses: ReadonlyArray<CatalogHarnessFixture> }
+    | undefined,
 }));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({ data: guiHarnessesCatalogMock.data }),

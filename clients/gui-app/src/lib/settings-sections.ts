@@ -113,7 +113,11 @@ export const FALLBACK_SETTINGS_SECTION_ID =
  * window's own host.
  */
 export type SettingsSectionGroupId =
-  "guide" | "app" | "account" | "personal" | "host";
+  | "guide"
+  | "app"
+  | "account"
+  | "personal"
+  | "host";
 
 export interface SettingsSectionGroup {
   readonly id: SettingsSectionGroupId;
