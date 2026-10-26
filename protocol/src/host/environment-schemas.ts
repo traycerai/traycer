@@ -1449,9 +1449,8 @@ export const environmentSecretSchemaV12 = lazySchema(() =>
 );
 export type EnvironmentSecretV12 = z.infer<typeof environmentSecretSchemaV12>;
 
-export const environmentSecretsListRequestSchemaV12 = lazySchema(
-  () => environmentSecretsListRequestSchemaV11,
-);
+export const environmentSecretsListRequestSchemaV12 =
+  environmentSecretsListRequestSchemaV11;
 export type EnvironmentSecretsListRequestV12 = z.infer<
   typeof environmentSecretsListRequestSchemaV12
 >;
