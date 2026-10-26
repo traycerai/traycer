@@ -4378,6 +4378,70 @@ function renderStoppedTurnsWithoutAssistantRecords(
 const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
   [];
 
+function objectArtifactInsertionIndex(
+  ordered: ReadonlyArray<OpenContentBlock>,
+  timestamp: number,
+  sweep: boolean,
+): number {
+  // Older sweep cards carry the drain time rather than the write time.
+  // Their last activity is the best available anchor in saved history.
+  const legacySweep =
+    sweep && ordered.every((candidate) => candidate.timestamp <= timestamp);
+  let insertion = -1;
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const candidate = ordered[index];
+    const activity =
+      candidate.type === "tool_call" ||
+      candidate.type === "command" ||
+      candidate.type === "file_change";
+    // Tool and subagent completion advances timestamp past artifacts they created.
+    const anchorTimestamp =
+      candidate.type === "tool_call" || candidate.type === "subagent"
+        ? (candidate.startedAt ?? candidate.timestamp)
+        : candidate.timestamp;
+    if (anchorTimestamp <= timestamp && (!legacySweep || activity)) {
+      insertion = index + 1;
+      break;
+    }
+  }
+  if (insertion === -1) {
+    const closingText = ordered.findLastIndex(
+      (candidate) => candidate.type === "text",
+    );
+    insertion = closingText === -1 ? ordered.length : closingText;
+  }
+  while (
+    ordered[insertion]?.type === "artifact_operation" &&
+    ordered[insertion].timestamp <= timestamp
+  )
+    insertion += 1;
+  return insertion;
+}
+
+/** Deferred creation cards belong beside activity, before the closing reply. */
+function placeObjectArtifactCards(
+  blocks: ReadonlyArray<OpenContentBlock>,
+): ReadonlyArray<OpenContentBlock> {
+  const ordered: OpenContentBlock[] = [];
+  for (const block of blocks) {
+    if (
+      block.type !== "artifact_operation" ||
+      block.operation !== "create" ||
+      (block.kind !== "html" && block.kind !== "canvas")
+    ) {
+      ordered.push(block);
+      continue;
+    }
+    const insertion = objectArtifactInsertionIndex(
+      ordered,
+      block.timestamp,
+      block.blockId.startsWith("artifact-create-sweep:"),
+    );
+    ordered.splice(insertion, 0, block);
+  }
+  return ordered;
+}
+
 function buildAssistantSegments(
   blocks: ReadonlyArray<OpenContentBlock>,
   checkpointView: CheckpointManifestView | null,
@@ -4413,7 +4477,7 @@ function buildAssistantSegments(
     targetsByResolutions.set(resolutions, computed);
     return computed;
   };
-  for (const block of blocks) {
+  for (const block of placeObjectArtifactCards(blocks)) {
     if (
       block.type === "error" &&
       codexRetryVisibility(
