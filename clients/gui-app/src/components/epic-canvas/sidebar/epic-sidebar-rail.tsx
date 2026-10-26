@@ -87,8 +87,6 @@ import {
   ColumnEdgeContext,
   useColumnOverlayPlacement,
 } from "@/components/layout/column-edge-context";
-import { useSurfaceHostPinWithDefault } from "@/hooks/host/use-surface-host-pin";
-import { tabSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import {
   selectPrScopeHasItems,
@@ -227,12 +225,8 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
   // The host the PR panel records presence under (see `EpicLeftPanelHost`).
   const canvasHostId = useCanvasHostId();
-  const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
-    tabSurfaceKey("pull-requests", tabId),
-    canvasHostId,
-  );
   const hasPullRequests = usePrPresenceStore(
-    selectPrScopeHasItems(hostId, epicId),
+    selectPrScopeHasItems(canvasHostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
   const setActivePanelIdAndExpand = useEpicLeftPanelStore(

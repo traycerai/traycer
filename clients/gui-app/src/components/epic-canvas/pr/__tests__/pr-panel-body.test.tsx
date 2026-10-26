@@ -30,7 +30,6 @@ import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
 } from "@/stores/epics/sidebar-node-reveal-store";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import {
   prPresenceScopeKey,
   usePrPresenceStore,
@@ -38,90 +37,10 @@ import {
 
 const canvasHostState = vi.hoisted(() => ({ id: "host-a" }));
 let streamBindingsByHost: Record<string, StreamRuntimeBinding | null> = {};
-const hostOptionsState = vi.hoisted(() => ({
-  value: {
-    hosts: [
-      { hostId: "host-a", label: "Host A" },
-      { hostId: "host-b", label: "Host B" },
-    ],
-    activeHostId: "host-a",
-    isLoading: false,
-    listsFailed: false,
-    retryLists: vi.fn(),
-  },
-}));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => canvasHostState.id,
 }));
-
-vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => hostOptionsState.value,
-}));
-
-vi.mock("@/components/home/host-workspace-selector/host-section", () => ({
-  WorkspaceHostSwitcher: (props: {
-    readonly hosts: readonly { readonly hostId: string }[];
-    readonly onSelect: (hostId: string) => void;
-    readonly isLoading: boolean;
-    readonly listsFailed: boolean;
-    readonly onRetryLists: () => void;
-  }) => (
-    <div data-testid="mock-pr-host-switcher">
-      {props.isLoading ? <span data-testid="pr-hosts-loading" /> : null}
-      {props.listsFailed ? (
-        <button type="button" onClick={props.onRetryLists}>
-          Retry hosts
-        </button>
-      ) : null}
-      {props.hosts.map((host) => (
-        <button
-          key={host.hostId}
-          type="button"
-          data-testid={`pr-host-option-${host.hostId}`}
-          onClick={() => props.onSelect(host.hostId)}
-        >
-          {host.hostId}
-        </button>
-      ))}
-    </div>
-  ),
-}));
-
-vi.mock("@/hooks/host/use-surface-host-pin", async () => {
-  const React = await import("react");
-  const { useSurfaceHostSelectionStore } =
-    await import("@/stores/host/surface-host-selection-store");
-  return {
-    useSurfaceHostPinWithDefault: (
-      surfaceKey: string,
-      defaultHostId: string | null,
-    ) => {
-      const stored = useSurfaceHostSelectionStore(
-        (state) => state.selections[surfaceKey],
-      );
-      const setSelectionRaw = useSurfaceHostSelectionStore(
-        (state) => state.setSelection,
-      );
-      const selection = stored ?? null;
-      const setSelection = React.useCallback(
-        (next: string | null) => setSelectionRaw(surfaceKey, next),
-        [setSelectionRaw, surfaceKey],
-      );
-      const resolvedHostId = selection ?? defaultHostId;
-      return {
-        selection,
-        honoredSelection: selection,
-        setSelection,
-        resolvedHostId,
-        followingHostId: defaultHostId,
-        isPinned: selection !== null,
-        latchOnFirstUse: () => undefined,
-        resolvedFrom: selection === null ? "default" : "pin",
-      };
-    },
-  };
-});
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
   useSurfaceHostStreamBinding: (hostId: string | null) =>
@@ -230,22 +149,24 @@ describe("PrPanelBody card list", () => {
   let queryClient: QueryClient;
   let mockWsStreamClient: MockWsStreamClient;
 
+  const panelTree = (props: { epicId: string; tabId: string }) => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <StreamRuntimeContext.Provider
+          value={{
+            wsStreamClient: mockWsStreamClient,
+            hostId: null,
+            retain: null,
+          }}
+        >
+          <PrPanelBody epicId={props.epicId} tabId={props.tabId} />
+        </StreamRuntimeContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+
   const renderPanel = (props: { epicId: string; tabId: string }) => {
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <StreamRuntimeContext.Provider
-            value={{
-              wsStreamClient: mockWsStreamClient,
-              hostId: null,
-              retain: null,
-            }}
-          >
-            <PrPanelBody epicId={props.epicId} tabId={props.tabId} />
-          </StreamRuntimeContext.Provider>
-        </TooltipProvider>
-      </QueryClientProvider>,
-    );
+    return render(panelTree(props));
   };
 
   const emitSnapshot = async (
@@ -282,18 +203,7 @@ describe("PrPanelBody card list", () => {
   beforeEach(() => {
     canvasHostState.id = "host-a";
     usePrPanelStore.setState({ openOnly: false });
-    useSurfaceHostSelectionStore.setState({ selections: {} });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
-    hostOptionsState.value = {
-      hosts: [
-        { hostId: "host-a", label: "Host A" },
-        { hostId: "host-b", label: "Host B" },
-      ],
-      activeHostId: "host-a",
-      isLoading: false,
-      listsFailed: false,
-      retryLists: vi.fn(),
-    };
     resetCanvas();
     useSidebarNodeRevealStore.setState(
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
@@ -321,7 +231,6 @@ describe("PrPanelBody card list", () => {
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
       true,
     );
-    useSurfaceHostSelectionStore.setState({ selections: {} });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
     streamBindingsByHost = {};
     queryClient.clear();
@@ -549,25 +458,35 @@ describe("PrPanelBody card list", () => {
     expect(tabId).toBeUndefined();
   });
 
-  it("routes rows, refresh, presence, and detail tiles to the selected host", async () => {
+  it("re-binds rows, refresh, presence, and detail tiles when the canvas host switches", async () => {
     const epicId = "epic-cross-host";
+    const tabId = "tab-cross-host";
     const hostBClient = new MockWsStreamClient();
     streamBindingsByHost["host-b"] = {
       wsStreamClient: hostBClient,
       hostId: "host-b",
       retain: null,
     };
-    renderPanel({ epicId, tabId: "tab-cross-host" });
+    const rendered = renderPanel({ epicId, tabId });
 
-    await emitSnapshot(epicId, [
+    const hostASession = await emitSnapshot(epicId, [
       buildPrItem({
         base: { owner: "acme", repo: "widgets", prNumber: 1 },
         githubHost: "github.com",
       }),
     ]);
     expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
+    expect(
+      usePrPresenceStore.getState().hasItemsByScopeKey[
+        prPresenceScopeKey("host-a", epicId)
+      ],
+    ).toBe(true);
 
-    fireEvent.click(screen.getByTestId("pr-host-option-host-b"));
+    canvasHostState.id = "host-b";
+    rendered.rerender(panelTree({ epicId, tabId }));
+    await waitFor(() => {
+      expect(hostASession.closed).toBe(true);
+    });
     const hostBItem = buildPrItem({
       base: { owner: "acme", repo: "widgets", prNumber: 2 },
       githubHost: "github.com",
@@ -606,7 +525,7 @@ describe("PrPanelBody card list", () => {
     expect(tile.prNumber).toBe(2);
   });
 
-  it("keeps the picker available for unsupported, loading, and failed reads", () => {
+  it("asks for a host update when the canvas host lacks the PR list stream", () => {
     const unsupportedClient = new MockWsStreamClient();
     vi.spyOn(unsupportedClient, "getMethodSupport").mockReturnValue(
       "unsupported",
@@ -616,26 +535,12 @@ describe("PrPanelBody card list", () => {
       hostId: "host-a",
       retain: null,
     };
-    const retryLists = vi.fn();
-    hostOptionsState.value = {
-      ...hostOptionsState.value,
-      isLoading: true,
-      listsFailed: true,
-      retryLists,
-    };
     renderPanel({ epicId: "epic-unsupported", tabId: "tab-unsupported" });
-    expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
     expect(screen.getByTestId("pr-panel-host-update-required")).toBeTruthy();
-    // A host-list failure must not remove the header; the retry action remains
-    // the recovery path even when the stream itself is unsupported.
-    expect(screen.getByTestId("pr-hosts-loading")).toBeTruthy();
-    expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
-    expect(screen.getByText("Retry hosts")).toBeTruthy();
-    fireEvent.click(screen.getByText("Retry hosts"));
-    expect(retryLists).toHaveBeenCalledTimes(1);
+    expect(unsupportedClient.subscribeCallCount).toBe(0);
   });
 
-  it("keeps the header while a selected host reports a recoverable stream error", async () => {
+  it("keeps the header actions while the canvas host reports a recoverable stream error", async () => {
     const epicId = "epic-header-recovery";
     renderPanel({ epicId, tabId: "tab-header-recovery" });
     await waitFor(() => {
@@ -654,7 +559,10 @@ describe("PrPanelBody card list", () => {
       isFatal: false,
     });
     expect(await screen.findByTestId("pr-panel-error-notice")).toBeTruthy();
-    expect(screen.getByTestId("pr-panel-host-picker")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("pr-panel-refresh"));
+    expect(session.sentClientFrames).toEqual([
+      { kind: "refresh", hasBinaryPayload: false },
+    ]);
   });
   describe("open-only filter", () => {
     const stateRows = (): readonly PrLightItem[] => [
