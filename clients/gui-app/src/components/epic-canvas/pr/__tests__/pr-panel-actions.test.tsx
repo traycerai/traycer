@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
@@ -35,11 +41,11 @@ function renderActions(value: TestSubscription, enabled: boolean): void {
 
 describe("PrPanelActions", () => {
   beforeEach(() => {
-    usePrPanelStore.setState({ openOnly: false });
+    usePrPanelStore.setState({ stateFilter: "open" });
   });
   afterEach(() => {
     cleanup();
-    usePrPanelStore.setState({ openOnly: false });
+    usePrPanelStore.setState({ stateFilter: "open" });
   });
 
   it("sends refresh through the exact subscription instance passed by the body", () => {
@@ -59,29 +65,45 @@ describe("PrPanelActions", () => {
     expect(current.sendRefresh).not.toHaveBeenCalled();
   });
 
-  it("toggles the open-only filter and reflects it as pressed", () => {
+  it("names the listed state on the trigger and follows the store", () => {
     renderActions(subscription(data([])), true);
-    const toggle = screen.getByTestId("pr-panel-open-only");
-    expect(toggle.getAttribute("aria-label")).toBe(
-      "Show open pull requests only",
-    );
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    const trigger = screen.getByTestId("pr-panel-state-filter");
+    expect(trigger.textContent).toBe("Open");
 
-    fireEvent.click(toggle);
-    expect(usePrPanelStore.getState().openOnly).toBe(true);
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
-
-    fireEvent.click(toggle);
-    expect(usePrPanelStore.getState().openOnly).toBe(false);
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    act(() => {
+      usePrPanelStore.getState().setStateFilter("merged");
+    });
+    expect(trigger.textContent).toBe("Merged");
   });
 
-  it("keeps the open-only filter usable when the subscription is disabled", () => {
-    renderActions(subscription(data([])), false);
-    const toggle = screen.getByTestId("pr-panel-open-only");
-    expect(toggle.getAttribute("disabled")).toBeNull();
+  it("checks the stored filter among the four choices", async () => {
+    usePrPanelStore.setState({ stateFilter: "closed" });
+    renderActions(subscription(data([])), true);
+    fireEvent.pointerDown(screen.getByTestId("pr-panel-state-filter"), {
+      button: 0,
+    });
 
-    fireEvent.click(toggle);
-    expect(usePrPanelStore.getState().openOnly).toBe(true);
+    const items = await screen.findAllByRole("menuitemradio");
+    expect(
+      items.map((item) => [
+        item.textContent,
+        item.getAttribute("aria-checked"),
+      ]),
+    ).toEqual([
+      ["Open", "false"],
+      ["Merged", "false"],
+      ["Closed", "true"],
+      ["All", "false"],
+    ]);
+  });
+
+  it("sets the filter from the menu while the subscription is disabled", async () => {
+    renderActions(subscription(data([])), false);
+    const trigger = screen.getByTestId("pr-panel-state-filter");
+    fireEvent.pointerDown(trigger, { button: 0 });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "All" }));
+
+    expect(usePrPanelStore.getState().stateFilter).toBe("all");
+    expect(trigger.textContent).toBe("All");
   });
 });

@@ -36,7 +36,9 @@ describe("@legendapp/list absolute scroll-adjust patch", () => {
       expect(source).toContain(
         'el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });',
       );
-      expect(source).not.toContain('el.scrollBy({ behavior: "auto", left, top });');
+      expect(source).not.toContain(
+        'el.scrollBy({ behavior: "auto", left, top });',
+      );
       expect(source).not.toContain(
         'target.scrollBy({ behavior: "auto", left: x, top: y });',
       );
