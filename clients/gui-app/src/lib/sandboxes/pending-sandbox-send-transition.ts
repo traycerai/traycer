@@ -45,6 +45,7 @@ export type PendingSendEvent =
   | "stop-failed"
   | "return"
   | "retry"
+  | "request-retry"
   | "rest"
   | "terminal-row"
   | "awake"
@@ -88,6 +89,8 @@ export interface PendingSendFacts {
   readonly origin: boolean;
   readonly durableClaim: boolean;
   readonly terminalDisposition: boolean;
+  readonly stopRequested: boolean;
+  readonly sandboxKnown: boolean;
   readonly host: "unknown" | "awake" | "resting" | "waking" | "ended";
   readonly frozen: boolean;
   readonly settingsReady: boolean;
@@ -111,6 +114,8 @@ export const UNKNOWN_PENDING_SEND_FACTS: PendingSendFacts = {
   origin: false,
   durableClaim: false,
   terminalDisposition: false,
+  stopRequested: false,
+  sandboxKnown: false,
   host: "unknown",
   frozen: false,
   settingsReady: false,
@@ -133,6 +138,7 @@ export type PendingSendEffect =
   | "record-receipt"
   | "finish-ui"
   | "retry"
+  | "request-retry"
   | "known-refusal"
   | "uncertain"
   | "wake"
@@ -187,6 +193,7 @@ interface PendingSendRecord {
     readonly blocker?: PendingSendBlocker;
   } | null;
   readonly ended?: boolean;
+  readonly stopRequested?: boolean;
 }
 
 /** Legacy records derive their phase from the same receipt/claim fields. */
@@ -204,7 +211,10 @@ export function pendingSendState(
   return {
     kind: record.request.kind,
     phase,
-    blocker: record.dispatch?.blocker ?? blocker,
+    blocker:
+      record.stopRequested === true
+        ? "stop"
+        : (record.dispatch?.blocker ?? blocker),
   };
 }
 
@@ -627,7 +637,38 @@ function retry(
   // Retry requests a new model read; the previous negative cache entry cannot
   // refuse that read before it starts. All earlier readiness gates still apply.
   const plan = observe(next, { ...facts, modelUnavailable: false });
-  return result(plan.state, ["retry", ...plan.effects], facts);
+  // A strip's fresh list may still be loading. It can hold dispatch without
+  // preventing an explicitly requested catalog refresh on the named host.
+  return result(
+    plan.state,
+    [
+      "retry",
+      ...plan.effects,
+      ...(retryCanRefreshUnknownModel(state, facts)
+        ? ["fetch-model" as const]
+        : []),
+    ],
+    facts,
+  );
+}
+
+/** An explicit model retry does not need a fresh row to read the named host. */
+function retryCanRefreshUnknownModel(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): boolean {
+  return (
+    state.phase === "waiting" &&
+    state.blocker === "not-sent" &&
+    state.kind !== "terminal" &&
+    facts.host === "unknown" &&
+    facts.clientReady &&
+    facts.agentReady &&
+    facts.settingsReady &&
+    !facts.frozen &&
+    !facts.modelReady &&
+    facts.stageStatus === "handoff"
+  );
 }
 
 function readinessEvent(
@@ -760,6 +801,7 @@ function requestStop(
   const permission = withdraw(state, facts);
   if (permission.outcome !== "applied" || state.phase !== "waiting")
     return permission;
+  if (!facts.sandboxKnown) return result(state, [], facts);
   if (facts.inFlight) return result(state, ["poll"], facts);
   return result(
     { ...state, blocker: "stop" },
@@ -768,14 +810,14 @@ function requestStop(
   );
 }
 
-/** Repair notifications cannot erase a stop intent persisted with the stage. */
+/** Repair notifications and a lost stage cannot erase the durable stop intent. */
 function stoppingTransition(
   state: PendingSendState,
   event: PendingSendEvent,
   facts: PendingSendFacts,
 ): PendingSendTransition {
   if (event === "task-deleted") return taskEvent(state, event, facts);
-  if (event === "stage-lost") return withdraw(state, facts);
+  if (event === "stage-lost") return result(state, ["poll"], facts);
   if (event === "retry") return result(state, [], facts);
   if (event === "stop-failed") return result(state, ["poll"], facts);
   if (
@@ -845,7 +887,11 @@ function staleRecord(
   state: PendingSendState,
   facts: PendingSendFacts,
 ): PendingSendTransition {
-  if (facts.terminalDisposition && facts.accountActive && facts.owns)
+  if (
+    (facts.terminalDisposition || facts.stopRequested) &&
+    facts.accountActive &&
+    facts.owns
+  )
     return result(state, ["rehydrate"], facts);
   return result(state, [], facts);
 }
@@ -867,6 +913,21 @@ function ownershipOutcome(
   };
 }
 
+/** A Retry request may cross windows; its execution still requires ownership. */
+function retryRequest(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  if (!facts.accountActive)
+    return { ...result(state, [], facts), outcome: "denied-ownership" };
+  const allowed =
+    state.phase === "waiting" &&
+    state.blocker !== "stop" &&
+    LATCHED_BLOCKERS.has(state.blocker) &&
+    !facts.durableClaim;
+  return result(state, allowed ? ["request-retry"] : [], facts);
+}
+
 /** The single lifecycle policy. Adapters supply facts and execute these named effects. */
 export function transitionPendingSend(
   state: PendingSendState,
@@ -880,6 +941,7 @@ export function transitionPendingSend(
   const bookkeeping = requestOutcome(state, event, facts);
   if (bookkeeping !== null) return bookkeeping;
   if (event === "account-away") return result(state, [], facts);
+  if (event === "request-retry") return retryRequest(state, facts);
   const ownership = ownershipOutcome(state, event, facts);
   if (ownership !== null) return ownership;
   if (state.phase === "staged") return stagedTransition(state, event, facts);

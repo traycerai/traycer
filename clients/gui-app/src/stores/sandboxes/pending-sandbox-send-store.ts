@@ -19,6 +19,7 @@ import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import {
   PENDING_SEND_SURFACE_PREFIX,
   readStagedSandbox,
+  type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 import { recordMapStorageKey } from "@/lib/persist/keys";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
@@ -120,6 +121,10 @@ export interface PendingSandboxSend {
   readonly dispatch?: PendingSandboxSendDispatch | null;
   /** An authoritative sandbox or task loss permits recovery of its pending message. */
   readonly ended?: boolean;
+  /** Only the lifecycle's hold-stop effect writes this durable intent. */
+  readonly stopRequested?: boolean;
+  /** Original-account observation survives auth clearing the transient stage. */
+  readonly stopStage?: StagedSandbox;
 }
 
 /** Delivered sends kept for their ready line; the oldest are dropped first. */
@@ -128,6 +133,7 @@ const DELIVERED_KEPT = 50;
 interface PendingSandboxSendStoreState {
   readonly sends: Readonly<Record<string, PendingSandboxSend>>;
   readonly add: (send: PendingSandboxSend) => void;
+  readonly holdStop: (id: string) => boolean;
   readonly confirmEpic: (id: string) => void;
   readonly beginDispatch: (
     id: string,
@@ -172,12 +178,14 @@ export function pendingSandboxSendFacts(
     current:
       stored !== null &&
       (stored.ended === true) === (send.ended === true) &&
+      (stored.stopRequested === true) === (send.stopRequested === true) &&
       (stored.delivery === null
         ? send.delivery === null &&
           (dispatch === null || pendingSandboxDispatchCurrent(id, dispatch))
         : send.delivery !== null &&
           JSON.stringify(stored.delivery) === JSON.stringify(send.delivery)),
     terminalDisposition: stored?.ended === true,
+    stopRequested: stored?.stopRequested === true,
     accountActive:
       (useAuthStore.getState().profile?.userId ?? null) === send.userId,
     owns: ownsPendingSandboxSend(id),
@@ -188,6 +196,29 @@ export function pendingSandboxSendFacts(
         ? pendingSandboxDispatchCurrent(id, dispatch)
         : pendingSandboxSendWithdrawalState(id) === "claimed",
   };
+}
+
+/** A pending stage's run and each async continuation need the owner's current authority. */
+export function pendingSandboxStageRunAllowed(
+  surfaceKey: string,
+  host: PendingSendFacts["host"],
+): boolean {
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
+  const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return false;
+  const stage = readStagedSandbox(surfaceKey);
+  const plan = transitionPendingSend(
+    pendingSendState(sends[id], "none"),
+    "observe",
+    pendingSandboxSendFacts(id, {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      host,
+      clientReady: true,
+      stageStatus: stage?.phase ?? "missing",
+    }),
+  );
+  return plan.effects.includes("run-stage") || plan.effects.includes("wake");
 }
 
 function pendingDecision(
@@ -284,6 +315,38 @@ export const usePendingSandboxSendStore =
         sends: {},
         add: (send) =>
           set((state) => ({ sends: { ...state.sends, [send.id]: send } })),
+        holdStop: (id) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return false;
+          const send = sends[id];
+          const stage =
+            readStagedSandbox(pendingSendSurfaceKey(id)) ?? send.stopStage;
+          if (
+            stage === undefined ||
+            !pendingDecision(send, "stop", {
+              ...UNKNOWN_PENDING_SEND_FACTS,
+              sandboxKnown: stage.createdSandboxId !== null,
+            }).effects.includes("hold-stop")
+          )
+            return false;
+          try {
+            set({
+              sends: {
+                ...sends,
+                [id]: { ...send, stopRequested: true, stopStage: stage },
+              },
+            });
+          } catch {
+            if (storedSend(id)?.stopRequested === true) return true;
+            try {
+              set({ sends });
+            } catch {
+              /* Retain the unsent copy. */
+            }
+            return false;
+          }
+          return storedSend(id)?.stopRequested === true;
+        },
         confirmEpic: (id) =>
           set((state) => {
             if (!Object.hasOwn(state.sends, id)) return state;

@@ -15,6 +15,7 @@ import {
   type SandboxSummary,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
+import { pendingSandboxStageRunAllowed } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
@@ -108,7 +109,12 @@ export async function runStagedSandbox(
   deps: StagedSandboxRunDeps,
 ): Promise<void> {
   const stage = readStagedSandbox(surfaceKey);
-  if (stage === null || stage.phase === "handoff") return;
+  if (
+    stage === null ||
+    stage.phase === "handoff" ||
+    !pendingSandboxStageRunAllowed(surfaceKey, "unknown")
+  )
+    return;
   // A wake failure still names a usable sandbox, even when the original
   // pick was New. No retry of that wake may replace the sandbox or its key.
   const retryingWake =
@@ -183,6 +189,7 @@ export async function rewakeStagedSandbox(
   const stage = readStagedSandbox(surfaceKey);
   if (
     stage === null ||
+    !pendingSandboxStageRunAllowed(surfaceKey, "resting") ||
     stage.phase !== "handoff" ||
     stage.clientRequestId === null ||
     stage.createdSandboxId === null ||
@@ -260,7 +267,8 @@ function stillCurrent(surfaceKey: string, clientRequestId: string): boolean {
   return (
     stage !== null &&
     stage.phase === "creating" &&
-    stage.clientRequestId === clientRequestId
+    stage.clientRequestId === clientRequestId &&
+    pendingSandboxStageRunAllowed(surfaceKey, "unknown")
   );
 }
 

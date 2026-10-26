@@ -131,7 +131,10 @@ export function SandboxSetupLine(props: {
           onStop: null,
           onChangeShape: null,
         }
-      : props.actions;
+      : {
+          ...props.actions,
+          onStop: stage.createdSandboxId === null ? null : props.actions.onStop,
+        };
   const failure = stage.failure;
   if (failure !== null && isRefusal(failure)) {
     return (
@@ -566,11 +569,19 @@ function ProgressBranchButtons(props: {
   if (failure?.kind === "settings") {
     return (
       <>
-        <LineButton
-          label={RETRY_APPLYING}
-          testId="sandbox-setup-retry-applying"
-          onClick={actions.onRetryApplying}
-        />
+        {props.view.stage.createdSandboxId === null ? (
+          <LineButton
+            label={CANCEL_AND_KEEP_THE_DRAFT}
+            testId="sandbox-setup-cancel"
+            onClick={actions.onCancel}
+          />
+        ) : (
+          <LineButton
+            label={RETRY_APPLYING}
+            testId="sandbox-setup-retry-applying"
+            onClick={actions.onRetryApplying}
+          />
+        )}
         {actions.onOpenTerminal === null ? null : (
           <LineButton
             label={OPEN_TERMINAL}

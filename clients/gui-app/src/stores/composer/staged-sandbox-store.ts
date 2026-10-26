@@ -12,7 +12,12 @@ import type {
   StageConfiguration,
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
-import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  createPendingStageStorage,
+  requestPendingStageRetry,
+  type PendingStageRetryRequest,
+} from "@/lib/sandboxes/pending-stage-storage";
 
 /**
  * What a composer surface has picked and not yet started: a new sandbox to
@@ -91,6 +96,10 @@ export type StagedSandboxFailure =
   | { readonly kind: "not-sent" };
 
 export interface StagedSandbox {
+  /** A same-account window asks the exclusive owner to retry this stage. */
+  readonly retryRequest?: PendingStageRetryRequest;
+  /** Only the owner acknowledges a mailbox request after executing its retry. */
+  readonly retryHandledId?: string;
   readonly target: StagedSandboxTarget;
   readonly phase: StagedSandboxPhase;
   /**
@@ -231,11 +240,16 @@ interface StagedSandboxStoreState {
         | "terminalLaunch"
         | "openTerminal"
         | "sendTaken"
+        | "retryHandledId"
       >
     >,
   ) => void;
   /** Back to staged with the draft kept (Cancel and keep the draft). */
   readonly cancel: (surfaceKey: string) => void;
+  readonly requestRetry: (
+    surfaceKey: string,
+    userId: string | null,
+  ) => Promise<string | null>;
   /** Drops every stage: the account changed. */
   readonly clearAll: () => void;
 }
@@ -370,11 +384,30 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             };
           }),
         })),
+      requestRetry: async (surfaceKey, userId) => {
+        if ((useAuthStore.getState().profile?.userId ?? null) !== userId)
+          return null;
+        const stage = get().bySurface[surfaceKey];
+        if (
+          stage === undefined ||
+          !surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
+        )
+          return null;
+        const id = requestPendingStageRetry({
+          name: persistKey(STORE_KEYS.stagedSandboxSend),
+          surfaceKey,
+          userId,
+          clientRequestId: stage.clientRequestId,
+          sendId: surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
+        });
+        if (id !== null) await useStagedSandboxStore.persist.rehydrate();
+        return id;
+      },
       clearAll: () => set({ bySurface: {} }),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.stagedSandboxSend)),
-      storage: createJSONStorage(() => createRecordMapStorage("bySurface")),
+      storage: createJSONStorage(createPendingStageStorage),
       partialize: (state) => ({ bySurface: persistedStages(state.bySurface) }),
       merge: (persisted, current) => ({
         ...current,

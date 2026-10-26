@@ -29,6 +29,7 @@ import {
   useSetupLineFacts,
   useStagedSandboxRunner,
   useStagedSandboxWaker,
+  type StagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
   mintPendingSandboxTerminalTile,
@@ -138,6 +139,21 @@ import {
 const READINESS_POLL_MS = 2_000;
 const STOP_INTENT_CODE = "pending-send-stop";
 const stopsInFlight = new Set<string>();
+const stopAttention = new Map<
+  string,
+  { readonly userId: string | null; readonly giveBack: () => void }
+>();
+
+/** Attention is local to the requesting mounted strip and never persisted. */
+function returnStoppedPendingSend(id: string): void {
+  const attention = stopAttention.get(id);
+  if (
+    attention !== undefined &&
+    attention.userId === (useAuthStore.getState().profile?.userId ?? null)
+  )
+    attention.giveBack();
+  else returnPendingSandboxSend(id);
+}
 
 /**
  * A pending send's owner never goes: the send is the task's, not a
@@ -201,7 +217,8 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
   const surfaceKey = pendingSendSurfaceKey(props.id);
-  const stage = useStagedSandbox(surfaceKey);
+  const observedStage = useStagedSandbox(surfaceKey);
+  const stage = observedStage ?? send?.stopStage ?? null;
   usePendingSendRecovery(props.id, send, stage);
   usePendingStagedRun(send, stage, surfaceKey);
   const dispatch = send?.dispatch ?? null;
@@ -210,12 +227,7 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
   }
   // A terminal asked for in place of an agent waits on no agent: the task's
   // strip opens it once the sandbox is up.
-  if (
-    send === null ||
-    stage === null ||
-    send.ended === true ||
-    send.request.kind === "terminal"
-  ) {
+  if (send === null || stage === null || send.ended === true) {
     return null;
   }
   return <PendingSendDelivery send={send} stage={stage} />;
@@ -241,17 +253,24 @@ function usePendingStagedRun(
       }),
     );
     if (!plan.effects.includes("run-stage") || current === null) return;
-    // Captured terminal intent repairs records written before the stage had this flag.
-    if (send.request.kind === "terminal" && !current.openTerminal)
-      useStagedSandboxStore
-        .getState()
-        .report(surfaceKey, { openTerminal: true });
-    runner(surfaceKey, stagedCreateNeedsFreshKey(current), {
-      fallbackName: stagedSandboxFallbackName(send.text),
-      taskId: send.epicId,
-      resume: current.phase === "creating",
-    });
+    executePendingStageRun(send, current, runner);
   }, [runner, send, stage, surfaceKey]);
+}
+
+/** The kernel's run-stage effect preserves the original terminal/send intent and key. */
+function executePendingStageRun(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  runner: StagedSandboxRunner,
+): void {
+  const surfaceKey = pendingSendSurfaceKey(send.id);
+  if (send.request.kind === "terminal" && !stage.openTerminal)
+    useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
+  runner(surfaceKey, stagedCreateNeedsFreshKey(stage), {
+    fallbackName: stagedSandboxFallbackName(send.text),
+    taskId: send.epicId,
+    resume: stage.phase === "creating" && stage.failure === null,
+  });
 }
 
 /** Retains the send's stage ownership and recovers interrupted task creation. */
@@ -294,6 +313,7 @@ function PendingSendDelivery(props: {
   readonly stage: StagedSandbox;
 }): ReactNode {
   const { send, stage } = props;
+  const runner = useStagedSandboxRunner();
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const sandbox = useWatchedSandboxRow(
     stage.createdSandboxId,
@@ -335,12 +355,27 @@ function PendingSendDelivery(props: {
         current.createdHostId === stage.createdHostId &&
         current.phase === "handoff",
     });
+    const retry = current?.retryRequest;
+    const retryRequested =
+      retry !== undefined &&
+      retry.userId === send.userId &&
+      retry.id !== current?.retryHandledId;
     const decision = transitionPendingSend(
       pendingSendState(send, stageBlocker(current)),
-      event,
+      retryRequested ? "retry" : event,
       currentFacts,
     );
     if (current === null) return;
+    if (decision.effects.includes("retry") && retry !== undefined) {
+      if (decision.effects.includes("fetch-model")) refetchModel();
+      useStagedSandboxStore
+        .getState()
+        .report(surfaceKey, { failure: null, retryHandledId: retry.id });
+    }
+    if (decision.effects.includes("run-stage")) {
+      executePendingStageRun(send, current, runner);
+      return;
+    }
     if (
       decision.effects.includes("return-message") ||
       decision.effects.includes("remove")
@@ -348,30 +383,17 @@ function PendingSendDelivery(props: {
       returnPendingSandboxSend(send.id);
       return;
     }
-    if (
-      decision.effects.includes("report-provider") &&
-      requested.readiness !== null
-    ) {
-      agentNotReady(
-        surfaceKey,
-        current.failure,
-        requested.readiness.kind,
-        requested.readiness.kind === "setup-failed"
-          ? requested.readiness.detail
-          : null,
-      );
-    }
-    if (decision.effects.includes("fetch-model")) refetchModel();
-    if (decision.effects.includes("report-not-sent")) notSent(surfaceKey);
-    if (!decision.effects.includes("prepare")) return;
-    if (current.failure !== null)
-      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
-    preparePendingReadySend({
+    executePendingReadiness({
+      decision,
       send,
       stage: current,
       client,
-      model: model.model,
-      profiles: requested.profiles,
+      requested: {
+        readiness: requested.readiness,
+        profiles: requested.profiles,
+      },
+      model: { model: model.model, refetch: refetchModel },
+      retryRequested,
     });
   }, [
     client,
@@ -379,14 +401,66 @@ function PendingSendDelivery(props: {
     event,
     model.model,
     refetchModel,
+    runner,
     requested.profiles,
     requested.readiness,
     send,
     stage.clientRequestId,
     stage.createdHostId,
+    stage.retryRequest,
+    stage.retryHandledId,
     surfaceKey,
   ]);
   return null;
+}
+
+/** Executes the query and preparation effects after the owner checked identity and mailbox. */
+function executePendingReadiness(input: {
+  readonly decision: PendingSendTransition;
+  readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly requested: Pick<PendingAgentReadiness, "readiness" | "profiles">;
+  readonly model: Pick<PendingDefaultModel, "model" | "refetch">;
+  readonly retryRequested: boolean;
+}): void {
+  const {
+    decision,
+    send,
+    stage: current,
+    client,
+    requested,
+    model,
+    retryRequested,
+  } = input;
+  const surfaceKey = pendingSendSurfaceKey(send.id);
+  const refetchModel = model.refetch;
+  if (
+    decision.effects.includes("report-provider") &&
+    requested.readiness !== null
+  ) {
+    agentNotReady(
+      surfaceKey,
+      current.failure,
+      requested.readiness.kind,
+      requested.readiness.kind === "setup-failed"
+        ? requested.readiness.detail
+        : null,
+    );
+  }
+  if (!retryRequested && decision.effects.includes("fetch-model"))
+    refetchModel();
+  if (decision.effects.includes("report-not-sent")) notSent(surfaceKey);
+  if (!decision.effects.includes("prepare")) return;
+  if (current.failure !== null)
+    useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+  preparePendingReadySend({
+    send,
+    stage: current,
+    client,
+    model: model.model,
+    profiles: requested.profiles,
+  });
 }
 
 /** Executes preparation against the same destination observation the kernel authorized. */
@@ -455,6 +529,8 @@ function usePendingDeliveryReadiness(
   const model = useDefaultModelOnHost(
     active && needsModel ? client : null,
     send.settings.harnessId,
+    send.id,
+    stage?.createdHostId ?? null,
   );
   const environment = useMemo<PendingSendFacts>(
     () => ({
@@ -523,6 +599,8 @@ function useRequestedAgentOnHost(
 function useDefaultModelOnHost(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,
+  sendId: string,
+  hostId: string | null,
 ): PendingDefaultModel {
   const models = useGuiHarnessModelsQueryForClient(client, harnessId, null, {
     // Observe the shared cache; only the kernel's fetch-model effect reads it.
@@ -533,15 +611,29 @@ function useDefaultModelOnHost(
     client === null
       ? null
       : (findDefaultModel(models.data?.models ?? [])?.slug ?? null);
+  const identity = `${sendId}:${hostId ?? ""}:${harnessId}`;
+  const [completed, setCompleted] = useState<string | null>(null);
+  const reading = useRef<string | null>(null);
   const refetchModels = models.refetch;
   const refetch = useCallback((): void => {
-    // Concurrent observers share the active read instead of cancelling it.
-    void refetchModels({ cancelRefetch: false });
-  }, [refetchModels]);
+    if (reading.current === identity) return;
+    reading.current = identity;
+    setCompleted(null);
+    // A negative shared cache is not a read for this send. Only completion
+    // of its own requested read can refuse a default model; positive cache
+    // entries remain usable immediately.
+    const finish = (): void => {
+      if (reading.current !== identity) return;
+      reading.current = null;
+      setCompleted(identity);
+    };
+    void refetchModels({ cancelRefetch: false }).then(finish, finish);
+  }, [identity, refetchModels]);
   return {
     model,
     refetch,
     unavailable:
+      completed === identity &&
       client !== null &&
       model === null &&
       !models.isFetching &&
@@ -664,7 +756,7 @@ function useWatchedSandboxRow(
   readonly refetch: () => Promise<unknown>;
   readonly environment: PendingSendFacts;
 } {
-  const stage = readStagedSandbox(surfaceKey);
+  const stage = readStagedSandbox(surfaceKey) ?? send?.stopStage ?? null;
   const row = usePendingSandboxRowFacts(
     sandboxId,
     send?.userId ?? null,
@@ -698,16 +790,20 @@ function useWatchedSandboxRow(
         usePendingSandboxSendStore
           .getState()
           .endDispatch(send.id, null, "terminal-row")
-      )
-        returnPendingSandboxSend(send.id);
+      ) {
+        if (send.stopRequested === true) returnStoppedPendingSend(send.id);
+        else returnPendingSandboxSend(send.id);
+      }
     }
     if (decision.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
     if (
       decision.effects.includes("return-message") ||
       decision.effects.includes("remove")
-    )
-      returnPendingSandboxSend(send.id);
+    ) {
+      if (send.stopRequested === true) returnStoppedPendingSend(send.id);
+      else returnPendingSandboxSend(send.id);
+    }
   }, [decision, row.failure, send, stage?.failure, surfaceKey, wake]);
   return {
     failed: row.failure !== null,
@@ -1590,64 +1686,49 @@ function PendingSendItem(props: {
   );
 }
 
-/** Explicit Retry refreshes only the model query authorized by the kernel. */
-function usePendingStagedSendRetry(
-  send: PendingSandboxSend,
-  stage: StagedSandbox | null,
-): () => void {
-  const surfaceKey = pendingSendSurfaceKey(send.id);
-  const row = usePendingSandboxRowFacts(
-    stage?.createdSandboxId ?? null,
-    send.userId,
-    stage?.createdHostId ?? null,
-  );
-  const { model, environment } = usePendingDeliveryReadiness(
-    send,
-    stage,
-    sandboxEnvironment(row, UNKNOWN_PENDING_SEND_FACTS),
-  );
+/** Any same-account strip can request Retry; only the owner executes its effects. */
+function usePendingStagedSendRetry(send: PendingSandboxSend): () => void {
   return useCallback(() => {
-    const { sends } = usePendingSandboxSendStore.getState();
-    if (!Object.hasOwn(sends, send.id)) return;
+    const surfaceKey = pendingSendSurfaceKey(send.id);
     const current = readStagedSandbox(surfaceKey);
-    if (current === null) return;
-    const decision = transitionPendingSend(
-      pendingSendState(sends[send.id], stageBlocker(current)),
-      "retry",
-      pendingSandboxSendFacts(send.id, {
-        ...environment,
-        stageCurrent: current === stage,
-        stageStatus: current.phase,
-      }),
+    const plan = transitionPendingSend(
+      pendingSendState(send, stageBlocker(current)),
+      "request-retry",
+      pendingSandboxSendFacts(send.id, UNKNOWN_PENDING_SEND_FACTS),
     );
-    if (decision.effects.includes("retry"))
-      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
-    if (decision.effects.includes("fetch-model")) model.refetch();
-    // Clearing the failure notifies the owning driver. It revalidates all
-    // readiness facts before executing preparation or waking the host.
-  }, [environment, model, send.id, stage, surfaceKey]);
+    if (plan.effects.includes("request-retry"))
+      void useStagedSandboxStore
+        .getState()
+        .requestRetry(surfaceKey, send.userId);
+  }, [send]);
 }
 
 /** Stop holds the unsent copy until the mutation or a fresh row proves rest. */
 async function stopPendingSend(
   id: string,
   stop: () => Promise<SandboxVerbOutcome>,
+  requested: () => void,
 ): Promise<void> {
   const plan = pendingStopDecision(id, "stop", "unknown");
   if (plan?.effects.includes("hold-stop")) {
+    if (!usePendingSandboxSendStore.getState().holdStop(id)) return;
     try {
       useStagedSandboxStore.getState().report(pendingSendSurfaceKey(id), {
         failure: { kind: "settings", code: STOP_INTENT_CODE },
       });
     } catch {
-      // No stop may start before its intent survives with the pending copy.
-      return;
+      // The pending record already holds the durable intent. A failed stage
+      // projection cannot veto the authorized Stop or erase its observer.
     }
   }
   if (!plan?.effects.includes("stop-host")) {
-    if (plan?.effects.includes("remove")) returnPendingSandboxSend(id);
+    if (plan?.effects.includes("remove")) {
+      requested();
+      returnStoppedPendingSend(id);
+    }
     return;
   }
+  requested();
   stopsInFlight.add(id);
   try {
     const outcome = await stop();
@@ -1659,7 +1740,7 @@ async function stopPendingSend(
     )
       host = "resting";
     const settled = pendingStopDecision(id, "stop-result", host);
-    if (settled?.effects.includes("remove")) returnPendingSandboxSend(id);
+    if (settled?.effects.includes("remove")) returnStoppedPendingSend(id);
   } catch {
     // The mutation owns the line's error. Its existing persisted latch holds
     // the only message copy, and the row watcher keeps polling for rest.
@@ -1677,6 +1758,8 @@ function pendingStopDecision(
 ): PendingSendTransition | null {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return null;
+  const stage =
+    readStagedSandbox(pendingSendSurfaceKey(id)) ?? sends[id].stopStage;
   return transitionPendingSend(
     pendingSendState(
       sends[id],
@@ -1686,6 +1769,7 @@ function pendingStopDecision(
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
       host,
+      sandboxKnown: (stage?.createdSandboxId ?? null) !== null,
       inFlight: stopsInFlight.has(id),
     }),
   );
@@ -1746,8 +1830,20 @@ function PendingStagedSendItem(props: {
   const { send } = props;
   const canWithdraw = usePendingSendWithdrawal(send.id);
   const surfaceKey = pendingSendSurfaceKey(send.id);
-  const stage = useStagedSandbox(surfaceKey);
-  const retrySend = usePendingStagedSendRetry(send, stage);
+  const observedStage = useStagedSandbox(surfaceKey);
+  const stage = observedStage ?? send.stopStage ?? null;
+  const retrySend = usePendingStagedSendRetry(send);
+  const attention = useRef<{
+    readonly userId: string | null;
+    readonly giveBack: () => void;
+  } | null>(null);
+  useEffect(
+    () => () => {
+      if (stopAttention.get(send.id) === attention.current)
+        stopAttention.delete(send.id);
+    },
+    [send.id, send.userId],
+  );
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
@@ -1759,13 +1855,37 @@ function PendingStagedSendItem(props: {
   const text = send.text;
   const run = useCallback(
     (fresh: boolean): void => {
+      const { sends } = usePendingSandboxSendStore.getState();
+      if (!Object.hasOwn(sends, send.id)) return;
+      const current = readStagedSandbox(surfaceKey);
+      let event: PendingSendEvent = "observe";
+      if (current?.failure !== null && current?.failure !== undefined)
+        event = "retry";
+      if (current?.failure?.kind === "settings") event = "settings-repaired";
+      const plan = transitionPendingSend(
+        pendingSendState(sends[send.id], stageBlocker(current)),
+        event,
+        pendingSandboxSendFacts(send.id, {
+          ...UNKNOWN_PENDING_SEND_FACTS,
+          settingsReady: true,
+          stageStatus: current?.phase ?? "missing",
+          wakeInFlight: stagedRunActive(surfaceKey),
+        }),
+      );
+      if (
+        event === "settings-repaired" &&
+        plan.outcome === "applied" &&
+        plan.state.blocker !== "stop"
+      )
+        useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+      if (!plan.effects.includes("run-stage")) return;
       runner(surfaceKey, fresh, {
         fallbackName: stagedSandboxFallbackName(text),
         taskId: epicId,
         resume: false,
       });
     },
-    [epicId, runner, surfaceKey, text],
+    [epicId, runner, send.id, surfaceKey, text],
   );
   const terminal = useMemo(
     () => ({
@@ -1799,7 +1919,17 @@ function PendingStagedSendItem(props: {
     endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
   };
   const stop = (): void => {
-    void stopPendingSend(send.id, () => verb.mutateAsync("stop"));
+    void stopPendingSend(
+      send.id,
+      () => verb.mutateAsync("stop"),
+      () => {
+        attention.current = {
+          userId: send.userId,
+          giveBack: () => backToComposer(false),
+        };
+        stopAttention.set(send.id, attention.current);
+      },
+    );
   };
   const name =
     stage.target.name.length > 0
@@ -1810,7 +1940,7 @@ function PendingStagedSendItem(props: {
       className="flex w-full flex-col gap-2"
       data-testid="pending-sandbox-send"
     >
-      {stageBlocker(stage) === "stop" ? (
+      {pendingSendState(send, stageBlocker(stage)).blocker === "stop" ? (
         <PendingStopLine
           costLine={facts.costLine}
           pending={verb.isPending}
@@ -1848,18 +1978,12 @@ function PendingStagedSendItem(props: {
   );
 }
 
-/**
- * `Open terminal instead`: the terminal opens here once the sandbox is up,
- * and the send ends with it.
- */
-function useOpenTerminalWhenUp(
-  send: PendingSandboxSend | null,
-  stage: StagedSandbox | null,
-  openTerminal: (() => void) | null,
-): void {
-  const sendId = send?.request.kind === "terminal" ? send.id : null;
-  const userId = send?.userId ?? null;
-  const surfaceKey = sendId === null ? "" : pendingSendSurfaceKey(sendId);
+/** A visible terminal ask holds its original-account ownership and repairs legacy intent. */
+function usePendingTerminalOwnership(
+  sendId: string | null,
+  userId: string | null,
+  surfaceKey: string,
+): boolean {
   const [owned, setOwned] = useState(false);
   useEffect(() => {
     if (sendId === null) return;
@@ -1883,14 +2007,30 @@ function useOpenTerminalWhenUp(
       ownership.release();
     };
   }, [sendId, surfaceKey, userId]);
+  return owned;
+}
+
+/** Observe and poll a terminal's sandbox before handoff, including a held Stop. */
+function usePendingTerminalSandbox(
+  send: PendingSandboxSend | null,
+  stage: StagedSandbox | null,
+  owned: boolean,
+): {
+  readonly hostId: string | null;
+  readonly ready: boolean;
+  readonly environment: PendingSendFacts;
+} {
+  const sendId = send?.request.kind === "terminal" ? send.id : null;
+  const surfaceKey = sendId === null ? "" : pendingSendSurfaceKey(sendId);
+  const sandboxId = stage?.createdSandboxId ?? null;
   const watching =
     owned &&
     sendId !== null &&
     send?.epicConfirmed === true &&
-    stage?.phase === "handoff";
-  const hostId = watching ? stage.createdHostId : null;
+    sandboxId !== null;
+  const hostId = stage?.createdHostId ?? null;
   const sandboxRow = useWatchedSandboxRow(
-    watching ? stage.createdSandboxId : null,
+    watching ? sandboxId : null,
     surfaceKey,
     send,
   );
@@ -1905,10 +2045,32 @@ function useOpenTerminalWhenUp(
       fireOnShow: true,
     });
   }, [refetchSandboxes, watching]);
-  // A cached endpoint and cwd do not prove the sandbox is still awake.
-  const terminalReady = watching && sandboxRow.ready && openTerminal !== null;
+  // An endpoint alone cannot open a terminal. The row and handoff must agree.
+  return {
+    hostId,
+    ready: watching && stage?.phase === "handoff" && sandboxRow.ready,
+    environment: sandboxRow.environment,
+  };
+}
+
+/**
+ * `Open terminal instead`: the terminal opens here once the sandbox is up,
+ * and the send ends with it.
+ */
+function useOpenTerminalWhenUp(
+  send: PendingSandboxSend | null,
+  stage: StagedSandbox | null,
+  openTerminal: (() => void) | null,
+): void {
+  const sendId = send?.request.kind === "terminal" ? send.id : null;
+  const userId = send?.userId ?? null;
+  const surfaceKey = sendId === null ? "" : pendingSendSurfaceKey(sendId);
+  const owned = usePendingTerminalOwnership(sendId, userId, surfaceKey);
+  const sandboxRow = usePendingTerminalSandbox(send, stage, owned);
+  const hostId = sandboxRow.hostId;
+  const terminalReady = sandboxRow.ready && openTerminal !== null;
   useEffect(() => {
-    if (!terminalReady) return;
+    if (!terminalReady || sendId === null) return;
     const { sends } = usePendingSandboxSendStore.getState();
     if (!Object.hasOwn(sends, sendId)) return;
     const current = sends[sendId];

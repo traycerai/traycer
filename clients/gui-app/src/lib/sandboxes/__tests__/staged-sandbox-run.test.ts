@@ -47,6 +47,13 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { authQueryKeys } from "@/lib/query-keys";
+import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const NEW_HOST_ID = "host-new";
 const SANDBOX_ID = "sbx_new";
@@ -923,6 +930,147 @@ describe("runStagedSandbox guards", () => {
       phase: "handoff",
       clientRequestId: auth.requests[1].clientRequestId,
     });
+  });
+});
+
+describe("runStagedSandbox for a pending send that holds a durable Stop", () => {
+  let SEND = "";
+  let sendCount = 0;
+
+  /** A pending send of the signed-in owner, this window holding its ownership. */
+  async function pendingOwnerWith(stopRequested: boolean): Promise<void> {
+    sendCount += 1;
+    SEND = `send-stop-run-${sendCount}`;
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+    surfaceKey = pendingSendSurfaceKey(SEND);
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: SEND, stopRequested }));
+    onTestFinished(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+    });
+    const ownership = holdPendingSandboxSendOwnership(SEND);
+    onTestFinished(ownership.release);
+    await ownership.ready;
+  }
+
+  it("runs a stage for a pending send that holds no Stop, which is what makes the Stop cases below a real difference", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { wake, deps } = harness(
+      {
+        lists: [
+          listOf(
+            sandboxSummaryFixture({
+              id: "sbx_resting",
+              hostId: "host-resting",
+              state: "awake",
+              guestConfigured: true,
+            }),
+          ),
+        ],
+        entries: [{ ...DIALABLE, hostId: "host-resting" }],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(stageOf().phase).toBe("handoff");
+  });
+
+  it("does not start a run, wake or create for a stage whose pending send holds a Stop", async () => {
+    await pendingOwnerWith(true);
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { auth, wake, deps } = harness({}, true);
+
+    await run(false, deps);
+
+    expect(wake).not.toHaveBeenCalled();
+    expect(auth.requests).toEqual([]);
+    expect(stageOf().phase).not.toBe("handoff");
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[surfaceKey],
+    ).toBeUndefined();
+  });
+
+  it("stops a run whose Stop lands as its create is accepted: no handoff, no host pin, no wake", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const { auth, wake, deps } = harness(
+      {
+        createSandbox: () => {
+          usePendingSandboxSendStore.setState((state) => ({
+            sends: {
+              ...state.sends,
+              [SEND]: { ...state.sends[SEND], stopRequested: true },
+            },
+          }));
+          return created;
+        },
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toHaveLength(1);
+    expect(stageOf().phase).not.toBe("handoff");
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[surfaceKey],
+    ).toBeUndefined();
+    expect(wake).not.toHaveBeenCalled();
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND]?.stopRequested,
+    ).toBe(true);
+  });
+
+  it("does not re-wake a handed-off stage whose pending send holds a Stop", async () => {
+    await pendingOwnerWith(false);
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { wake, deps } = harness(
+      {
+        lists: [
+          listOf(
+            sandboxSummaryFixture({
+              id: "sbx_resting",
+              hostId: "host-resting",
+              state: "awake",
+              guestConfigured: true,
+            }),
+          ),
+        ],
+        entries: [{ ...DIALABLE, hostId: "host-resting" }],
+      },
+      true,
+    );
+    await run(false, deps);
+    expect(stageOf().phase).toBe("handoff");
+    expect(wake).toHaveBeenCalledTimes(1);
+
+    // Without a Stop the resting stage is woken again.
+    await rewakeStagedSandbox(surfaceKey, deps);
+    expect(wake).toHaveBeenCalledTimes(2);
+    expect(stageOf().phase).toBe("handoff");
+
+    usePendingSandboxSendStore.setState((state) => ({
+      sends: {
+        ...state.sends,
+        [SEND]: { ...state.sends[SEND], stopRequested: true },
+      },
+    }));
+    await rewakeStagedSandbox(surfaceKey, deps);
+
+    expect(wake).toHaveBeenCalledTimes(2);
+    expect(stageOf().phase).toBe("handoff");
   });
 });
 

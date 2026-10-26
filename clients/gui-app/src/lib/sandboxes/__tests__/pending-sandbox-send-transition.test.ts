@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  pendingSendState,
   transitionPendingSend,
   type PendingSendBlocker,
   type PendingSendEvent,
@@ -22,6 +23,7 @@ import {
   type PendingSendState,
   type PendingSendTransition,
 } from "../pending-sandbox-send-transition";
+import { pendingSend } from "./pending-send-fixtures";
 
 type Kind = PendingSendState["kind"];
 type Outcome = "applied" | "ignored" | "denied-claim" | "unreachable";
@@ -706,7 +708,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "task-deleted": ["E", "end-host", "a"],
     "epic-create-failed": ["W.stop", "", "i"],
     "task-interrupted": ["W.stop", "", "i"],
-    "stage-lost": ["RC", "ret+remove", "a"],
+    "stage-lost": ["W.stop", "poll", "a"],
     "account-away": ["W.stop", "", "i"],
     "account-back": ["W.stop", "poll", "a"],
     reload: ["W.stop", "poll", "a"],
@@ -1548,6 +1550,8 @@ function defaultFacts(rowId: string): PendingSendFacts {
     epicConfirmed: true,
     stageStatus: "handoff",
     terminalDisposition: false,
+    stopRequested: false,
+    sandboxKnown: true,
   };
 }
 
@@ -2082,6 +2086,140 @@ describe("guard: a requested stop is held until the host answers", () => {
   });
 });
 
+describe("guard: a Retry requested in a window that may not own the send", () => {
+  const LATCHED = ["W.credits", "W.settings", "W.notsent", "W.wake"] as const;
+  const OTHERS = ROWS.filter(
+    (row) => !(LATCHED as readonly string[]).includes(row.id),
+  ).map((row) => row.id);
+  const request = (rowId: string, overlay: Partial<PendingSendFacts>) =>
+    run(stateOf("chat", rowId), "request-retry", {
+      ...defaultFacts(rowId),
+      ...overlay,
+    });
+
+  it.each(
+    LATCHED.flatMap((id) =>
+      [
+        ["the owner", { owns: true }],
+        [
+          "a window that does not own the send",
+          { owns: false, exclusive: false, origin: false },
+        ],
+      ].map(([who, facts]) => [id, who, facts] as const),
+    ),
+  )(
+    "PS.%s asks for one Retry, changing nothing and touching no network, from %s",
+    (rowId, _who, facts) => {
+      const start = stateOf("chat", rowId);
+      const transition = request(rowId, facts as Partial<PendingSendFacts>);
+      expect(transition.state).toEqual(start);
+      expect(sortedEffects(transition)).toEqual(["request-retry"]);
+      expect(outcomeOf(transition)).toBe("applied");
+    },
+  );
+
+  it.each(LATCHED)(
+    "PS.%s refuses the request under another account",
+    (rowId) => {
+      const start = stateOf("chat", rowId);
+      const transition = request(rowId, { accountActive: false, owns: false });
+      expect(transition.state).toEqual(start);
+      expect(transition.effects).toEqual([]);
+      expect(outcomeOf(transition)).toBe("denied-ownership");
+    },
+  );
+
+  it.each(OTHERS)(
+    "PS.%s has no latched failure to retry, so the request does nothing",
+    (rowId) => {
+      const transition = request(rowId, { owns: false });
+      expect(sortedEffects(transition)).not.toContain("request-retry");
+      expect(
+        transition.effects.filter((effect) =>
+          [
+            "wake",
+            "dispatch",
+            "prepare",
+            "fetch-model",
+            "persist-claim",
+          ].includes(effect),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("Retry on a latched Not sent with an empty model fetches it when the host is not yet known but client and agent are ready", () => {
+    const transition = run(stateOf("chat", "W.notsent"), "retry", {
+      ...defaultFacts("W.notsent"),
+      host: "unknown",
+      clientReady: true,
+      agentReady: true,
+      frozen: false,
+      settingsReady: true,
+      stageStatus: "handoff",
+      modelReady: false,
+      modelUnavailable: true,
+    });
+    expect(sortedEffects(transition)).toContain("fetch-model");
+    expect(
+      transition.effects.filter((effect) =>
+        ["wake", "dispatch", "prepare", "persist-claim"].includes(effect),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("guard: a Stop needs a sandbox to stop", () => {
+  const WAITING = ROWS.filter((row) => row.phase === "waiting").map(
+    (row) => row.id,
+  );
+
+  it.each(WAITING)(
+    "PS.%s.stop with no sandbox id yet is ignored with no effect, and withdrawal stays allowed",
+    (rowId) => {
+      const start = stateOf("chat", rowId);
+      const transition = run(start, "stop", {
+        ...factsFor(rowId, "stop"),
+        sandboxKnown: false,
+      });
+      expect(transition.state).toEqual(start);
+      expect(transition.effects).toEqual([]);
+      expect(outcomeOf(transition)).toBe("ignored");
+      expect(transition.view.canWithdraw).toBe(true);
+    },
+  );
+
+  it.each(["U", "E"])(
+    "PS.%s.stop does not depend on whether a sandbox id is known",
+    (rowId) => {
+      const known = run(stateOf("chat", rowId), "stop", {
+        ...factsFor(rowId, "stop"),
+        sandboxKnown: true,
+      });
+      const unknown = run(stateOf("chat", rowId), "stop", {
+        ...factsFor(rowId, "stop"),
+        sandboxKnown: false,
+      });
+      expect(unknown.state).toEqual(known.state);
+      expect(sortedEffects(unknown)).toEqual(sortedEffects(known));
+      expect(outcomeOf(unknown)).toEqual(outcomeOf(known));
+    },
+  );
+
+  it.each(WAITING)(
+    "PS.%s.cancel with no sandbox id yet still returns the send",
+    (rowId) => {
+      const transition = run(stateOf("chat", rowId), "cancel", {
+        ...factsFor(rowId, "cancel"),
+        sandboxKnown: false,
+      });
+      expect(sortedEffects(transition)).toEqual(
+        expectedEffects("chat", "ret+remove"),
+      );
+    },
+  );
+});
+
 describe("guard: an unknown row never wakes, sends or releases", () => {
   const OBSERVATIONS = [
     "rest",
@@ -2537,6 +2675,91 @@ describe("guard: a stale local record whose stored record ended", () => {
       const transition = run(stateOf("chat", rowId), "awake", {
         ...factsFor(rowId, "awake"),
         current: false,
+      });
+      expect(transition.effects).toEqual([]);
+    },
+  );
+});
+
+describe("guard: a stored Stop outranks the stage, and a stale local record rehydrates it", () => {
+  const WAITING = ROWS.filter((row) => row.phase === "waiting").map(
+    (row) => row.id,
+  );
+  const BLOCKERS = [
+    "none",
+    "host",
+    "credits",
+    "settings",
+    "client",
+    "model",
+    "provider",
+    "not-sent",
+    "wake",
+  ] as const;
+  const EVENTS_SEEN = [
+    "awake",
+    "rest",
+    "reload",
+    "storage-changed",
+    "retry",
+    "cancel",
+    "stop",
+    "terminal-row",
+  ] as const;
+
+  it.each(BLOCKERS)(
+    "a record with a stored Stop reads as stopping under the %s stage blocker",
+    (blocker) => {
+      expect(
+        pendingSendState(pendingSend({ stopRequested: true }), blocker).blocker,
+      ).toBe("stop");
+    },
+  );
+
+  it.each(BLOCKERS)(
+    "a record without a stored Stop keeps the %s stage blocker",
+    (blocker) => {
+      expect(
+        pendingSendState(pendingSend({ stopRequested: false }), blocker)
+          .blocker,
+      ).toBe(blocker);
+    },
+  );
+
+  it.each(
+    WAITING.flatMap((id) => EVENTS_SEEN.map((event) => [id, event] as const)),
+  )(
+    "PS.%s.%s on a stale local record whose stored record holds a Stop only rehydrates",
+    (rowId, event) => {
+      const start = stateOf("chat", rowId);
+      const transition = run(start, event, {
+        ...factsFor(rowId, event),
+        current: false,
+        stopRequested: true,
+      });
+      expect(transition.effects).toEqual(["rehydrate"]);
+      expect(transition.state).toEqual(start);
+    },
+  );
+
+  it.each(WAITING)(
+    "PS.%s.awake does not rehydrate a stale record that holds no Stop",
+    (rowId) => {
+      const transition = run(stateOf("chat", rowId), "awake", {
+        ...factsFor(rowId, "awake"),
+        current: false,
+      });
+      expect(transition.effects).toEqual([]);
+    },
+  );
+
+  it.each(WAITING)(
+    "PS.%s.account-away does not rehydrate for another account",
+    (rowId) => {
+      const transition = run(stateOf("chat", rowId), "account-away", {
+        ...factsFor(rowId, "account-away"),
+        current: false,
+        stopRequested: true,
       });
       expect(transition.effects).toEqual([]);
     },

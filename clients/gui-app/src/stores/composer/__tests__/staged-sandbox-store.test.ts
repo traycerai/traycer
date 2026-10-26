@@ -1,6 +1,11 @@
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { recordMapStoragePrefix } from "@/lib/persist/keys";
-import { pendingSendSurfaceKey } from "@/stores/sandboxes/pending-sandbox-send-store";
+import { requestPendingStageRetry } from "@/lib/sandboxes/pending-stage-storage";
+import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   readStagedSandbox,
@@ -348,3 +353,38 @@ function restoreStageStorage(
   for (const key of keys) localStorage.removeItem(key);
   for (const [key, value] of entries) localStorage.setItem(key, value);
 }
+
+describe("a retry request written by a window that does not own the send", () => {
+  it("survives the owner's stale progress write made before its window hydrates it", async () => {
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: "mailbox-send", userId: "user-1" }));
+    const surface = pendingSendSurfaceKey("mailbox-send");
+    const store = useStagedSandboxStore.getState();
+    store.stage(surface, NEW_TARGET);
+    const clientRequestId = store.begin(surface, false, 1_000, false);
+
+    // Another window files its request; no storage event reaches this one.
+    const requestId = requestPendingStageRetry({
+      name: persistKey(STORE_KEYS.stagedSandboxSend),
+      surfaceKey: surface,
+      userId: "user-1",
+      clientRequestId,
+      sendId: "mailbox-send",
+    });
+    expect(requestId).not.toBeNull();
+    expect(readStagedSandbox(surface)?.retryRequest).toBeUndefined();
+
+    // The owner, still on its stale stage, writes progress.
+    useStagedSandboxStore
+      .getState()
+      .report(surface, { step: "booting", stepAt: 2_000 });
+    await useStagedSandboxStore.persist.rehydrate();
+
+    expect(readStagedSandbox(surface)?.retryRequest).toMatchObject({
+      id: requestId,
+      userId: "user-1",
+    });
+    expect(readStagedSandbox(surface)?.step).toBe("booting");
+  });
+});
