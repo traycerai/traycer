@@ -586,7 +586,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           new Set(lostIds),
         );
         clearDeletedEpicRunSettings(scopes);
-        tabCommandCoordinator.handleEpicAccessLoss(lostIds);
+        tabCommandCoordinator.handleEpicAccessLoss(lostIds, ctx.userId);
         if (ctx.userId !== null) {
           // Tombstone each success in the scope its deletion actually had.
           //

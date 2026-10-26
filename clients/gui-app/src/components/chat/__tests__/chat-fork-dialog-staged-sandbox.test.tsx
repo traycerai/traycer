@@ -49,6 +49,11 @@ const dialogMocks = vi.hoisted(() => ({
   needsOwnHostToast: vi.fn<() => void>(),
   attachCalls: [] as Array<{ epicId: string; teamId: string }>,
   attachAnswers: true,
+  /** Each attach asked for, with the callbacks it will answer through. */
+  attachRequests: [] as Array<{
+    readonly input: { readonly epicId: string; readonly teamId: string };
+    readonly onSuccess: () => void;
+  }>,
   stagingSeen: [] as Array<unknown>,
   /** The dialog's own host pick, as its workspace controls call it. */
   selectHost: null as ((hostId: string) => void) | null,
@@ -163,6 +168,7 @@ vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
       options: { readonly onSuccess: () => void },
     ) => {
       dialogMocks.attachCalls.push(input);
+      dialogMocks.attachRequests.push({ input, onSuccess: options.onSuccess });
       if (dialogMocks.attachAnswers) options.onSuccess();
     },
   }),
@@ -319,6 +325,7 @@ import {
   readStagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
@@ -476,6 +483,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
     dialogMocks.onOpenChange.mockReset();
     dialogMocks.needsOwnHostToast.mockReset();
     dialogMocks.attachCalls.length = 0;
+    dialogMocks.attachRequests.length = 0;
     dialogMocks.attachAnswers = true;
     dialogMocks.stagingSeen.length = 0;
     dialogMocks.selectHost = null;
@@ -496,6 +504,7 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
   });
 
   afterEach(() => {
+    useAuthStore.getState().setSignedOut();
     resetHostDirectoryRows();
     resetNegotiatedManifests();
     useWorktreeIntentStagingStore.getState().resetForTests();
@@ -719,6 +728,102 @@ describe("ChatForkDialog on a New sandbox the chip picked", () => {
       [],
     );
     expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  describe("while a team's attach has not answered", () => {
+    const TEAM_A: Extract<StagedSandboxTarget, { kind: "new" }> = {
+      ...NEW_SANDBOX,
+      configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+    };
+    const TEAM_B: Extract<StagedSandboxTarget, { kind: "new" }> = {
+      ...NEW_SANDBOX,
+      configuration: { kind: "team", teamId: "team-10", teamName: "Beta" },
+    };
+
+    function startPendingAttach(): void {
+      dialogMocks.attachAnswers = false;
+      renderStaged(TEAM_A);
+      fillTitle();
+      fireEvent.click(forkButton());
+      expect(dialogMocks.attachCalls).toEqual([
+        { epicId: "epic-test", teamId: "team-9" },
+      ]);
+    }
+
+    it.each([
+      ["another team", TEAM_B, "team-10"],
+      ["Personal", NEW_SANDBOX, null],
+    ] as const)(
+      "hands nothing over, for the old or the new stage, when the stage is retargeted to %s and the first attach answers",
+      async (_label, retarget, teamId) => {
+        startPendingAttach();
+        act(() => {
+          useStagedSandboxStore.getState().stage(FORK_SURFACE, retarget);
+        });
+
+        act(() => {
+          dialogMocks.attachRequests[0].onSuccess();
+        });
+
+        expect(
+          Object.keys(usePendingSandboxSendStore.getState().sends),
+        ).toEqual([]);
+        expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+        expect(readStagedSandbox(FORK_SURFACE)).toMatchObject({
+          phase: "staged",
+          target: retarget,
+        });
+
+        // The new stage is forked on its own: its team attached first.
+        dialogMocks.attachAnswers = true;
+        fireEvent.click(forkButton());
+        await waitFor(() => {
+          expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+        });
+        expect(dialogMocks.attachCalls).toEqual(
+          teamId === null
+            ? [{ epicId: "epic-test", teamId: "team-9" }]
+            : [
+                { epicId: "epic-test", teamId: "team-9" },
+                { epicId: "epic-test", teamId },
+              ],
+        );
+        expect(
+          readStagedSandbox(pendingSendSurfaceKey(onlyPendingSend().id))
+            ?.target,
+        ).toEqual(retarget);
+      },
+    );
+
+    it("hands nothing over when the attach answers after the account changed", () => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "user-1", userName: "U", email: "u@example.com" },
+          { userId: "user-1", username: "U" },
+          [],
+        );
+      startPendingAttach();
+      act(() => {
+        useAuthStore.getState().setSignedOut();
+        useAuthStore
+          .getState()
+          .setSignedIn(
+            { userId: "user-2", userName: "V", email: "v@example.com" },
+            { userId: "user-2", username: "V" },
+            [],
+          );
+      });
+
+      act(() => {
+        dialogMocks.attachRequests[0].onSuccess();
+      });
+
+      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual(
+        [],
+      );
+      expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+    });
   });
 
   describe("when the agent is signed out on the staged configuration", () => {

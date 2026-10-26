@@ -100,7 +100,13 @@ import {
   useStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxTarget,
+  type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
 import { createEmptyNewConversationContent } from "@/stores/epics/new-conversation-modal-store";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import {
@@ -809,28 +815,35 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   }, []);
 
   const close = useCallback(() => {
-    if (createChat.isPending) return;
+    if (createChat.isPending || attachEnvironment.isPending) return;
     clearForkWorkspaces();
     onOpenChange(false);
-  }, [clearForkWorkspaces, createChat.isPending, onOpenChange]);
+  }, [
+    attachEnvironment.isPending,
+    clearForkWorkspaces,
+    createChat.isPending,
+    onOpenChange,
+  ]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
-      if (!nextOpen && createChat.isPending) return;
+      if (!nextOpen && (createChat.isPending || attachEnvironment.isPending))
+        return;
       if (!nextOpen) {
         clearForkWorkspaces();
       }
       onOpenChange(nextOpen);
     },
-    [clearForkWorkspaces, createChat.isPending, onOpenChange],
+    [
+      attachEnvironment.isPending,
+      clearForkWorkspaces,
+      createChat.isPending,
+      onOpenChange,
+    ],
   );
 
-  const submit = useCallback(() => {
-    if (!canSubmit || target === null) return;
-    // A staged sandbox: the fork is handed to the task, which creates the
-    // sandbox, waits for the agent there and forks onto it, through a reload.
-    const staged = readStagedSandbox(forkSurfaceKey);
-    if (staged !== null && staged.phase !== "handoff") {
+  const submitStagedFork = useCallback(
+    (staged: StagedSandbox, target: ChatForkDialogTarget): void => {
       // An agent signed out on the staged configuration is refused here,
       // before anything is created or woken; the dialog stays as it was.
       const signedOut = stagedSignInCheck(staged);
@@ -839,7 +852,22 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         return;
       }
       const settings = pickedRunSettings(toolbarStore.getState());
+      const ownerUserId = useAuthStore.getState().profile?.userId ?? null;
       const hand = (): void => {
+        const decision = transitionPendingSend(
+          { kind: "fork", phase: "staged", blocker: "none" },
+          "handoff",
+          {
+            ...UNKNOWN_PENDING_SEND_FACTS,
+            current: true,
+            owns: true,
+            epicConfirmed: true,
+            accountActive:
+              (useAuthStore.getState().profile?.userId ?? null) === ownerUserId,
+            stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
+          },
+        );
+        if (!decision.effects.includes("handoff")) return;
         const handed = handPendingSandboxSend({
           fromSurfaceKey: forkSurfaceKey,
           epicId,
@@ -881,6 +909,30 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           },
         },
       );
+    },
+    [
+      attachClient,
+      attachEnvironment,
+      clearForkWorkspaces,
+      epicId,
+      forkSurfaceKey,
+      onOpenChange,
+      sourceOwnerUserId,
+      stagedSignInCheck,
+      tabHostTeamId,
+      tabId,
+      toolbarStore,
+      trimmedTitle,
+    ],
+  );
+
+  const submit = useCallback(() => {
+    if (!canSubmit || target === null) return;
+    // A staged sandbox: the fork is handed to the task, which creates the
+    // sandbox, waits for the agent there and forks onto it, through a reload.
+    const staged = readStagedSandbox(forkSurfaceKey);
+    if (staged !== null && staged.phase !== "handoff") {
+      submitStagedFork(staged, target);
       return;
     }
     if (sandboxAgentGate.notice !== null) {
@@ -929,7 +981,22 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
     });
+    const submittedBy = useAuthStore.getState().profile?.userId ?? null;
     const createForkChat = (): void => {
+      const decision = transitionPendingSend(
+        { kind: "fork", phase: "staged", blocker: "none" },
+        "handoff",
+        {
+          ...UNKNOWN_PENDING_SEND_FACTS,
+          current: true,
+          owns: true,
+          epicConfirmed: true,
+          accountActive:
+            (useAuthStore.getState().profile?.userId ?? null) === submittedBy,
+          stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
+        },
+      );
+      if (!decision.effects.includes("handoff")) return;
       createChat.mutate(
         {
           epicId,
@@ -947,6 +1014,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         },
         {
           onSuccess: (result) => {
+            if (
+              (useAuthStore.getState().profile?.userId ?? null) !== submittedBy
+            )
+              return;
             Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
               include_history: true,
@@ -1006,14 +1077,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     epicId,
     forkSurfaceKey,
     navigateNestedFocus,
-    stagedSignInCheck,
+    submitStagedFork,
     sandboxAgentGate.notice,
     onOpenChange,
     seedIntent,
     selectedHostClient,
     sourceOwnerUserId,
     stagingKey,
-    tabHostTeamId,
     tabId,
     target,
     toolbarStore,
@@ -1141,7 +1211,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               onKeyDown={(event) => {
                 if (event.key === "Enter") submit();
               }}
-              disabled={createChat.isPending}
+              disabled={createChat.isPending || attachEnvironment.isPending}
               aria-label="Fork agent title"
               placeholder={sourceUntitled ? "Untitled agent" : ""}
             />
@@ -1155,7 +1225,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 <ChatForkModelPicker
                   key={modelPickerKey}
                   store={toolbarStore}
-                  disabled={createChat.isPending}
+                  disabled={createChat.isPending || attachEnvironment.isPending}
                   selectedHostId={selectedHostId}
                 />
               </ComposerStagedSurfaceKeyProvider>
@@ -1171,7 +1241,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             // describes the target currently on screen, would then answer "no"
             // and render nothing at all. The user would see the fork fail
             // silently.
-            disabled={createChat.isPending}
+            disabled={createChat.isPending || attachEnvironment.isPending}
             stagingKey={stagingKey}
             layout="stacked"
             workspaceSeed={workspaceSeed}
@@ -1207,7 +1277,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           <Button
             type="button"
             variant="outline"
-            disabled={createChat.isPending}
+            disabled={createChat.isPending || attachEnvironment.isPending}
             onClick={close}
           >
             Cancel

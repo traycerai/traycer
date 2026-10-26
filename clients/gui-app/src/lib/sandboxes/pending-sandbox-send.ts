@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
@@ -21,7 +21,7 @@ import {
 } from "@/stores/composer/staged-sandbox-store";
 import {
   pendingSendSurfaceKey,
-  pendingSandboxSendWithdrawalState,
+  pendingSandboxSendFacts,
   usePendingSandboxSendStore,
   type PendingSandboxSend,
   type PendingSandboxSendRequest,
@@ -39,10 +39,17 @@ import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-st
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
   reservePendingSandboxSendOwnership,
-  ownsPendingSandboxSendExclusively,
-  ownsPendingSandboxSend,
   holdPendingSandboxSendOwnership,
+  markPendingSandboxSendHanded,
+  forgetPendingSandboxSendHanded,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+export { pendingSandboxSendHandedHere } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import {
+  pendingSendState,
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+  type PendingSendTransition,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
 
 /** Whether the agent the person asked for can take the message on the sandbox. */
 export type RequestedAgentReadiness =
@@ -129,7 +136,7 @@ export function handPendingSandboxSend(
   const id = uuidv4();
   const surfaceKey = pendingSendSurfaceKey(id);
   reservePendingSandboxSendOwnership(id);
-  handedThisSession.add(id);
+  markPendingSandboxSendHanded(id);
   const store = useStagedSandboxStore.getState();
   store.adopt(input.fromSurfaceKey, surfaceKey);
   // Publish the stage first: a different window must never see a send with
@@ -157,33 +164,85 @@ export function handPendingSandboxSend(
   return id;
 }
 
-/**
- * The sends this window handed, whose task's create may still be on its way.
- * Only an exclusive successor can recover one this window did not hand.
- */
-const handedThisSession = new Set<string>();
-
-/** Whether this window handed the send (it was not rehydrated). */
-export function pendingSandboxSendHandedHere(id: string): boolean {
-  return handedThisSession.has(id);
-}
-
 /** Confirms the task only while owning its send, so withdrawal cannot race it. */
 export function confirmPendingSandboxSendEpic(id: string): void {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return;
-  const { userId } = sends[id];
   const ownership = holdPendingSandboxSendOwnership(id);
   void ownership.ready
     .then((granted) => {
-      if (
-        granted &&
-        (useAuthStore.getState().profile?.userId ?? null) === userId
-      ) {
+      if (granted) {
         usePendingSandboxSendStore.getState().confirmEpic(id);
       }
     })
     .finally(() => ownership.release());
+}
+
+/** Authoritative task loss releases the pending copy even if its host might still run it. */
+export function recoverPendingSandboxSendsAfterTaskLoss(
+  epicIds: readonly string[],
+  userId: string | null,
+): void {
+  if (
+    userId === null ||
+    (useAuthStore.getState().profile?.userId ?? null) !== userId
+  )
+    return;
+  const lost = new Set(epicIds);
+  const affected = Object.values(
+    usePendingSandboxSendStore.getState().sends,
+  ).filter(
+    (send) =>
+      send.userId === userId && lost.has(send.epicId) && send.delivery === null,
+  );
+  for (const send of affected) {
+    const ownership = holdPendingSandboxSendOwnership(send.id);
+    void ownership.ready
+      .then((granted) => {
+        if (!granted) return;
+        return recoverTaskLostSend(send.id);
+      })
+      .catch(() => {
+        // A failed replacement-draft write retains the durable pending copy for recovery.
+      })
+      .finally(() => ownership.release());
+  }
+}
+
+/** Re-read a newer durable claim before recovering; never overwrite a changing record. */
+async function recoverTaskLostSend(id: string): Promise<void> {
+  let recovery = taskLossRecovery(id);
+  if (recovery?.plan.effects.includes("rehydrate")) {
+    await usePendingSandboxSendStore.persist.rehydrate();
+    recovery = taskLossRecovery(id);
+  }
+  if (recovery === null) return;
+  const { send, plan } = recovery;
+  if (
+    plan.effects.includes("end-host") &&
+    !usePendingSandboxSendStore
+      .getState()
+      .endDispatch(id, send.dispatch ?? null, "task-deleted")
+  )
+    return;
+  if (plan.effects.includes("end-host") || plan.effects.includes("remove"))
+    returnPendingSandboxSend(id);
+}
+
+/** Captures a record with its authority before executing any recovery effects. */
+function taskLossRecovery(id: string): {
+  readonly send: PendingSandboxSend;
+  readonly plan: PendingSendTransition;
+} | null {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return null;
+  const send = sends[id];
+  const plan = transitionPendingSend(
+    pendingSendState(send, "none"),
+    "task-deleted",
+    pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS),
+  );
+  return { send, plan };
 }
 
 /**
@@ -194,20 +253,11 @@ export function confirmPendingSandboxSendEpic(id: string): void {
 export function canWithdrawPendingSandboxSend(id: string): boolean {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return false;
-  const send = sends[id];
-  if (
-    send.delivery !== null ||
-    (send.dispatch ?? null) !== null ||
-    (useAuthStore.getState().profile?.userId ?? null) !== send.userId
-  )
-    return false;
-  const state = pendingSandboxSendWithdrawalState(id);
-  const exclusive = ownsPendingSandboxSendExclusively(id);
-  return (
-    (state === "unconfirmed" &&
-      (pendingSandboxSendHandedHere(id) || exclusive)) ||
-    (state === "confirmed" && exclusive)
-  );
+  return transitionPendingSend(
+    pendingSendState(sends[id], "none"),
+    "return",
+    pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS),
+  ).effects.includes("remove");
 }
 
 /** Ends an undispatched send; a host request already sent remains accountable. */
@@ -218,21 +268,19 @@ export function endPendingSandboxSend(id: string): void {
 
 /** A terminal opened with its stable identity completes even without Web Locks. */
 export function completePendingSandboxTerminal(id: string): void {
-  const { sends } = usePendingSandboxSendStore.getState();
-  if (
-    !Object.hasOwn(sends, id) ||
-    sends[id].request.kind !== "terminal" ||
-    !ownsPendingSandboxSend(id)
-  )
-    return;
-  removePendingSandboxSend(id);
+  usePendingSandboxSendStore.getState().completeTerminal(id);
+  clearEndedPendingStage(id);
 }
 
 function removePendingSandboxSend(id: string): void {
   usePendingSandboxSendStore.getState().remove(id);
+  clearEndedPendingStage(id);
+}
+
+function clearEndedPendingStage(id: string): void {
   if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id)) return;
   useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(id));
-  handedThisSession.delete(id);
+  forgetPendingSandboxSendHanded(id);
 }
 
 /** Where an undelivered send's message went back to. */
@@ -268,19 +316,15 @@ export function returnPendingSandboxSend(
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
   const send = sends[id];
-  if (
-    send.delivery !== null ||
-    (useAuthStore.getState().profile?.userId ?? null) !== send.userId
-  ) {
-    return { kind: "none" };
-  }
-  if (
-    (send.dispatch ?? null) !== null ||
-    pendingSandboxSendWithdrawalState(id) === "claimed"
-  ) {
-    return { kind: "dispatching" };
-  }
-  if (!canWithdrawPendingSandboxSend(id)) return { kind: "none" };
+  const plan = transitionPendingSend(
+    pendingSendState(send, "none"),
+    "return",
+    pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS),
+  );
+  if (plan.effects.includes("rehydrate"))
+    void usePendingSandboxSendStore.persist.rehydrate();
+  if (plan.outcome === "denied-claim") return { kind: "dispatching" };
+  if (!plan.effects.includes("remove")) return { kind: "none" };
   const { request } = send;
   const returned =
     request.kind === "chat"
@@ -290,11 +334,33 @@ export function returnPendingSandboxSend(
   return returned;
 }
 
+/** A stable closed draft makes terminal recovery repeatable across fallback windows. */
+function restoreEndedSandboxMessage(
+  send: PendingSandboxSend,
+): ReturnedPendingSandboxSend {
+  const draftId = uuidv5(
+    `pending-sandbox-send:${send.id}:recovered`,
+    uuidv5.URL,
+  );
+  useLandingDraftStore.getState().installLandingDraft({
+    id: draftId,
+    content: send.content,
+    selection: null,
+    lastTouchedAt: Date.now(),
+    settings: send.settings,
+    composerMode: "chat",
+    workspace: emptyLandingDraftWorkspaceSnapshot(),
+    closed: true,
+  });
+  return { kind: "landing-draft", draftId };
+}
+
 /** Preserves an occupied task draft by putting this message in its own closed draft. */
 function restorePendingMessage(
   send: PendingSandboxSend,
   request: Extract<PendingSandboxSendRequest, { kind: "chat" }>,
 ): ReturnedPendingSandboxSend {
+  if (send.ended === true) return restoreEndedSandboxMessage(send);
   // Write the replacement before removing the image roots in the pending record.
   let returned: ReturnedPendingSandboxSend;
   const modal = useNewConversationModalStore.getState();

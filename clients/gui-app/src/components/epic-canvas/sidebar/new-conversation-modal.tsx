@@ -1,4 +1,8 @@
 import {
+  transitionPendingSend,
+  UNKNOWN_PENDING_SEND_FACTS,
+} from "@/lib/sandboxes/pending-sandbox-send-transition";
+import {
   use,
   useCallback,
   useEffect,
@@ -2382,9 +2386,19 @@ function useStagedTaskAttachment(input: {
             ?.revision ?? 0,
       );
       const stillCurrent = (): boolean =>
-        (useAuthStore.getState().profile?.userId ?? null) === userId &&
-        readStagedSandbox(surfaceKey) === staged &&
-        generation.stillCurrent();
+        transitionPendingSend(
+          { kind: "chat", phase: "staged", blocker: "none" },
+          "handoff",
+          {
+            ...UNKNOWN_PENDING_SEND_FACTS,
+            current: generation.stillCurrent(),
+            owns: true,
+            epicConfirmed: true,
+            accountActive:
+              (useAuthStore.getState().profile?.userId ?? null) === userId,
+            stageCurrent: readStagedSandbox(surfaceKey) === staged,
+          },
+        ).effects.includes("handoff");
       stageAttachmentRef.current = staged;
       void attachEnvironmentAsync({ epicId, teamId: configuration.teamId })
         .then(() => {

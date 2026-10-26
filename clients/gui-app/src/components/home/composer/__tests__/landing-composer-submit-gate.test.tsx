@@ -1233,7 +1233,7 @@ describe("LandingComposer direct submit gate", () => {
       expect(
         screen.getByTestId("terminal-account-first-mention").textContent,
       ).toBe(
-        "e2e-sbx-p1's own sign-in, which stays on e2e-sbx-p1. Link a plan to use one everywhere.",
+        "e2e-sbx-p1's own sign-in, which stays on e2e-sbx-p1. Sign in on Providers to use one everywhere.",
       );
     });
 
@@ -1243,7 +1243,7 @@ describe("LandingComposer direct submit gate", () => {
       expect(
         screen.getByTestId("terminal-account-first-mention").textContent,
       ).toBe(
-        "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere.",
+        "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.",
       );
     });
   });

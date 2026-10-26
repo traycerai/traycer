@@ -10,6 +10,18 @@ interface SendOwnership {
 }
 
 const ownerships = new Map<string, SendOwnership>();
+const handedThisSession = new Set<string>();
+
+/** An originating window may cancel before its task has been confirmed. */
+export function markPendingSandboxSendHanded(id: string): void {
+  handedThisSession.add(id);
+}
+export function forgetPendingSandboxSendHanded(id: string): void {
+  handedThisSession.delete(id);
+}
+export function pendingSandboxSendHandedHere(id: string): boolean {
+  return handedThisSession.has(id);
+}
 
 /**
  * Reserve before publishing a new send, so another window cannot reclaim its
