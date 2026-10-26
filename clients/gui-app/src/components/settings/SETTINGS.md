@@ -864,11 +864,12 @@ configuration whose names and revisions match.
 Team hooks live under `hooks/environment/team/`. Variables, provider env
 overrides, shell, managed profiles, pack policies, MCP tool toggles, agent
 definitions, browser access and model routing read revisioned configuration
-items through the surface's own host, which forwards them on the viewer's
-session; every team read and write is `target-host` in the routing table, so
-the server pool serves none of them. Saves quote the displayed revision; conflicts
-reread the row and show who changed it. Approval policy reads its item and
-writes through the dedicated policy method. Editors can change configuration;
+items through the configuration's serving tier on the viewer's session.
+Pool-only methods use the pool requester when configured, including when no
+computer is selected; without a pool they retain the surface host. Capability
+checks use the requester serving each method. Saves quote the displayed
+revision; conflicts reread the row and show who changed it. Approval policy
+reads its item and writes through the dedicated policy method. Editors can change configuration;
 plan linking and approval/browser policy changes require an admin. Viewers get
 read-only values, with secret names and read-access Details entries only.
 
@@ -878,16 +879,18 @@ in local component state and direct requests. Team query caches include the
 signed-in viewer's identity. Generic item mutations also retain environmentId
 in their variables so paused-save status belongs to the picked team.
 
-Live facts, native skills and the guide share `useTeamViewingHost()`: an
+Live facts, native skills and file previews use `useTeamViewingHost()`: an
 explicit reachable host registered to that team, or no host. The window's own
 host (`useEffectiveHostId()`) counts as reachable whenever the team's list
 holds it, since the cloud's flag lapses for a desktop host that is not
 relay-attached. Picking it does
-not activate or wake it. Skills and the guide use the team's room through
-that host; no-host states offer the common picker. Skill edits and removal
-capture the team id and require `providers.nativeMutate@1.4` at dispatch. A
-host that no longer serves that team refuses the write. The page refreshes
-the host list without reading native skills back from that host.
+not activate or wake it. Configuration Skills and the guide read the team's
+room through its serving tier without requiring a viewing host. Skill previews
+and file edits require the named viewing host; removal and provider switches
+use the configuration's serving tier. Writes capture the team id and check the
+required method capability at dispatch. Host-local writes refuse a host that
+no longer serves that team. The page refreshes the host list without reading
+native skills back from that host.
 First edits of an absent model-routing item
 start from the named host's seeded policy; Reset and Restore default tiers
 delete the team item. Host-source panels preserve their existing behavior.

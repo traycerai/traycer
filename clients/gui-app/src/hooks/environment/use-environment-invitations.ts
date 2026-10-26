@@ -27,22 +27,23 @@ import { toastFromAuthError } from "@/lib/auth-error-toast";
 
 const EMPTY_PARAMS = {};
 
-/** Both reads and Accept use authn if either host method is unavailable. */
+/** Reads and Accept use authn without a serving host or either host method. */
 function useInvitationRoute(client: HostClient<HostRpcRegistry> | null) {
   const servingClient = useMemo(
     () => (client === null ? null : resolvePoolTierHostClient(client)),
     [client],
   );
-  const hostId = useReactiveHostReadiness(client).hostId;
+  const hostId = useReactiveHostReadiness(servingClient).hostId;
   const lists = useHostMethodSupport(hostId, "environment.invitations.list");
   const accepts = useHostMethodSupport(
     hostId,
     "environment.invitations.accept",
   );
+  const direct = hostId === null || lists === false || accepts === false;
   return {
     servingClient,
-    direct: client === null || lists === false || accepts === false,
-    served: lists === true && accepts === true,
+    direct,
+    served: !direct && lists === true && accepts === true,
   };
 }
 

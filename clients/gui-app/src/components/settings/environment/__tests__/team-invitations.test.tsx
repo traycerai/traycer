@@ -21,12 +21,15 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
   mountTeamPage,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
 
@@ -50,6 +53,8 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
+  resetNegotiatedManifests();
   vi.restoreAllMocks();
   viewerUserId.current = "user-me";
 });
@@ -189,6 +194,51 @@ function InvitationFlow(props: {
   );
 }
 
+async function assertExplicitHttpInvitationFlow(
+  harness: TeamPageHarness,
+): Promise<void> {
+  const calls = stubInvitationHttp(undefined);
+  const onAccepted = vi.fn();
+  const wrapper = wrapperWithInvitationAuth(harness.Wrapper, invitationAuth());
+  render(<InvitationFlow onAccepted={onAccepted} />, { wrapper });
+
+  const row = await screen.findByTestId("environment-invitation-env-beta");
+  expect(row.textContent).toContain("Beta");
+  expect(calls.map((call) => call.method)).toEqual(["GET"]);
+  expect(calls[0]?.url).toBe(
+    `${AUTHN_BASE_URL}/api/v3/environments/me/invitations`,
+  );
+  expect(calls[0]?.headers.get("Authorization")).toBe(`Bearer ${TEST_BEARER}`);
+  expect(calls[0]?.headers.get("x-traycer-invite-acceptance")).toBe("explicit");
+
+  await userEvent.click(
+    screen.getByTestId("environment-invitation-review-env-beta"),
+  );
+  expect(
+    screen.getByRole("heading", { name: "You're invited to Beta" }),
+  ).toBeTruthy();
+  expect(screen.getByTestId("invite-accept-grant")).toBeTruthy();
+  expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+  expect(onAccepted).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByTestId("invite-accept"));
+  await waitFor(() => {
+    expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
+  });
+  const posts = calls.filter((call) => call.method === "POST");
+  expect(posts).toHaveLength(1);
+  expect(posts[0]?.url).toBe(
+    `${AUTHN_BASE_URL}/api/v3/environments/me/invitations/accept`,
+  );
+  expect(posts[0]?.headers.get("Authorization")).toBe(`Bearer ${TEST_BEARER}`);
+  expect(posts[0]?.headers.get("x-traycer-invite-acceptance")).toBe("explicit");
+  expect(JSON.parse(posts[0]?.body ?? "null")).toEqual({
+    environmentId: "env-beta",
+  });
+  expect(harness.paramsOf("environment.invitations.list")).toHaveLength(0);
+  expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
+}
+
 describe("the invited rows of the Environment dropdown", () => {
   it("lists an invited team as 'invited' with Review, and hands the invitation to Review", async () => {
     negotiateMethods({
@@ -218,55 +268,42 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
       "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
+    await assertExplicitHttpInvitationFlow(harness);
+  });
+
+  it("lists and accepts over authenticated HTTP without an active host", async () => {
+    resetNegotiatedManifests();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => NO_ENVIRONMENTS,
+      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
+      "environment.invitations.accept": () => ({ outcome: "accepted" }),
+    });
+    useSelectionAuthorityStore.getState().reset();
+    const requester = requireTeamHostClient();
+    teamHostBoundary.client = requester.createRequesterForHostId(null);
+    expect(teamHostBoundary.client.getActiveHostId()).toBeNull();
+
+    await assertExplicitHttpInvitationFlow(harness);
+  });
+
+  it("waits for an addressable host's invitation capabilities before routing", async () => {
+    resetNegotiatedManifests();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => NO_ENVIRONMENTS,
+      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
+      "environment.invitations.accept": () => ({ outcome: "accepted" }),
+    });
+    expect(requireTeamHostClient().getActiveHostId()).not.toBeNull();
     const calls = stubInvitationHttp(undefined);
-    const onAccepted = vi.fn();
-    const wrapper = wrapperWithInvitationAuth(
-      harness.Wrapper,
-      invitationAuth(),
-    );
-    render(<InvitationFlow onAccepted={onAccepted} />, { wrapper });
-
-    const row = await screen.findByTestId("environment-invitation-env-beta");
-    expect(row.textContent).toContain("Beta");
-    expect(calls.map((call) => call.method)).toEqual(["GET"]);
-    expect(calls[0]?.url).toBe(
-      `${AUTHN_BASE_URL}/api/v3/environments/me/invitations`,
-    );
-    expect(calls[0]?.headers.get("Authorization")).toBe(
-      `Bearer ${TEST_BEARER}`,
-    );
-    expect(calls[0]?.headers.get("x-traycer-invite-acceptance")).toBe(
-      "explicit",
+    renderRows(vi.fn())(
+      wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()),
     );
 
-    await userEvent.click(
-      screen.getByTestId("environment-invitation-review-env-beta"),
-    );
-    expect(
-      screen.getByRole("heading", { name: "You're invited to Beta" }),
-    ).toBeTruthy();
-    expect(screen.getByTestId("invite-accept-grant")).toBeTruthy();
-    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
-    expect(onAccepted).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByTestId("invite-accept"));
     await waitFor(() => {
-      expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
+      expect(harness.paramsOf("environment.list")).toHaveLength(1);
     });
-    const posts = calls.filter((call) => call.method === "POST");
-    expect(posts).toHaveLength(1);
-    expect(posts[0]?.url).toBe(
-      `${AUTHN_BASE_URL}/api/v3/environments/me/invitations/accept`,
-    );
-    expect(posts[0]?.headers.get("Authorization")).toBe(
-      `Bearer ${TEST_BEARER}`,
-    );
-    expect(posts[0]?.headers.get("x-traycer-invite-acceptance")).toBe(
-      "explicit",
-    );
-    expect(JSON.parse(posts[0]?.body ?? "null")).toEqual({
-      environmentId: "env-beta",
-    });
+    expect(screen.queryByTestId("environment-invitation-env-beta")).toBeNull();
+    expect(calls).toHaveLength(0);
     expect(harness.paramsOf("environment.invitations.list")).toHaveLength(0);
     expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
   });
