@@ -12,6 +12,17 @@ import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 const mocks = vi.hoisted(() => ({
   row: null as MergedNotificationRow | null,
   bots: undefined as BotListResponse | undefined,
@@ -127,7 +138,10 @@ beforeEach(() => {
     mainBotIds: {},
   };
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+});
 
 describe("<NotificationRow /> about a bot", () => {
   it("shows the bot's squircle picture in place of the glyph", () => {
@@ -138,6 +152,18 @@ describe("<NotificationRow /> about a bot", () => {
     expect(avatar.textContent).toBe("TR");
     expect(mocks.listEnabled).toContain(true);
   });
+
+  it.each(["off", "unread"] as const)(
+    "reads no bot list and keeps the glyph while bots read %s",
+    (state) => {
+      previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
+      const entry = renderRow(verdictRow(BOT_ID));
+
+      expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+      expect(mocks.listEnabled.length).toBeGreaterThan(0);
+      expect(mocks.listEnabled).not.toContain(true);
+    },
+  );
 
   it("keeps the glyph on a row about anything else", () => {
     const entry = renderRow(verdictRow("epic-1"));

@@ -30,6 +30,17 @@ import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-sto
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 const toastState = vi.hoisted(() => {
   let onDismiss: (() => void) | undefined;
   let onAction: (() => void) | undefined;
@@ -204,6 +215,40 @@ function computerWhoseStatusFailsAfterOneRead(
   return { statusReads: () => reads };
 }
 
+/** This computer, counting the status and review reads its host is asked. */
+function computerCountingReads(status: EnvironmentStatusResponseV11): {
+  readonly status: () => number;
+  readonly review: () => number;
+} {
+  const reads = { status: 0, review: 0 };
+  const { client } = buildEnvironmentClient({
+    hostId: "old",
+    handlers: {
+      "environment.review": () => {
+        reads.review += 1;
+        return {
+          entries: [
+            held({ reason: "executable_entry", kind: "mcp_server", key: "gh" }),
+          ],
+          shownAt: null,
+          acknowledgedAt: null,
+          evidence: { version: null, at: null },
+        };
+      },
+      "environment.status": () => {
+        reads.status += 1;
+        return status;
+      },
+    },
+  });
+  recordNegotiatedHostManifest("old", {
+    "environment.review": { major: 1, minor: 2 },
+    "environment.status": { major: 1, minor: 1 },
+  });
+  thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+  return { status: () => reads.status, review: () => reads.review };
+}
+
 const NOT_MOVED_STATUS = environmentStatusFixture({
   planes: { records: "local", broker: "local", room: "local" },
   consent: null,
@@ -362,6 +407,52 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       hostId: "old",
       hostName: "Old laptop",
     });
+  });
+
+  it("shows the plain setup reminder, and reads neither the status nor the review, while environments read off", async () => {
+    previewVerdict.current = { environments: "off", sandboxes: "off", bots: "off" };
+    try {
+      const reads = computerCountingReads(NOT_MOVED_STATUS);
+      renderGuide();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(
+          "You're all set",
+          expect.anything(),
+        ),
+      );
+      expect(toastState).not.toHaveBeenCalledWith(
+        "This computer's settings aren't in Personal.",
+        expect.anything(),
+      );
+      expect(toastState).not.toHaveBeenCalledWith(
+        "An earlier version shared this computer's settings",
+        expect.anything(),
+      );
+      expect(reads.status()).toBe(0);
+      expect(reads.review()).toBe(0);
+    } finally {
+      previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    }
+  });
+
+  it("shows no toast at all, and reads nothing, while environments are unread", async () => {
+    previewVerdict.current = { environments: "unread", sandboxes: "unread", bots: "unread" };
+    try {
+      const reads = computerCountingReads(NOT_MOVED_STATUS);
+      renderGuide();
+
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      });
+      expect(toastState).not.toHaveBeenCalled();
+      expect(reads.status()).toBe(0);
+      expect(reads.review()).toBe(0);
+    } finally {
+      previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    }
   });
 
   it("keeps the setup reminder once this computer's settings are in Personal", async () => {

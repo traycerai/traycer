@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { navigationSource } from "@/lib/commands/sources/navigation.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
@@ -9,6 +9,17 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
 
 function ctx(pathname: string): CommandContext {
   return {
@@ -69,8 +80,38 @@ describe("navigationSource", () => {
 
   afterEach(() => {
     cleanup();
+    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+  });
+
+  const GATED_IDS = [
+    "nav:settings/secrets",
+    "nav:settings/members",
+    "nav:settings/sandboxes",
+  ];
+
+  it.each(["off", "unread"] as const)(
+    "settings sub-page drops the pages whose preview feature reads %s",
+    (state) => {
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      const ids = captureSettingsSubpage("/").map((i) => i.id);
+
+      for (const id of GATED_IDS) expect(ids).not.toContain(id);
+      expect(ids).toContain("nav:settings/general");
+    },
+  );
+
+  it("settings sub-page lists the gated pages with their preview features on, and drops only Sandboxes with sandboxes off", () => {
+    expect(captureSettingsSubpage("/").map((i) => i.id)).toEqual(
+      expect.arrayContaining(GATED_IDS),
+    );
+    cleanup();
+
+    previewVerdict.current = { environments: "on", sandboxes: "off", bots: "on" };
+    const ids = captureSettingsSubpage("/").map((i) => i.id);
+    expect(ids).not.toContain("nav:settings/sandboxes");
+    expect(ids).toContain("nav:settings/secrets");
   });
 
   it("root emits Open Tasks + Settings entry on an epic detail route", () => {

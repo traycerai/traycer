@@ -63,9 +63,15 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import type { EnvOverrideValue } from "../env-override-editor";
 import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 
-// These cases are about the environments-on behaviour.
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
 vi.mock("@/hooks/auth/use-preview-feature", () => ({
-  usePreviewFeature: () => "on" as const,
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -212,6 +218,28 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
+
+  it.each(["off", "unread"] as const)(
+    "limits the reach to this computer under a Personal pick while environments read %s",
+    (state) => {
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      try {
+        renderSection({
+          providerId: "cursor",
+          envOverrideScope: "harness-and-native-config",
+        });
+
+        expect(
+          screen.getByText(
+            "Set for Cursor each time it starts, on this computer only. Unset removes a variable Cursor would otherwise get from the shell.",
+          ),
+        ).toBeTruthy();
+        expect(screen.queryByText(/running Personal/)).toBeNull();
+      } finally {
+        previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+      }
+    },
+  );
 
   it("limits the reach to this computer on a Local row", () => {
     useSettingsEnvironmentPickStore.setState({

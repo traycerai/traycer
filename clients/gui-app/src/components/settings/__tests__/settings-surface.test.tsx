@@ -32,11 +32,45 @@ vi.mock("@/components/settings/settings-modal-content", () => ({
 
 import { SettingsSurface } from "@/components/settings/settings-surface";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 describe("<SettingsSurface />", () => {
   afterEach(() => {
     cleanup();
     testState.pathname = "/epics";
     testState.mobile = false;
+    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+  });
+
+  it.each(["off", "unread"] as const)(
+    "opens General for a route section that needs a preview feature while environments read %s",
+    (state) => {
+      previewVerdict.current = { environments: state, sandboxes: "on", bots: "on" };
+      testState.pathname = "/settings/members";
+      render(<SettingsSurface lastPath={null} />);
+
+      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+        "general",
+      );
+    },
+  );
+
+  it("keeps the route section when its preview feature is on", () => {
+    testState.pathname = "/settings/members";
+    render(<SettingsSurface lastPath={null} />);
+
+    expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+      "members",
+    );
   });
 
   it("keeps its remembered section while a split partner owns the route", () => {

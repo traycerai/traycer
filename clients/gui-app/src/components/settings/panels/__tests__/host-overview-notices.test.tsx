@@ -127,6 +127,11 @@ import type {
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { HostUpdateCompletion } from "@/hooks/host/use-host-update-completion";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 afterEach(() => {
   cleanup();
   // Two tests below switch to fake timers; without this every later test

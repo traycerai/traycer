@@ -37,6 +37,17 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 // The sidebar's host group is headed by the one host switcher, which composes
 // several host-runtime hooks. This suite is about NAVIGATION, so it mocks at
 // the scope boundary rather than standing up a host runtime.
@@ -151,7 +162,7 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
 // does not mount. It is irrelevant to navigation (it renders nothing for an
 // account with no sandboxes), and has its own suite.
 vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
-  SandboxBalanceBanner: () => null,
+  SandboxBalanceBanner: () => <div data-testid="sandbox-balance-warning" />,
 }));
 // Same reasoning: the Automations entry reads its own `useQuery`; its own
 // suite covers what it renders, this one covers when the sidebar mounts it.
@@ -1063,5 +1074,112 @@ describe("<SettingsSidebar /> Environment pick", () => {
     await renderRail();
 
     expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
+  });
+});
+
+describe("<SettingsSidebar /> preview features", () => {
+  const ALL_ON = { environments: "on", sandboxes: "on", bots: "on" } as const;
+
+  beforeEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    setMobileApp(false);
+    previewVerdict.current = { ...ALL_ON };
+  });
+
+  afterEach(() => {
+    cleanup();
+    previewVerdict.current = { ...ALL_ON };
+    useAuthStore.setState({ status: "signed-out" });
+    sandboxControl.reason = null;
+    scopeOverrides.current = { client: null };
+  });
+
+  async function renderRail(): Promise<void> {
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    await screen.findByTestId("settings-sidebar-item-general");
+  }
+
+  const present = (id: string): boolean =>
+    screen.queryByTestId(`settings-sidebar-item-${id}`) !== null;
+  const headings = (): string[] =>
+    Array.from(document.querySelectorAll("h2")).map((node) => node.textContent);
+
+  it.each(["off", "unread"] as const)(
+    "has no rows for the gated pages, no Environment picker and an Agent settings heading while the verdict reads %s",
+    async (state) => {
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+      await renderRail();
+
+      for (const id of ["secrets", "members", "machine-setup", "agent-definitions", "sandboxes"]) {
+        expect(present(id)).toBe(false);
+      }
+      expect(present("providers")).toBe(true);
+      expect(screen.queryByTestId("environment-picker-trigger")).toBeNull();
+      expect(headings()).toContain("Agent settings");
+      expect(headings()).not.toContain("Environment");
+    },
+  );
+
+  it("brings the rows, the picker and the Environment heading back with the verdict on", async () => {
+    await renderRail();
+
+    expect(present("secrets")).toBe(true);
+    expect(present("sandboxes")).toBe(true);
+    expect(screen.getByTestId("environment-picker-trigger")).toBeTruthy();
+    expect(headings()).toContain("Environment");
+    expect(headings()).not.toContain("Agent settings");
+  });
+
+  it("drops only the Sandboxes row when sandboxes read off and environments and bots read on", async () => {
+    previewVerdict.current = { environments: "on", sandboxes: "off", bots: "on" };
+    await renderRail();
+
+    expect(present("sandboxes")).toBe(false);
+    expect(present("secrets")).toBe(true);
+    expect(screen.getByTestId("environment-picker-trigger")).toBeTruthy();
+  });
+
+  describe("the host picker's sandbox entries", () => {
+    it.each(["off", "unread"] as const)(
+      "draws no sandboxes link, Automations entry, balance warning or unavailable note while sandboxes read %s",
+      async (state) => {
+        previewVerdict.current = { environments: "on", sandboxes: state, bots: "on" };
+        useAuthStore.setState({ status: "signed-in" });
+        await renderRail();
+        cleanup();
+        sandboxControl.reason = SANDBOXES_UNAVAILABLE_IN_STAGING;
+        await renderRail();
+
+        for (const id of [
+          "settings-host-picker-sandboxes",
+          "automations-entry-probe",
+          "sandbox-balance-warning",
+          "settings-sandboxes-unavailable",
+        ]) {
+          expect(screen.queryByTestId(id)).toBeNull();
+        }
+      },
+    );
+
+    it("draws the link, the Automations entry and the balance warning with sandboxes on, and the note on a build that cannot reach the control plane", async () => {
+      useAuthStore.setState({ status: "signed-in" });
+      await renderRail();
+
+      expect(screen.getByTestId("settings-host-picker-sandboxes")).toBeTruthy();
+      expect(screen.getByTestId("automations-entry-probe")).toBeTruthy();
+      expect(screen.getByTestId("sandbox-balance-warning")).toBeTruthy();
+      cleanup();
+
+      sandboxControl.reason = SANDBOXES_UNAVAILABLE_IN_STAGING;
+      await renderRail();
+      expect(screen.getByTestId("settings-sandboxes-unavailable")).toBeTruthy();
+    });
   });
 });

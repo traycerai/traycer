@@ -7,6 +7,7 @@ import {
 
 function facts(overrides: Partial<GettingStartedFacts>): GettingStartedFacts {
   return {
+    environments: true,
     providerSetUp: false,
     hasTask: false,
     hasSecret: false,
@@ -58,5 +59,32 @@ describe("gettingStartedGuideIsComplete", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("without environments", () => {
+  const WITHOUT_ENVIRONMENTS = facts({
+    environments: false,
+    providerSetUp: true,
+    hasTask: true,
+  });
+
+  it("offers neither the Secrets nor the second-computer card", () => {
+    expect(
+      gettingStartedVisibleCards(WITHOUT_ENVIRONMENTS).map((card) => card.id),
+    ).toEqual(["provider", "task"]);
+  });
+
+  it("is complete once the steps it shows are done, with no secret and no second computer", () => {
+    expect(gettingStartedGuideIsComplete(WITHOUT_ENVIRONMENTS)).toBe(true);
+  });
+
+  it("still counts the credits step while a sandbox is staged", () => {
+    expect(
+      gettingStartedVisibleCards({
+        ...WITHOUT_ENVIRONMENTS,
+        sandboxStaged: true,
+      }).map((card) => card.id),
+    ).toEqual(["provider", "task", "credits"]);
   });
 });

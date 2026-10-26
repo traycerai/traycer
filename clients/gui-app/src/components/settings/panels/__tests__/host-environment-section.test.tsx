@@ -64,6 +64,17 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 }));
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 function makeClient(): HostClient<HostRpcRegistry> {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,

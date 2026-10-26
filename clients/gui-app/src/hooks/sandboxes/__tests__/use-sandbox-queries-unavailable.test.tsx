@@ -31,7 +31,21 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
-import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-query";
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
+import {
+  useSandboxAutomation,
+  useSandboxTeamPods,
+} from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
@@ -52,6 +66,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
   useAuthStore.setState({ status: "signed-out" });
 });
 
@@ -143,5 +158,57 @@ describe("the sandbox queries on a build that cannot reach the control plane", (
       });
     });
     expect(mocks.binding?.auth.getSandboxAutomation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the sandbox queries without the sandboxes preview feature", () => {
+  it.each(["off", "unread"] as const)(
+    "never ask the control plane for the list, costs, catalogue or Automations while sandboxes read %s",
+    async (state) => {
+      previewVerdict.current = { environments: "on", sandboxes: state, bots: "on" };
+      const list = renderHook(() => useSandboxList(), { wrapper: wrapper() });
+      const costs = renderHook(() => useSandboxCosts(), { wrapper: wrapper() });
+      const catalogue = renderHook(() => useSandboxCatalogue(true), {
+        wrapper: wrapper(),
+      });
+      const automation = renderHook(() => useSandboxAutomation(null), {
+        wrapper: wrapper(),
+      });
+
+      const pods = renderHook(() => useSandboxTeamPods(["env-team"]), {
+        wrapper: wrapper(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const auth = mocks.binding?.auth;
+      expect(pods.result.current.size).toBe(0);
+      expect(auth?.listSandboxes).not.toHaveBeenCalled();
+      expect(auth?.getSandboxAutomation).not.toHaveBeenCalled();
+      for (const query of [list, costs, catalogue, automation]) {
+        expect(query.result.current.fetchStatus).toBe("idle");
+        expect(query.result.current.isError).toBe(false);
+      }
+    },
+  );
+});
+
+describe("the sandbox queries with the sandboxes preview feature on", () => {
+  it("reads the list and the team pods", async () => {
+    mocks.binding?.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    mocks.binding?.auth.getSandboxAutomation.mockResolvedValue({
+      kind: "ok",
+      automation: { available: true, sandbox: null, pods: [] },
+    });
+    renderHook(() => useSandboxList(), { wrapper: wrapper() });
+    renderHook(() => useSandboxTeamPods(["env-team"]), { wrapper: wrapper() });
+
+    await waitFor(() => {
+      expect(mocks.binding?.auth.listSandboxes).toHaveBeenCalled();
+      expect(mocks.binding?.auth.getSandboxAutomation).toHaveBeenCalled();
+    });
   });
 });

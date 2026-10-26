@@ -366,6 +366,40 @@ describe("the Personal pages without environments", () => {
       expect(mounted.environmentRequests()).toEqual([]);
     });
 
+    it.each([
+      {
+        section: "shell" as const,
+        page: <ShellSettingsPanel />,
+        copy: [
+          "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.",
+          "Variables are plain values every host gets.",
+        ],
+      },
+      {
+        section: "providers" as const,
+        page: <ProvidersSettingsPanel />,
+        copy: ["Sign-ins, keys and tools for each coding agent on this host."],
+      },
+      {
+        section: "mcp-servers" as const,
+        page: <McpServersSettingsPanel />,
+        copy: ["The MCP servers each coding agent can use on this host."],
+      },
+      {
+        section: "skills" as const,
+        page: <SkillsSettingsPanel />,
+        copy: ["The skills each coding agent can use on this host."],
+      },
+    ])("speaks for this host only on the $section page", async ({ section, page, copy }) => {
+      mountSection({ section, page, user });
+
+      for (const text of copy) {
+        expect(await screen.findByText(text)).toBeTruthy();
+      }
+      expect(screen.queryByText(/every computer and sandbox/)).toBeNull();
+      expect(screen.queryByText(/running Personal/)).toBeNull();
+    });
+
     it("shows the Agents page as the selection guide alone, with no Definitions tab or read", async () => {
       const mounted = mountSection({
         section: "agents",
@@ -416,5 +450,29 @@ describe("the Personal pages without environments", () => {
 
     expect(await screen.findByTestId("agents-tab-guide")).toBeTruthy();
     expect(screen.getByTestId("agents-tab-definitions")).toBeTruthy();
+  });
+
+  it.each([
+    {
+      page: <ShellSettingsPanel />,
+      copy: [
+        "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+        "Variables are plain values every computer and sandbox running Personal gets.",
+      ],
+    },
+    {
+      page: <ProvidersSettingsPanel />,
+      copy: [
+        "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+      ],
+    },
+  ])("keeps the Personal sentences with environments on", async ({ page, copy }) => {
+    // A non-environment section keeps the cloud frame out of the way, so the
+    // panel's own verdict is what is read.
+    mountSection({ section: "general", page, user: RECORD_WITH_ENVIRONMENTS });
+
+    for (const text of copy) {
+      expect(await screen.findByText(text)).toBeTruthy();
+    }
   });
 });

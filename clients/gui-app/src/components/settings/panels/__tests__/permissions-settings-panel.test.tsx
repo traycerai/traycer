@@ -28,6 +28,17 @@ import {
 } from "@/stores/tabs/settings-open-intent-store";
 import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
 
+// The preview-features verdict per feature; a case sets it, every other runs on.
+const previewVerdict = vi.hoisted(
+  (): { current: Record<"environments" | "sandboxes" | "bots", "on" | "off" | "unread"> } => ({
+    current: { environments: "on", sandboxes: "on", bots: "on" },
+  }),
+);
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: (feature: "environments" | "sandboxes" | "bots") =>
+    previewVerdict.current[feature],
+}));
+
 // The panel is host-scoped, so it reads `useHostScope`; mocked at that
 // boundary, as the shell panel suite does.
 const scopeOverrides = vi.hoisted((): { current: Partial<HostScope> } => ({
@@ -269,6 +280,26 @@ describe("PermissionsSettingsPanel", () => {
         ),
       ).not.toBeNull();
     });
+
+    it.each(["off", "unread"] as const)(
+      "keeps the general subtitle under a Personal pick while environments read %s",
+      (state) => {
+        previewVerdict.current = { environments: state, sandboxes: state, bots: state };
+        try {
+          useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+          render(<PermissionsSettingsPanel />);
+
+          expect(
+            screen.getByText(
+              "How much an agent may do on its own, and who reviews the rest.",
+            ),
+          ).not.toBeNull();
+          expect(screen.queryByText(/every computer and sandbox/)).toBeNull();
+        } finally {
+          previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+        }
+      },
+    );
 
     it("keeps the general subtitle on a computer's own row", () => {
       useSettingsEnvironmentPickStore.setState({

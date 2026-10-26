@@ -216,6 +216,11 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 import { ProviderReauthBanner } from "../provider-reauth-banner";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
+// These cases are about the environments-on behaviour.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on" as const,
+}));
+
 // TokenReauthForm reads/writes the TanStack Query cache (useQueryClient +
 // useTabRefreshProviders), so every banner render needs a QueryClient in scope.
 function QueryWrapper({ children }: { children: ReactNode }) {
