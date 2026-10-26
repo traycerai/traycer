@@ -3,6 +3,7 @@ import type { Viewport } from "@xyflow/react";
 import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  adjacentFullscreenBoard,
   boardFrame,
   selectLiveBoards,
   type CanvasPageItems,
@@ -45,11 +46,6 @@ export function useCanvasPresentation({
     ? currentFullscreen(snapshot.boards, fullscreen)
     : null;
   const closeFullscreen = useCallback(() => setFullscreen(null), []);
-  useCanvasFullscreenSurface(
-    surface,
-    activeFullscreen !== null,
-    closeFullscreen,
-  );
   const rememberBoard = useCallback(
     (path: string): void => {
       setRecentBoards((previous) =>
@@ -60,6 +56,26 @@ export function useCanvasPresentation({
       );
     },
     [liveFrameLimit],
+  );
+  const stepFullscreen = useCallback(
+    (direction: -1 | 1): void => {
+      if (activeFullscreen === null) return;
+      const target = adjacentFullscreenBoard(
+        snapshot,
+        activeFullscreen,
+        direction,
+      );
+      if (target === null) return;
+      rememberBoard(target);
+      setFullscreen(target);
+    },
+    [activeFullscreen, snapshot, rememberBoard],
+  );
+  useCanvasFullscreenSurface(
+    surface,
+    activeFullscreen !== null,
+    closeFullscreen,
+    stepFullscreen,
   );
   const liveBoards = useMemo(() => {
     const nearest = selectLiveBoards(
