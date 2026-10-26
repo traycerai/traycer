@@ -105,6 +105,7 @@ import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostManifest,
@@ -185,22 +186,28 @@ function mountHost(): { readonly requests: () => string[] } {
     },
   });
   const entry = hostEntryFixture(HOST_ID);
+  const poolEntry = hostEntryFixture(POOL_HOST_ID);
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
-    findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
+    findHostById: (hostId) => {
+      if (hostId === entry.hostId) return entry;
+      return hostId === poolEntry.hostId ? poolEntry : null;
+    },
     messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   windowHost.client = spine.createRequester(entry);
-  recordNegotiatedHostManifest(HOST_ID, {
-    "environment.list": { major: 1, minor: 0 },
-    "environment.host.list": { major: 1, minor: 0 },
-    "environment.status": { major: 1, minor: 1 },
-    "environment.secrets.list": { major: 1, minor: 1 },
-  });
+  for (const id of [HOST_ID, POOL_HOST_ID]) {
+    recordNegotiatedHostManifest(id, {
+      "environment.list": { major: 1, minor: 0 },
+      "environment.host.list": { major: 1, minor: 0 },
+      "environment.status": { major: 1, minor: 1 },
+      "environment.secrets.list": { major: 1, minor: 1 },
+    });
+  }
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: "user-me", username: "me" },
@@ -303,7 +310,11 @@ describe("the environment arm scope", () => {
 
   it("reads the environment list and publishes the team's scope with environments on", async () => {
     authUser.current = { data: RECORD_ON };
-    tier.pool = { hostId: "pool-host" };
+    tier.pool = { hostId: HOST_ID };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-me", username: "me" },
+    });
     const host = mountHost();
     render(<EnvironmentArmScopeMount />, { wrapper: queries });
 

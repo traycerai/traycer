@@ -365,6 +365,12 @@ describe("MobileNavDrawer Tracy row", () => {
   const TRACY = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW_MS);
+    testState.items = [];
+    testState.activity = {};
+    testState.indicators = {};
+    queryClient.clear();
     useMobileNavStore.setState({ open: true });
     useBotTabsStore
       .getState()
@@ -395,23 +401,28 @@ describe("MobileNavDrawer Tracy row", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
+    previewVerdict.current = { environments: "on", sandboxes: "on", bots: "on" };
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useMobileNavStore.setState({ open: false });
     useAuthStore.setState({ profile: null, shareableTeams: [] });
   });
 
-  it("draws the entry's row with bots on", () => {
+  it("draws the entry's row with bots on", async () => {
     renderDrawer();
 
-    expect(screen.getByTestId("mobile-nav-tracy")).toBeTruthy();
+    expect(await screen.findByTestId("mobile-nav-tracy")).toBeTruthy();
   });
 
   it.each(["off", "unread"] as const)(
     "draws no row for a restored entry while bots read %s",
-    (state) => {
+    async (state) => {
       previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
       renderDrawer();
 
+      // The drawer itself is up, so the row's absence is not an unmounted drawer.
+      await screen.findByTestId("mobile-nav-new-task");
       expect(screen.queryByTestId("mobile-nav-tracy")).toBeNull();
     },
   );
