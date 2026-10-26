@@ -1153,10 +1153,21 @@ describe("the fixed Tracy entry - closing bot tabs follows a verdict the record 
     );
   }
 
+  // Waits for the user record's own refetch (the mount's, on initial data) to
+  // finish, so a "nothing was closed" assertion follows the controller's
+  // handling of the answer rather than a sleep. A record that never answers
+  // has no fetch to wait for.
   async function settle(): Promise<void> {
+    if (scriptedUser.record !== undefined) {
+      await waitFor(() => {
+        expect(queryClient.isFetching({ queryKey: ["scripted-auth-user"] })).toBe(
+          0,
+        );
+      });
+    }
     await act(async () => {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
+        setTimeout(resolve, 0);
       });
     });
   }
