@@ -28,6 +28,15 @@ also checks that older line's harness vocabulary. No data moves between maps.
 
 ## Same-major changes
 
+Rich-artifact tombstones carry `deletionUnderstood`, defaulting to `false`
+for legacy input. The shared tombstone constructor writes `true` for HTML,
+canvas and file deletes. A 1.5.1 subtree delete can commit an unacknowledged
+tombstone before throwing; the tip host uses its local projection receipt to
+recover that artifact's original identity. The default must never manufacture
+an acknowledgement. The field is required in the typed domain, accepts absent
+persisted input, and is omitted from state-stream projections. Pre-HTML epic
+records and chat-sync reader floors are unchanged.
+
 Readers treat newer records in the same persistence major as compatible. A
 same-major change must therefore preserve both directions needed during a
 rolling upgrade: the new reader accepts existing records, and shipped readers
