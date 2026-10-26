@@ -252,6 +252,7 @@ function statusWith(
     install: null,
     processMemory: null,
     crossHostMessaging: null,
+    sessions: null,
   };
 }
 
@@ -322,6 +323,7 @@ function statusWithBusy(
     install: null,
     processMemory: null,
     crossHostMessaging: null,
+    sessions: null,
   };
 }
 
@@ -345,6 +347,7 @@ function statusOperationNull(
     install: null,
     processMemory: null,
     crossHostMessaging: null,
+    sessions: null,
   };
 }
 

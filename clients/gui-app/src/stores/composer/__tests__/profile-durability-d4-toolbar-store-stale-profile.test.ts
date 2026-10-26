@@ -70,6 +70,7 @@ function catalogWithLoadedModels(): ComposerToolbarCatalog {
     modelsLoaded: true,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    keepsUnavailablePick: false,
   };
 }
 
@@ -145,6 +146,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       modelsLoaded: true,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      keepsUnavailablePick: false,
     });
 
     // No eligible harness at all: `effectiveSelectionFromHarnesses` returns

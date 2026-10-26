@@ -30,7 +30,6 @@ import {
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
-import { AutomationsHostEntry } from "@/components/hosts/automations-host-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
@@ -304,11 +303,6 @@ function SettingsSidebarHostPicker(props: {
         >
           {sandboxesUnavailable}
         </p>
-      ) : null}
-      {/* The Automations host before its row exists; the real row joins the
-          list above once it does. */}
-      {sandboxes && signedIn && sandboxesUnavailable === null ? (
-        <AutomationsHostEntry />
       ) : null}
       {sandboxes && signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
       {/* The host list's balance banner: the two-hour and thirty-minute

@@ -20,6 +20,7 @@ import {
   type SandboxListResponse,
   type SandboxPatchRequest,
   type SandboxSummary,
+  type SandboxVerbGesture,
   type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import { composeRequestAbort } from "../auth/request-abort";
@@ -585,6 +586,10 @@ export async function keepSandboxViaHttp(
  * {@link SANDBOX_VERB_FETCH_TIMEOUT_MS}: a wake passes what is left of its
  * budget, so a request that outlives the wake is aborted with it rather than
  * left to land a verb in a transition a retry has started.
+ *
+ * `gesture` is what the verb came from when it was not its own menu item
+ * (Open terminal, Send, Open files), recorded on the operation it starts;
+ * `null` sends no body.
  */
 export async function runSandboxVerbViaHttp(
   serverBaseUrl: string,
@@ -592,6 +597,7 @@ export async function runSandboxVerbViaHttp(
   proxyToken: string | null,
   sandboxId: string,
   verb: SandboxLifecycleVerb,
+  gesture: SandboxVerbGesture | null,
   timeoutMs: number,
 ): Promise<SandboxLifecycleVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
@@ -599,7 +605,7 @@ export async function runSandboxVerbViaHttp(
     sandboxesUrl(serverBaseUrl, `/${sandboxId}/${verb}`),
     {
       method: "POST",
-      body: null,
+      body: gesture === null ? null : JSON.stringify({ gesture }),
       timeoutMs: Math.min(
         Math.max(timeoutMs, 0),
         SANDBOX_VERB_FETCH_TIMEOUT_MS,

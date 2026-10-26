@@ -19,6 +19,7 @@ import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings
 import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
 import { useHostBinding } from "@/lib/host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import {
   buildHostScopeOptions,
   type HostScopeOption,
@@ -209,6 +210,7 @@ export function useHostOptions(): HostOptions {
     () => deriveStatus(localSnapshot, installedQuery.data),
     [localSnapshot, installedQuery.data],
   );
+  const localPlatform = resolveDesktopPlatform(runnerHost);
 
   // Subscribed, not read ambiently: the session cache is pull-only, and the
   // memo below would otherwise keep answering with whatever was true at its
@@ -279,6 +281,7 @@ export function useHostOptions(): HostOptions {
         localHostId,
         activeHostId,
         localService,
+        localPlatform,
         hasLiveSession,
         leases,
         authorityAttached,
@@ -293,6 +296,7 @@ export function useHostOptions(): HostOptions {
       localHostId,
       activeHostId,
       localService,
+      localPlatform,
       hasLiveSession,
       leases,
       authorityAttached,

@@ -1,4 +1,5 @@
 import type { GuiHarnessSandboxCredentialMode } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 /**
  * What the harness picker says about a coding CLI on a sandbox host, from the
@@ -7,7 +8,8 @@ import type { GuiHarnessSandboxCredentialMode } from "@traycer/protocol/host/age
  * `null` for a row with no mode: a personal host, or a sandbox host from
  * before the field, where the picker says what it always said. A CLI that is
  * not offered on sandboxes at all is absent from the list, so there is no line
- * for it.
+ * for it. Traycer's own harness holds Traycer's key, so its placeholder line
+ * names whose key it is.
  */
 export interface SandboxCredentialLine {
   readonly tone: "plain" | "caution" | "unavailable";
@@ -15,6 +17,7 @@ export interface SandboxCredentialLine {
 }
 
 export function sandboxCredentialLine(
+  harnessId: GuiHarnessId,
   mode: GuiHarnessSandboxCredentialMode | null | undefined,
   note: string | null | undefined,
 ): SandboxCredentialLine | null {
@@ -22,7 +25,10 @@ export function sandboxCredentialLine(
     case "placeholder":
       return {
         tone: "plain",
-        text: "On this sandbox its credential stays with Traycer: agents can use it, never read it",
+        text:
+          harnessId === "traycer"
+            ? "Uses Traycer's key on this sandbox. Agents can use it but never see it."
+            : "On this sandbox its credential stays with Traycer: agents can use it, never read it",
       };
     case "process-scoped":
       return {

@@ -4,8 +4,8 @@ import {
   type HostSandboxState,
 } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
-  formatSandboxDay,
   sandboxCardActions,
   sandboxFrozenLine,
   sandboxGuestConfigFailure,
@@ -64,6 +64,11 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     destroyAfterRestingMinutes: null,
     destroyAt: null,
     createdByTaskId: null,
+    createdByAgentName: null,
+    createdByTaskTitle: null,
+    keptAt: null,
+    operation: null,
+    regionLabel: null,
     ...overrides,
   };
 }
@@ -80,13 +85,20 @@ const THAWED_ACTIONS: Record<HostSandboxState, readonly SandboxCardAction[]> = {
   destroying: [],
   destroyed: [],
   failed: ["destroy"],
-  released: ["destroy"],
+  released: [],
 };
+
+const TEAM_POD_ACTIONS: Record<HostSandboxState, readonly SandboxCardAction[]> =
+  {
+    ...THAWED_ACTIONS,
+    awake: ["stop", "destroy"],
+    released: ["start", "destroy"],
+  };
 
 describe("sandboxCardActions", () => {
   it("offers each state exactly the verbs the control plane accepts from it", () => {
     for (const state of HOST_SANDBOX_STATES) {
-      expect(sandboxCardActions(state, false, "agent")).toEqual(
+      expect(sandboxCardActions(state, false, "agent", false)).toEqual(
         THAWED_ACTIONS[state],
       );
     }
@@ -100,9 +112,10 @@ describe("sandboxCardActions", () => {
       "stopping",
       "stopped",
       "failed",
-      "released",
     ] as const) {
-      expect(sandboxCardActions(state, true, "agent")).toEqual(["destroy"]);
+      expect(sandboxCardActions(state, true, "agent", false)).toEqual([
+        "destroy",
+      ]);
     }
   });
 
@@ -113,49 +126,54 @@ describe("sandboxCardActions", () => {
       "starting",
       "destroying",
       "destroyed",
+      "released",
     ] as const) {
-      expect(sandboxCardActions(state, true, "agent")).toEqual([]);
+      expect(sandboxCardActions(state, true, "agent", false)).toEqual([]);
     }
   });
 
   it("never offers a wake verb to a frozen row, which would only answer sandbox_frozen", () => {
     for (const state of HOST_SANDBOX_STATES) {
-      const actions = sandboxCardActions(state, true, "agent");
+      const actions = sandboxCardActions(state, true, "agent", false);
       expect(actions).not.toContain("resume");
       expect(actions).not.toContain("start");
     }
   });
 
-  it("offers the Automations row stop/destroy awake and start/destroy released, never suspend", () => {
-    expect(sandboxCardActions("awake", false, "automation")).toEqual([
-      "stop",
-      "destroy",
-    ]);
-    expect(sandboxCardActions("released", false, "automation")).toEqual([
-      "start",
-      "destroy",
-    ]);
+  it("offers the person's own Automations row no card action in any state, frozen or not", () => {
     for (const state of HOST_SANDBOX_STATES) {
-      expect(sandboxCardActions(state, false, "automation")).not.toContain(
-        "suspend",
+      expect(sandboxCardActions(state, false, "automation", false)).toEqual([]);
+      expect(sandboxCardActions(state, true, "automation", false)).toEqual([]);
+    }
+  });
+
+  it("offers a team pod Stop and Start in place of suspend, with Destroy, in each state", () => {
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxCardActions(state, false, "automation", true)).toEqual(
+        TEAM_POD_ACTIONS[state],
       );
     }
   });
 
-  it("keeps the frozen rule for the Automations row", () => {
-    expect(sandboxCardActions("released", true, "automation")).toEqual([
-      "destroy",
-    ]);
-    expect(sandboxCardActions("creating", true, "automation")).toEqual([]);
+  it("offers a frozen team pod Destroy and nothing else wherever its state has Destroy", () => {
+    for (const state of HOST_SANDBOX_STATES) {
+      expect(sandboxCardActions(state, true, "automation", true)).toEqual(
+        TEAM_POD_ACTIONS[state].includes("destroy") ? ["destroy"] : [],
+      );
+    }
   });
 
-  it("leaves an agent row's released offer at destroy only", () => {
-    expect(sandboxCardActions("released", false, "agent")).toEqual(["destroy"]);
+  it("leaves an awake agent row suspend, stop and destroy", () => {
+    expect(sandboxCardActions("awake", false, "agent", false)).toEqual([
+      "suspend",
+      "stop",
+      "destroy",
+    ]);
   });
 
   it("offers an unknown state nothing, frozen or not", () => {
-    expect(sandboxCardActions(null, false, "agent")).toEqual([]);
-    expect(sandboxCardActions(null, true, "agent")).toEqual([]);
+    expect(sandboxCardActions(null, false, "agent", false)).toEqual([]);
+    expect(sandboxCardActions(null, true, "agent", false)).toEqual([]);
   });
 });
 
@@ -179,6 +197,12 @@ describe("sandboxStateLine", () => {
     expect(sandboxStateLine("awake", false, null)).toContain("awake rate");
     expect(sandboxStateLine("suspended", false, null)).toContain(
       "storage rate",
+    );
+  });
+
+  it("says a released row's files are kept and the next shell starts it", () => {
+    expect(sandboxStateLine("released", false, null)).toBe(
+      "Suspended, files kept. The next shell starts it.",
     );
   });
 
@@ -208,10 +232,19 @@ describe("sandboxStateLine", () => {
     ).toBe(sandboxFrozenLine(frozenAt));
   });
 
-  it("names the failure code on a failed row and falls back without one", () => {
+  it("names the failure's support reference on a failed row, never its raw code, and falls back without one", () => {
+    const failed = sandboxStateLine(
+      "failed",
+      false,
+      summaryOf({ failureCode: "create:kube-create-service-account" }),
+    );
+    expect(failed).toBe(
+      "Failed to start (SBX-0412). Nothing is billed for a sandbox that never woke.",
+    );
+    expect(failed).not.toContain("create:");
     expect(
       sandboxStateLine("failed", false, summaryOf({ failureCode: "OOM_BOOT" })),
-    ).toContain("(OOM_BOOT)");
+    ).toBe("Failed to start. Nothing is billed for a sandbox that never woke.");
     expect(
       sandboxStateLine("failed", false, summaryOf({ failureCode: null })),
     ).toBe(sandboxStateLine("failed", false, null));
@@ -230,16 +263,13 @@ describe("sandboxStateLine", () => {
     );
   });
 
-  it("names the code of a start that did not finish on a stopped row", () => {
+  it("names the support reference of a start that did not finish on a stopped row", () => {
     expect(
-      sandboxStateLine(
-        "stopped",
-        false,
-        summaryOf({ failureCode: "wake-timeout:no-phase" }),
-      ),
-    ).toBe(
-      "The last start didn't finish (wake-timeout:no-phase). Start tries again.",
-    );
+      sandboxStateLine("stopped", false, summaryOf({ failureCode: "start:x" })),
+    ).toBe("The last start didn't finish (SBX-0508). Start tries again.");
+    expect(
+      sandboxStateLine("stopped", false, summaryOf({ failureCode: "zzz" })),
+    ).toBe("The last start didn't finish. Start tries again.");
   });
 
   it("keeps the plain stopped line for a stopped row with no failure code", () => {
@@ -260,7 +290,7 @@ describe("sandboxStateLine", () => {
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
     ).toBe(
-      "Failed to start (chat-store-newer). Nothing is billed for a sandbox that never woke.",
+      "Failed to start (SBX-0430). Nothing is billed for a sandbox that never woke.",
     );
   });
 
@@ -280,10 +310,11 @@ describe("sandboxFrozenLine", () => {
     const frozenAt = new Date(2026, 9, 9, 12, 0, 0).getTime();
     const line = sandboxFrozenLine(frozenAt);
     expect(line).toBe(
-      `${BASE} Destroyed on ${formatSandboxDay(frozenDestroyAt(frozenAt))}.`,
+      `${BASE} Destroyed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}.`,
     );
-    expect(formatSandboxDay(frozenDestroyAt(frozenAt))).toBe(
-      formatSandboxDay(new Date(2026, 10, 8, 12, 0, 0).getTime()),
+    // Thirty days on, to the minute: the date carries its time.
+    expect(formatSandboxDate(frozenDestroyAt(frozenAt), true)).toBe(
+      formatSandboxDate(new Date(2026, 10, 8, 12, 0, 0).getTime(), true),
     );
   });
 });
@@ -410,7 +441,7 @@ describe("sandboxTileOverlay", () => {
   it("offers a released row a Start overlay", () => {
     expect(sandboxTileOverlay("released", false)).toEqual({
       kind: "asleep",
-      message: "Released",
+      message: "Suspended",
       verb: "start",
       label: "Start",
     });

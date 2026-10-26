@@ -122,7 +122,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     );
     expect(await service.keepSandbox("sbx_1")).toEqual(unavailable);
     expect(
-      await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
+      await service.runSandboxVerb("sbx_1", "resume", null, VERB_TIMEOUT_MS),
     ).toEqual(unavailable);
     expect(await service.getSandboxAutomation(null)).toEqual(unavailable);
     expect(await service.openSandboxAutomation(null)).toEqual(unavailable);
@@ -165,7 +165,7 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
       kind: "unauthorized",
     });
     expect(
-      await service.runSandboxVerb("sbx_1", "resume", VERB_TIMEOUT_MS),
+      await service.runSandboxVerb("sbx_1", "resume", null, VERB_TIMEOUT_MS),
     ).toEqual({
       kind: "unauthorized",
     });

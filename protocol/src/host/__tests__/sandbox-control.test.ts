@@ -9,6 +9,7 @@ import {
   sandboxListResponseSchema,
   sandboxPodSchema,
   sandboxRefusalBodySchema,
+  sandboxSupportReference,
 } from "@traycer/protocol/host/sandbox-control";
 
 /**
@@ -434,5 +435,22 @@ describe("refusal body message", () => {
       sandboxRefusalBodySchema.safeParse({ code: "sandbox_busy", message: 3 })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("sandboxSupportReference", () => {
+  it.each([
+    ["create:kube-create-service-account", "SBX-0412"],
+    ["resume", "SBX-0507"],
+    ["wake-timeout:attaching", "SBX-0511"],
+    ["envelope-delivery:x", "SBX-0520"],
+  ])("maps %s to %s by its class", (code, reference) => {
+    expect(sandboxSupportReference(code)).toBe(reference);
+  });
+
+  it("is null for a code of no listed class and for no code", () => {
+    expect(sandboxSupportReference("kube-thing")).toBeNull();
+    expect(sandboxSupportReference("nostage:create")).toBeNull();
+    expect(sandboxSupportReference(null)).toBeNull();
   });
 });

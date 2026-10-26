@@ -20,6 +20,7 @@ import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
 import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 import type { TerminalSidebarSessionRow } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 
@@ -154,7 +155,8 @@ function SwitcherTerminalRow(props: {
   // not both read as the current tile.
   const isActive = useIsActiveTile(tabId, session.sessionId, hostId);
   const navigatorResourceMetrics = useNavigatorResourceMetrics();
-  const label = terminalSessionLabel(session);
+  const taskHome = useTaskHomeDirectory(epicId, hostId);
+  const label = terminalSessionLabel(session, taskHome);
 
   return (
     <SwitcherListRow

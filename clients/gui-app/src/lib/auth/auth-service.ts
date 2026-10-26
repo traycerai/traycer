@@ -69,6 +69,7 @@ import type {
   SandboxCreateRequest,
   SandboxLifecycleVerb,
   SandboxPatchRequest,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
@@ -3167,12 +3168,13 @@ export class AuthService {
 
   /**
    * A lifecycle verb: the card's suspend / resume / stop / start, and the
-   * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
+   * wake a tab open runs, with the gesture it came from. Answers `unauthorized` with no cloud bearer rather
    * than throwing, because the tab-open wake reads it as an outcome.
    */
   async runSandboxVerb(
     sandboxId: string,
     verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
     timeoutMs: number,
   ): Promise<SandboxLifecycleVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
@@ -3181,7 +3183,13 @@ export class AuthService {
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb, timeoutMs);
+    return this.runnerHost.runSandboxVerb(
+      bearer,
+      sandboxId,
+      verb,
+      gesture,
+      timeoutMs,
+    );
   }
 
   /**

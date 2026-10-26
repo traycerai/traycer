@@ -914,6 +914,8 @@ function RoutingCatalogSync({
       models: models ?? [],
       modelsLoaded: models !== undefined,
       tuiOnly: false,
+      // A setting, not a run: nothing is swapped here in the first place.
+      keepsUnavailablePick: false,
     });
   }, [store, harnesses, harnessId, models]);
   return null;

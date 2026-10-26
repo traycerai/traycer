@@ -21,7 +21,6 @@ const testState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({ data: providersResponse() }),
   useProvidersListForClient: (
     _client: unknown,
     activity: { enabled: boolean; subscribed: boolean },
@@ -37,10 +36,7 @@ function providersResponse() {
     : { providers: testState.providers };
 }
 
-import {
-  useProviderPackGate,
-  useProviderPackGateForClient,
-} from "@/hooks/providers/use-provider-pack-gate";
+import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 
 // `candidates: []` is the load-bearing default here: no bundled binary, no
 // PATH install, nothing to fall back to. Every "blocks" assertion below depends
@@ -113,15 +109,18 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("useProviderPackGate", () => {
+describe("useProviderPackGateForClient on an active surface", () => {
   // The gate is UX; the host resolver is the authoritative backstop and refuses
   // independently. So an unknown answer must never block - a gate that failed
   // CLOSED here would lock the composer for the entire first `providers.list`
   // round trip on every app start.
   it("does not block while providers.list has not loaded", () => {
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(false);
     expect(result.current.hint).toBeNull();
   });
@@ -130,7 +129,10 @@ describe("useProviderPackGate", () => {
     testState.providers = [
       providerState("claude-code", { status: "downloading", percent: 10 }),
     ];
-    const { result } = renderHook(() => useProviderPackGate(null), { wrapper });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, null, true),
+      { wrapper },
+    );
     expect(result.current.blocked).toBe(false);
   });
 
@@ -138,9 +140,12 @@ describe("useProviderPackGate", () => {
     testState.providers = [
       providerState("claude-code", { status: "downloading", percent: 42 }),
     ];
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(true);
     expect(result.current.hint).toBe("Preparing Claude Code… 42%");
     expect(result.current.preparing?.kind).toBe("downloading");
@@ -150,9 +155,12 @@ describe("useProviderPackGate", () => {
     testState.providers = [
       providerState("claude-code", { status: "downloading", percent: null }),
     ];
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(true);
     // Never "0%" - the download is moving, this host just cannot see how far.
     expect(result.current.hint).toBe("Preparing Claude Code…");
@@ -167,9 +175,12 @@ describe("useProviderPackGate", () => {
         retryAtMs: 1_700_000_000_000,
       }),
     ];
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(true);
     expect(result.current.hint).toContain("disk space");
     expect(result.current.preparing?.retryAtMs).toBe(1_700_000_000_000);
@@ -181,9 +192,12 @@ describe("useProviderPackGate", () => {
     ["null (old host / unmanaged store)", null],
   ])("does not block on %s", (_label, managedInstallState) => {
     testState.providers = [providerState("claude-code", managedInstallState)];
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(false);
   });
 
@@ -199,9 +213,12 @@ describe("useProviderPackGate", () => {
         percent: 0,
       }),
     ];
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(false);
     // No hint either: every consumer feeds this into a DISABLED-state tooltip,
     // so a non-null hint here would explain why a live button is dead.
@@ -222,9 +239,12 @@ describe("useProviderPackGate", () => {
         retryAtMs: null,
       }),
     ];
-    const { result } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
     expect(result.current.blocked).toBe(false);
     expect(result.current.hint).toBeNull();
   });
@@ -237,12 +257,18 @@ describe("useProviderPackGate", () => {
       providerState("claude-code", { status: "downloading", percent: 5 }),
       providerState("codex", { status: "installed" }),
     ];
-    const { result: claude } = renderHook(() => useProviderPackGate("claude"), {
-      wrapper,
-    });
-    const { result: codex } = renderHook(() => useProviderPackGate("codex"), {
-      wrapper,
-    });
+    const { result: claude } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", true),
+      {
+        wrapper,
+      },
+    );
+    const { result: codex } = renderHook(
+      () => useProviderPackGateForClient(null, "codex", true),
+      {
+        wrapper,
+      },
+    );
     expect(claude.current.blocked).toBe(true);
     expect(codex.current.blocked).toBe(false);
   });

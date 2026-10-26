@@ -169,10 +169,14 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
 vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
   SandboxBalanceBanner: () => <div data-testid="sandbox-balance-warning" />,
 }));
-// Same reasoning: the Automations entry reads its own `useQuery`; its own
-// suite covers what it renders, this one covers when the sidebar mounts it.
-vi.mock("@/components/hosts/automations-host-entry", () => ({
-  AutomationsHostEntry: () => <div data-testid="automations-entry-probe" />,
+
+// The deployment offers Automations and no row exists yet: the one state the
+// sidebar once drew an Automations / Start entry for.
+vi.mock("@/hooks/sandboxes/use-sandbox-automation-query", () => ({
+  useSandboxAutomation: () => ({ data: { available: true, sandbox: null } }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-automation-open-mutation", () => ({
+  useSandboxAutomationOpen: () => ({ isPending: false, mutate: vi.fn() }),
 }));
 
 // What `IRunnerHost.sandboxControlUnavailableReason` reads as; a build that
@@ -697,28 +701,13 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
   });
 
-  it("mounts the Automations entry for a signed-in user on a build that reaches the control plane", async () => {
+  it("draws no Automations entry, though the deployment offers it and no row exists", async () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
-    expect(await screen.findByTestId("automations-entry-probe")).toBeDefined();
-  });
-
-  it("mounts no Automations entry on a build that cannot reach the control plane, or signed out", async () => {
-    sandboxControl.reason = "Sandboxes aren't available in staging builds.";
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-    expect(
-      await screen.findByTestId("settings-sandboxes-unavailable"),
-    ).toBeDefined();
-    expect(screen.queryByTestId("automations-entry-probe")).toBeNull();
-    cleanup();
-
-    sandboxControl.reason = null;
-    useAuthStore.setState({ status: "signed-out" });
-    renderSidebar();
     expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
-    expect(screen.queryByTestId("automations-entry-probe")).toBeNull();
+    expect(screen.queryByText("Automations")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
   });
 
   it("offers no Secrets and GitHub row to a signed-in user", async () => {
@@ -1167,7 +1156,7 @@ describe("<SettingsSidebar /> preview features", () => {
 
   describe("the host picker's sandbox entries", () => {
     it.each(["off", "unread"] as const)(
-      "draws no sandboxes link, Automations entry, balance warning or unavailable note while sandboxes read %s",
+      "draws no sandboxes link, balance warning or unavailable note while sandboxes read %s",
       async (state) => {
         previewVerdict.current = {
           environments: state,
@@ -1182,7 +1171,6 @@ describe("<SettingsSidebar /> preview features", () => {
 
         for (const id of [
           "settings-host-picker-sandboxes",
-          "automations-entry-probe",
           "sandbox-balance-warning",
           "settings-sandboxes-unavailable",
         ]) {
@@ -1191,12 +1179,11 @@ describe("<SettingsSidebar /> preview features", () => {
       },
     );
 
-    it("draws the link, the Automations entry and the balance warning with sandboxes on, and the note on a build that cannot reach the control plane", async () => {
+    it("draws the link and the balance warning with sandboxes on, and the note on a build that cannot reach the control plane", async () => {
       useAuthStore.setState({ status: "signed-in" });
       await renderRail();
 
       expect(screen.getByTestId("settings-host-picker-sandboxes")).toBeTruthy();
-      expect(screen.getByTestId("automations-entry-probe")).toBeTruthy();
       expect(screen.getByTestId("sandbox-balance-warning")).toBeTruthy();
       cleanup();
 

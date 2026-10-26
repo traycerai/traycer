@@ -257,6 +257,7 @@ function ChatComposerLikeHarness(props: {
     hostId: "tab-host",
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    stagedSurfaceKey: null,
   });
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);

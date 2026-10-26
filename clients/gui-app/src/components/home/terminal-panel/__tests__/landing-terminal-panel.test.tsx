@@ -263,6 +263,28 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   buildDialableHostClient: mocks.buildDialableHostClient,
 }));
+// The client for a host other than the composer's, which a request names; one
+// per host, stable across renders as the real hook's is.
+const clientsByHostId = vi.hoisted(
+  () =>
+    new Map<
+      string,
+      { getActiveHostId: () => string; onChange: () => () => void }
+    >(),
+);
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId === null) return null;
+    const known = clientsByHostId.get(hostId);
+    if (known !== undefined) return known;
+    const client = {
+      getActiveHostId: () => hostId,
+      onChange: () => () => undefined,
+    };
+    clientsByHostId.set(hostId, client);
+    return client;
+  },
+}));
 // jsdom reports a desktop width, so this only makes the default explicit -
 // the phone case flips it per test.
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
@@ -1946,20 +1968,43 @@ describe("<LandingTerminalPanel />", () => {
     ).toHaveLength(0);
   });
 
-  it("holds a requested terminal while the panel targets another host, and drops it once the composer is pinned elsewhere", async () => {
+  it("opens a requested terminal on the host the request names, folderless in its home, leaving the composer on its own host", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
-    mocks.primaryWorkspacePath = null;
+    mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingPanelStore.getState().requestTerminal(COMPOSER_SURFACE, "host-b");
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(COMPOSER_SURFACE, "host-a");
     render(panelUi());
+
+    act(() => {
+      useLandingPanelStore
+        .getState()
+        .requestTerminal(COMPOSER_SURFACE, "host-b");
+    });
+
     await waitFor(() => {
-      expect(mocks.queryClient.fetchQuery).toHaveBeenCalled();
+      expect(
+        landingTerminalTabs(useLandingPanelStore.getState().tabs),
+      ).toHaveLength(1);
     });
     await act(async () => {
       for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
     });
+    const state = useLandingPanelStore.getState();
+    const terminals = landingTerminalTabs(state.tabs);
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ hostId: "host-b", cwd: "/Users/dev" });
+    expect(state.terminalRequest).toBeNull();
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[COMPOSER_SURFACE],
+    ).toBe("host-a");
+  });
+
+  it("drops a requested terminal for another host once the composer is pinned elsewhere", () => {
+    useLandingPanelStore.getState().requestTerminal(COMPOSER_SURFACE, "host-b");
     expect(useLandingPanelStore.getState().terminalRequest).not.toBeNull();
 
     act(() => {
@@ -1969,7 +2014,6 @@ describe("<LandingTerminalPanel />", () => {
     });
 
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
-    expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
   });
 
   it("starts a sandbox staged on the composer from Terminal in the chooser, and opens nothing on the host it falls back to", async () => {
@@ -2024,7 +2068,7 @@ describe("<LandingTerminalPanel />", () => {
       configuration: { kind: "personal" },
       verb: "resume",
     });
-    staged.begin(COMPOSER_SURFACE, false, 1_000);
+    staged.begin(COMPOSER_SURFACE, false, 1_000, false);
     staged.report(COMPOSER_SURFACE, {
       createdSandboxId: "sbx-1",
       createdHostId: "host-sbx",

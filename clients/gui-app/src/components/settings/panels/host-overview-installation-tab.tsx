@@ -9,6 +9,7 @@ import {
   OsServiceSection,
   type OsServiceSectionProps,
 } from "@/components/settings/panels/host-overview-os-service-section";
+import { HostOverviewNotice } from "@/components/settings/panels/host-overview-status-card";
 import { HostOverviewTabSections } from "@/components/settings/panels/host-overview-tabs";
 import {
   InstallRecordGroup,
@@ -91,7 +92,8 @@ export function HostOverviewInstallationTab(
  * The two groups read FROM the host - the install record and the OS service.
  * While it connects or restarts they are the loading shape; when it cannot be
  * reached, one line says both need a connection, rather than two empty titled
- * cards or a second "can't reach" notice under the header's.
+ * cards or a second "can't reach" notice under the header's. A version that
+ * answers neither is one line too, saying what an update brings back.
  */
 function HostOverviewInstallationHostGroups(
   props: HostOverviewInstallationTabProps,
@@ -108,6 +110,16 @@ function HostOverviewInstallationHostGroups(
         The install record and OS service are read from {props.hostName}, so
         they need a connection.
       </p>
+    );
+  }
+  if (
+    props.installInfoDegrade === "unsupported" &&
+    props.service?.degrade === "unsupported"
+  ) {
+    return (
+      <HostOverviewNotice testId="host-overview-installation-unsupported">
+        {`Update ${props.hostName} to see its activity here.`}
+      </HostOverviewNotice>
     );
   }
   return (

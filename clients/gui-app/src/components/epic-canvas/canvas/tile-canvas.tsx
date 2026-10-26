@@ -35,6 +35,7 @@ import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { PendingSandboxSendStrip } from "@/components/sandboxes/pending-sandbox-sends";
 import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 
 interface TileCanvasPaneContextValue {
@@ -73,16 +74,21 @@ export function TileCanvas(props: TileCanvasProps) {
   const renderLive = snapshotLoaded || hasActiveHandoff;
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden bg-canvas text-canvas-foreground"
+      className="canvas-token-scope relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas text-canvas-foreground"
       data-testid="tile-canvas"
     >
-      <TileCanvasBody
-        epicId={epicId}
-        tabId={tabId}
-        snapshotFetchError={snapshotFetchError}
-        renderLive={renderLive}
-        hasActiveHandoff={hasActiveHandoff}
-      />
+      {/* A message sent to a staged sandbox waits here, behind its setup
+          line, until the agent on the sandbox takes it. */}
+      <PendingSandboxSendStrip epicId={epicId} tabId={tabId} />
+      <div className="relative min-h-0 w-full flex-1">
+        <TileCanvasBody
+          epicId={epicId}
+          tabId={tabId}
+          snapshotFetchError={snapshotFetchError}
+          renderLive={renderLive}
+          hasActiveHandoff={hasActiveHandoff}
+        />
+      </div>
       <EpicCanvasDragInteractionShield />
     </div>
   );

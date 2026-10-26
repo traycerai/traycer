@@ -1574,7 +1574,7 @@ export function hostAcknowledgedTab(
   tab: LandingTerminalTabRef,
   terminal: PlainTerminalProjection,
 ): LandingTerminalTabRef {
-  const view = selectPlainTerminalViewModel(terminal);
+  const view = selectPlainTerminalViewModel(terminal, null);
   return {
     ...tab,
     sessionId: terminal.record.terminalId,

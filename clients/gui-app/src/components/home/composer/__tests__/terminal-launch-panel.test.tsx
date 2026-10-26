@@ -116,6 +116,7 @@ function makeToolbarStore() {
     modelsLoaded: true,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    keepsUnavailablePick: false,
   });
   return store;
 }
@@ -159,6 +160,7 @@ function makeGuiOnlyToolbarStore() {
     modelsLoaded: true,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    keepsUnavailablePick: false,
   });
   return store;
 }

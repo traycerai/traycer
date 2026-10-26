@@ -394,7 +394,7 @@ function LandingTerminalDurableBootstrap(
       authoritativeTerminal={
         projection === undefined
           ? null
-          : selectPlainTerminalViewModel(projection)
+          : selectPlainTerminalViewModel(projection, null)
       }
     />
   );

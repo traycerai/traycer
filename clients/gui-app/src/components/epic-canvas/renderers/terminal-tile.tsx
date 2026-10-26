@@ -34,6 +34,10 @@ import {
   resolvedHostLabel,
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import {
+  sandboxDeadTileReason,
+  useHostSandboxEnd,
+} from "@/hooks/sandboxes/use-host-sandbox-end";
 import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useTerminalSessionRecovery,
@@ -67,6 +71,7 @@ import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-
 import { TerminalQuoteOverlay } from "./terminal-quote/terminal-quote-overlay";
 import { useTerminalFindSessionRow } from "@/hooks/terminal/use-terminal-display-title";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
 import type { EpicTerminalAuthorityController } from "@/hooks/terminal/use-epic-terminal-authority";
 import { useLandingTerminalDurableLifecycle } from "@/components/home/terminal-panel/landing-terminal-durable-bootstrap";
@@ -101,6 +106,10 @@ export function TerminalTile(props: TerminalTileProps) {
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
   const reachability = useHostReachability(hostId);
+  const sandboxEnd = useHostSandboxEnd(hostId);
+  const sandboxStopped = sandboxEnd?.kind === "stopped";
+  // A member destroyed it: the banner says so, and nothing is raised.
+  const sandboxDestroyed = sandboxEnd?.kind === "destroyed";
   // Invariant 6: the pre-bootstrap wait is bounded and it says which host it
   // is waiting on. This tile used to render a wordless skeleton for both
   // `checking` and `host-starting` (audit S5) - indistinguishable from a
@@ -204,10 +213,12 @@ export function TerminalTile(props: TerminalTileProps) {
     // evidence.
     if (reachability.basis !== "directory") return;
     if (epicId === null) return;
+    if (sandboxDestroyed) return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
       hostId,
       hostLabel: reachability.hostLabel,
+      sandboxStopped,
       target: {
         kind: "terminal",
         epicId,
@@ -221,6 +232,8 @@ export function TerminalTile(props: TerminalTileProps) {
     reachability.status,
     reachability.hostLabel,
     reachability.basis,
+    sandboxStopped,
+    sandboxDestroyed,
     epicId,
     hostId,
     props.node.id,
@@ -231,7 +244,10 @@ export function TerminalTile(props: TerminalTileProps) {
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
-        reason="host-unreachable"
+        reason={sandboxDeadTileReason(sandboxEnd)}
+        destroyedLine={
+          sandboxEnd?.kind === "destroyed" ? sandboxEnd.line : null
+        }
         hostLabel={reachability.hostLabel}
         ownerKind="terminal"
         onClose={closeCanvasTile}
@@ -811,6 +827,7 @@ function TerminalLive(props: TerminalLiveProps) {
     epicId: props.epicId,
     sessionId: handle.sessionId,
   });
+  const taskHome = useTaskHomeDirectory(props.epicId, hostId);
   let liveTitle: string | null = null;
   if (props.authoritativeTerminal !== null) {
     liveTitle = props.authoritativeTerminal.displayTitle;
@@ -819,6 +836,7 @@ function TerminalLive(props: TerminalLiveProps) {
       title: sessionRow.title,
       activeProcessName: sessionRow.activeProcessName,
       currentCwd: sessionRow.currentCwd,
+      taskHome,
     });
   }
   const status = useStore(handle.store, (s) => s.status);

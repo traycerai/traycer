@@ -48,6 +48,7 @@ const IDLE_COSTS = {
   sandboxes: [],
   awakeBurnMillicreditsPerHour: 0,
   todayYoursMillicredits: 0,
+  todayByEnvironment: [],
 };
 const IDLE: SandboxCostsFetchResult = { kind: "ok", costs: IDLE_COSTS };
 

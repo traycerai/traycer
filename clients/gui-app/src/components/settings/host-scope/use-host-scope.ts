@@ -398,7 +398,7 @@ export async function requestActivate(
   if (result.ok) {
     // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
     // so it is woken, and derivation serves a fallback until it is up.
-    if (option !== null) wakeSandboxOnPick(option);
+    if (option !== null) wakeSandboxOnPick(option, null);
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",

@@ -113,6 +113,52 @@ test.describe("fullscreen keeps the same running board", () => {
   });
 });
 
+test.describe("fullscreen steps through the reading order", () => {
+  // Real input is the claim: a button that becomes disabled while focused
+  // drops focus in Chrome, so the handoff to the other stepper is what keeps
+  // a later arrow press inside the surface; and a key pressed INSIDE the
+  // board's frame only reaches the app through the sandbox bridge's replay.
+  test("the header steppers and a real arrow press, on the surface and inside the board", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByRole("button", { name: "Play A fullscreen" }).click();
+    await expect(fullscreenBoardChoice(page)).toHaveText("A");
+
+    const next = page.getByRole("button", { name: "Next board" });
+    const previous = page.getByRole("button", { name: "Previous board" });
+    await expect(previous).toBeDisabled();
+    await next.click();
+    await expect(fullscreenBoardChoice(page)).toHaveText("B");
+    await expect(next).toBeDisabled();
+    await expect(previous).toBeFocused();
+
+    await page.keyboard.press("ArrowLeft");
+    await expect(fullscreenBoardChoice(page)).toHaveText("A");
+
+    // Click into the running board so its document owns the keyboard, then
+    // step from there. By coordinates: the fullscreen frame is scaled, and
+    // the claim is that a real press inside it reaches the app.
+    const frame = await page.locator('iframe[title="A"]').boundingBox();
+    if (frame === null) throw new Error("the fullscreen board has no box");
+    await page.mouse.click(
+      frame.x + frame.width / 2,
+      frame.y + frame.height / 2,
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.activeElement?.getAttribute("title")),
+      )
+      .toBe("A");
+    await page.keyboard.press("ArrowRight");
+    await expect(fullscreenBoardChoice(page)).toHaveText("B");
+    await expect(canvasSurface(page)).toHaveAttribute(
+      "data-canvas-fullscreen",
+      "true",
+    );
+  });
+});
+
 test.describe("per-board Play vs. editing", () => {
   test("Play from one board's button plays that board alone and keeps the editing chrome", async ({
     page,

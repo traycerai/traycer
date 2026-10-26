@@ -108,7 +108,7 @@ describe("<SweepHostList /> picking a row", () => {
     fireEvent.click(row("sbx-suspended"));
 
     expect(wakeSandboxOnPick).toHaveBeenCalledTimes(1);
-    expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED);
+    expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED, null);
     expect(onPick).toHaveBeenCalledTimes(1);
     expect(onPick).toHaveBeenCalledWith("sbx-suspended");
     // The wake is asked first, so a pick that throws still woke it.
@@ -121,11 +121,11 @@ describe("<SweepHostList /> picking a row", () => {
     renderList([PERSONAL, AWAKE]);
 
     fireEvent.click(row("sbx-awake"));
-    expect(wakeSandboxOnPick).toHaveBeenLastCalledWith(AWAKE);
+    expect(wakeSandboxOnPick).toHaveBeenLastCalledWith(AWAKE, null);
     expect(onPick).toHaveBeenLastCalledWith("sbx-awake");
 
     fireEvent.click(row("laptop"));
-    expect(wakeSandboxOnPick).toHaveBeenLastCalledWith(PERSONAL);
+    expect(wakeSandboxOnPick).toHaveBeenLastCalledWith(PERSONAL, null);
     expect(onPick).toHaveBeenLastCalledWith("laptop");
     expect(wakeSandboxOnPick).toHaveBeenCalledTimes(2);
     expect(onPick).toHaveBeenCalledTimes(2);

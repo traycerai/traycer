@@ -21,8 +21,8 @@ import {
   movedNoticeShown,
   SETUP_STEPS,
   setupView,
-  TERMINAL_ACCOUNT_SENTENCE,
-  TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS,
+  terminalAccountSentence,
+  terminalAccountSentenceWithoutEnvironments,
   teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
   useEnvironmentNoticesRead,
@@ -107,6 +108,7 @@ function AccessTabBody(props: {
   readonly hostName: string;
 }): ReactNode {
   const status = useEnvironmentStatusRead(props.client, props.hostId, true);
+  const localHostId = useReactiveLocalHostId();
   // Unread takes this branch too: it drops sections, which the read restores.
   const environments = usePreviewFeature("environments");
   if (environments !== "on") {
@@ -121,7 +123,11 @@ function AccessTabBody(props: {
         )}
         <TerminalAccountsSection
           client={props.client}
-          sentence={TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS}
+          sentence={terminalAccountSentenceWithoutEnvironments(
+            props.hostId !== null && props.hostId === localHostId
+              ? null
+              : props.hostName,
+          )}
         />
       </>
     );
@@ -176,6 +182,7 @@ function AccessSections(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
+  const localHostId = useReactiveLocalHostId();
   return (
     <>
       <MovedNotice
@@ -198,7 +205,11 @@ function AccessSections(props: {
         sentence={
           props.status.principal?.kind === "team"
             ? teamTerminalAccountSentence(props.status.principal.teamName)
-            : TERMINAL_ACCOUNT_SENTENCE
+            : terminalAccountSentence(
+                props.hostId !== null && props.hostId === localHostId
+                  ? null
+                  : props.hostName,
+              )
         }
       />
       <LocalValuesSection client={props.client} hostId={props.hostId} />

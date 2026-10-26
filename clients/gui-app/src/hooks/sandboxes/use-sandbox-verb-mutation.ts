@@ -90,6 +90,7 @@ export function useSandboxVerb(
       const result = await binding.auth.runSandboxVerb(
         sandboxId,
         verb,
+        null,
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
       if (result.kind === "ok") {

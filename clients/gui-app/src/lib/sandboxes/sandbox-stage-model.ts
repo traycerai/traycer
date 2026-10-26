@@ -333,16 +333,18 @@ export interface StagePrice {
   readonly exact: boolean;
 }
 
-/** A size's awake price an hour from a region's per-unit rates. */
+/**
+ * A size's awake price an hour from a region's per-unit rates, by the
+ * server's own rule, so it is the rate the row is billed at: vCPU and memory
+ * only (disk is the resting rate), rounded up.
+ */
 function ratedAwakeMcPerHour(
   rates: SandboxCataloguePricing,
   size: { readonly cpus: number; readonly memoryMb: number },
-  diskMb: number,
 ): number {
-  return Math.round(
+  return Math.ceil(
     (size.cpus * rates.vcpuHourMillicredits +
-      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits +
-      (diskMb / MB_PER_GIB) * rates.diskGbHourMillicredits) *
+      (size.memoryMb / MB_PER_GIB) * rates.memoryGbHourMillicredits) *
       rates.multiplier,
   );
 }
@@ -384,11 +386,7 @@ export function stageSmallestShape(
       awakeMcPerHour:
         region.pricing === null
           ? region.fromPriceMcPerHour.awakeMc
-          : ratedAwakeMcPerHour(
-              region.pricing,
-              smallestRung,
-              smallestRung.diskMb,
-            ),
+          : ratedAwakeMcPerHour(region.pricing, smallestRung),
     };
   }
   const bounds = provider.shape;
@@ -422,9 +420,8 @@ export function stagePrice(
       exact: smallest.isStaged,
     };
   }
-  const diskMb = shape.diskMb ?? provider.shape.diskDefaultMb;
   return {
-    awakeMcPerHour: ratedAwakeMcPerHour(rates, shape, diskMb),
+    awakeMcPerHour: ratedAwakeMcPerHour(rates, shape),
     exact: true,
   };
 }
@@ -500,7 +497,7 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
   if (input.needsCredits) {
     return {
       kind: "price",
-      text: addCreditsPriceClause(input.price.awakeMcPerHour),
+      text: addCreditsPriceClause(copy, input.price.awakeMcPerHour),
     };
   }
   const line = costLine(input.price.awakeMcPerHour, copy);

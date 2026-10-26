@@ -254,7 +254,7 @@ describe("<HostSwitcher /> team groups", () => {
     expect(anyTeamGroup()).toBeNull();
   });
 
-  it("lists a team's pod with the team's sandboxes", () => {
+  it("lists a team's sandboxes and never its Automations pod", () => {
     renderSwitcher({
       hosts: [
         PERSONAL,
@@ -264,7 +264,10 @@ describe("<HostSwitcher /> team groups", () => {
       action: HOST_LIST_ACTION,
       intent: "view",
     });
-    expect(teamGroup("team-a").contains(row("alpha-pod"))).toBe(true);
+    expect(teamGroup("team-a").contains(row("alpha-1"))).toBe(true);
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-alpha-pod"),
+    ).toBeNull();
   });
 
   it("selects a team's sandbox row on a click", () => {
