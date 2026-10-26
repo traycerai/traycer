@@ -6,10 +6,10 @@ import {
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
- * Whether THIS window is on screen (shown and not minimised), as main sees it.
- * Renderer parking cannot read it from the Page Visibility API in this app:
- * every window runs with `backgroundThrottling: false`, which keeps
- * `document.visibilityState` at `"visible"` through minimise and hide.
+ * Main's shown/not-minimised answer. The renderer ANDs it with Page
+ * Visibility, which cannot report hide/minimise while a WebRTC video plane
+ * keeps background throttling off
+ * (`electron-main/windows/background-rendering.ts`).
  */
 export interface WindowVisibilityBridgeSurface {
   /** The startup read; main's replay fires before any renderer subscription. */
