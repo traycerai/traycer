@@ -23,6 +23,7 @@
 export const SETTINGS_PATHS = new Set([
   "agent-definitions",
   "agents",
+  "alerts",
   "app-diagnostics",
   "app-notifications",
   "appearance",

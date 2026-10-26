@@ -7,6 +7,7 @@
  * `SETTINGS_SECTIONS` id (asserted by the index test).
  */
 import { AGENT_SELECTION } from "@/components/settings/panels/agents-settings.definitions";
+import { ALERTS } from "@/components/settings/panels/alerts-settings.definitions";
 import { APP_DIAGNOSTICS } from "@/components/settings/panels/app-diagnostics-settings.definitions";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
@@ -52,6 +53,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     APPEARANCE,
     OPENING_BEHAVIOR,
     APP_NOTIFICATIONS,
+    ALERTS,
     KEYBINDINGS,
     APP_DIAGNOSTICS,
     LAYOUT,

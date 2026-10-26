@@ -1150,8 +1150,8 @@ export type PushSeverity = HostNotificationSeverity;
 
 /**
  * Read/repair surface for the device's OS push permission, backing the
- * Settings → Sounds "this phone" rows, plus which severities this phone is
- * pushed for. Only reachable where `IRunnerHost.pushPermission` is non-null.
+ * Settings → Alerts push rows, plus which severities this phone is pushed
+ * for. Only reachable where `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {
   /** Local OS read; never prompts. */

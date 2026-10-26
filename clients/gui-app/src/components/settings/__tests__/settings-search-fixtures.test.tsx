@@ -12,7 +12,7 @@ import {
 } from "@/components/settings/__tests__/settings-search-targets";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
-import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
+import { AlertsSettingsPanel } from "@/components/settings/panels/alerts-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
@@ -161,7 +161,7 @@ const MOUNTS: {
   "opening-behavior": <OpeningBehaviorPanel />,
   permissions: <PermissionsSettingsPanel />,
   browser: <BrowserSettingsPanel />,
-  "app-notifications": <AppNotificationsSettingsPanel />,
+  alerts: <AlertsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
   host: <HostSettingsPanel />,
 };

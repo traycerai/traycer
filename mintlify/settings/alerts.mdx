@@ -1,0 +1,35 @@
+---
+title: "Alerts"
+description: "Open your OS notification settings, turn on push notifications in the mobile app and choose which kinds reach this phone."
+---
+
+**Alerts** decides how this app alerts you. It sits in the **Application** group of [Settings](/settings), after [Sounds](/settings/sounds).
+
+Which events create a notification in the first place is set per host, in Host › [Notifications](/settings/notifications). For what notifications are and where they appear, see [Notifications](/concepts/notifications).
+
+## System
+
+**OS notifications** (desktop app): banners, badges and delivery are managed by your operating system. Click **Open Settings** to open your OS notification settings for Traycer.
+
+## This Phone
+
+**Push notifications on this phone** (mobile app) shows whether this phone can receive a host's notifications:
+
+- If you haven't been asked yet, tap **Enable**.
+- If they are turned off for Traycer, tap **Open Settings** to turn them back on in the phone's Settings app. The phone only asks once, so this is the way back after you declined.
+- When they are on, the row reads **On**.
+
+Once they are on, a switch for each kind of notification chooses which ones reach this phone. All four are on to begin with. Turning one off stops that kind from reaching this phone only; other phones and the desktop app are unaffected, and the notification still appears in the app.
+
+| Switch | Covers |
+| --- | --- |
+| **Needs action** | Approvals and interviews. |
+| **Failure** | Errored turns, stalls, crashes, and rate limits. |
+| **Done** | Completed or intentionally stopped turns. |
+| **Info** | Sharing, comments, access changes, and other informational notifications. |
+
+A kind a host does not create never reaches the phone, whatever its switch says; see [Events](#events).
+
+## Events
+
+**Notification events** chooses which events alert you, for the host selected in Settings. Click **Open Host Notifications** to go to Host › [Notifications](/settings/notifications).
