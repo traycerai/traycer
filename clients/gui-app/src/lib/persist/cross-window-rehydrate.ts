@@ -1,3 +1,5 @@
+import { recordMapStoragePrefix } from "@/lib/persist/keys";
+
 /**
  * Make a persisted store pick up ANOTHER window's writes to it.
  *
@@ -29,7 +31,11 @@ export function installCrossWindowRehydrate(
     // A `null` key is `localStorage.clear()`, which is every key at once -
     // including this one. Ignoring it would leave the store holding values
     // whose storage is gone (what "sign out in the other window" looks like).
-    if (event.key === null || event.key === key) {
+    if (
+      event.key === null ||
+      event.key === key ||
+      event.key.startsWith(recordMapStoragePrefix(key))
+    ) {
       void store.persist.rehydrate();
     }
   });

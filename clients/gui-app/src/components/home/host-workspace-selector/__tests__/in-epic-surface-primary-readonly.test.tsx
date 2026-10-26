@@ -21,8 +21,27 @@ import type {
   WorktreeIntent,
   WorktreeWorkspaceSummaryV15,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  SandboxCatalogue,
+  UserSandboxCost,
+} from "@traycer/protocol/host/sandbox-control";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type {
+  NewStagedSandboxTarget,
+  SandboxStagingTask,
+} from "@/components/composer/use-sandbox-staging";
 import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  teamSubscription,
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -72,6 +91,14 @@ const folderActionsMocks = vi.hoisted(() => ({
 const toastMocks = vi.hoisted(() => ({
   reportableErrorToast: vi.fn(),
 }));
+/** What the chat chip's sandbox picker is handed; `null` is the suite's default. */
+const chipMocks = vi.hoisted(() => ({
+  hosts: null as HostScopeOption[] | null,
+  task: null as SandboxStagingTask | null,
+  user: null as AuthenticatedUser | null,
+  catalogue: null as SandboxCatalogue | null,
+  costs: null as UserSandboxCost | null,
+}));
 
 const RECENT_FOLDER: PreparedWorkspaceFolder = {
   workspacePath: "/repo/recent",
@@ -82,6 +109,11 @@ const RECENT_FOLDER: PreparedWorkspaceFolder = {
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
+}));
+// The picker's sandbox groups are drawn only with sandboxes on, which the
+// chip's cases are about.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
 }));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => FAKE_CLIENT,
@@ -234,7 +266,7 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   return {
     useHostOptions: () =>
       hostOptionsFixture({
-        hosts: [
+        hosts: chipMocks.hosts ?? [
           hostScopeOptionFixture({
             hostId: "host-test",
             name: "Test host",
@@ -257,6 +289,49 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
     close: vi.fn(),
     setSection: vi.fn(),
   }),
+}));
+// The task's hosts come from the open epic's runtime, which this suite never
+// mounts: the chip's staging is handed the task a test names.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: (
+      _epicId: string,
+      surfaceKey: string,
+      _namedHostId: string | null,
+    ) => ({ surfaceKey, task: chipMocks.task }),
+  }),
+);
+vi.mock("@/hooks/auth/use-auth-user-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/auth/use-auth-user-query")
+  >()),
+  useAuthUser: () => ({ data: chipMocks.user }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: chipMocks.catalogue }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
+  useSandboxCosts: () => ({ data: chipMocks.costs }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
+  useSandboxDefaultsLookup: () => () => null,
+}));
+vi.mock("@/hooks/use-epic-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-epic-store")>()),
+  useMaybeEpicStore: (
+    selector: (state: unknown) => unknown,
+    _fallback: unknown,
+  ) =>
+    selector({
+      chats: {
+        byId: { "agent-1": { id: "agent-1", title: "Planner" } },
+      },
+      tuiAgents: { byId: {} },
+    }),
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () => null,
@@ -382,6 +457,7 @@ function BoundSurfaceTree(props: {
           bindingResolved: props.bindingResolved,
           onBindingCommitted: props.onBindingCommitted,
           onForkOnHost: null,
+          onForkOnNewSandbox: null,
         }}
       />
     </TooltipProvider>
@@ -1631,5 +1707,346 @@ it("acknowledges a committed earlier removal when a later folder rejects", async
       ownerKind: "terminal-agent",
       workspacePath: "/repo/gamma",
     });
+  });
+});
+
+describe("the chat chip is the composer's picker", () => {
+  const COMPUTER = hostScopeOptionFixture({
+    hostId: "host-test",
+    name: "windows-test-machine",
+    platform: "win32-x64",
+    isLocalMachine: true,
+    isActive: true,
+  });
+
+  function sandboxRow(
+    hostId: string,
+    name: string,
+    summary: Parameters<typeof sandboxSummaryFixture>[0],
+  ): HostScopeOption {
+    return hostScopeOptionFixture({
+      hostId,
+      name,
+      isLocalMachine: false,
+      isActive: false,
+      connectable: true,
+      kind: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        teamOwned: false,
+        summary: sandboxSummaryFixture({
+          id: `sbx-${hostId}`,
+          hostId,
+          displayName: name,
+          state: "awake",
+          ...summary,
+        }),
+      },
+    });
+  }
+
+  const AGENT_SANDBOX = sandboxRow("box-agent", "e2e-sbx-agent-1", {
+    burst: true,
+    idleMinutes: 2,
+    createdByAgentId: "agent-1",
+    createdByTaskId: "epic-1",
+    createdBy: { userId: "u1", displayName: "Ada" },
+  });
+  const STARTED = sandboxRow("box-started", "e2e-sbx-p1", {
+    createdBy: { userId: "u1", displayName: "Ada" },
+  });
+  const AUTOMATIONS = sandboxRow("box-automations", "Automations", {
+    kind: "automation",
+    createdBy: { userId: "u1", displayName: "Ada" },
+  });
+
+  const CATALOGUE: SandboxCatalogue = {
+    providers: [
+      {
+        provider: "tensorlake",
+        os: ["linux"],
+        shape: {
+          cpuMin: 1,
+          cpuMax: 16,
+          cpuStep: 1,
+          memoryPerCpuMinMb: 1024,
+          memoryPerCpuMaxMb: 8192,
+          memoryMinMb: 1024,
+          memoryMaxMb: 65536,
+          memoryStepMb: 512,
+          diskMinMb: 10240,
+          diskMaxMb: 102400,
+          diskDefaultMb: 20480,
+        },
+        suspendFidelity: "memory",
+        stoppedStorage: "snapshot",
+        wakeClass: "resume",
+        shapes: [{ cpus: 2, memoryMb: 4096, diskMb: 20480, default: true }],
+        dockerInGuest: true,
+        creatable: true,
+        notCreatableReason: null,
+        regions: [
+          {
+            id: "us-east",
+            label: "US East",
+            fromPriceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
+            pricing: null,
+          },
+        ],
+      },
+    ],
+  };
+
+  const onForkOnHost = vi.fn<(hostId: string) => void>();
+  const onForkOnNewSandbox = vi.fn<(target: NewStagedSandboxTarget) => void>();
+
+  function openChip(): void {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <HostWorkspaceSelector
+            disabled={false}
+            surface={{
+              kind: "chat",
+              hostId: "host-test",
+              epicId: "epic-1",
+              tabId: "tab-1",
+              ownerId: "owner-1",
+              binding: BINDING,
+              isOwnerActive: false,
+              hasActiveTurn: false,
+              ownerLabel: "Owner",
+              inFlightWorktreeIntent: null,
+              missingWorktreePaths: [],
+              bindingResolved: true,
+              onBindingCommitted: null,
+              onForkOnHost,
+              onForkOnNewSandbox,
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+  }
+
+  beforeEach(() => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u1", username: "ada" },
+    });
+    chipMocks.hosts = [COMPUTER, AGENT_SANDBOX, STARTED, AUTOMATIONS];
+    chipMocks.task = {
+      epicId: "epic-1",
+      hosts: [AGENT_SANDBOX, AUTOMATIONS].map((host) => ({
+        hostId: host.hostId,
+        label: host.name,
+        principal: { kind: "user", id: "u1" },
+        reach: "same_principal",
+      })),
+      groups: [],
+      collaborators: null,
+    };
+    chipMocks.catalogue = CATALOGUE;
+    chipMocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 1_000,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [teamSubscription(1_000)],
+    );
+    chipMocks.costs = null;
+    useStagedSandboxStore.setState({ bySurface: {} });
+  });
+
+  afterEach(() => {
+    chipMocks.hosts = null;
+    chipMocks.task = null;
+    chipMocks.user = null;
+    chipMocks.catalogue = null;
+    chipMocks.costs = null;
+    onForkOnHost.mockReset();
+    onForkOnNewSandbox.mockReset();
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  });
+
+  it("lists In this task, Yours, Sandboxes you started and the New group, with a search and the Settings footer", () => {
+    openChip();
+
+    const order = Array.from(document.querySelectorAll("[data-testid]"))
+      .map((element) => element.getAttribute("data-testid"))
+      .filter((id) =>
+        [
+          "host-switcher-in-this-task",
+          "host-switcher-yours",
+          "host-switcher-sandboxes-you-started",
+        ].includes(id ?? ""),
+      );
+    expect(order).toEqual([
+      "host-switcher-in-this-task",
+      "host-switcher-yours",
+      "host-switcher-sandboxes-you-started",
+    ]);
+    expect(
+      screen.getByTestId("host-switcher-sandboxes-you-started").textContent,
+    ).toContain("Sandboxes you started");
+    expect(
+      Array.from(document.querySelectorAll("[cmdk-group-heading]")).map(
+        (heading) => heading.textContent,
+      ),
+    ).toContain(
+      "New sandbox · a computer in the cloud, billed by the hour while awake",
+    );
+    expect(screen.getByPlaceholderText("Search hosts")).toBeDefined();
+    expect(
+      screen.getByTestId("host-switcher-manage-sandboxes").textContent,
+    ).toBe("Manage sandboxes in Settings");
+    // Collapsed behind its count until opened.
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-box-started"),
+    ).toBeNull();
+  });
+
+  it("lists the task's agent sandbox with who created it, when it goes, and whose it is", () => {
+    openChip();
+
+    const row = screen.getByTestId("settings-host-switcher-option-box-agent");
+    expect(screen.getByTestId("host-switcher-in-this-task").contains(row)).toBe(
+      true,
+    );
+    expect(row.textContent).toContain("e2e-sbx-agent-1");
+    expect(row.textContent).toContain(
+      "Agent sandbox · created by Planner · destroys itself after 2 idle min",
+    );
+    expect(within(row).getByTestId("host-switcher-row-tag").textContent).toBe(
+      "Personal",
+    );
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-box-automations"),
+    ).toBeNull();
+  });
+
+  it("lists an agent sandbox created for the task even before the task's hosts include it", () => {
+    chipMocks.task = {
+      epicId: "epic-1",
+      hosts: [],
+      groups: [],
+      collaborators: null,
+    };
+    openChip();
+
+    const row = screen.getByTestId("settings-host-switcher-option-box-agent");
+    expect(screen.getByTestId("host-switcher-in-this-task").contains(row)).toBe(
+      true,
+    );
+    expect(row.textContent).toContain(
+      "Agent sandbox · created by Planner · destroys itself after 2 idle min",
+    );
+  });
+
+  it("says the computer's OS and that it is active, and the funded New row's price", () => {
+    openChip();
+
+    expect(
+      screen.getByTestId("settings-host-switcher-option-host-test").textContent,
+    ).toContain("windows-test-machine · Windows · Active");
+    expect(screen.getByText("New Personal sandbox")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake · uses your credits",
+      ),
+    ).toBeDefined();
+  });
+
+  it("says whose a sandbox the person started is and what it cost today", () => {
+    chipMocks.costs = {
+      sandboxes: [
+        {
+          sandboxId: "sbx-box-started",
+          currentRateMillicreditsPerHour: 120,
+          state: "awake",
+          frozen: false,
+          charged: {
+            computeMillicredits: 0,
+            storageMillicredits: 0,
+            sinceCreatedAt: 0,
+          },
+          pendingMillicredits: 0,
+          segments: [],
+          todayMillicredits: 30,
+          history: [],
+        },
+      ],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 30,
+      todayByEnvironment: [],
+    };
+    openChip();
+
+    fireEvent.click(
+      screen.getByTestId("host-switcher-sandboxes-you-started-toggle"),
+    );
+
+    expect(
+      screen.getByTestId("settings-host-switcher-option-box-started")
+        .textContent,
+    ).toContain("Personal · $0.03 today");
+  });
+
+  it("hands a New row's pick to the fork, staging nothing", () => {
+    openChip();
+
+    fireEvent.click(screen.getByText("New Personal sandbox"));
+
+    expect(onForkOnNewSandbox).toHaveBeenCalledTimes(1);
+    expect(onForkOnNewSandbox).toHaveBeenCalledWith({
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: 20_480,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "",
+      wakeString: "Suspend keeps memory",
+    });
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+    expect(onForkOnHost).not.toHaveBeenCalled();
+  });
+
+  it("forks onto the host a host row names", () => {
+    openChip();
+
+    fireEvent.click(
+      screen.getByTestId("settings-host-switcher-option-box-agent"),
+    );
+
+    expect(onForkOnHost).toHaveBeenCalledWith("box-agent");
+    expect(onForkOnNewSandbox).not.toHaveBeenCalled();
+  });
+
+  it("says no host of the person's matches, and where the others are", () => {
+    openChip();
+
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+      target: { value: "zzz" },
+    });
+
+    expect(
+      screen.getByTestId("host-switcher-composer-no-match").textContent,
+    ).toContain(
+      'No host of yours matches "zzz".Other members\' and agent sandboxes are in Settings.',
+    );
   });
 });

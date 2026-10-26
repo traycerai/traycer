@@ -163,7 +163,7 @@ describe("groupHostOptions teams", () => {
     expect(ids(groups.teams[0].sandboxes)).toEqual(["team-a-1"]);
   });
 
-  it("lists a team's pod in the team's sandboxes on the host list", () => {
+  it("never lists a team's pod on the host list", () => {
     const groups = groupHostOptions(
       [
         sandboxRow("team-a-1", TEAM_A, {}),
@@ -174,7 +174,7 @@ describe("groupHostOptions teams", () => {
       null,
     );
     expect(ids(groups.sandboxes)).toEqual([]);
-    expect(ids(groups.teams[0].sandboxes)).toEqual(["team-a-1", "team-a-pod"]);
+    expect(ids(groups.teams[0].sandboxes)).toEqual(["team-a-1"]);
   });
 
   it("never lists a team's pod in a picker", () => {

@@ -39,6 +39,7 @@ function burning(mcPerHour: number): UserSandboxCost {
     sandboxes: [],
     awakeBurnMillicreditsPerHour: mcPerHour,
     todayYoursMillicredits: 0,
+    todayByEnvironment: [],
   };
 }
 

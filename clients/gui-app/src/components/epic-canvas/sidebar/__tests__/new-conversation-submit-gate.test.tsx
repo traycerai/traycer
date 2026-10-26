@@ -62,6 +62,13 @@ interface GateCreateChatRequest {
 
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
+  readonly values: {
+    readonly selection: {
+      readonly harnessId: string;
+      readonly modelSlug: string;
+      readonly profileId: string | null;
+    };
+  };
   readonly selection: {
     readonly harnessId: string;
     readonly modelSlug: string;
@@ -215,6 +222,13 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
 });
 
 const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
+  values: {
+    selection: {
+      harnessId: "claude",
+      modelSlug: "claude-sonnet",
+      profileId: null,
+    },
+  },
   selection: {
     harnessId: "claude",
     modelSlug: "claude-sonnet",
@@ -226,6 +240,15 @@ const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
   reasoning: "medium",
   serviceTier: "",
   agentMode: "regular",
+}));
+
+// The agent gates read the placement host's own lists; nothing here stages a
+// sandbox or sits on one, so none of them holds or refuses a send.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => () => null,
 }));
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
@@ -438,7 +461,6 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // hook stubbed to its "nothing to report" answer so these gate tests stay
   // about the gate they name. `blocked: false` is also the hook's real
   // fail-open answer before `providers.list` resolves.
-  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
   useProviderPackGateForClient: () => ({
     blocked: false,
     hint: null,
@@ -583,7 +605,10 @@ function QueryWrapper({ children }: { readonly children: ReactNode }) {
 }
 
 describe("NewConversationModalBody direct submit gate", () => {
-  it("resubmits on a staged sandbox only once its catalog answers, and refuses with no agent to run", () => {
+  // A send to a staged sandbox is handed to its task and delivered from
+  // there; the sandbox's handoff resubmits a terminal agent's Start only, so
+  // an answered catalog never makes a second create of the message.
+  it("resubmits nothing of a send on a staged sandbox once its catalog answers", () => {
     render(
       <NewConversationModalBody
         epicId="epic-1"
@@ -610,25 +635,13 @@ describe("NewConversationModalBody direct submit gate", () => {
     // The new host's catalog has not answered: no resubmit yet.
     expect(staged().canSubmit).toBe(false);
 
-    // It answers with no agent: the resubmit is refused, and nothing is created.
     act(() => {
       toolbar.setState({
-        selection: { ...TOOLBAR_DEFAULTS.selection, modelSlug: "" },
-        catalog: { hostId: "host-1", harnesses: [], modelsLoaded: false },
+        catalog: { hostId: "host-1", harnesses: [], modelsLoaded: true },
       });
     });
-    expect(staged().canSubmit).toBe(true);
     expect(staged().submit()).toBe(false);
     expect(testState.createChat).not.toHaveBeenCalled();
-
-    // With a default model, the resubmit is the person's send.
-    act(() => {
-      toolbar.setState({ selection: TOOLBAR_DEFAULTS.selection });
-    });
-    act(() => {
-      expect(staged().submit()).toBe(true);
-    });
-    expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 
   it("submits a new chat with Cmd+Enter from anywhere in the modal", () => {

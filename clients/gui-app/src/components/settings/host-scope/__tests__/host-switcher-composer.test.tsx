@@ -91,6 +91,7 @@ function composerMode(
     viewerUserId: VIEWER,
     inThisTask: null,
     subLinesFor: () => [],
+    tagFor: () => null,
     newRows: [
       {
         configurationKey: "personal",
@@ -196,7 +197,7 @@ describe("<HostSwitcher /> composer mode picks", () => {
 
     fireEvent.click(row("sbx-suspended"));
 
-    expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED);
+    expect(wakeSandboxOnPick).toHaveBeenCalledWith(SUSPENDED, null);
     expect(onSelect).toHaveBeenCalledWith("sbx-suspended");
     expect(onPickHost).not.toHaveBeenCalled();
   });
@@ -556,6 +557,76 @@ describe("<HostSwitcher /> composer mode search", () => {
   });
 });
 
+describe("<HostSwitcher /> composer mode search narrows", () => {
+  const PRO = hostScopeOptionFixture({
+    hostId: "pro",
+    name: "Pro",
+    isLocalMachine: false,
+    isActive: false,
+  });
+  const THIS_COMPUTER = hostScopeOptionFixture({
+    hostId: "mine",
+    name: "windows-test-machine",
+    isLocalMachine: true,
+    isActive: true,
+  });
+  const P1 = sandboxHost("e2e-sbx-p1", "awake", {});
+  const P2 = sandboxHost("e2e-sbx-p2", "awake", {});
+
+  function hostRows(): string[] {
+    return screen
+      .queryAllByTestId(/^settings-host-switcher-option-/)
+      .map((element) =>
+        (element.getAttribute("data-testid") ?? "").replace(
+          "settings-host-switcher-option-",
+          "",
+        ),
+      );
+  }
+
+  function search(term: string): void {
+    renderSwitcher({
+      hosts: [PRO, THIS_COMPUTER, P1, P2],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+      target: { value: term },
+    });
+  }
+
+  it("keeps only the host whose name contains the term, and the New group and footer", () => {
+    search("p2");
+
+    expect(hostRows()).toEqual(["e2e-sbx-p2"]);
+    expect(screen.getByText("New Personal sandbox")).toBeDefined();
+    expect(screen.getByText("New Acme sandbox")).toBeDefined();
+    expect(
+      screen.getByTestId("host-switcher-manage-sandboxes").textContent,
+    ).toBe("Manage sandboxes in Settings");
+    expect(screen.queryByTestId("host-switcher-composer-no-match")).toBeNull();
+  });
+
+  it("matches a row by its title as well as its name", () => {
+    search("this comp");
+
+    expect(hostRows()).toEqual(["mine"]);
+  });
+
+  it("lists no host for a term nothing contains, keeps the New group and footer, and says so", () => {
+    search("qq");
+
+    expect(hostRows()).toEqual([]);
+    expect(screen.getByText("New Personal sandbox")).toBeDefined();
+    expect(screen.getByTestId("host-switcher-manage-sandboxes")).toBeDefined();
+    expect(
+      screen.getByTestId("host-switcher-composer-no-match").textContent,
+    ).toBe(
+      'No host of yours matches "qq".Other members\' and agent sandboxes are in Settings.',
+    );
+  });
+});
+
 describe("<HostSwitcher /> composer mode search field", () => {
   it("is there for a single host, holds focus, and filters the rows", () => {
     renderSwitcher({
@@ -768,5 +839,116 @@ describe("<HostSwitcher /> composer mode computers", () => {
     const mac = row("remote-mac");
     expect(within(mac).getByText(line)).toBeDefined();
     expect(mac.textContent.replace(line, "")).not.toMatch(/offline/i);
+  });
+});
+
+describe("<HostSwitcher /> composer mode row titles wrap", () => {
+  const LOCAL = hostScopeOptionFixture({
+    hostId: "local-win",
+    name: "windows-test-machine",
+    platform: "win32-x64",
+    isLocalMachine: true,
+    isActive: true,
+  });
+  const ROW_TITLE = "A sandbox with a long name that must be read in full";
+  const LONG_NAMED = sandboxHost("sbx-long", "awake", {});
+  const NAMED = { ...LONG_NAMED, name: ROW_TITLE };
+
+  // jsdom paints no layout, so this is a check of the classes the title
+  // carries: wrapping, and not the truncation the Settings host list keeps.
+  function expectWraps(title: HTMLElement): void {
+    expect(title.classList.contains("truncate")).toBe(false);
+    expect(title.classList.contains("wrap-break-word")).toBe(true);
+  }
+
+  it("wraps the New row's label in full", () => {
+    const label = "New Personal sandbox · needs credits";
+    renderSwitcher({
+      hosts: [LAPTOP],
+      composer: composerMode({
+        newRows: [
+          {
+            configurationKey: "personal",
+            label,
+            subLine: "Linux · 2 vCPU · 4 GB · from $0.21 an hour",
+            configuration: { kind: "personal" },
+            disabled: false,
+          },
+        ],
+      }),
+      intent: "pin",
+    });
+
+    expectWraps(
+      within(
+        screen.getByTestId("host-switcher-new-sandbox-personal"),
+      ).getByText(label),
+    );
+  });
+
+  it("wraps the computer row's title", () => {
+    renderSwitcher({
+      hosts: [LOCAL],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+
+    expectWraps(within(row("local-win")).getByText("This computer"));
+  });
+
+  it("wraps a sandbox row's name", () => {
+    renderSwitcher({
+      hosts: [LAPTOP, NAMED],
+      composer: composerMode({ inThisTask: [NAMED] }),
+      intent: "pin",
+    });
+
+    expectWraps(within(row("sbx-long")).getByText(ROW_TITLE));
+  });
+
+  it("still truncates a sandbox's name in a list that is not the composer's", () => {
+    renderSwitcher({ hosts: [LAPTOP, NAMED], composer: null, intent: "pin" });
+
+    const title = within(row("sbx-long")).getByText(ROW_TITLE);
+    expect(title.classList.contains("truncate")).toBe(true);
+    expect(title.classList.contains("wrap-break-word")).toBe(false);
+  });
+});
+
+describe("<HostSwitcher /> composer mode and the Automations host", () => {
+  function automationHost(hostId: string, teamOwned: boolean): HostScopeOption {
+    return sandboxHost(hostId, "awake", {
+      teamOwned,
+      summary: sandboxSummaryFixture({
+        id: `sbx-${hostId}`,
+        hostId,
+        kind: "automation",
+        createdBy: { userId: VIEWER, displayName: "Me" },
+      }),
+    });
+  }
+
+  it("offers no Automations row, personal or a team's", () => {
+    renderSwitcher({
+      hosts: [
+        LAPTOP,
+        AWAKE,
+        automationHost("pod-personal", false),
+        automationHost("pod-team", true),
+      ],
+      composer: composerMode({}),
+      intent: "pin",
+    });
+    fireEvent.click(
+      screen.getByTestId("host-switcher-sandboxes-you-started-toggle"),
+    );
+
+    expect(row("sbx-awake")).toBeDefined();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-pod-personal"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("settings-host-switcher-option-pod-team"),
+    ).toBeNull();
   });
 });

@@ -14,7 +14,10 @@ import type {
   PlainTerminalScope,
 } from "@traycer/protocol/host/terminal/plain-schemas";
 import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
-import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import {
+  terminalSessionTitle,
+  type TaskHomeDirectory,
+} from "@/lib/terminals/terminal-title";
 
 export const PLAIN_TERMINAL_RPC_METHODS = [
   "terminal.plain.create",
@@ -554,6 +557,7 @@ export interface PlainTerminalViewModel {
 /** Keeps semantic title/process/cwd/runtime fields separate for every surface. */
 export function selectPlainTerminalViewModel(
   terminal: PlainTerminalProjection,
+  taskHome: TaskHomeDirectory | null,
 ): PlainTerminalViewModel {
   const liveCwd =
     terminal.runtime.status === "running" ? terminal.runtime.currentCwd : null;
@@ -574,6 +578,7 @@ export function selectPlainTerminalViewModel(
       title: terminal.record.manualTitle,
       activeProcessName,
       currentCwd: liveCwd ?? terminal.record.launch.cwd,
+      taskHome,
     }),
   };
 }

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import { useSandboxWakeForOpenedTile } from "@/hooks/sandboxes/use-sandbox-wake-on-tile-open";
 import { useTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import { useHostBinding } from "@/lib/host";
@@ -12,19 +13,22 @@ import { useHostBinding } from "@/lib/host";
 export function SandboxWakeOnTileOpen(props: {
   readonly hostId: string;
   readonly instanceId: string;
+  /** What the open is recorded as on the wake it starts. */
+  readonly gesture: SandboxVerbGesture | null;
 }): ReactNode {
   const requested = useTileOpenRequested(props.instanceId);
   // No host runtime above the tile (a shell mounted bare, a tile under test):
   // no directory, so no sandbox to wake.
   const hasRuntime = useHostBinding() !== null;
   return requested && hasRuntime ? (
-    <SandboxWakeForOpenedTile hostId={props.hostId} />
+    <SandboxWakeForOpenedTile hostId={props.hostId} gesture={props.gesture} />
   ) : null;
 }
 
 function SandboxWakeForOpenedTile(props: {
   readonly hostId: string;
+  readonly gesture: SandboxVerbGesture | null;
 }): ReactNode {
-  useSandboxWakeForOpenedTile(props.hostId);
+  useSandboxWakeForOpenedTile(props.hostId, props.gesture);
   return null;
 }

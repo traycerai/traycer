@@ -21,8 +21,8 @@ import {
   movedNoticeShown,
   SETUP_STEPS,
   setupView,
-  TERMINAL_ACCOUNT_SENTENCE,
-  TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS,
+  terminalAccountSentence,
+  terminalAccountSentenceWithoutEnvironments,
   teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
   useEnvironmentNoticesRead,
@@ -111,19 +112,12 @@ function AccessTabBody(props: {
   const environments = usePreviewFeature("environments");
   if (environments !== "on") {
     return (
-      <>
-        {status.data === null ? null : (
-          <RemoteAccessSection
-            client={props.client}
-            hostId={props.hostId}
-            status={status.data.remoteAccess}
-          />
-        )}
-        <TerminalAccountsSection
-          client={props.client}
-          sentence={TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS}
-        />
-      </>
+      <AccessSectionsWithoutEnvironments
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+        remoteAccess={status.data === null ? null : status.data.remoteAccess}
+      />
     );
   }
   if (status.supported === false) {
@@ -170,12 +164,41 @@ function AccessTabBody(props: {
   );
 }
 
+function AccessSectionsWithoutEnvironments(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+  readonly hostName: string;
+  readonly remoteAccess: EnvironmentStatusResponseV11["remoteAccess"] | null;
+}): ReactNode {
+  const localHostId = useReactiveLocalHostId();
+  return (
+    <>
+      {props.remoteAccess === null ? null : (
+        <RemoteAccessSection
+          client={props.client}
+          hostId={props.hostId}
+          status={props.remoteAccess}
+        />
+      )}
+      <TerminalAccountsSection
+        client={props.client}
+        sentence={terminalAccountSentenceWithoutEnvironments(
+          props.hostId !== null && props.hostId === localHostId
+            ? null
+            : props.hostName,
+        )}
+      />
+    </>
+  );
+}
+
 function AccessSections(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
+  const localHostId = useReactiveLocalHostId();
   return (
     <>
       <MovedNotice
@@ -198,7 +221,11 @@ function AccessSections(props: {
         sentence={
           props.status.principal?.kind === "team"
             ? teamTerminalAccountSentence(props.status.principal.teamName)
-            : TERMINAL_ACCOUNT_SENTENCE
+            : terminalAccountSentence(
+                props.hostId !== null && props.hostId === localHostId
+                  ? null
+                  : props.hostName,
+              )
         }
       />
       <LocalValuesSection client={props.client} hostId={props.hostId} />

@@ -218,6 +218,8 @@ export function useJudgeToolbarStore(input: {
       models: models ?? EMPTY_JUDGE_MODELS,
       modelsLoaded,
       tuiOnly: false,
+      // A setting, not a run: nothing is swapped here in the first place.
+      keepsUnavailablePick: false,
     });
   }, [store, harnesses, harnessId, models, modelsLoaded]);
 

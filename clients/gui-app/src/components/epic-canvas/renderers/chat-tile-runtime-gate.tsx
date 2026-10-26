@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useDeadlineReached } from "@/hooks/use-deadline-reached";
+import { useEndedSandboxHost } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 import {
   hostIsBehindClient,
   HOST_UPDATE_SKEW_COPY,
@@ -80,6 +81,7 @@ export function ChatTilePreContent(props: {
   const tabHostId = useTabHostId();
   const lease = useHostLease(tabHostId);
   const hostUpdate = useChatTileHostUpdate();
+  const ended = useEndedSandboxHost(tabHostId);
   const retries = session?.retries ?? null;
   const reloadStartedAt = session?.reloadStartedAt ?? null;
   const waitBeganAt = chatLoadWaitBeganAt(frame.wait, retries, reloadStartedAt);
@@ -119,6 +121,11 @@ export function ChatTilePreContent(props: {
     hasReadySession: frame.hasReadySession,
     elapsed: chatPreContentElapsed(slow, overdue),
   };
+  // A sandbox a member destroyed is not a failed open: the pane's own line
+  // says who destroyed it, and there is nothing to try again.
+  if (ended !== null && session !== null && session.fatalClose !== null) {
+    return null;
+  }
   const view = describeChatPreContent(input);
   const onTryAgain =
     session === null || !view.offersTryAgain
@@ -136,6 +143,34 @@ export function ChatTilePreContent(props: {
       chatPreContentReport(input, Date.now() - waitBeganAt),
       null,
     );
+  const actions = (
+    <ChatTilePreContentActions
+      view={view}
+      onOpenHostUpdate={hostUpdate.openHostUpdate}
+      onTryAgain={onTryAgain}
+      report={report}
+    />
+  );
+  return (
+    <ChatTilePreContentBody
+      testId={props.testId}
+      view={view}
+      hasHandle={session !== null}
+      waitBeganAt={waitBeganAt}
+      actions={actions}
+    />
+  );
+}
+
+/** The described pre-content view, laid out as a line or as a card. */
+function ChatTilePreContentBody(props: {
+  readonly testId: string;
+  readonly view: ChatPreContentView;
+  readonly hasHandle: boolean;
+  readonly waitBeganAt: number;
+  readonly actions: ReactNode;
+}): ReactNode {
+  const { view, actions } = props;
   const spinner = view.spinner ? (
     <AgentSpinningDots
       className="shrink-0"
@@ -148,20 +183,12 @@ export function ChatTilePreContent(props: {
     view.detail === null ? null : (
       <p className="max-w-md text-ui-sm text-muted-foreground">{view.detail}</p>
     );
-  const actions = (
-    <ChatTilePreContentActions
-      view={view}
-      onOpenHostUpdate={hostUpdate.openHostUpdate}
-      onTryAgain={onTryAgain}
-      report={report}
-    />
-  );
   return (
     <div
       data-testid={props.testId}
       data-arm={view.kind}
-      data-has-handle={session === null ? "false" : "true"}
-      data-wait-began-at={waitBeganAt}
+      data-has-handle={props.hasHandle ? "true" : "false"}
+      data-wait-began-at={props.waitBeganAt}
       data-error-code={view.code ?? undefined}
       // The wait and the verdict share this one element, so it has to stay a
       // live region ACROSS the swap: dropping the attributes at the moment the

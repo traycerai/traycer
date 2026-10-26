@@ -11,6 +11,7 @@ import {
   type SandboxWakeOutcome,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { isSleepingSandboxPick } from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -123,6 +124,7 @@ function startWakeAttempt(
   auth: AuthService,
   hostId: string,
   startedBy: string | null,
+  gesture: SandboxVerbGesture | null,
 ): SandboxWakeAttempt {
   let verbRequest: Promise<unknown> = Promise.resolve();
   const outcome = wakeSandboxHost(
@@ -130,7 +132,7 @@ function startWakeAttempt(
     hostId,
     startedBy,
     (sandboxId, verb, timeoutMs) => {
-      const request = auth.runSandboxVerb(sandboxId, verb, timeoutMs);
+      const request = auth.runSandboxVerb(sandboxId, verb, gesture, timeoutMs);
       verbRequest = request;
       return request;
     },
@@ -196,13 +198,14 @@ async function runSharedWake(
   auth: AuthService,
   hostId: string,
   startedBy: string | null,
+  gesture: SandboxVerbGesture | null,
 ): Promise<SandboxWakeRun> {
   const key = wakeKey(startedBy, hostId);
   const running = wakesInFlight.get(key);
   if (running !== undefined) {
     return { outcome: await running, joined: true };
   }
-  const attempt = startWakeAttempt(auth, hostId, startedBy);
+  const attempt = startWakeAttempt(auth, hostId, startedBy, gesture);
   wakesInFlight.set(key, attempt.outcome);
   void attempt.settled.then(() => {
     if (wakesInFlight.get(key) === attempt.outcome) {
@@ -282,11 +285,15 @@ interface SandboxWakeBinding {
  * outcome resolves for a caller that waits on it (the composer's send), and
  * is `null` when no wake was sent (signed out, or a build without the control
  * plane).
+ *
+ * `gesture` is what the wake is recorded as (Open terminal, Send, Open
+ * files); a wake that joins one in flight keeps the first one's.
  */
 export function startSandboxWake(
   client: QueryClient,
   binding: SandboxWakeBinding | null,
   hostId: string,
+  gesture: SandboxVerbGesture | null,
 ): Promise<SandboxWakeOutcome | null> {
   // Signed out there is no sandbox row to wake, and nothing a retry fixes.
   if (binding === null) return Promise.resolve(null);
@@ -302,15 +309,17 @@ export function startSandboxWake(
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
   const teamOwned = facts !== null && facts.ownerTeamName !== null;
-  return runSandboxWake(client, binding, hostId, teamOwned);
+  return runSandboxWake({ client, binding, hostId, teamOwned, gesture });
 }
 
-function runSandboxWake(
-  client: QueryClient,
-  binding: SandboxWakeBinding,
-  hostId: string,
-  teamOwned: boolean,
-): Promise<SandboxWakeOutcome | null> {
+function runSandboxWake(input: {
+  readonly client: QueryClient;
+  readonly binding: SandboxWakeBinding;
+  readonly hostId: string;
+  readonly teamOwned: boolean;
+  readonly gesture: SandboxVerbGesture | null;
+}): Promise<SandboxWakeOutcome | null> {
+  const { client, binding, hostId, teamOwned, gesture } = input;
   const { auth, directory } = binding;
   // The account this wake runs for. A wake that ends under another account
   // stops polling (see `readSandboxFacts`), and reports and refreshes nothing:
@@ -319,7 +328,7 @@ function runSandboxWake(
   const startedBy = signedInUserId();
   const observer = new QueryMutationObserver<SandboxWakeRun>(client, {
     mutationKey: sandboxMutationKeys.wake(hostId),
-    mutationFn: () => runSharedWake(auth, hostId, startedBy),
+    mutationFn: () => runSharedWake(auth, hostId, startedBy, gesture),
     onSuccess: (run) => {
       if (run.joined || signedInUserId() !== startedBy) return;
       void directory.refresh();
@@ -354,8 +363,18 @@ function runSandboxWake(
  * Not a hook: a pick is an event, and the pickers render in places that have
  * no query provider of their own. It reads the app-wide binding and query
  * client, the same objects the providers hand the rest of the app.
+ * `gesture` is what the pick is recorded as (a new terminal's host pick is
+ * Open terminal); `null` for a plain pick.
  */
-export function wakeSandboxOnPick(host: HostScopeOption): void {
+export function wakeSandboxOnPick(
+  host: HostScopeOption,
+  gesture: SandboxVerbGesture | null,
+): void {
   if (!isSleepingSandboxPick(host)) return;
-  void startSandboxWake(queryClient, getHostBindingSnapshot(), host.hostId);
+  void startSandboxWake(
+    queryClient,
+    getHostBindingSnapshot(),
+    host.hostId,
+    gesture,
+  );
 }

@@ -68,6 +68,7 @@ function catalog(input: {
     modelsLoaded: input.modelsLoaded,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    keepsUnavailablePick: false,
   };
 }
 

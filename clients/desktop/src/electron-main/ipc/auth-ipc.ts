@@ -57,6 +57,7 @@ import {
   parseSandboxAutomationOpenTarget,
   parseSandboxCreateRequest,
   parseSandboxLifecycleVerb,
+  parseSandboxVerbGesture,
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseStoredAuthTokens,
@@ -355,18 +356,21 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       bearerToken: unknown,
       sandboxId: unknown,
       verb: unknown,
+      gesture: unknown,
       timeoutMs: unknown,
     ) => {
       assertString(bearerToken, "runSandboxVerb.bearerToken");
       assertString(sandboxId, "runSandboxVerb.sandboxId");
       assertNumber(timeoutMs, "runSandboxVerb.timeoutMs");
       const parsedVerb = parseSandboxLifecycleVerb(verb);
+      const parsedGesture = parseSandboxVerbGesture(gesture);
       return runSandboxVerbViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
         sandboxId,
         parsedVerb,
+        parsedGesture,
         timeoutMs,
       );
     },

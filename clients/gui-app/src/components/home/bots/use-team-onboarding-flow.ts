@@ -107,6 +107,7 @@ export function useTeamOnboardingFlow(input: {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      stagedSurfaceKey: null,
     },
   );
   const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);

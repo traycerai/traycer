@@ -843,3 +843,90 @@ export const hostStatusUpgradeV17ToV18 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, crossHostMessaging: null }),
 });
+
+/**
+ * One running agent on the host, as `host.status` @1.9 lists it: a GUI chat
+ * with a live session, or a terminal agent whose process runs. `name` is the
+ * chat's or terminal's title, sent only to the caller who owns the session;
+ * any other caller reads `null` (a session in someone else's task).
+ */
+export const hostStatusAgentSessionSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["chat", "terminal-agent"]),
+    /** The task (epic) it runs in; `null` when private or unknown to the caller. */
+    taskId: z.string().nullable(),
+    /**
+     * Canonical chat or terminal-agent session id only for its owner. Other
+     * callers receive an opaque response-local id that cannot open a session.
+     */
+    sessionId: z.string().min(1),
+    name: z.string().nullable(),
+    /** Mid-turn now: the live dot. */
+    working: z.boolean(),
+  }),
+);
+export type HostStatusAgentSession = z.infer<
+  typeof hostStatusAgentSessionSchema
+>;
+
+/**
+ * One open plain terminal, idle ones included. `name` is its title, sent
+ * only to the caller who owns it.
+ */
+export const hostStatusTerminalSessionSchema = lazySchema(() =>
+  z.object({
+    /** The task (epic) it runs in; `null` when private or unknown to the caller. */
+    taskId: z.string().nullable(),
+    /**
+     * Canonical terminal id only for its owner. Other callers receive an
+     * opaque response-local id that cannot open a session.
+     */
+    sessionId: z.string().min(1),
+    name: z.string().nullable(),
+  }),
+);
+export type HostStatusTerminalSession = z.infer<
+  typeof hostStatusTerminalSessionSchema
+>;
+
+/**
+ * Every running agent and open terminal on the host, for the Sandboxes row's
+ * pills and the Suspend, Stop and Destroy confirmations' lists. A list of
+ * what is open, NOT a measure of work: `busySessionCount` and
+ * `busyBreakdown` keep their meaning (what an update drain waits for), and
+ * nothing that decides idleness reads this.
+ */
+export const hostStatusSessionsSchema = lazySchema(() =>
+  z.object({
+    agents: z.array(hostStatusAgentSessionSchema),
+    terminals: z.array(hostStatusTerminalSessionSchema),
+  }),
+);
+export type HostStatusSessions = z.infer<typeof hostStatusSessionsSchema>;
+
+/**
+ * v1.9 adds `sessions`. `null` means the host did not report: a peer below
+ * this minor, which a reader shows as unknown, never as nothing running.
+ * Every other field is v1.8's, unchanged.
+ */
+export const hostStatusV19 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 9 } as const,
+  requestSchema: hostStatusV18.requestSchema,
+  responseSchema: lazySchema(() =>
+    hostStatusV18.responseSchema.extend({
+      sessions: hostStatusSessionsSchema.nullable(),
+    }),
+  ),
+});
+
+// A pre-1.9 peer never listed its sessions: `null`, never two empty lists.
+export const hostStatusUpgradeV18ToV19 = defineUpgradePath<
+  typeof hostStatusV18,
+  typeof hostStatusV19
+>({
+  from: hostStatusV18.schemaVersion,
+  to: hostStatusV19.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, sessions: null }),
+});

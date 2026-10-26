@@ -1,7 +1,10 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { create } from "zustand";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  UserSandboxCost,
+} from "@traycer/protocol/host/sandbox-control";
 import type {
   TaskHostPrincipal,
   TaskHostRow,
@@ -34,6 +37,15 @@ import {
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
+import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
+import { useMaybeEpicStore } from "@/hooks/use-epic-store";
+import { useSampledNow } from "@/lib/relative-time";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import {
+  SANDBOX_DEFAULT_IDLE_MINUTES,
+  sandboxAwakeTodayMs,
+  sandboxTodayCost,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
 import {
   configurationStageShape,
@@ -52,17 +64,22 @@ import {
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
+  AGENT_SANDBOX,
+  agentSandboxCreatedByLine,
+  burstIdleShortLine,
   SANDBOXES_CANT_BE_CREATED,
   NEEDS_CREDITS,
+  fundedRowPrice,
   needsCreditsRow,
   newSandboxRowLabel,
   reachRemedyLine,
   reachSentence,
+  sandboxOsLabel,
   sandboxShapeLabel,
-  shortPriceLabel,
   stagedChipLabel,
   stoppedPickLabel,
   suspendedPickLabel,
+  awakePickLabel,
   usesCreditsClause,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -81,6 +98,7 @@ import {
   type SandboxesPageConfigurationId,
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 
 /**
  * What an in-task picker knows about its task: the hosts it already uses,
@@ -88,6 +106,7 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
  * collaborators is a list this person could not read, counted as readers.
  */
 export interface SandboxStagingTask {
+  readonly epicId: string;
   readonly hosts: readonly TaskHostRow[] | null;
   readonly groups: readonly TaskHostGroup[];
   readonly collaborators: EpicCollaboratorsView | null;
@@ -106,8 +125,8 @@ export function useSandboxStagingTask(epicId: string): SandboxStagingTask {
     staleTime: undefined,
   }).data;
   return useMemo(
-    () => ({ hosts, groups, collaborators: collaborators ?? null }),
-    [collaborators, groups, hosts],
+    () => ({ epicId, hosts, groups, collaborators: collaborators ?? null }),
+    [collaborators, epicId, groups, hosts],
   );
 }
 
@@ -142,6 +161,12 @@ export function openStagedShapeSheet(surfaceKey: string): void {
 export interface SandboxStagingSurface {
   readonly surfaceKey: string;
   readonly task: SandboxStagingTask | null;
+  /**
+   * The staged block's `Open terminal instead`, beside Send: a terminal on
+   * the same staged sandbox, with the same credit checks and no agent
+   * sign-in. `null` where the surface's own action is the terminal.
+   */
+  readonly openTerminalInstead: (() => void) | null;
 }
 
 /**
@@ -153,11 +178,13 @@ export function useInTaskSandboxStagingSurface(
   epicId: string,
   surfaceKey: string,
   namedHostId: string | null,
+  openTerminalInstead: (() => void) | null,
 ): SandboxStagingSurface | null {
   const task = useSandboxStagingTask(epicId);
   return useMemo(
-    () => (namedHostId !== null ? null : { surfaceKey, task }),
-    [namedHostId, surfaceKey, task],
+    () =>
+      namedHostId !== null ? null : { surfaceKey, task, openTerminalInstead },
+    [namedHostId, openTerminalInstead, surfaceKey, task],
   );
 }
 
@@ -174,9 +201,17 @@ export interface SandboxStaging {
   readonly stage: StagedSandbox | null;
   /** The block under the staged host; `null` when nothing is staged. */
   readonly consequences: ConsequencesInput | null;
+  /** The block's `Open terminal instead`; `null` when nothing is staged. */
+  readonly openTerminalInstead: (() => void) | null;
   /** The shape sheet, mounted beside the picker. */
   readonly sheet: ReactNode;
 }
+
+/** A New row's target: what a pick stages, or what a chat's fork lands on. */
+export type NewStagedSandboxTarget = Extract<
+  StagedSandboxTarget,
+  { readonly kind: "new" }
+>;
 
 interface NewRowFacts {
   readonly configuration: StageConfiguration;
@@ -206,12 +241,18 @@ function useOfferedStagingSurface(
  * those picks, as every composer memory is bucketed by the composer's host.
  * A `null` surface stages nothing (a picker that is not a composer's) and
  * returns `null`; so does every surface without sandboxes (unread included).
+ *
+ * `forkOnNew` is a chat's host chip: a chat cannot move, so a New row (or
+ * the shape sheet's choice) is handed to the chat's fork instead of being
+ * staged, and a host row's pick is the chip's own fork.
  */
 export function useSandboxStaging(input: {
   readonly surface: SandboxStagingSurface | null;
   readonly memoryHostId: string | null;
   readonly hosts: readonly HostScopeOption[];
+  readonly forkOnNew: ((target: NewStagedSandboxTarget) => void) | null;
 }): SandboxStaging | null {
+  const { forkOnNew } = input;
   const { memoryHostId } = input;
   const surface = useOfferedStagingSurface(input.surface);
   const surfaceKey = surface === null ? "" : surface.surfaceKey;
@@ -270,7 +311,7 @@ export function useSandboxStaging(input: {
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
     return {
       configuration: stagedConfiguration,
-      price: stagedFacts === null ? null : stagedFacts.price,
+      price: stagedTargetPrice(stage.target, input.hosts, stagedFacts),
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
       audience: audienceFor(stagedConfiguration),
       reachHost: reachFor(
@@ -282,6 +323,7 @@ export function useSandboxStaging(input: {
     };
   }, [
     audienceFor,
+    input.hosts,
     reachFor,
     stage,
     stagedConfiguration,
@@ -289,11 +331,23 @@ export function useSandboxStaging(input: {
     viewerUserId,
   ]);
 
+  // A New target goes to the chat's fork, else it is staged on the surface.
+  const placeNew = useCallback(
+    (target: NewStagedSandboxTarget): void => {
+      if (forkOnNew === null) {
+        useStagedSandboxStore.getState().stage(surfaceKey, target);
+      } else {
+        forkOnNew(target);
+      }
+    },
+    [forkOnNew, surfaceKey],
+  );
+
   const stageNew = useCallback(
     (facts: NewRowFacts): void => {
       if (facts.shape === null || catalogue === null) return;
       const provider = stageProviderFor(catalogue, facts.shape.os);
-      useStagedSandboxStore.getState().stage(surfaceKey, {
+      placeNew({
         kind: "new",
         configuration: facts.configuration,
         shape: facts.shape,
@@ -308,42 +362,93 @@ export function useSandboxStaging(input: {
           stageConfigurationKey(facts.configuration),
         );
     },
-    [catalogue, memoryHostId, surfaceKey],
+    [catalogue, memoryHostId, placeNew],
   );
+
+  // In this task: every host the task already uses, and every agent sandbox
+  // created for it: the task's hosts list only hosts that own a chat on it,
+  // so one an agent created and has not used yet is the row's own fact.
+  // Automations is never offered, and a sandbox whose row has not answered
+  // is not either (it fails closed).
+  const inThisTask = useMemo(
+    () =>
+      task === null
+        ? null
+        : input.hosts.filter((host) => {
+            const summary = host.sandbox === null ? null : host.sandbox.summary;
+            const used =
+              (task.hosts ?? []).some((row) => row.hostId === host.hostId) ||
+              (summary !== null &&
+                summary.burst &&
+                summary.createdByTaskId === task.epicId);
+            return (
+              used &&
+              hostOptionPickerGroup(host, true, null) !== "hidden" &&
+              (host.sandbox === null || summary !== null)
+            );
+          }),
+    [input.hosts, task],
+  );
+  const epicId = task === null ? null : task.epicId;
+  const creatorIds = useMemo(
+    () => agentSandboxCreatorIds(inThisTask ?? [], epicId),
+    [epicId, inThisTask],
+  );
+  // One line per creator, in `creatorIds`' order: a joined string, so the
+  // store read stays a primitive.
+  const creatorTitles = useMaybeEpicStore(
+    (state) => creatorIds.map((id) => agentTitleIn(state, id)).join("\n"),
+    "",
+  );
+  const costs = useSandboxCosts().data ?? null;
+  const now = useSampledNow();
 
   const composer = useMemo<HostSwitcherComposerMode>(() => {
     // The picker's own rule: an agent's burst sandbox and Automations are
-    // never offered, a sandbox whose row has not answered is not either (it
-    // fails closed), and a teammate's team sandbox stays on the team's page.
+    // offered only under In this task, and a teammate's team sandbox stays on
+    // the team's page.
     const composerViewerId = viewerUserId.length === 0 ? null : viewerUserId;
-    const inThisTask =
-      task === null
-        ? null
-        : input.hosts.filter(
-            (host) =>
-              (task.hosts ?? []).some((row) => row.hostId === host.hostId) &&
-              hostOptionPickerGroup(host, false, {
-                userId: composerViewerId,
-              }) !== "hidden",
-          );
+    const titles = creatorTitles.split("\n");
+    const creatorName = (agentId: string): string | null => {
+      const title = titles[creatorIds.indexOf(agentId)] ?? "";
+      return title.length === 0 ? null : title;
+    };
     return {
       viewerUserId: composerViewerId,
       inThisTask,
       subLinesFor: (hostId) => {
         const host = input.hosts.find((option) => option.hostId === hostId);
-        if (host === undefined || task === null) return [];
+        if (host === undefined) return [];
+        const sandboxLines = sandboxRowLines(host, {
+          costs,
+          now,
+          epicId,
+          creatorName,
+        });
+        if (task === null) return sandboxLines;
         const owner = hostOptionTeamOwner(host);
         const principal: TaskHostPrincipal =
           owner === null
             ? { kind: "user", id: viewerUserId }
             : { kind: "team", id: owner.teamId };
         const other = reachFor(hostId, principal);
-        if (other === null) return [];
+        if (other === null) return sandboxLines;
         const remedyTeam =
           host.isLocalMachine && owner === null ? taskTeamTitle(task) : null;
         return remedyTeam === null
-          ? [reachSentence(other)]
-          : [reachSentence(other), reachRemedyLine(remedyTeam)];
+          ? [...sandboxLines, reachSentence(other)]
+          : [
+              ...sandboxLines,
+              reachSentence(other),
+              reachRemedyLine(remedyTeam),
+            ];
+      },
+      tagFor: (hostId) => {
+        const host = input.hosts.find((option) => option.hostId === hostId);
+        if (host === undefined || host.sandbox === null) return null;
+        const summary = host.sandbox.summary;
+        if (summary === null || !summary.burst) return null;
+        return hostConfigurationLabel(host);
       },
       newRows: rows.map(newRowPresentation),
       rememberedConfigurationKey:
@@ -354,12 +459,17 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel:
-        stage === null ? null : stagedLabel(stage.target, stagedFacts),
+      stagedLabel: stage === null ? null : stagedLabel(stage, stagedFacts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
       onPickHost: (host) => {
+        // A chat's pick is its fork onto that host, made by the chip itself;
+        // a sleeping sandbox wakes for it, as any pin's pick does.
+        if (forkOnNew !== null) {
+          wakeSandboxOnPick(host, null);
+          return;
+        }
         const target = restingTargetFor(host);
         if (target === null) {
           useStagedSandboxStore.getState().clear(surfaceKey);
@@ -389,9 +499,16 @@ export function useSandboxStaging(input: {
       },
     };
   }, [
+    costs,
+    creatorIds,
+    creatorTitles,
+    epicId,
+    forkOnNew,
+    inThisTask,
     input.hosts,
     lastConfigurationByHost,
     memoryHostId,
+    now,
     openSettings,
     reachFor,
     rows,
@@ -404,19 +521,9 @@ export function useSandboxStaging(input: {
     viewerUserId,
   ]);
 
-  const sheetFacts =
-    sheetKey === null
-      ? null
-      : (rows.find(
-          (row) => stageConfigurationKey(row.configuration) === sheetKey,
-        ) ?? null);
+  const sheetFacts = newRowOf(rows, sheetKey);
   const stagedNewTarget =
-    stage !== null &&
-    stage.target.kind === "new" &&
-    sheetFacts !== null &&
-    stageConfigurationKey(stage.target.configuration) === sheetKey
-      ? stage.target
-      : null;
+    sheetFacts === null ? null : stagedNewTargetOf(stage, sheetKey);
   const sheet =
     sheetFacts === null ? null : (
       <SandboxShapeSheet
@@ -445,7 +552,7 @@ export function useSandboxStaging(input: {
           unmovedComputer: null,
         }}
         onUseShape={(shape, name, wake) => {
-          useStagedSandboxStore.getState().stage(surfaceKey, {
+          placeNew({
             kind: "new",
             configuration: sheetFacts.configuration,
             shape,
@@ -462,7 +569,11 @@ export function useSandboxStaging(input: {
     );
 
   if (surface === null) return null;
-  return { composer, stage, consequences, sheet };
+  const openTerminalInstead =
+    stage === null || stage.phase === "handoff"
+      ? null
+      : surface.openTerminalInstead;
+  return { composer, stage, consequences, openTerminalInstead, sheet };
 }
 
 function newRowFacts(input: {
@@ -515,7 +626,12 @@ function stagedNewFacts(
   };
 }
 
-/** `New Acme sandbox · needs credits` over `2 vCPU · 4 GB · $0.12/h · uses your Acme credits`. */
+/**
+ * `New Acme sandbox` over `Linux · 2 vCPU · 4 GB · $0.12 an hour while awake ·
+ * uses your Acme credits`; at a short balance `New Acme sandbox · needs
+ * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses your Acme
+ * credits`.
+ */
 function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
   const copy = stageConfigurationCopy(facts.configuration);
   const head = newSandboxRowLabel(copy);
@@ -530,7 +646,10 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
   }
   const parts: string[] = [];
   if (facts.shape !== null) {
-    parts.push(sandboxShapeLabel(facts.shape.cpus, facts.shape.memoryMb));
+    parts.push(
+      sandboxOsLabel(facts.shape.os),
+      sandboxShapeLabel(facts.shape.cpus, facts.shape.memoryMb),
+    );
   }
   if (facts.price !== null) {
     parts.push(newRowPrice(facts.price, facts.needsCredits));
@@ -546,9 +665,9 @@ function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
 }
 
 function newRowPrice(price: StagePrice, needsCredits: boolean): string {
-  if (needsCredits) return needsCreditsRow(price.awakeMcPerHour);
-  const label = shortPriceLabel(price.awakeMcPerHour);
-  return price.exact ? label : `from ${label}`;
+  return needsCredits
+    ? needsCreditsRow(price.awakeMcPerHour)
+    : fundedRowPrice(price.awakeMcPerHour, price.exact);
 }
 
 /**
@@ -564,11 +683,17 @@ export function restingVerb(
   return null;
 }
 
-function stagedLabel(
-  target: StagedSandboxTarget,
-  facts: NewRowFacts | null,
-): string {
+function stagedLabel(stage: StagedSandbox, facts: NewRowFacts | null): string {
+  const { target } = stage;
   if (target.kind === "existing") {
+    // Its wake is ticked once the line is past it: the sandbox is awake now.
+    if (
+      stage.phase === "handoff" ||
+      (stage.phase === "creating" &&
+        (stage.step === "applying" || stage.step === "delivering"))
+    ) {
+      return awakePickLabel(target.name);
+    }
     return target.verb === "resume"
       ? suspendedPickLabel(target.name)
       : stoppedPickLabel(target.name);
@@ -686,4 +811,124 @@ function taskTeamTitle(task: SandboxStagingTask): string | null {
   return (
     task.groups.find((group) => group.key.startsWith("team:"))?.title ?? null
   );
+}
+
+/** `Personal`, or the team that owns the sandbox. */
+function hostConfigurationLabel(host: HostScopeOption): string {
+  const owner = hostOptionTeamOwner(host);
+  return owner === null ? "Personal" : owner.teamName;
+}
+
+/** The agents in this task that created an in-task agent sandbox. */
+function agentSandboxCreatorIds(
+  hosts: readonly HostScopeOption[],
+  epicId: string | null,
+): readonly string[] {
+  if (epicId === null) return [];
+  const ids = hosts.flatMap((host) => {
+    const summary = host.sandbox === null ? null : host.sandbox.summary;
+    if (summary === null || !summary.burst) return [];
+    const id = summary.createdByAgentId;
+    return id === null || summary.createdByTaskId !== epicId ? [] : [id];
+  });
+  return [...new Set(ids)].sort();
+}
+
+function agentTitleIn(state: OpenEpicState, agentId: string): string {
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    return state.chats.byId[agentId].title;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    return state.tuiAgents.byId[agentId].title;
+  }
+  return "";
+}
+
+/**
+ * A sandbox row's own line: an agent sandbox says who created it and when it
+ * goes (`Agent sandbox · created by Planner · destroys itself after 30 idle
+ * min`); one the person started says whose it is and what it cost today
+ * (`Personal · $0.03 today`). A computer has none here.
+ */
+function sandboxRowLines(
+  host: HostScopeOption,
+  context: {
+    readonly costs: UserSandboxCost | null;
+    readonly now: number;
+    readonly epicId: string | null;
+    readonly creatorName: (agentId: string) => string | null;
+  },
+): readonly string[] {
+  const summary = host.sandbox === null ? null : host.sandbox.summary;
+  if (summary === null) return [];
+  if (summary.burst) {
+    const creator =
+      summary.createdByAgentId === null ||
+      summary.createdByTaskId !== context.epicId
+        ? null
+        : context.creatorName(summary.createdByAgentId);
+    return [
+      `${creator === null ? AGENT_SANDBOX : agentSandboxCreatedByLine(creator)} · ${burstIdleShortLine(summary.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES)}`,
+    ];
+  }
+  const cost =
+    context.costs?.sandboxes.find((row) => row.sandboxId === summary.id) ??
+    null;
+  const today = sandboxTodayCost(
+    summary,
+    cost,
+    sandboxAwakeTodayMs(summary, context.now),
+  );
+  const configuration = hostConfigurationLabel(host);
+  return [today === null ? configuration : `${configuration} · ${today}`];
+}
+
+/**
+ * The staged target's price: an existing sandbox's from its row, a New
+ * one's from the catalogue (`null` until it answers).
+ */
+function stagedTargetPrice(
+  target: StagedSandboxTarget,
+  hosts: readonly HostScopeOption[],
+  stagedFacts: NewRowFacts | null,
+): StagePrice | null {
+  if (target.kind === "existing") {
+    return existingTargetPrice(hosts, target.hostId);
+  }
+  return stagedFacts === null ? null : stagedFacts.price;
+}
+
+/** The New row of `configurationKey`; `null` for none, or no key. */
+function newRowOf(
+  rows: readonly NewRowFacts[],
+  configurationKey: string | null,
+): NewRowFacts | null {
+  if (configurationKey === null) return null;
+  return (
+    rows.find(
+      (row) => stageConfigurationKey(row.configuration) === configurationKey,
+    ) ?? null
+  );
+}
+
+/** The staged New target, when it is the one of `configurationKey`. */
+function stagedNewTargetOf(
+  stage: StagedSandbox | null,
+  configurationKey: string | null,
+): NewStagedSandboxTarget | null {
+  if (stage === null || stage.target.kind !== "new") return null;
+  return stageConfigurationKey(stage.target.configuration) === configurationKey
+    ? stage.target
+    : null;
+}
+
+function existingTargetPrice(
+  hosts: readonly HostScopeOption[],
+  hostId: string,
+): StagePrice | null {
+  const host = hosts.find((option) => option.hostId === hostId);
+  const summary =
+    host === undefined || host.sandbox === null ? null : host.sandbox.summary;
+  if (summary === null || summary.priceMcPerHour === null) return null;
+  return { awakeMcPerHour: summary.priceMcPerHour.awakeMc, exact: true };
 }

@@ -2,6 +2,7 @@ import {
   createSessionRegistry,
   type SessionRegistry,
 } from "@traycer-clients/shared/replica-runtime";
+import { isSandboxHostId } from "@/lib/sandboxes/sandbox-host-directory";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import {
   DESKTOP_RETENTION_PROFILE,
@@ -140,8 +141,11 @@ export class TerminalSessionRegistry {
         maxActiveDeferMs: null,
         // Ordered by release, which is what `releaseSequence` recorded.
         refreshOrderOnRelease: true,
-        retainWhenIdle: ({ handle }) =>
-          shouldKeepLeaseFree(handle) || shouldLingerLeaseFree(handle),
+        // On a sandbox nothing is kept: its stream goes with the last lease
+        // (`isSandboxHostId`).
+        retainWhenIdle: ({ handle, hostId }) =>
+          !isSandboxHostId(hostId) &&
+          (shouldKeepLeaseFree(handle) || shouldLingerLeaseFree(handle)),
         // "Busy" here is the indefinite keep-warm class: a running
         // terminal-agent. A lingering plain terminal is not busy - it is warm
         // on a clock.

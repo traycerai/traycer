@@ -60,6 +60,7 @@ function build(input: {
     localHostId: null,
     activeHostId: null,
     localService: undefined,
+    localPlatform: null,
     hasLiveSession: () => false,
     localHostSettingUp: false,
     localHostTerminalRunNote: null,
@@ -337,7 +338,7 @@ describe("sleeping sandbox picks", () => {
     expect(isHostOptionSelectable(host, "pin", available)).toBe(false);
   });
 
-  it("lists the Automations pod with the user's sandboxes and offers it to no picker", () => {
+  it("lists the Automations pod in no host list and offers it to no picker", () => {
     const pod = sandboxOption({
       state: "awake",
       frozen: false,
@@ -345,11 +346,11 @@ describe("sleeping sandbox picks", () => {
       kind: "automation",
     });
     expect(hostOptionPickerGroup(pod, false, null)).toBe("hidden");
-    expect(hostOptionPickerGroup(pod, true, null)).toBe("sandbox");
+    expect(hostOptionPickerGroup(pod, true, null)).toBe("hidden");
     expect(pickableHostOptions([pod], null)).toEqual([]);
   });
 
-  it("hides the Automations pod from every picker, shows it in the host list, and never activates it", () => {
+  it("hides the Automations pod from every picker and the host list, and never activates it", () => {
     for (const state of ["awake", "released"] as const) {
       const pod = sandboxOption({
         state,
@@ -359,9 +360,10 @@ describe("sleeping sandbox picks", () => {
       });
       expect(hostOptionPickerGroup(pod, false, null)).toBe("hidden");
       expect(hostOptionPickerGroup(pod, false, { userId: "u" })).toBe("hidden");
-      expect(hostOptionPickerGroup(pod, true, null)).toBe("sandbox");
+      expect(hostOptionPickerGroup(pod, true, null)).toBe("hidden");
       expect(hostOptionCanActivate(pod)).toBe(false);
       expect(groupHostOptions([pod], false, null, null).sandboxes).toEqual([]);
+      expect(groupHostOptions([pod], true, null, null).sandboxes).toEqual([]);
     }
   });
 

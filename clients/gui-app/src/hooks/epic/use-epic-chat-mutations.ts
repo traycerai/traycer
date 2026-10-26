@@ -272,6 +272,24 @@ export function useEpicCreateChatForHostClient(
   CreateChatMutationInput,
   CreateChatMutationContext
 > {
+  return useCreateChatForClient(client, null);
+}
+
+/**
+ * A durable sandbox dispatch can settle after sign-out. Its caller records the
+ * original account's receipt; these lifecycle effects belong only to that account.
+ */
+export function useEpicCreateChatForPendingSandbox(
+  client: HostClient<HostRpcRegistry> | null,
+  ownerUserId: string | null,
+) {
+  return useCreateChatForClient(client, { ownerUserId });
+}
+
+function useCreateChatForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  ownerFence: { readonly ownerUserId: string | null } | null,
+) {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -282,6 +300,19 @@ export function useEpicCreateChatForHostClient(
     client,
     method: "epic.createChat",
     mapVariables: (params) => {
+      if (
+        ownerFence !== null &&
+        ownerFence.ownerUserId !== currentProfileUserId()
+      ) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message:
+            "The account that started this request is no longer signed in.",
+          requestId: "client-pre-flight",
+          method: "epic.createChat",
+          fatalDetails: null,
+        });
+      }
       const clientHostId = client?.getActiveHostId() ?? null;
       if (clientHostId !== params.hostId) {
         throw new HostRpcError({
@@ -301,26 +332,17 @@ export function useEpicCreateChatForHostClient(
     // the same place for the same reason: below every arm that treats a body as
     // a created chat, so only the final outcome reaches them.
     //
-    // `epic.createChat` is UNKEYED, so the re-dispatch is a plain second
-    // request rather than a replay - which is safe here precisely because the
-    // first one refused and created nothing.
-    //
-    // NOT because the method mints no caller-owned id: it does, and the modal
-    // pre-mints `chatId` and passes it. The reason unkeyed is settled here is
-    // the plan's D-decision about what a key would have to protect. A key
-    // guards the window where the caller cannot tell whether a create landed
-    // and will ask again; this surface has no such window. The modal clears its
-    // draft, staged intent and editor SYNCHRONOUSLY at submit and closes
-    // itself, so the only re-dispatch is the one on this refusal arm - where
-    // the host has already said it created nothing - and a second refusal ends
-    // the line with a toast rather than a retry. There is nothing left for a
-    // key to deduplicate.
-    //
-    // A SECOND refusal is the end of the line. The modal clears its draft,
-    // staged intent and editor synchronously at submit (by design - it closes
-    // itself), so there is no prompt to restore and the toast is the whole
-    // remedy.
+    // The transport mutation is unkeyed. Caller-owned chat IDs let a durable
+    // sandbox dispatch replay an uncertain request as the same agent; ordinary
+    // modal creates close on submit. This retry is different: the host already
+    // said it created nothing because attachment bytes were missing. Repair
+    // those bytes and send the identical request, with no new chat or message.
     resolveResponse: async (response, variables, redispatch) => {
+      if (
+        ownerFence !== null &&
+        ownerFence.ownerUserId !== currentProfileUserId()
+      )
+        return response;
       if (response.refusal?.kind !== "missing-attachment-bytes") {
         return response;
       }
@@ -336,6 +358,11 @@ export function useEpicCreateChatForHostClient(
       // confirmed to the next message that carries it.
       invalidateDraftBlobConfirmations(hostId, hashes);
       await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
+      if (
+        ownerFence !== null &&
+        ownerFence.ownerUserId !== currentProfileUserId()
+      )
+        return response;
       return redispatch();
     },
     options: {
@@ -345,6 +372,11 @@ export function useEpicCreateChatForHostClient(
         ownerUserId: currentProfileUserId(),
       }),
       onSuccess: (data, params, ctx) => {
+        if (
+          ownerFence !== null &&
+          ownerFence.ownerUserId !== currentProfileUserId()
+        )
+          return;
         // A REFUSAL ARRIVES HERE, not in `onError`, and it has to be read
         // BEFORE anything treats this body as a created chat. `@1.2` gave
         // `epic.createChat` a `refusal` key it has never had, and the released
@@ -388,6 +420,11 @@ export function useEpicCreateChatForHostClient(
         invalidateEpicChatRecords(queryClient, ctx.hostId);
       },
       onError: (error, variables) => {
+        if (
+          ownerFence !== null &&
+          ownerFence.ownerUserId !== currentProfileUserId()
+        )
+          return;
         releaseCreatedChat(variables);
         // Beside `releaseCreatedChat` and for the same reason: nothing else
         // would ever remove a deferred modal create's marker entry. No tile

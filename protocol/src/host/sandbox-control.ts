@@ -198,8 +198,9 @@ export interface SandboxSummary {
    */
   readonly environmentId: string | null;
   /**
-   * The member who created a team sandbox; `null` on a personal sandbox, a
-   * pod, and from a server that predates the field.
+   * The member who created the sandbox (an agent's create names the member
+   * it ran for); `null` on a pod, and from a server that predates the field.
+   * A server before the staging.145 fixes sent it on team rows only.
    */
   readonly createdBy: SandboxMember | null;
   /**
@@ -211,7 +212,8 @@ export interface SandboxSummary {
   /**
    * The member who kept a sandbox an agent created, turning it into one that
    * waits for its owner (`burst` false); `null` on a row nobody kept and from
-   * a server before keep.
+   * a server before keep (and, before the staging.145 fixes, on a personal
+   * row).
    */
   readonly keptBy: SandboxMember | null;
   /**
@@ -237,7 +239,160 @@ export interface SandboxSummary {
    * the GUI and from a server before the field.
    */
   readonly createdByTaskId: string | null;
+  /**
+   * The name of the agent that created the sandbox (its chat's title), only
+   * for a viewer who may read that chat; `null` otherwise, on a row no agent
+   * created, and from a server before the field.
+   */
+  readonly createdByAgentName: string | null;
+  /**
+   * The title of `createdByTaskId`, only for a viewer who may open that task;
+   * `null` otherwise and from a server before the field.
+   */
+  readonly createdByTaskTitle: string | null;
+  /** When `keptBy` kept the row (epoch milliseconds); `null` when nobody did. */
+  readonly keptAt: number | null;
+  /**
+   * The operation the row's state comes from: the latest one, landed or
+   * still moving. `null` on a row no operation has moved yet and from a
+   * server before the field.
+   */
+  readonly operation: SandboxOperation | null;
+  /**
+   * The label of `region` (`United States (West)`), the same one the
+   * catalogue gives it; `null` from a server before the field.
+   */
+  readonly regionLabel: string | null;
 }
+
+/**
+ * Why a transition happened, as the control plane records it. Read as text:
+ * a server may add a cause, which a reader shows generically.
+ *
+ *  - `verb`: a member's create, suspend, stop or destroy;
+ *  - `wake`: a member's resume or start (or the wake a send or Open terminal
+ *    made);
+ *  - `idle`: the idle period passed; `burst-idle`: an agent sandbox's idle
+ *    period passed and it destroyed itself;
+ *  - `resting`: the resting period passed and the row was destroyed;
+ *  - `freeze` / `thaw`: out of credits, and credits added;
+ *  - `failure`: a step failed and the row was rolled back (a failed wake
+ *    lands `stopped`);
+ *  - `day-30`: a frozen row's 30 days ran out;
+ *  - `reconcile`, `release`, `erasure`: the control plane's own repairs, an
+ *    Automations release, an account's erasure.
+ */
+export type SandboxTransitionCause = string;
+
+/**
+ * The gesture a member's verb came from, when it was not the verb's own menu
+ * item: `open-terminal`, `send` (a message to a task on it) or `open-files`.
+ * A value this build does not know reads as `null`.
+ */
+export const SANDBOX_VERB_GESTURES = [
+  "open-terminal",
+  "send",
+  "open-files",
+] as const;
+
+export type SandboxVerbGesture = (typeof SANDBOX_VERB_GESTURES)[number];
+
+export const sandboxVerbGestureSchema = lazySchema(() =>
+  z.enum(SANDBOX_VERB_GESTURES),
+);
+
+/**
+ * Support references by failure class: what a person reads and quotes for a
+ * failure, in place of the provider's raw code.
+ */
+const SANDBOX_SUPPORT_REFERENCES: ReadonlyMap<string, string> = new Map([
+  ["credit-gate", "SBX-0402"],
+  ["provider-unavailable", "SBX-0410"],
+  ["provider-pending", "SBX-0411"],
+  ["create", "SBX-0412"],
+  ["provider-error", "SBX-0413"],
+  ["boot-timeout", "SBX-0414"],
+  ["boot-token-mint", "SBX-0415"],
+  ["boot-token-delivery", "SBX-0416"],
+  ["grant_set_failed", "SBX-0417"],
+  ["environment_placement_failed", "SBX-0418"],
+  ["chat-store-newer", "SBX-0430"],
+  ["resume", "SBX-0507"],
+  ["start", "SBX-0508"],
+  ["wake-prepare", "SBX-0509"],
+  ["wake-complete", "SBX-0510"],
+  ["wake-timeout", "SBX-0511"],
+  ["envelope-delivery", "SBX-0520"],
+  ["suspend", "SBX-0601"],
+  ["stop", "SBX-0701"],
+]);
+
+/**
+ * A failure code's support reference (`create:kube-create-service-account`
+ * is `SBX-0412`), keyed on its class: the part before the first `:` when
+ * that part is a listed stage, otherwise the whole code. `null` for a code
+ * of no listed class, and for no code. The raw code stays in diagnostics.
+ */
+export function sandboxSupportReference(
+  failureCode: string | null,
+): string | null {
+  if (failureCode === null) return null;
+  const colon = failureCode.indexOf(":");
+  const stage = colon === -1 ? null : failureCode.slice(0, colon);
+  const failureClass =
+    stage !== null && SANDBOX_SUPPORT_REFERENCES.has(stage)
+      ? stage
+      : failureCode;
+  return SANDBOX_SUPPORT_REFERENCES.get(failureClass) ?? null;
+}
+
+/**
+ * One operation in a sandbox's life: a create, a wake, a suspend, a stop, a
+ * destroy, or the system's own move, from the transition that left the state
+ * before it to the one that landed it.
+ */
+export interface SandboxOperation {
+  /** When it started (epoch milliseconds). */
+  readonly at: number;
+  /** The state it started from (`creating` for the create). */
+  readonly fromState: HostSandboxState;
+  /** Where it landed, or where it stands while still moving. */
+  readonly state: HostSandboxState;
+  /** What started it. */
+  readonly cause: SandboxTransitionCause;
+  /**
+   * What landed it: `cause` again, or `failure` when it was rolled back
+   * (a failed wake lands `stopped` with `failure`).
+   */
+  readonly outcomeCause: SandboxTransitionCause;
+  /**
+   * The landing's closed-vocabulary detail (a failure code, `busy` when a
+   * suspend found the guest in use); `null` when there is none.
+   */
+  readonly outcomeDetail: string | null;
+  /**
+   * The member who started it, with their name for "you" or the name; `null`
+   * for a system cause (idle, resting, credits, a failure, a repair) and for
+   * a member whose account was erased.
+   */
+  readonly actor: SandboxMember | null;
+  /** The gesture the member's verb came from; `null` for the plain verb. */
+  readonly gesture: SandboxVerbGesture | null;
+}
+
+export const sandboxOperationSchema: z.ZodType<SandboxOperation> = lazySchema(
+  () =>
+    z.object({
+      at: z.number(),
+      fromState: z.enum(HOST_SANDBOX_STATES),
+      state: z.enum(HOST_SANDBOX_STATES),
+      cause: z.string().min(1),
+      outcomeCause: z.string().min(1),
+      outcomeDetail: z.string().nullable(),
+      actor: sandboxMemberSchema.nullable(),
+      gesture: sandboxVerbGestureSchema.nullable().catch(null),
+    }),
+);
 
 /**
  * A team member as a team sandbox's card names them. `userId` lets the card
@@ -311,6 +466,13 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
       .default(null),
     destroyAt: z.number().nullable().default(null),
     createdByTaskId: z.string().min(1).nullable().default(null),
+    createdByAgentName: z.string().nullable().default(null),
+    createdByTaskTitle: z.string().nullable().default(null),
+    keptAt: z.number().nullable().default(null),
+    // One unreadable operation (a state newer than this build) must not
+    // fail the row, and with it the whole sandbox list.
+    operation: sandboxOperationSchema.nullable().default(null).catch(null),
+    regionLabel: z.string().nullable().default(null),
   }),
 );
 
@@ -470,8 +632,10 @@ export const sandboxShapeRungSchema: z.ZodType<SandboxShapeRung> = lazySchema(
 );
 
 /**
- * A region's awake rates per unit, in millicredits an hour: a shape costs
- * `(cpus × vcpu + memory GB × memory + disk GB × disk) × multiplier`.
+ * A region's rates per unit, in millicredits an hour, as the server bills
+ * them (memory and disk in GiB, `MB / 1024`): a shape's awake price is
+ * `ceil((cpus × vcpu + memory GB × memory) × multiplier)`; `disk` is the
+ * snapshot rate a suspended or stopped sandbox pays instead.
  */
 export interface SandboxCataloguePricing {
   readonly vcpuHourMillicredits: number;
@@ -747,6 +911,12 @@ export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND =
 /** The create could not check the environment (authn unreachable). */
 export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE =
   "environment_unavailable";
+/**
+ * A rename the host list could not take (authn unreachable or refusing), sent
+ * as a 503 by `PATCH /api/sandboxes/:id`. Nothing was saved: the row keeps its
+ * old name, so trying again is safe.
+ */
+export const SANDBOX_REFUSAL_CODE_RENAME_UNAVAILABLE = "rename_unavailable";
 
 // -----------------------------------------------------------------------------
 // Lifecycle verbs
@@ -759,6 +929,16 @@ export const SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE =
  * and the typed refusals above.
  */
 export type SandboxLifecycleVerb = "suspend" | "resume" | "stop" | "start";
+
+/**
+ * The optional body of `POST /api/sandboxes/:id/<verb>`: the gesture the
+ * verb came from, recorded on the operation it starts (History's "Resumed by
+ * you (Open terminal)"). A server before the field ignores the body; one with
+ * it reads an absent body, or a gesture it does not know, as none.
+ */
+export interface SandboxLifecycleVerbRequest {
+  readonly gesture: SandboxVerbGesture | null;
+}
 
 // -----------------------------------------------------------------------------
 // Cost view
@@ -811,7 +991,40 @@ export interface SandboxCost {
    * from a server before the field.
    */
   readonly todayMillicredits: number;
+  /**
+   * Details' History: every operation, oldest first, each with what it cost
+   * until the next one started. Empty on a team row of the list (its
+   * `/:id/cost` carries it) and from a server before the field.
+   */
+  readonly history: readonly SandboxHistoryEntry[];
 }
+
+/** One History line: an operation and the span it governed. */
+export interface SandboxHistoryEntry extends SandboxOperation {
+  /** When the next operation started; `null` while this one is the row's current one. */
+  readonly untilAt: number | null;
+  /**
+   * The charges posted from `at` to `untilAt` (to now on the current entry,
+   * with the open segment's accrual), each counted where its minute starts.
+   */
+  readonly millicredits: number;
+}
+
+export const sandboxHistoryEntrySchema: z.ZodType<SandboxHistoryEntry> =
+  lazySchema(() =>
+    z.object({
+      at: z.number(),
+      fromState: z.enum(HOST_SANDBOX_STATES),
+      state: z.enum(HOST_SANDBOX_STATES),
+      cause: z.string().min(1),
+      outcomeCause: z.string().min(1),
+      outcomeDetail: z.string().nullable(),
+      actor: sandboxMemberSchema.nullable(),
+      gesture: sandboxVerbGestureSchema.nullable().catch(null),
+      untilAt: z.number().nullable(),
+      millicredits: z.number().nonnegative(),
+    }),
+  );
 
 export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
   z.object({
@@ -827,8 +1040,31 @@ export const sandboxCostSchema: z.ZodType<SandboxCost> = lazySchema(() =>
     pendingMillicredits: z.number().nonnegative(),
     segments: z.array(sandboxCostSegmentSchema),
     todayMillicredits: z.number().nonnegative().default(0),
+    // One unreadable entry (a state newer than this build) must not fail
+    // the cost, and with it the page's figures.
+    history: z.array(sandboxHistoryEntrySchema).default([]).catch([]),
   }),
 );
+
+/**
+ * One configuration's cost today (UTC day): every sandbox of it the viewer
+ * reaches, those destroyed today included.
+ */
+export interface SandboxEnvironmentToday {
+  readonly environmentId: string;
+  readonly todayMillicredits: number;
+  /** The viewer's own share of it (their personal rows, the wakes they paid for). */
+  readonly todayYoursMillicredits: number;
+}
+
+export const sandboxEnvironmentTodaySchema: z.ZodType<SandboxEnvironmentToday> =
+  lazySchema(() =>
+    z.object({
+      environmentId: z.string().min(1),
+      todayMillicredits: z.number().nonnegative(),
+      todayYoursMillicredits: z.number().nonnegative(),
+    }),
+  );
 
 /** `GET /api/sandboxes/cost`: every listed sandbox's cost and the user's burn. */
 export interface UserSandboxCost {
@@ -840,6 +1076,12 @@ export interface UserSandboxCost {
    * returned; `0` from a server before the field.
    */
   readonly todayYoursMillicredits: number;
+  /**
+   * Each configuration's cost today, sandboxes destroyed today included (the
+   * per-row figures above leave them out with their rows). Empty from a
+   * server before the field.
+   */
+  readonly todayByEnvironment: readonly SandboxEnvironmentToday[];
 }
 
 export const userSandboxCostSchema: z.ZodType<UserSandboxCost> = lazySchema(
@@ -848,5 +1090,6 @@ export const userSandboxCostSchema: z.ZodType<UserSandboxCost> = lazySchema(
       sandboxes: z.array(sandboxCostSchema),
       awakeBurnMillicreditsPerHour: z.number().nonnegative(),
       todayYoursMillicredits: z.number().nonnegative().default(0),
+      todayByEnvironment: z.array(sandboxEnvironmentTodaySchema).default([]),
     }),
 );

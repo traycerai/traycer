@@ -124,6 +124,8 @@ export interface AppLocalNotificationsState {
   upsertReplacingPreservingReadState: (
     entry: AppLocalNotificationInput,
   ) => void;
+  /** Withdraws a host's stream faults: its sandbox was destroyed on purpose. */
+  removeHostStreamFailures: (originHostId: string) => void;
   markAsRead: (id: string, readAt: number) => void;
   markEntityAsRead: (
     originHostId: string | null,
@@ -536,6 +538,25 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
+        removeHostStreamFailures: (originHostId) => {
+          set((state) => {
+            const removed = Object.values(state.byId).filter(
+              (entry) =>
+                entry.kind === "stream.transport.error" &&
+                entry.originHostId === originHostId,
+            );
+            if (removed.length === 0) return state;
+            const byId = { ...state.byId };
+            for (const entry of removed) delete byId[entry.id];
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
         markAsRead: (id, readAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -834,9 +855,13 @@ export function emitTerminalClosedNotification(input: {
   readonly instanceId: string;
   readonly hostId: string;
   readonly hostLabel: string;
+  /** The host is a sandbox someone stopped, not one that went missing. */
+  readonly sandboxStopped: boolean;
   readonly target: TerminalNotificationTarget;
 }): void {
-  const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
+  const message = input.sandboxStopped
+    ? `Terminal closed: ${input.hostLabel} was stopped.`
+    : `Terminal closed: host "${input.hostLabel}" is unreachable.`;
   useAppLocalNotificationsStore.getState().upsertReplacingPreservingReadState({
     id: `terminal.closed:${input.instanceId}`,
     originHostId: input.hostId,

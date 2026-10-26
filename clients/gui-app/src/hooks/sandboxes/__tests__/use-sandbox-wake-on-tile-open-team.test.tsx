@@ -161,7 +161,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     );
     scriptListUntilVerb(binding, "suspended");
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -170,6 +170,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "resume",
+      null,
       expect.any(Number),
     );
   });
@@ -185,7 +186,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     );
     scriptListUntilVerb(binding, "released");
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -193,6 +194,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "start",
+      null,
       expect.any(Number),
     );
   });
@@ -208,7 +210,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     );
     scriptListUntilVerb(binding, "suspended");
 
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();
@@ -225,7 +227,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
     binding.auth.listSandboxes.mockImplementation(
       listOf({ state: "suspended", frozen: true }),
     );
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
+    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID, null), {
       wrapper: wrapper(),
     });
     await settleWake();

@@ -13,7 +13,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   HostNotificationsCloudFeedRow,
-  HostNotificationsCloudFeedRowV14,
+  HostNotificationsCloudFeedRowV15,
   HostNotificationsCloudFeedSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -598,7 +598,7 @@ describe("cloud notifications store", () => {
       null,
     );
     const base = cloudRow("entry-stalled", 4, "host-a");
-    const row: HostNotificationsCloudFeedRowV14 = {
+    const row: HostNotificationsCloudFeedRowV15 = {
       ...base,
       coalesceKey: "environment.move.stalled:host-a",
       entry: {
@@ -621,6 +621,49 @@ describe("cloud notifications store", () => {
     const state = useCloudNotificationsStore.getState();
     expect(state.rows).toEqual({
       [cloudNotificationFeedId("entry-stalled")]: row,
+    });
+    expect(state.connectionState).toBe("connected");
+    close();
+  });
+
+  it("lands a snapshot carrying a sandbox.notice row instead of rejecting the feed", () => {
+    const client = new ControlledWsStreamClient();
+    const close = openCloudNotificationsStream(
+      reconnectEngine,
+      client,
+      null,
+      null,
+    );
+    const base = cloudRow("entry-notice", 4, "host-a");
+    const row: HostNotificationsCloudFeedRowV15 = {
+      ...base,
+      coalesceKey: "sandbox-notice:sbx-1",
+      entry: {
+        ...base.entry,
+        kind: "sandbox.notice",
+        severity: "info",
+        outcome: "completed",
+        payload: {
+          kind: "sandbox_notice",
+          sandboxId: "sbx-1",
+          sandboxName: "build box",
+          notice: { kind: "resting_destroyed" },
+        },
+      },
+    };
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 4,
+      rows: [row],
+      summary,
+    });
+
+    const state = useCloudNotificationsStore.getState();
+    expect(state.rows).toEqual({
+      [cloudNotificationFeedId("entry-notice")]: row,
     });
     expect(state.connectionState).toBe("connected");
     close();

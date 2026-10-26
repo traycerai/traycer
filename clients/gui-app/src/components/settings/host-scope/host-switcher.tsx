@@ -1,4 +1,5 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { useState, type ReactNode } from "react";
 import {
   ChevronDown,
@@ -140,7 +141,9 @@ interface HostSwitcherActionPresentation {
  * collapsed group, a New sandbox row per configuration with a gear, and
  * `Manage sandboxes in Settings` at the foot. A pick here only STAGES: no
  * sandbox is woken or created until the first action (the send, or the
- * terminal open), so this mode never calls `wakeSandboxOnPick`.
+ * terminal open), so this mode never calls `wakeSandboxOnPick`. A chat's
+ * host chip uses the same mode, where its `onPickHost` and `onPickNew` fork
+ * the chat instead.
  */
 export interface HostSwitcherComposerMode {
   readonly viewerUserId: string | null;
@@ -151,6 +154,8 @@ export interface HostSwitcherComposerMode {
   readonly inThisTask: readonly HostScopeOption[] | null;
   /** Lines under a host row (the Local sub-line, the reach sentence). */
   readonly subLinesFor: (hostId: string) => readonly string[];
+  /** The configuration tag beside an agent sandbox's title, else `null`. */
+  readonly tagFor: (hostId: string) => string | null;
   readonly newRows: readonly HostSwitcherNewRow[];
   /** The configuration that heads the New group past two configurations. */
   readonly rememberedConfigurationKey: string | null;
@@ -393,56 +398,13 @@ export function HostSwitcher(props: {
   // `Add host…` with it, since that footer is its sole opener. So the one moment
   // a person most needs the picker was the one moment it disappeared.
   if (hosts.length === 0 && props.composer === null) {
-    // A FAILED list is not an empty account, here as much as in the gate — the
-    // same rule, at its second consumer. This branch used to claim "No hosts
-    // yet" and offer the trailing action over a union that was empty because a
-    // request never came back: contradicting the panel beside it, and letting
-    // Add record an empty known-hosts snapshot that a later successful retry
-    // turned into "your existing host just connected". Retry is the honest
-    // action; the rest returns the moment the claim can be made.
-    if (props.listsFailed && !props.isLoading) {
-      return (
-        <div
-          className="flex w-full flex-col gap-2 px-3 py-2"
-          data-testid="settings-host-switcher-lists-failed"
-        >
-          <span className="text-ui-xs text-muted-foreground">
-            Couldn&apos;t load your hosts
-          </span>
-          <button
-            type="button"
-            onClick={props.onRetryLists}
-            className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            data-testid="settings-host-switcher-retry-lists"
-          >
-            Try again
-          </button>
-        </div>
-      );
-    }
     return (
-      <div
-        className="flex w-full flex-col gap-2 px-3 py-2"
-        data-testid="settings-host-switcher-empty"
-      >
-        <span className="text-ui-xs text-muted-foreground">
-          {props.isLoading ? "Finding your hosts…" : "No hosts yet"}
-        </span>
-        {/* Genuinely zero hosts is exactly when this action matters most, and
-            it used to be unreachable here — the only opener lived in a popover
-            this branch returned before rendering. */}
-        {props.isLoading || trailingAction === null ? null : (
-          <button
-            type="button"
-            onClick={trailingAction.onSelect}
-            className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            data-testid={trailingAction.emptyTestId}
-          >
-            <trailingAction.icon className="size-3.5 shrink-0" />
-            {trailingAction.label}
-          </button>
-        )}
-      </div>
+      <HostSwitcherEmptyList
+        listsFailed={props.listsFailed}
+        isLoading={props.isLoading}
+        onRetryLists={props.onRetryLists}
+        trailingAction={trailingAction}
+      />
     );
   }
 
@@ -484,7 +446,9 @@ export function HostSwitcher(props: {
           // also send the draft).
           onKeyDown={(event) => event.stopPropagation()}
         >
-          <Command>
+          <Command
+            filter={props.composer === null ? undefined : composerSearchFilter}
+          >
             {showSearch ? (
               <CommandInput
                 placeholder={SEARCH_HOSTS_PLACEHOLDER}
@@ -493,12 +457,11 @@ export function HostSwitcher(props: {
               />
             ) : null}
             <CommandList>
-              <CommandEmpty>
-                <HostSwitcherNoMatch
-                  composer={props.composer}
-                  search={search}
-                />
-              </CommandEmpty>
+              {/* The composer's New rows never filter out, so its no-match
+                  line is drawn by its groups instead. */}
+              {props.composer === null ? (
+                <CommandEmpty>No hosts match.</CommandEmpty>
+              ) : null}
               <HostSwitcherGroups
                 hosts={hosts}
                 action={props.action}
@@ -512,6 +475,7 @@ export function HostSwitcher(props: {
                   props.composer?.onOpenShape(configurationKey);
                 }}
                 searching={search.length > 0}
+                search={search}
                 renderRow={(host) => (
                   <HostSwitcherRow
                     key={host.hostId}
@@ -534,6 +498,11 @@ export function HostSwitcher(props: {
                     }
                     composer={props.composer !== null}
                     subLines={hostSubLines(props.composer, host.hostId)}
+                    tag={
+                      props.composer === null
+                        ? null
+                        : props.composer.tagFor(host.hostId)
+                    }
                     onSelect={() => {
                       pickHostRow(props.composer, props.intent, host);
                       props.onSelect(host.hostId);
@@ -627,20 +596,53 @@ function hostSwitcherShowsSearch(
   return composer !== null || hosts.length >= SEARCH_THRESHOLD;
 }
 
-/** A picker's empty search: the composer says where the rest are. */
-function HostSwitcherNoMatch(props: {
-  readonly composer: HostSwitcherComposerMode | null;
-  readonly search: string;
-}): ReactNode {
-  if (props.composer === null) return "No hosts match.";
+/** Item values the composer's search never filters out: New rows, the footer. */
+const COMPOSER_UNFILTERED_PREFIXES = ["new-sandbox:", "action:"] as const;
+
+/**
+ * Whether a composer host row matches a search: its title or its name
+ * contains the term, ignoring case. Partial terms narrow (`p2` keeps
+ * `e2e-sbx-p2` alone), unlike cmdk's scattered-letter scoring.
+ */
+function composerHostMatches(host: HostScopeOption, term: string): boolean {
+  const needle = term.trim().toLocaleLowerCase();
+  if (needle.length === 0) return true;
+  return [hostRowTitle(host, true), host.name].some((text) =>
+    text.toLocaleLowerCase().includes(needle),
+  );
+}
+
+/**
+ * The composer list's cmdk filter. A host row's first two keywords are its
+ * title and name (see `HostSwitcherRow`), which `composerHostMatches` reads.
+ */
+function composerSearchFilter(
+  value: string,
+  search: string,
+  keywords: string[] | undefined,
+): number {
+  if (COMPOSER_UNFILTERED_PREFIXES.some((prefix) => value.startsWith(prefix))) {
+    return 1;
+  }
+  const needle = search.trim().toLocaleLowerCase();
+  if (needle.length === 0) return 1;
+  return (keywords ?? [])
+    .slice(0, 2)
+    .some((text) => text.toLocaleLowerCase().includes(needle))
+    ? 1
+    : 0;
+}
+
+/** The composer's empty search: no host of yours, and where the rest are. */
+function HostSwitcherNoMatch(props: { readonly search: string }): ReactNode {
   return (
-    <span
-      className="flex flex-col gap-0.5"
+    <div
+      className="flex flex-col gap-0.5 px-2 py-3 text-center text-ui-sm text-muted-foreground"
       data-testid="host-switcher-composer-no-match"
     >
-      <span>{noHostMatchesLine(props.search)}</span>
+      <span>{noHostMatchesLine(props.search.trim())}</span>
       <span className="text-ui-xs">{NO_MATCH_ELSEWHERE_LINE}</span>
-    </span>
+    </div>
   );
 }
 
@@ -665,7 +667,7 @@ function pickHostRow(
     composer.onPickHost(host);
     return;
   }
-  if (intent !== "view") wakeSandboxOnPick(host);
+  if (intent !== "view") wakeSandboxOnPick(host, null);
 }
 
 /** The staged New row's gear beside the trigger: the shape sheet. */
@@ -690,6 +692,69 @@ function HostSwitcherStagedGear(props: {
     >
       <Settings aria-hidden />
     </Button>
+  );
+}
+
+/** The picker's place when the account lists no host: why, and what to do. */
+function HostSwitcherEmptyList(props: {
+  readonly listsFailed: boolean;
+  readonly isLoading: boolean;
+  readonly onRetryLists: () => void;
+  readonly trailingAction:
+    | (HostSwitcherActionPresentation & { readonly onSelect: () => void })
+    | null;
+}): ReactNode {
+  const { trailingAction } = props;
+  // A FAILED list is not an empty account, here as much as in the gate — the
+  // same rule, at its second consumer. This branch used to claim "No hosts
+  // yet" and offer the trailing action over a union that was empty because a
+  // request never came back: contradicting the panel beside it, and letting
+  // Add record an empty known-hosts snapshot that a later successful retry
+  // turned into "your existing host just connected". Retry is the honest
+  // action; the rest returns the moment the claim can be made.
+  if (props.listsFailed && !props.isLoading) {
+    return (
+      <div
+        className="flex w-full flex-col gap-2 px-3 py-2"
+        data-testid="settings-host-switcher-lists-failed"
+      >
+        <span className="text-ui-xs text-muted-foreground">
+          Couldn&apos;t load your hosts
+        </span>
+        <button
+          type="button"
+          onClick={props.onRetryLists}
+          className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          data-testid="settings-host-switcher-retry-lists"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="flex w-full flex-col gap-2 px-3 py-2"
+      data-testid="settings-host-switcher-empty"
+    >
+      <span className="text-ui-xs text-muted-foreground">
+        {props.isLoading ? "Finding your hosts…" : "No hosts yet"}
+      </span>
+      {/* Genuinely zero hosts is exactly when this action matters most, and
+          it used to be unreachable here — the only opener lived in a popover
+          this branch returned before rendering. */}
+      {props.isLoading || trailingAction === null ? null : (
+        <button
+          type="button"
+          onClick={trailingAction.onSelect}
+          className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          data-testid={trailingAction.emptyTestId}
+        >
+          <trailingAction.icon className="size-3.5 shrink-0" />
+          {trailingAction.label}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -728,6 +793,7 @@ function HostSwitcherGroups(props: {
   readonly onPickNew: (configurationKey: string) => void;
   readonly onOpenShape: (configurationKey: string) => void;
   readonly searching: boolean;
+  readonly search: string;
   readonly selected: HostScopeOption | null;
   readonly renderRow: (host: HostScopeOption) => ReactNode;
 }): ReactNode {
@@ -739,6 +805,7 @@ function HostSwitcherGroups(props: {
         onPickNew={props.onPickNew}
         onOpenShape={props.onOpenShape}
         searching={props.searching}
+        search={props.search}
         selected={props.selected}
         renderRow={props.renderRow}
       />
@@ -823,6 +890,7 @@ function HostSwitcherComposerGroups(props: {
   readonly onPickNew: (configurationKey: string) => void;
   readonly onOpenShape: (configurationKey: string) => void;
   readonly searching: boolean;
+  readonly search: string;
   readonly selected: HostScopeOption | null;
   readonly renderRow: (host: HostScopeOption) => ReactNode;
 }): ReactNode {
@@ -837,8 +905,14 @@ function HostSwitcherComposerGroups(props: {
   // A host the task already uses is listed once, under In this task.
   const yours = groups.yours.filter((host) => !inTaskIds.has(host.hostId));
   const started = groups.started.filter((host) => !inTaskIds.has(host.hostId));
+  const noHostMatches =
+    props.search.trim().length > 0 &&
+    ![...inTask, ...yours, ...started].some((host) =>
+      composerHostMatches(host, props.search),
+    );
   return (
     <>
+      {noHostMatches ? <HostSwitcherNoMatch search={props.search} /> : null}
       {inTask.length === 0 ? null : (
         <CommandGroup
           heading={IN_THIS_TASK_LABEL}
@@ -956,7 +1030,7 @@ function HostSwitcherNewSandboxRow(props: {
     >
       <Plus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-ui-sm">{row.label}</span>
+        <span className="text-ui-sm wrap-break-word">{row.label}</span>
         <span className="text-ui-xs text-muted-foreground wrap-break-word">
           {row.subLine}
         </span>
@@ -1177,8 +1251,17 @@ function HostSwitcherOptionRow(props: {
   readonly surfaceState: HostRowSurfaceState;
   readonly updateView: FleetUpdateView | null;
   readonly environmentLabel: string | null;
+  /** The composer and in-task pickers: the title wraps, never cut. */
+  readonly composer: boolean;
   readonly subLines: readonly string[];
+  readonly tag: string | null;
 }): ReactNode {
+  const tag =
+    props.tag === null ? null : (
+      <Badge size="xs" variant="muted" data-testid="host-switcher-row-tag">
+        {props.tag}
+      </Badge>
+    );
   const row = (
     <HostOptionRow
       host={props.host}
@@ -1188,13 +1271,24 @@ function HostSwitcherOptionRow(props: {
       surfaceState={props.surfaceState}
       updateView={props.updateView}
       nameRef={null}
+      nameWraps={props.composer}
       environmentLabel={props.environmentLabel}
     />
   );
-  if (props.subLines.length === 0) return row;
+  if (props.subLines.length === 0) {
+    return (
+      <>
+        {row}
+        {tag}
+      </>
+    );
+  }
   return (
     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      <span className="flex min-w-0 items-center gap-2">{row}</span>
+      <span className="flex min-w-0 items-center gap-2">
+        {row}
+        {tag}
+      </span>
       {props.subLines.map((line) => (
         <span
           key={line}
@@ -1229,7 +1323,7 @@ function ComposerComputerRow(props: {
         {props.title === hostOptionKindLabel(props.host) ? null : (
           <span className="sr-only">{hostOptionKindLabel(props.host)}</span>
         )}
-        <span className="min-w-0 flex-1 truncate text-start">
+        <span className="min-w-0 flex-1 text-start wrap-break-word">
           {props.title}
         </span>
       </span>
@@ -1269,6 +1363,8 @@ function HostSwitcherRow(props: {
   readonly composer: boolean;
   /** Lines under the row (the composer's Local sub-line, the reach sentence). */
   readonly subLines: readonly string[];
+  /** The composer's configuration tag beside the title, or `null`. */
+  readonly tag: string | null;
   readonly onSelect: () => void;
 }): ReactNode {
   const { host } = props;
@@ -1320,7 +1416,9 @@ function HostSwitcherRow(props: {
           surfaceState={surfaceState}
           updateView={props.updateView}
           environmentLabel={props.environmentLabel}
+          composer={props.composer}
           subLines={props.subLines}
+          tag={props.tag}
         />
       )}
     </CommandItem>

@@ -197,6 +197,7 @@ export function buildOverviewHostFixture(options: {
         install: options.install ?? null,
         processMemory: null,
         crossHostMessaging: null,
+        sessions: null,
       };
     },
     "host.identity.get": () => ({ ...identity }),

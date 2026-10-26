@@ -1,6 +1,11 @@
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { KnownHostSessionsList } from "@/components/host/host-restart-sessions";
+import {
+  HostReportedSessionsList,
+  SandboxSessionPillBadge,
+} from "@/components/hosts/sandbox-reported-sessions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -41,6 +46,7 @@ import {
   SANDBOX_SESSIONS_CAPTION,
   sandboxDestroySessionsSentence,
   sandboxRestingPreview,
+  sandboxStopDestroySentence,
   sandboxTypedNameReason,
   toastSandboxVerbOutcome,
 } from "@/components/hosts/sandbox-confirm-model";
@@ -55,6 +61,7 @@ import {
   sandboxPeriodDraft,
   sandboxPeriodMinutes,
   sandboxRestingRefusal,
+  sandboxSessionPills,
   sandboxSessionsLine,
   type SandboxPageConfiguration,
   type SandboxPeriodDraft,
@@ -131,10 +138,18 @@ function storageCredits(
   return `${payer === "you" ? "your" : `${payer}'s`} ${configuration.teamName} credits`;
 }
 
-/** The sessions count line and the caption, inside every confirmation. */
+/**
+ * The sessions count line with its pills, the named sessions (the host's
+ * own list while live, else the ones this window knows of), and the caption, inside every confirmation that interrupts
+ * something. Destroy says the count in its sentence (`countLine: false`). A
+ * named session's link closes the dialog it opens from.
+ */
 export function SandboxSessionsBlock(props: {
   readonly report: SandboxSessionReport;
+  readonly countLine: boolean;
   readonly trailing: string | null;
+  readonly hostId: string;
+  readonly onNavigate: () => void;
 }): ReactNode {
   const now = useSampledNow();
   return (
@@ -142,12 +157,34 @@ export function SandboxSessionsBlock(props: {
       className="flex flex-col gap-1 border-t border-border/60 px-5 py-3"
       data-testid="sandbox-confirm-sessions"
     >
-      <p
-        className="text-ui-sm font-medium"
-        data-testid="sandbox-confirm-sessions-line"
-      >
-        {sandboxSessionsLine(props.report, now)}
-      </p>
+      {props.countLine ? (
+        <p
+          className="flex flex-wrap items-center gap-1.5 text-ui-sm font-medium"
+          data-testid="sandbox-confirm-sessions-line"
+        >
+          {sandboxSessionsLine(props.report, now)}
+          {sandboxSessionPills(props.report).map((pill) => (
+            <SandboxSessionPillBadge
+              key={pill.key}
+              pill={pill}
+              testId="sandbox-confirm-session-pill"
+            />
+          ))}
+        </p>
+      ) : null}
+      {props.report.kind === "live" ? (
+        <HostReportedSessionsList
+          hostId={props.hostId}
+          sessions={props.report.sessions}
+          onNavigate={props.onNavigate}
+        />
+      ) : (
+        <KnownHostSessionsList
+          hostId={props.hostId}
+          disabled={false}
+          onNavigate={props.onNavigate}
+        />
+      )}
       <p className="text-ui-xs text-muted-foreground">
         {props.trailing === null
           ? SANDBOX_SESSIONS_CAPTION
@@ -188,7 +225,13 @@ function VerbConfirmDialog(
             {props.outcome}
           </DialogDescription>
         </DialogHeader>
-        <SandboxSessionsBlock report={report} trailing={props.told} />
+        <SandboxSessionsBlock
+          report={report}
+          countLine
+          trailing={props.told}
+          hostId={props.sandbox.hostId}
+          onNavigate={() => props.onOpenChange(false)}
+        />
         <DialogFooter>
           <Button
             type="button"
@@ -266,13 +309,24 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
 export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
+  const now = useSampledNow();
   const team = configuration.kind === "team";
+  const destroyed = sandboxStopDestroySentence(
+    props.sandbox.destroyAfterRestingMinutes,
+    now,
+  );
   return (
     <VerbConfirmDialog
       {...props}
       verb="stop"
       title={`Stop ${props.sandbox.displayName}?`}
-      outcome={`Stop ends every process; Start is a cold boot and only shells marked relaunch come back. The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}. Its destroy-after period counts from now.`}
+      outcome={[
+        "Stop ends every process; Start is a cold boot and only shells marked relaunch come back.",
+        `The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}.`,
+        destroyed,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" ")}
       told={
         team
           ? "They and you are told who stopped it and whether it completed."
@@ -293,12 +347,16 @@ export function SandboxDestroyDialog(
 ): ReactNode {
   const [typed, setTyped] = useState("");
   const inputId = useId();
-  const destroy = useSandboxDestroy(props.sandbox.id);
+  const destroy = useSandboxDestroy(props.sandbox);
   const configuration = useDialogConfiguration(props.sandbox);
   const report = useDialogSessions(props.sandbox, props.open);
   const team = configuration.kind === "team";
   const name = props.sandbox.displayName;
   const reason = sandboxTypedNameReason(typed, name);
+  // A stopped or failed sandbox has no process left to end; one mid-destroy
+  // keeps the sentence it opened with.
+  const runsNothing =
+    props.sandbox.state === "stopped" || props.sandbox.state === "failed";
   return (
     <ConfirmDestructiveDialog
       blockedReason={reason}
@@ -308,7 +366,7 @@ export function SandboxDestroyDialog(
         props.onOpenChange(next);
       }}
       title={`Destroy ${name}?`}
-      description={`${sandboxDestroySessionsSentence(report, team)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
+      description={`${sandboxDestroySessionsSentence(report, team, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
       cascadeSummary={null}
       actionLabel="Destroy"
       isPending={destroy.isPending}
@@ -328,10 +386,18 @@ export function SandboxDestroyDialog(
         });
       }}
     >
-      <SandboxSessionsBlock
-        report={report}
-        trailing={team ? "Affected members are told who destroyed it." : null}
-      />
+      {runsNothing ? null : (
+        <SandboxSessionsBlock
+          report={report}
+          countLine={false}
+          trailing={team ? "Affected members are told who destroyed it." : null}
+          hostId={props.sandbox.hostId}
+          onNavigate={() => {
+            setTyped("");
+            props.onOpenChange(false);
+          }}
+        />
+      )}
       <div className="flex flex-col gap-1.5 px-5 pb-4">
         <Label htmlFor={inputId}>Type the name to confirm</Label>
         <Input
@@ -362,7 +428,6 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
   const wake = useSandboxWakeString(props.sandbox);
-  const report = useDialogSessions(props.sandbox, props.open);
   const now = useSampledNow();
   const name = props.sandbox.displayName;
   const restingDays = SANDBOX_DEFAULT_RESTING_MINUTES / (24 * 60);
@@ -398,7 +463,7 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
         <DialogHeader>
           <DialogTitle className="wrap-anywhere">{`Keep ${name}?`}</DialogTitle>
           <DialogDescription className="wrap-anywhere">
-            {keepPreviewLine(restingDays, formatSandboxDate(restsUntil, false))}
+            {keepPreviewLine(restingDays, formatSandboxDate(restsUntil, true))}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1 px-5 py-3 text-ui-sm">
@@ -420,7 +485,6 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
             </p>
           ) : null}
         </div>
-        <SandboxSessionsBlock report={report} trailing={null} />
         <DialogFooter>
           <Button
             type="button"

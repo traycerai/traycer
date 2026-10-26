@@ -96,6 +96,13 @@ vi.mock("sonner", () => ({
   toast: vi.fn(),
 }));
 
+// The picker's Terminal account sentence reads the fleet's rows for the run
+// target's name; this suite has no fleet.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+});
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: vi.fn(),

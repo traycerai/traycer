@@ -12,7 +12,7 @@ import {
   hostNotificationEntrySchema,
   hostNotificationEntrySchemaV21,
   hostNotificationEntrySchemaV22,
-  hostNotificationEntrySchemaV24,
+  hostNotificationEntrySchemaV25,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV12,
@@ -21,6 +21,7 @@ import {
   hostNotificationsCloudFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV13,
   hostNotificationsCloudFeedSubscribeV14,
+  hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -331,10 +332,13 @@ describe("registry wiring", () => {
     expect(Object.keys(line.versions)).toEqual(["0"]);
   });
 
-  it("advertises cloud feed @1.4 with the prior minors installed for older peers", () => {
+  it("advertises cloud feed @1.5 with the prior minors installed for older peers", () => {
     const line =
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1];
-    expect(line.latestMinor).toBe(4);
+    expect(line.latestMinor).toBe(5);
+    expect(line.versions[5].contract).toBe(
+      hostNotificationsCloudFeedSubscribeV15,
+    );
     expect(line.versions[4].contract).toBe(
       hostNotificationsCloudFeedSubscribeV14,
     );
@@ -503,6 +507,7 @@ describe("negotiated-version visibility projection", () => {
           "team.role.changed",
           "team.host.returned",
           "secret.removed",
+          "sandbox.notice",
         ]);
       }
     }
@@ -511,14 +516,14 @@ describe("negotiated-version visibility projection", () => {
   it("keeps a fully-capable caller's exclusion empty", () => {
     expect(
       hiddenHostNotificationKinds(
-        { method: "host.notifications.feed.subscribe" },
-        { major: 1, minor: 6 },
+        { method: "host.notifications.cloudFeed.subscribe" },
+        { major: 1, minor: 5 },
       ),
     ).toEqual([]);
   });
 
   it("covers every kind the entry unions can carry", () => {
-    const armKinds = hostNotificationEntrySchemaV24.options.map(
+    const armKinds = hostNotificationEntrySchemaV25.options.map(
       (option) => option.shape.kind.value,
     );
     expect([...ALL_HOST_NOTIFICATION_KINDS].sort()).toEqual(

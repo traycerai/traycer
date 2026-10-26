@@ -1770,6 +1770,15 @@ const hooksEpicAppWideByCallerExemptions = [
   "src/hooks/epic/use-epic-chat-mutations.ts",
 ];
 
+// `epic.attachEnvironment` is the person's account-level act: the protocol
+// requires their own host's bearer and refuses a team's host. Prefer the
+// caller's personal serving client; when that host belongs to a team, the
+// personal app-wide fallback follows the fork dialog's attachment contract.
+// This read never selects task placement or the host a chat/terminal runs on.
+const accountOperationAppWideReadExemptions = [
+  "src/hooks/epic/use-epic-attach-environment-mutation.ts",
+];
+
 // The dead-tile "open in editor" opener is a FOLLOWING surface with no picker
 // of its own (selection model §2), local-only by its own gate.
 const followingSurfaceAppWideReadExemptions = [
@@ -2229,6 +2238,7 @@ export default tseslint.config(
       ...followingSurfaceAppWideReadExemptions,
       ...appChromeAppWideReadExemptions,
       ...hookWrapperAppWideReadExemptions,
+      ...accountOperationAppWideReadExemptions,
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": importRestrictions(

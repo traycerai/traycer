@@ -1,4 +1,13 @@
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxOperation,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import type {
+  HostStatusAgentSession,
+  HostStatusSessions,
+  HostStatusTerminalSession,
+} from "@traycer/protocol/host/status/contracts";
+import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
 
 /** One sandbox row as `GET /api/sandboxes` carries it, with overrides. */
 export function sandboxSummaryFixture(
@@ -40,6 +49,71 @@ export function sandboxSummaryFixture(
     destroyAfterRestingMinutes: null,
     destroyAt: null,
     createdByTaskId: null,
+    createdByAgentName: null,
+    createdByTaskTitle: null,
+    keptAt: null,
+    operation: null,
+    regionLabel: null,
+    ...overrides,
+  };
+}
+
+/** One running agent in `host.status`'s `sessions`, with overrides. */
+export function agentSessionFixture(
+  overrides: Partial<HostStatusAgentSession>,
+): HostStatusAgentSession {
+  return {
+    kind: "chat",
+    taskId: "task-1",
+    sessionId: "chat-1",
+    name: "Planner",
+    working: false,
+    ...overrides,
+  };
+}
+
+/** One open terminal in `host.status`'s `sessions`, with overrides. */
+export function terminalSessionFixture(
+  overrides: Partial<HostStatusTerminalSession>,
+): HostStatusTerminalSession {
+  return {
+    taskId: "task-1",
+    sessionId: "term-1",
+    name: "build",
+    ...overrides,
+  };
+}
+
+/** The report a live read of `sessions` gives: its count and split. */
+export function liveSessionReport(
+  sessions: HostStatusSessions,
+  busy: boolean,
+): SandboxSessionReport {
+  return {
+    kind: "live",
+    count: sessions.agents.length + sessions.terminals.length,
+    busy,
+    kinds: {
+      agents: sessions.agents.length,
+      terminals: sessions.terminals.length,
+    },
+    sessions,
+  };
+}
+
+/** The operation a row's state comes from, with overrides. */
+export function sandboxOperationFixture(
+  overrides: Partial<SandboxOperation>,
+): SandboxOperation {
+  return {
+    at: 1_791_000_020_000,
+    fromState: "awake",
+    state: "destroying",
+    cause: "verb",
+    outcomeCause: "verb",
+    outcomeDetail: null,
+    actor: { userId: "u-me", displayName: "Me" },
+    gesture: null,
     ...overrides,
   };
 }

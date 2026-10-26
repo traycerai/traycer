@@ -2,6 +2,7 @@ import type { ListedTerminalSidebarSession } from "@/lib/terminals/reconcile-ter
 import {
   deriveTitleSourceFromSessionTitle,
   terminalSessionLabel,
+  type TaskHomeDirectory,
 } from "@/lib/terminals/terminal-title";
 import { providerLoginTerminalProviderId } from "@/stores/providers/provider-login-terminals";
 import { existingSessionOriginFields } from "@/stores/epics/canvas/types";
@@ -20,8 +21,10 @@ export function makeListedEpicTerminalRef(args: {
   readonly hostId: string;
   readonly instanceId: string;
   readonly durable: boolean;
+  /** The task's directory on `hostId`, so a terminal there is named by the host. */
+  readonly taskHome: TaskHomeDirectory | null;
 }): EpicTerminalRef {
-  const name = terminalSessionLabel(args.session);
+  const name = terminalSessionLabel(args.session, args.taskHome);
   const titleSource = deriveTitleSourceFromSessionTitle(args.session.title);
   if (args.durable) {
     return {

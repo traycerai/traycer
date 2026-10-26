@@ -14,6 +14,7 @@ export function PickerSandboxCredentialLine(props: {
     props.harness === null
       ? null
       : sandboxCredentialLine(
+          props.harness.id,
           props.harness.sandboxCredentialMode,
           props.harness.sandboxCredentialNote,
         );
