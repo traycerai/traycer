@@ -37,6 +37,19 @@ vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersions: () => new Map(),
 }));
+// The picker's Personal row reads the hosts running Personal from one hook;
+// these suites are about the sidebar around it.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined }),
 }));

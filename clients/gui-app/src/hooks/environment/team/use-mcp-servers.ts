@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
@@ -25,7 +26,7 @@ export type EnvironmentMcpServer = ResponseOfMethod<
 
 /**
  * The configuration's MCP servers, each with its `mcp_server` item, read
- * through the surface's own host on the viewer's session.
+ * through the configuration's serving tier on the viewer's session.
  */
 export function useConfigurationMcpServersQuery(): UseQueryResult<
   readonly EnvironmentMcpServer[],
@@ -42,7 +43,7 @@ export function useConfigurationMcpServersQuery(): UseQueryResult<
     readonly EnvironmentMcpServer[]
   >({
     cacheKeyIdentity: [viewerId],
-    client: useHostClient(),
+    client: usePoolTierHostClient(useHostClient()),
     method: "environment.configuration.mcpServers.list",
     params: {
       environmentId: source.kind === "pool" ? source.environmentId : "",
@@ -78,7 +79,7 @@ export function useSecretMcpServerNames(
     readonly EnvironmentMcpServer[]
   >({
     cacheKeyIdentity: [viewerId],
-    client: useHostClient(),
+    client: usePoolTierHostClient(useHostClient()),
     method: "environment.configuration.mcpServers.list",
     params: { environmentId: environmentId ?? "" },
     preflight: cloudVerdictPreflight(
@@ -118,10 +119,10 @@ const MCP_SERVER_READS = [
  * switches).
  */
 export function useConfigurationMcpServerMutations() {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
-  // The list beside a write may have been read on another host: a tool
-  // switch writes through the viewing host, under the surface host's list.
+  // A configuration write refreshes every cached projection of its server
+  // list, including readers mounted under another host scope.
   const reread = (environmentId: string): void =>
     invalidateConfigurationReads(queries, environmentId, MCP_SERVER_READS);
   const put = useHostScopedMutationForClient(client, {

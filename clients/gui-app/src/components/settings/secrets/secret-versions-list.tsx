@@ -13,6 +13,7 @@ import { useSecretVersionActions } from "@/components/settings/secrets/use-secre
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   SECRET_SCOPE_LINE,
@@ -26,11 +27,6 @@ import {
  * secret restores it with the grants a new secret gets (`regrant: true`),
  * never the revoked ones. A refusal reads its line.
  */
-
-const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 function versionState(version: SecretVersion): string {
   if (version.destroyedAt !== null) return "destroyed";
@@ -90,7 +86,8 @@ function VersionRow(props: {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-ui-xs text-foreground">
-          Version {version.ordinal} · {DATE_FORMAT.format(version.createdAt)}
+          Version {version.ordinal} ·{" "}
+          {formatSettingsDate(version.createdAt, true)}
           <span className="text-muted-foreground">
             {" · "}
             {versionState(version)}

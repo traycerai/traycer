@@ -27,11 +27,54 @@ import {
 
 const POOL_PLAN = createHostRpcTierPlan(poolEntry);
 
+/** A configuration's own cloud state: served with no host running it. */
+const CONFIGURATION_POOL_ONLY = [
+  "environment.configuration.guide.get",
+  "environment.configuration.guide.reset",
+  "environment.configuration.guide.set",
+  "environment.configuration.items",
+  "environment.configuration.items.delete",
+  "environment.configuration.items.put",
+  "environment.configuration.mcpServers.delete",
+  "environment.configuration.mcpServers.list",
+  "environment.configuration.mcpServers.put",
+  "environment.configuration.mcpServers.setEnabled",
+  "environment.configuration.policy.put",
+  "environment.configuration.skills.list",
+  "environment.configuration.skills.remove",
+  "environment.configuration.skills.setProviders",
+  "environment.configuration.skills.upload",
+  "environment.history",
+  "environment.host.list",
+  "environment.members",
+  "environment.members.invite",
+  "environment.members.noticeSeen",
+  "environment.members.remove",
+  "environment.members.removePreview",
+  "environment.members.seats",
+  "environment.members.setRole",
+  "environment.plans.list",
+  "environment.plans.unlink",
+  "environment.plans.unlinkPreview",
+  "environment.secrets.consent",
+  "environment.secrets.create",
+  "environment.secrets.destroy",
+  "environment.secrets.list",
+  "environment.secrets.replaceValue",
+  "environment.secrets.rotation",
+  "environment.secrets.undo",
+  "environment.secrets.verify",
+  "environment.secrets.versions",
+];
+
 const EXPECTED_POOL_ONLY = [
+  ...CONFIGURATION_POOL_ONLY,
   "autoPolicy.get",
   "autoPolicy.set",
   "chat.serving.subscribe",
   "environment.chats.subscribe",
+  "environment.invitations.accept",
+  "environment.invitations.list",
   "environment.binding.read",
   "environment.communicationGraph.subscribe",
   "environment.list",
@@ -119,6 +162,26 @@ describe("decideHostRpcDispatch", () => {
       ),
     ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
   });
+
+  it.each(CONFIGURATION_POOL_ONLY)(
+    "serves %s from the pool when the plan has one, else from the caller's host",
+    (method) => {
+      const route = hostRpcRouteOf(method);
+      expect(route).toBe("pool-only");
+      if (route === null) return;
+      expect(
+        decideHostRpcDispatch(route, personalRemoteEntry, POOL_PLAN, null),
+      ).toEqual({ kind: "dispatch", entry: poolEntry });
+      expect(
+        decideHostRpcDispatch(
+          route,
+          personalRemoteEntry,
+          NO_POOL_HOST_RPC_TIER_PLAN,
+          null,
+        ),
+      ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
+    },
+  );
 
   it.each(["target-host", "sender-host"] as const)(
     "refuses a %s call on the pool with E_HOST_UNSUPPORTED",

@@ -152,7 +152,7 @@ const HOSTNAME = /^[A-Za-z0-9._-]{1,253}$/;
 
 function destinationProblem(state: SecretFormState): string | null {
   const hosts = secretFormHosts(state);
-  if (hosts.length === 0) return "Enter the destination host.";
+  if (hosts.length === 0) return "Enter the server address.";
   if (hosts.length > 16) return "A secret reaches at most 16 hosts.";
   const bad = hosts.find((host) => !HOSTNAME.test(host));
   if (bad !== undefined) {

@@ -132,6 +132,23 @@ describe("providerRailStateWord", () => {
     ).toBeNull();
   });
 
+  it("says own login for a saved login the tool reports as configured, on the provider or on the terminal login's row, but never for Traycer", () => {
+    const configured = { ...SIGNED_IN, status: "configured" } as const;
+    expect(providerRailStateWord(state({ auth: configured }))).toBe(
+      "own login",
+    );
+    expect(
+      providerRailStateWord(
+        state({
+          profiles: [{ ...profile("ambient", "configured") }],
+        }),
+      ),
+    ).toBe("own login");
+    expect(
+      providerRailStateWord(state({ providerId: "traycer", auth: configured })),
+    ).toBeNull();
+  });
+
   it("states nothing while the sign-in is not an answer yet", () => {
     expect(providerRailStateWord(state({}))).toBeNull();
     expect(

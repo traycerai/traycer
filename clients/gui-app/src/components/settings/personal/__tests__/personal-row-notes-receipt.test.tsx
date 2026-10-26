@@ -59,11 +59,11 @@ afterEach(() => {
 });
 
 function RowNotesProbe(): ReactNode {
-  const notes = usePersonalRowNotes("variable");
+  const notes = usePersonalRowNotes({ kind: "variable" });
   return (
     <ul data-testid="row-notes">
       {[...notes.entries()].map(([key, note]) => (
-        <li key={key}>{`${key}: ${note}`}</li>
+        <li key={key}>{`${key}: ${note.kind}`}</li>
       ))}
     </ul>
   );
@@ -196,7 +196,7 @@ describe("an edit made while the host is out of reach", () => {
   it("is Pending, with the page saying changes wait for the reconnect, until the receipt is accepted", async () => {
     const page = mountPageOver(waitingEdit("reconnecting"));
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["EDITED: Pending"]);
+      expect(notes()).toEqual(["EDITED: pending"]);
     });
     expect(
       (await screen.findByTestId("personal-page-status")).textContent,
@@ -224,7 +224,7 @@ describe("an edit made while the host is out of reach", () => {
   it("stays Pending across a reconnect that has not yet delivered its receipt", async () => {
     const page = mountPageOver(waitingEdit("reconnecting"));
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["EDITED: Pending"]);
+      expect(notes()).toEqual(["EDITED: pending"]);
     });
 
     await page.hostNowAnswers(waitingEdit("connected"));
@@ -232,7 +232,7 @@ describe("an edit made while the host is out of reach", () => {
     await vi.waitFor(() => {
       expect(statusLine()).not.toBe(OFFLINE_LINE);
     });
-    expect(notes()).toEqual(["EDITED: Pending"]);
+    expect(notes()).toEqual(["EDITED: pending"]);
   });
 
   it("clears only the edit whose receipt arrived, not its neighbour's", async () => {
@@ -246,7 +246,7 @@ describe("an edit made while the host is out of reach", () => {
       }),
     );
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["FIRST: Pending", "SECOND: Pending"]);
+      expect(notes()).toEqual(["FIRST: pending", "SECOND: pending"]);
     });
 
     await page.hostNowAnswers(
@@ -264,7 +264,7 @@ describe("an edit made while the host is out of reach", () => {
     );
 
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["SECOND: Pending"]);
+      expect(notes()).toEqual(["SECOND: pending"]);
     });
   });
 });

@@ -27,6 +27,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
         ? hostBindingMock.current
         : { ...real, hostClient: hostBindingMock.current.hostClient };
     },
+    // The secrets that set a variable are read through the page's client.
+    useHostClient: () => hostBindingMock.current?.hostClient,
   };
 });
 
@@ -34,6 +36,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
 }));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -50,7 +59,15 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -61,8 +78,12 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
+  ConfigEnvLocalOverrideClearRequest,
+  ConfigEnvLocalOverrideResponse,
   EnvironmentReviewEntry,
+  EnvironmentSecretV12,
   EnvironmentStatusResponseV11,
+  LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
@@ -79,6 +100,7 @@ import {
   pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "host-a";
@@ -89,11 +111,21 @@ const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
     itemStatusFixture({ kind: "variable", key: "EXISTING", status: "pending" }),
   ],
 });
+/** The minors a Personal case negotiates; every other method is `1.0`. */
+const MANIFEST_MINORS: ReadonlyMap<string, number> = new Map([
+  ["environment.status", 1],
+  ["environment.secrets.list", 2],
+]);
 /** `sk-` and a long run: a known token shape, whatever the variable is called. */
 const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
 
+beforeEach(() => {
+  useAuthStore.setState({ status: "signed-in" });
+});
+
 afterEach(() => {
   cleanup();
+  useAuthStore.setState({ status: "signed-out" });
   navigateToSettingsSectionMock.mockReset();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
@@ -111,6 +143,12 @@ interface Rendered {
   readonly runnerHost: MockRunnerHost;
   readonly set: Mock<(request: EnvSetCall) => Promise<EnvSetCall>>;
   readonly statusCalls: () => number;
+  /** `config.env.localOverride.clear`, answered as saved. */
+  readonly clear: Mock<
+    (
+      request: ConfigEnvLocalOverrideClearRequest,
+    ) => Promise<ConfigEnvLocalOverrideResponse>
+  >;
 }
 
 function renderShellPage(options: {
@@ -121,6 +159,10 @@ function renderShellPage(options: {
   readonly existingVariables: readonly { key: string; value: string }[];
   /** What `environment.review` answers. */
   readonly review: readonly EnvironmentReviewEntry[];
+  /** What `environment.localOverrides` answers: values this host keeps itself. */
+  readonly localOverrides: readonly LocalOverride[];
+  /** What `environment.secrets.list` answers. */
+  readonly secrets: readonly EnvironmentSecretV12[];
 }): Rendered {
   const cli = new MockTraycerCli();
   cli.shellConfig = { path: "/bin/zsh", args: ["-i", "-l"], synthesised: true };
@@ -129,6 +171,12 @@ function renderShellPage(options: {
     await cli.envOverrideSet(request);
     return { key: request.key, value: request.value };
   });
+  const clear = vi.fn(
+    (
+      _request: ConfigEnvLocalOverrideClearRequest,
+    ): Promise<ConfigEnvLocalOverrideResponse> =>
+      Promise.resolve({ outcome: "saved", overrides: [] }),
+  );
   let statusCalls = 0;
   const fixture = buildConfigHostFixture({
     hostId: HOST_ID,
@@ -136,12 +184,34 @@ function renderShellPage(options: {
     cli,
     overrideHandlers: {
       "config.env.set": set,
+      "config.env.localOverride.clear": clear,
       "environment.status": () => {
         statusCalls += 1;
         if (options.status === null) return new Promise<never>(() => {});
         return options.status;
       },
-      "environment.localOverrides": () => ({ overrides: [] }),
+      "environment.localOverrides": () => ({
+        overrides: [...options.localOverrides],
+      }),
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      }),
+      "environment.secrets.list": () => ({
+        secrets: [...options.secrets],
+        removed: [],
+      }),
       "environment.review": () => ({
         // The `@1.2` facts each row carries, none of them known here.
         entries: options.review.map((entry) => ({
@@ -174,7 +244,7 @@ function renderShellPage(options: {
       Object.fromEntries(
         methods.map((method) => [
           method,
-          { major: 1, minor: method === "environment.status" ? 1 : 0 },
+          { major: 1, minor: MANIFEST_MINORS.get(method) ?? 0 },
         ]),
       ),
     );
@@ -213,7 +283,13 @@ function renderShellPage(options: {
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
-  return { cli, runnerHost, set, statusCalls: () => statusCalls };
+  return {
+    cli,
+    runnerHost,
+    set,
+    clear,
+    statusCalls: () => statusCalls,
+  };
 }
 
 const READY_HOST = {
@@ -222,9 +298,14 @@ const READY_HOST = {
     "environment.status",
     "environment.localOverrides",
     "environment.review",
+    "environment.list",
+    "environment.secrets.list",
+    "config.env.localOverride.clear",
   ],
   existingVariables: [],
   review: [],
+  localOverrides: [],
+  secrets: [],
 } as const;
 
 /** Waits until the page has rendered the host's status it read. */
@@ -625,5 +706,120 @@ describe("a held key-shaped variable on a Personal page", () => {
 
     fireEvent.click(within(banner).getByRole("button", { name: "Review" }));
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+  });
+});
+
+function variableOverride(key: string, value: string): LocalOverride {
+  return {
+    target: { kind: "variable", key },
+    os: "any",
+    value,
+    setAt: 1,
+  };
+}
+
+describe("a variable this computer keeps its own value for", () => {
+  const OWN_VALUE_HOST = {
+    ...READY_HOST,
+    existingVariables: [{ key: "LOG_LEVEL", value: "info" }],
+    localOverrides: [variableOverride("LOG_LEVEL", "error")],
+  };
+
+  it("reads what the host uses and offers Use everywhere", async () => {
+    renderShellPage(OWN_VALUE_HOST);
+    await pageIsReady();
+
+    const note = await screen.findByTestId("env-row-own-value");
+    expect(note.textContent).toBe("host-a uses: error · Use everywhere");
+  });
+
+  it("saves the host's value for everyone, and stops the host keeping its own only after the save landed", async () => {
+    const { set, clear } = renderShellPage(OWN_VALUE_HOST);
+    let finishSave: () => void = () => {};
+    set.mockImplementationOnce(async (request) => {
+      await new Promise<void>((resolve) => {
+        finishSave = resolve;
+      });
+      return { key: request.key, value: request.value };
+    });
+    await pageIsReady();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "LOG_LEVEL",
+      value: "error",
+      executableWriteGrant: null,
+    });
+    expect(clear).not.toHaveBeenCalled();
+
+    finishSave();
+
+    await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+    });
+  });
+
+  it("shows dots and no Use everywhere for a value that looks like a key", async () => {
+    renderShellPage({
+      ...OWN_VALUE_HOST,
+      localOverrides: [variableOverride("LOG_LEVEL", API_KEY_VALUE)],
+    });
+    await pageIsReady();
+
+    const note = await screen.findByTestId("env-row-own-value");
+    expect(note.textContent).toBe("host-a uses: ••••••••");
+    expect(screen.queryByRole("button", { name: "Use everywhere" })).toBeNull();
+    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
+  });
+});
+
+describe("a variable a secret sets on the Personal page", () => {
+  const NAME = "ENV_E2E_SERVICE_TOKEN";
+  const secretSettingIt: EnvironmentSecretV12 = {
+    secretId: "sec-1",
+    name: NAME,
+    kind: "api_key",
+    protocol: "https",
+    destinations: ["api.example.com"],
+    mode: "exposed",
+    state: "live",
+    currentVersionId: "ver-1",
+    revoked: false,
+    updatedAt: 1,
+    variables: [NAME],
+    providerVariables: [],
+  };
+  const withKeyShapedValue = {
+    ...READY_HOST,
+    existingVariables: [{ key: NAME, value: API_KEY_VALUE }],
+  };
+
+  it("reads the name as the secret's, with no value and no key refusal", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    renderShellPage({ ...withKeyShapedValue, secrets: [secretSettingIt] });
+    await pageIsReady();
+
+    const row = await screen.findByTestId("env-claimed-row");
+    expect(row.textContent).toBe(`${NAME} · from the secret ${NAME} · Secrets`);
+    expect(screen.queryByTestId("env-masked-row")).toBeNull();
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
+  });
+
+  it("control: with no secret claiming the name, the saved key-shaped value is masked and refused", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    renderShellPage({ ...withKeyShapedValue, secrets: [] });
+    await pageIsReady();
+
+    const row = await screen.findByTestId("env-masked-row");
+    expect(within(row).getByTestId("env-key-refusal").textContent).toBe(
+      KEY_REFUSAL,
+    );
+    expect(screen.queryByTestId("env-claimed-row")).toBeNull();
   });
 });

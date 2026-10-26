@@ -9,6 +9,7 @@ import {
   inviteForbiddenRefusal,
   inviteRoleLabel,
   inviteRoleLine,
+  inviteSentBody,
   inviteSentLabel,
   ROLE_LABELS,
   seatLimitRefusal,
@@ -38,7 +39,11 @@ const ROLE_LINE_ID = "members-invite-role-line";
 
 type InviteDialogPhase =
   | { readonly kind: "form"; readonly email: string; readonly role: TeamRole }
-  | { readonly kind: "sent" }
+  | {
+      readonly kind: "sent";
+      readonly email: string;
+      readonly role: TeamRole;
+    }
   | { readonly kind: "refused"; readonly message: string };
 
 function emailLooksValid(value: string): boolean {
@@ -61,6 +66,21 @@ function refusalMessage(
   if (outcome.outcome === "seat_limit") return seatLimitRefusal(teamName);
   if (outcome.outcome === "failed") return INVITE_FAILED;
   return inviteForbiddenRefusal();
+}
+
+/**
+ * The line under the title: the lead on the form, what happens next once
+ * sent, nothing on a refusal, whose own line says it.
+ */
+function inviteDialogDescription(
+  phase: InviteDialogPhase,
+  teamName: string,
+): string | null {
+  if (phase.kind === "form") return inviteDialogLead(teamName);
+  if (phase.kind === "sent") {
+    return inviteSentBody(phase.email, teamName, phase.role);
+  }
+  return null;
 }
 
 /**
@@ -99,9 +119,10 @@ export function InviteDialog(props: {
     if (phase.kind !== "form") return;
     const email = phase.email.trim();
     if (!emailLooksValid(email)) return;
-    void props.onInvite({ email, role: phase.role }).then((outcome) => {
+    const role = phase.role;
+    void props.onInvite({ email, role }).then((outcome) => {
       if (outcome.outcome === "sent") {
-        setPhase({ kind: "sent" });
+        setPhase({ kind: "sent", email, role });
         return;
       }
       setPhase({
@@ -121,10 +142,8 @@ export function InviteDialog(props: {
           <DialogTitle>
             {phase.kind === "sent" ? inviteSentLabel() : INVITE_LABEL}
           </DialogTitle>
-          <DialogDescription>
-            {phase.kind === "form"
-              ? inviteDialogLead(props.teamName)
-              : inviteSentLabel()}
+          <DialogDescription data-testid="members-invite-description">
+            {inviteDialogDescription(phase, props.teamName)}
           </DialogDescription>
         </DialogHeader>
         {phase.kind === "form" ? (

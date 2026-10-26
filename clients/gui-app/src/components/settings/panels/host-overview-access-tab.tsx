@@ -22,6 +22,7 @@ import {
   SETUP_STEPS,
   setupView,
   terminalAccountSentence,
+  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -155,6 +156,7 @@ function AccessSections(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
+  const localHostId = useReactiveLocalHostId();
   return (
     <>
       <MovedNotice
@@ -174,8 +176,15 @@ function AccessSections(props: {
       />
       <TerminalAccountsSection
         client={props.client}
-        hostId={props.hostId}
-        hostName={props.hostName}
+        sentence={
+          props.status.principal?.kind === "team"
+            ? teamTerminalAccountSentence(props.status.principal.teamName)
+            : terminalAccountSentence(
+                props.hostId !== null && props.hostId === localHostId
+                  ? null
+                  : props.hostName,
+              )
+        }
       />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>
@@ -379,10 +388,8 @@ const AMBIENT_PROFILE_ID = "ambient";
 
 function TerminalAccountsSection(props: {
   readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string | null;
-  readonly hostName: string;
+  readonly sentence: string;
 }): ReactNode {
-  const localHostId = useReactiveLocalHostId();
   const list = useProvidersListForClient(props.client, {
     enabled: true,
     subscribed: true,
@@ -410,11 +417,7 @@ function TerminalAccountsSection(props: {
       fill={false}
     >
       <p className="max-w-[72ch] px-5 pt-4 text-ui-sm text-muted-foreground">
-        {terminalAccountSentence(
-          props.hostId !== null && props.hostId === localHostId
-            ? null
-            : props.hostName,
-        )}
+        {props.sentence}
       </p>
       <ul className="flex flex-col">
         {rows.map((row) => (

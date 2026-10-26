@@ -1,12 +1,9 @@
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 import type { DetailsRecovery } from "@/lib/settings-details-entry";
 
-const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-export function detailsTime(at: number | null): string {
-  return at === null ? "unknown" : DATE_FORMAT.format(at);
+/** A time the app has. One it does not have is left out, never "unknown". */
+export function detailsTime(at: number): string {
+  return formatSettingsDate(at, true);
 }
 
 export function detailsRecoveryLabel(

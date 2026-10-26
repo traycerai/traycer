@@ -1886,11 +1886,6 @@ function ServerRowBadges(props: {
           connectivity check
         </Badge>
       ) : null}
-      {server.configOnly ? (
-        <Badge variant="muted" className="h-4" size="xs">
-          config only
-        </Badge>
-      ) : null}
       {server.stdioDegraded ? (
         <Badge variant="muted" className="h-4" size="xs">
           stdio degraded
@@ -2175,9 +2170,11 @@ function toolsUnavailableMessage(server: ProviderMcpServer): string {
     server.statusDetail !== null
   ) {
     message = redactLogText(server.statusDetail);
+  } else if (server.status === "config_only") {
+    message = "Traycer hasn't checked this server yet.";
   } else if (server.configOnly) {
     message =
-      "This OAuth-gated server is config-only — manage it in the provider's native surface, or sign in if available.";
+      "This server signs in with OAuth, so Traycer can't check it. Manage it in the provider's own settings, or sign in if available.";
   } else if (server.stdioDegraded) {
     message =
       "Stdio is degraded for this provider — config is editable, but live tools are unavailable in-session.";
@@ -2208,7 +2205,9 @@ function ToolsUnavailableState(props: {
 
   const showRetry =
     onRefresh !== null &&
-    (server.status === "error" || server.status === "disconnected");
+    (server.status === "error" ||
+      server.status === "disconnected" ||
+      server.status === "config_only");
 
   return (
     <div className="flex flex-col items-start gap-2 py-2">
@@ -2464,8 +2463,9 @@ function statusLabelFor(server: ProviderMcpServer): string {
       return "Error";
     case "disconnected":
       return "Disconnected";
+    // Read from the provider's config; Traycer has not connected to it yet.
     case "config_only":
-      return "Config only";
+      return "Not checked";
     case "unknown":
       return "Unknown";
   }

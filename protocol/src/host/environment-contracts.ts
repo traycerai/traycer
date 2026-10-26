@@ -50,6 +50,41 @@ export const environmentSecretsListUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, removed: [] }),
 });
 
+export const environmentSecretsListV12 = defineRpcContract({
+  method: "environment.secrets.list",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: schemas.environmentSecretsListRequestSchemaV12,
+  responseSchema: schemas.environmentSecretsListResponseSchemaV12,
+});
+
+/** A `@1.1` host names no variables: its rows set the secret under none. */
+export const environmentSecretsListUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentSecretsListV11,
+  typeof environmentSecretsListV12
+>({
+  from: environmentSecretsListV11.schemaVersion,
+  to: environmentSecretsListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    secrets: response.secrets.map((secret) => ({
+      ...secret,
+      variables: [],
+      providerVariables: [],
+    })),
+    removed: response.removed.map((removed) => ({
+      ...removed,
+      removal: {
+        ...removed.removal,
+        targets: removed.removal.targets.map((target) => ({
+          ...target,
+          failedAt: null,
+        })),
+      },
+    })),
+  }),
+});
+
 export const environmentSecretsCreateV10 = defineRpcContract({
   method: "environment.secrets.create",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -468,7 +503,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.secrets.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentSecretsListV10,
@@ -477,6 +512,10 @@ export const ENVIRONMENT_RPC_METHODS = {
         1: {
           contract: environmentSecretsListV11,
           upgradeFromPreviousVersion: environmentSecretsListUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentSecretsListV12,
+          upgradeFromPreviousVersion: environmentSecretsListUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

@@ -373,6 +373,8 @@ export function publishedChatSessionState(
     requestTranscriptOrdinal: () => undefined,
     findReadOrdinal: null,
     requestFindReadOrdinal: () => undefined,
+    heldReadOrdinals: [],
+    holdTranscriptOrdinal: () => () => undefined,
     accumulatedFileChangeSummaries: [],
     // A published transcript is not on the windowed line and streams no
     // chunks, so there is no generation to be waiting on.

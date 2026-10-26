@@ -326,6 +326,8 @@ function fakePushPermission(state: PushPermissionState): IPushPermissionHost {
     get: () => Promise.resolve(state),
     request: () => Promise.resolve(state),
     openSettings: () => Promise.resolve(),
+    getMutedSeverities: () => Promise.resolve([]),
+    setMutedSeverities: () => Promise.resolve(),
     onChange: () => ({ dispose: () => undefined }),
   };
 }

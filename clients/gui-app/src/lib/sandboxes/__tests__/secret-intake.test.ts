@@ -271,7 +271,7 @@ describe("secretFormProblem", () => {
 
   it("refuses no host", () => {
     expect(secretFormProblem({ ...validDatabaseForm(), hosts: "  " })).toBe(
-      "Enter the destination host.",
+      "Enter the server address.",
     );
   });
 

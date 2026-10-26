@@ -295,7 +295,7 @@ function McpServerSecretFields(props: {
           onChange={(event) => update({ variable: event.target.value })}
         />
         <p role="status" className="text-ui-xs text-warning-foreground">
-          {stdioSecretRefusal(field.length > 0 ? field : "this server")}
+          {stdioSecretRefusal(field.length > 0 ? field : null)}
         </p>
       </>
     );

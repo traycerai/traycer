@@ -20,7 +20,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useHostClient } from "@/lib/host/runtime";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import {
+  useConfigurationEnvironmentId,
+  useConfigurationIsPersonal,
+} from "@/components/settings/environment/configuration-source";
+import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
   useTeamPlanLinkCompleteMutation,
@@ -32,6 +36,7 @@ import {
   LINK_DEVICE_LINE,
   LINK_EXPIRED,
   LINK_INTRO,
+  teamLinkIntro,
   LINK_LINKING,
   LINK_SIGN_IN_LINE,
   LINK_UNAVAILABLE,
@@ -125,6 +130,8 @@ function TeamProviderLinkDialogFor(props: {
     props.environmentId,
     () => codeRef.current.trim(),
   );
+  const personal = useConfigurationIsPersonal();
+  const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
   const poll = pollOf(state);
   const pollAnswer = useTeamPlanLinkPollQuery(
     props.environmentId,
@@ -170,6 +177,7 @@ function TeamProviderLinkDialogFor(props: {
   return (
     <LinkDialogFrame
       title="Link a plan"
+      intro={personal ? LINK_INTRO : teamLinkIntro(teamName)}
       state={shown}
       target={target}
       code={code}
@@ -266,6 +274,7 @@ function ProviderLinkDialogFor(props: {
   return (
     <LinkDialogFrame
       title="Link to your plan"
+      intro={LINK_INTRO}
       state={state}
       target={target}
       code={code}
@@ -283,6 +292,7 @@ function ProviderLinkDialogFor(props: {
 
 function LinkDialogFrame(props: {
   readonly title: string;
+  readonly intro: string;
   readonly state: LinkDialogState;
   readonly target: ProviderLinkTarget;
   readonly code: string;
@@ -309,7 +319,7 @@ function LinkDialogFrame(props: {
       >
         <DialogHeader className="gap-1.5">
           <DialogTitle>{props.title}</DialogTitle>
-          <DialogDescription>{LINK_INTRO}</DialogDescription>
+          <DialogDescription>{props.intro}</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-5 text-ui-sm">
           <LinkBody

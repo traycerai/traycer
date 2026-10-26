@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -44,6 +45,7 @@ export function useEnvironmentHostLists(
   environmentIds: ReadonlyArray<string>,
   enabled: boolean,
 ): EnvironmentHostLists {
+  const servingClient = usePoolTierHostClient(client);
   const idsKey = environmentIds.join("\n");
   const ids = useMemo(
     () => idsKey.split("\n").filter((id) => id.length > 0),
@@ -94,7 +96,7 @@ export function useEnvironmentHostLists(
     [ids],
   );
   return useHostQueries<HostRpcRegistry, typeof METHOD, EnvironmentHostLists>({
-    client,
+    client: servingClient,
     requests,
     cacheKeyIdentity: undefined,
     options: { enabled, refetchOnWindowFocus: false },

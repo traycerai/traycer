@@ -132,7 +132,7 @@ describe("StopSharingSheet row names", () => {
     const text = document.body.textContent;
     expect(text).toContain("Model routing");
     expect(text).toContain("Browser agent access");
-    expect(text).toContain("Claude Code: ANTHROPIC_BASE_URL");
+    expect(text).toContain("ANTHROPIC_BASE_URL (Claude Code)");
     expect(text).not.toContain("fallback / owner");
     expect(text).not.toContain("browser / agentAccess");
   });

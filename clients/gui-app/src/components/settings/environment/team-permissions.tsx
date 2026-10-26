@@ -4,6 +4,7 @@ import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import {
   useConfigurationPolicyQuery,
   useConfigurationPolicyMutation,
@@ -28,6 +29,7 @@ export function TeamPermissions(props: {
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const query = useConfigurationPolicyQuery();
+  const read = useBoundedRead(query);
   const [conflict, setConflict] = useState(false);
   return (
     <SettingsPanelShell
@@ -40,12 +42,9 @@ export function TeamPermissions(props: {
       bodyClassName="flex flex-col gap-3 overflow-visible rounded-none border-none bg-transparent"
     >
       {conflict ? <ConfigurationConflict changedBy={null} /> : null}
-      {query.isPending ? <MutedAgentSpinner /> : null}
-      {query.isError ? (
-        <ConfigurationReadFailed
-          page="permissions"
-          onRetry={() => void query.refetch()}
-        />
+      {read.pending ? <MutedAgentSpinner /> : null}
+      {read.failed ? (
+        <ConfigurationReadFailed page="permissions" onRetry={read.retry} />
       ) : null}
       {query.data === undefined ? null : (
         <TeamPolicyEditor

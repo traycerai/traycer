@@ -7,9 +7,14 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { DetailsDrawer } from "@/components/settings/details/details-drawer";
+import {
+  DetailsDrawer,
+  type DetailsItemRetry,
+  type DetailsTab,
+} from "@/components/settings/details/details-drawer";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useDetailsRecovery } from "@/components/settings/details/use-details-recovery";
+import { useSecretRemovalRetry } from "@/components/settings/details/use-secret-removal-retry";
 import { serializeDetailsExport } from "@/components/settings/details/details-export";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostClient } from "@/lib/host";
@@ -22,18 +27,26 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const DETAILS_LOAD_FAILED = "Couldn't load details.";
 
+const NO_ITEM_RETRY: DetailsItemRetry = {
+  onRetry: () => {},
+  pending: false,
+  error: null,
+};
+
 /** Mounted only while open: no previous reader's evidence is rendered on open. */
 function DetailsSession(props: {
   readonly subject: DetailsSubject;
   readonly title: string;
   readonly controls: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
+  readonly initialTab: DetailsTab;
 }): ReactNode {
   const client = useHostClient();
   const hostId = useReactiveHostReadiness(client).hostId;
   const queryClient = useQueryClient();
   const runner = useRunnerHostOrNull();
   const recovery = useDetailsRecovery();
+  const itemRetry = useSecretRemovalRetry(client, hostId);
   const viewerUserId = useCloudChatViewerId();
   const [selected, setSelected] = useState<{
     readonly subject: DetailsSubject;
@@ -101,8 +114,10 @@ function DetailsSession(props: {
         exportDiagnostics.reset();
         setSelected({ subject: nextSubject, title: nextTitle });
       }}
+      itemRetry={itemRetry}
       // The controls act on the subject it opened for, not a selected item.
       controls={selected === null ? props.controls : null}
+      initialTab={props.initialTab}
       onBack={
         selected === null
           ? null
@@ -139,8 +154,10 @@ function DetailsControlsSession(props: {
       onRetry={() => {}}
       onRecover={() => {}}
       onSubjectSelect={() => {}}
+      itemRetry={NO_ITEM_RETRY}
       controls={props.controls}
       onBack={null}
+      initialTab="status"
     />
   );
 }
@@ -156,6 +173,8 @@ export function SettingsDetailsDialog(props: {
   readonly controls: ReactNode;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /** The tab it opens on; Export diagnostics needs the subject's status. */
+  readonly initialTab: DetailsTab;
 }): ReactNode {
   if (!props.open) return null;
   if (props.subject === null)
@@ -172,6 +191,7 @@ export function SettingsDetailsDialog(props: {
       title={props.title}
       controls={props.controls}
       onOpenChange={props.onOpenChange}
+      initialTab={props.initialTab}
     />
   );
 }
@@ -198,6 +218,7 @@ export function SettingsDetailsButton(props: {
         controls={props.controls}
         open={open}
         onOpenChange={setOpen}
+        initialTab="status"
       />
     </>
   );

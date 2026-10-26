@@ -6,14 +6,17 @@ vi.mock("@/lib/links/open-link", () => ({
 }));
 // The computers holding a copy are covered by `secret-remove-preview-computers`;
 // a team page names none.
-vi.mock("@/components/settings/personal/use-personal-computers", () => ({
-  usePersonalComputers: () => ({
-    computers: [],
-    statuses: new Map(),
-    versions: new Map(),
-    participants: [],
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
   }),
-}));
+);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -36,7 +39,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsReplaceValueResponse,
   SecretVerifyResult,
@@ -54,7 +57,10 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
-import { SECRETS_NEED_UPDATED_HOST } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  SECRETS_EMPTY_TEXT,
+  SECRETS_NEED_UPDATED_HOST,
+} from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 /**
@@ -69,7 +75,7 @@ const AT = Date.UTC(2026, 9, 20, 9, 30);
 const TYPED_VALUE = 'team"s\\ecret-UNIQUE-4410';
 const FLOOR = { major: 1, minor: 1 } as const;
 
-function secretFixture(): EnvironmentSecret {
+function secretFixture(): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -81,6 +87,8 @@ function secretFixture(): EnvironmentSecret {
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: AT,
+    variables: [],
+    providerVariables: [],
   };
 }
 
@@ -149,6 +157,7 @@ function renderPage(harness: TeamPageHarness): void {
     <SecretsPage
       client={client}
       hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
       hostName={(hostId) => hostId}
     />,
     { wrapper: harness.Wrapper },

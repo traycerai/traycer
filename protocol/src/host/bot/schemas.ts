@@ -732,9 +732,10 @@ export const botTaskEntrySchema = lazySchema(() =>
       /** When the last check-in for this task was consumed; null if never. */
       lastCheckinAt: z.number().int().nullable(),
       /**
-       * What that check-in said, kept by the bot's bound host: `null` from
-       * any other host (the cloud row does not carry it), before the first
-       * check-in, and for a deleted task.
+       * What that check-in said, kept by the bot's bound host and mirrored
+       * into the bot's environment room, which any other host serves it
+       * from (T65); `null` before the first check-in, for a deleted task,
+       * and while the serving host cannot read the room.
        */
       lastCheckin: botTaskLastCheckinSchema.nullable(),
       /** When the next periodic check-in is due; null for any other cadence. */
@@ -787,7 +788,8 @@ export type BotSubscribeOpenRequest = z.infer<
 
 /**
  * What one of the bot's running chats (the trunk, or a thread's session) is
- * doing, as the bound host sees it:
+ * doing, as the bound host sees it (and writes it to the bot's environment
+ * room, which every other host serves it from, T65):
  *
  *  - `idle` - the session is open and no turn runs;
  *  - `replying` - a turn runs; `startedAt` is when it started and `step` the
@@ -838,7 +840,8 @@ export type BotActivityTarget = z.infer<typeof botActivityTargetSchema>;
 /**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
  * re-sent whole whenever the bot row, its task list, a task's last check-in,
- * its open-request count or its conversations' rows change on this host;
+ * its open-request count or its conversations' rows change (on the bound
+ * host, or in the bot's environment room on any other);
  * `activity` carries one changed entry of the bot's activity in between;
  * `deleted` ends it (the bot
  * was archived, or the caller lost it). The conversation rows stay
@@ -853,16 +856,19 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
       tasks: z.array(botTaskEntrySchema),
       /**
        * Requests across the bot's conversations not yet resolved, as the
-       * bound host knows them. `null` when the serving host is not the bound
-       * one, and on the bound host until it has read the conversations once
-       * (a later snapshot carries the count).
+       * bound host knows them; another host serves the count the bound host
+       * wrote to the bot's environment room (T65). `null` until the bound
+       * host has read the conversations once (a later snapshot carries the
+       * count), and while the serving host cannot read the room.
        */
       openRequestCount: z.number().int().nonnegative().nullable(),
       /**
        * Changes whenever a row is written to the bot's channel or a thread
        * record on the bound host (a post, a reply, an announcement, a
        * verdict): a changed value says to read the threads' listing again.
-       * `null` when the serving host is not the bound one.
+       * Another host serves the value the bound host writes to the bot's
+       * environment room once the row is published (T65). `null` while the
+       * serving host cannot read the room.
        */
       conversationsRevision: z.number().int().nonnegative().nullable(),
       /** `boundHostId` and `hostEpoch` restated for cheap comparison. */
@@ -875,8 +881,10 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
       }),
       /**
        * What the bot's running chats are doing, whole; later changes arrive
-       * as `activity` frames. `null` when the serving host is not the bound
-       * one.
+       * as `activity` frames. Another host serves what the bound host wrote
+       * to the bot's environment room (T65), where a `trunk` of `null` means
+       * no value has been written. `null` while the serving host cannot read
+       * the room.
        */
       activity: botActivitySchema.nullable(),
       hasBinaryPayload: z.literal(false),
@@ -884,7 +892,7 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
     /**
      * One entry of the snapshot's `activity` changed: `entry` replaces it, and
      * `null` removes it (the session is no longer open on the host). Sent
-     * only by the bound host, only after a snapshot.
+     * only after a snapshot that carried an `activity`.
      */
     z.object({
       kind: z.literal("activity"),

@@ -367,12 +367,12 @@ describe("<ProviderSkillsTab /> skill detail", () => {
       name: "Open find-skills (Shared)",
     });
     const providerRow = screen.getByRole("button", {
-      name: "Open find-skills (Provider-only)",
+      name: "Open find-skills (Codex only)",
     });
     expect(sharedRow).toBeDefined();
     expect(providerRow).toBeDefined();
     expect(within(sharedRow).getByText("Shared")).toBeDefined();
-    expect(within(providerRow).getByText("Provider-only")).toBeDefined();
+    expect(within(providerRow).getByText("Codex only")).toBeDefined();
   });
 
   it("does not mount the file read until a row is opened", () => {

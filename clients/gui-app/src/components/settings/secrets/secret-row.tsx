@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useSecretRowActions } from "@/components/settings/secrets/use-secret-row-actions";
+import { removalWithFailures } from "@/components/settings/secrets/secret-removal-lines";
 import { SecretRemovalStatus } from "@/components/settings/secrets/secret-removal-status";
 import { SettingsDetailsButton } from "@/components/settings/details/settings-details-button";
 import { useDetailsEnvironmentId } from "@/components/settings/details/use-details-environment-id";
@@ -40,7 +41,7 @@ import {
   secretValueOrigin,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSecretMcpServerNames } from "@/hooks/environment/team/use-mcp-servers";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
@@ -327,7 +328,10 @@ export function SecretRow(props: {
   // The computers running Personal hold a copy of Personal's; a team's
   // computers and every sandbox use the value without one.
   const onPersonal = useEnvironmentPick().kind === "personal";
-  const holders = usePersonalComputers(onPersonal).participants;
+  const running = useHostsRunningPersonal();
+  const holders = onPersonal
+    ? running.hosts.filter((host) => host.kind === "personal")
+    : [];
   const usedBy = secretUsedByLine(
     useSecretMcpServerNames(secret.secretId, removing),
   );
@@ -415,7 +419,8 @@ export function SecretRow(props: {
       </div>
       {removal === null ? null : (
         <SecretRemovalStatus
-          removal={removal}
+          removal={removalWithFailures(removal, null)}
+          hostName={props.hostName}
           pending={actions.remove.isPending || actions.versions.isFetching}
           onRetry={() => {
             if (actions.currentVersionId === null)

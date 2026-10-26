@@ -357,6 +357,23 @@ function phoneRunner(input: {
   /** `null` stands in for a platform with no OS settings page (dev web). */
   readonly openPushSettings: (() => Promise<void>) | null;
 }): MobileRunnerHost {
+  return runnerAround(
+    new MobilePushRegistration({
+      plugin: input.plugin,
+      authnBaseUrl: "http://localhost:32350",
+      platform: "ios",
+      environment: "sandbox",
+      registerToken: async () => ({ kind: "ok" }),
+      removeToken: async () => ({ kind: "ok" }),
+    }),
+    input.openPushSettings,
+  );
+}
+
+function runnerAround(
+  pushRegistration: MobilePushRegistration,
+  openPushSettings: (() => Promise<void>) | null,
+): MobileRunnerHost {
   return new MobileRunnerHost({
     signInUrl: "http://localhost:32352/sign-in",
     authnBaseUrl: "http://localhost:32350",
@@ -365,15 +382,8 @@ function phoneRunner(input: {
     serverBaseUrl: "http://localhost:5010",
     sandboxControlUnavailableReason: null,
     fleetHostIds: null,
-    pushRegistration: new MobilePushRegistration({
-      plugin: input.plugin,
-      authnBaseUrl: "http://localhost:32350",
-      platform: "ios",
-      environment: "sandbox",
-      registerToken: async () => ({ kind: "ok" }),
-      removeToken: async () => ({ kind: "ok" }),
-    }),
-    openPushSettings: input.openPushSettings,
+    pushRegistration,
+    openPushSettings,
     returnScheme: "traycer",
     authSheet: null,
     linkCodeScanner: null,
@@ -1840,6 +1850,8 @@ describe("MobileRunnerHost", () => {
 
     afterEach(() => {
       Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+      window.localStorage.clear();
     });
 
     function setVisibility(next: DocumentVisibilityState): void {
@@ -1921,6 +1933,84 @@ describe("MobileRunnerHost", () => {
 
       subscription.dispose();
       await pushPermission.request();
+      expect(changes).toEqual([1]);
+    });
+
+    it("stores a muted set through the runner and tells subscribers to re-read", async () => {
+      vi.useFakeTimers();
+      const registration = new MobilePushRegistration({
+        plugin: new FakePushPlugin(),
+        authnBaseUrl: "http://localhost:32350",
+        platform: "ios",
+        environment: "sandbox",
+        registerToken: async () => ({ kind: "ok" }),
+        removeToken: async () => ({ kind: "ok" }),
+      });
+      registration.start(
+        {
+          get: async () => ({
+            token: "bearer-1",
+            refreshToken: "refresh-1",
+            savedAt: "2026-08-05T00:00:00.000Z",
+            user: { id: "user-1", email: "dev@traycer.ai", name: "Dev" },
+          }),
+          subscribe: () => ({ dispose: () => {} }),
+        },
+        { onSystemResumed: () => ({ dispose: () => {} }) },
+      );
+      const pushPermission = runnerAround(
+        registration,
+        OPEN_SETTINGS,
+      ).pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+      const changes: number[] = [];
+      pushPermission.onChange(() => changes.push(1));
+
+      await pushPermission.setMutedSeverities(["info"]);
+
+      expect(changes).toEqual([1]);
+      await expect(pushPermission.getMutedSeverities()).resolves.toEqual([
+        "info",
+      ]);
+    });
+
+    it("fires onChange when the login session changes - the muted set is per account", async () => {
+      const host = runnerAround(
+        new MobilePushRegistration({
+          plugin: new FakePushPlugin(),
+          authnBaseUrl: "http://localhost:32350",
+          platform: "ios",
+          environment: "sandbox",
+          registerToken: async () => ({ kind: "ok" }),
+          removeToken: async () => ({ kind: "ok" }),
+        }),
+        OPEN_SETTINGS,
+      );
+      const pushPermission = host.pushPermission;
+      expect(pushPermission).not.toBeNull();
+      if (pushPermission === null) return;
+      const changes: number[] = [];
+      const subscription = pushPermission.onChange(() => changes.push(1));
+
+      await host.tokenStore.signIn(
+        { token: "access-token", refreshToken: "refresh-token" },
+        { id: "user-1", email: "user@example.com", name: "User" },
+      );
+      await vi.waitFor(() => {
+        expect(changes).toEqual([1]);
+      });
+
+      subscription.dispose();
+      // Self-writes notify asynchronously; wait on the store's own signal.
+      const second = new Promise<void>((resolve) => {
+        host.tokenStore.subscribe(() => resolve());
+      });
+      await host.tokenStore.signIn(
+        { token: "access-token-2", refreshToken: "refresh-token-2" },
+        { id: "user-2", email: "user2@example.com", name: "User2" },
+      );
+      await second;
       expect(changes).toEqual([1]);
     });
 

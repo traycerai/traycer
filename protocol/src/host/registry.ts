@@ -1200,8 +1200,10 @@ import {
   environmentBindingReadV10,
   environmentHostBindV10,
   environmentHostListUpgradeV10ToV11,
+  environmentHostListUpgradeV11ToV12,
   environmentHostListV10,
   environmentHostListV11,
+  environmentHostListV12,
   environmentHostReadV10,
   environmentListUpgradeV10ToV11,
   environmentListV10,
@@ -9007,7 +9009,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "environment.host.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentHostListV10,
@@ -9019,6 +9021,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: environmentHostListV11,
           upgradeFromPreviousVersion: environmentHostListUpgradeV10ToV11,
           responseGrowthProjectionGated: true,
+        },
+        // `hasLocalRow` is a new key: an older caller's reparse strips it.
+        2: {
+          contract: environmentHostListV12,
+          upgradeFromPreviousVersion: environmentHostListUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

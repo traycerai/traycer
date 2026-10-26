@@ -1,7 +1,5 @@
 import { Coins, Download, KeyRound, Lock, SquarePen } from "lucide-react";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
-import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
@@ -16,6 +14,7 @@ import {
 } from "@/lib/sandboxes/staged-sandbox-in-window";
 import { providerSetUp } from "@/components/onboarding/set-up-personal";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 
 const CARDS = [
   {
@@ -123,11 +122,6 @@ function cardPresentation(
   };
 }
 
-function personalComputerCount(hosts: readonly HostListItem[] | null): number {
-  if (hosts === null) return 0;
-  return hosts.filter((host) => host.kind === "personal").length;
-}
-
 export function useGettingStartedFacts(): GettingStartedFacts {
   const client = useOptionalHostClient();
   const hostId = useRequesterHostId(client);
@@ -149,7 +143,10 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   const { tasks } = useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, {
     enabled: true,
   });
-  const hosts = useRegisteredHosts().data?.hosts ?? null;
+  // Complete once a second computer runs Personal: the computers Personal
+  // reaches, not the account's host list, which leaves out a computer with
+  // remote access off.
+  const running = useHostsRunningPersonal();
   const user = useAuthUser().data ?? null;
   const staged = useStagedSandboxInThisWindow();
   return {
@@ -157,7 +154,8 @@ export function useGettingStartedFacts(): GettingStartedFacts {
       providers.data !== undefined && providerSetUp(providers.data.providers),
     hasTask: tasks.length > 0,
     hasSecret: secrets.data?.secrets.some((secret) => !secret.revoked) === true,
-    hasSecondPersonalComputer: personalComputerCount(hosts) >= 2,
+    hasSecondPersonalComputer:
+      running.hosts.filter((host) => host.kind === "personal").length >= 2,
     sandboxStaged: sandboxIsStagedInThisWindow(staged),
     creditsAboveZero: (sandboxBalanceMc(user) ?? 0) > 0,
   };

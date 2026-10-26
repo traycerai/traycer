@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useState } from "react";
 import {
   useQueryClient,
@@ -83,9 +84,10 @@ export function useEnvironmentMemberDirectory(
   environmentId: string | null,
   enabled: boolean,
 ): EnvironmentMemberDirectory {
+  const servingClient = usePoolTierHostClient(client);
   const queryClient = useQueryClient();
   // The same host id the batch below keys its queries with.
-  const hostId = useReactiveHostReadiness(client).hostId;
+  const hostId = useReactiveHostReadiness(servingClient).hostId;
   const [requested, setRequested] = useState<Requested>({
     environmentId,
     hostId,
@@ -122,7 +124,7 @@ export function useEnvironmentMemberDirectory(
     typeof METHOD,
     ReadonlyArray<EnvironmentMembersResponse | undefined>
   >({
-    client,
+    client: servingClient,
     requests,
     cacheKeyIdentity: undefined,
     options: {

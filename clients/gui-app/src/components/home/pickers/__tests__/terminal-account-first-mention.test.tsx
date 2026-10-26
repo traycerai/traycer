@@ -18,7 +18,7 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
 }));
 
 const SENTENCE =
-  "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere.";
+  "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.";
 const PERSIST_NAME = "traycer-gui-app:terminal-account-mention";
 
 function resetStore(): void {
@@ -129,7 +129,7 @@ describe("<TerminalAccountFirstMention />", () => {
       expect(
         screen.getByTestId("terminal-account-first-mention").textContent,
       ).toBe(
-        "e2e-sbx-p1's own sign-in, which stays on e2e-sbx-p1. Link a plan to use one everywhere.",
+        "e2e-sbx-p1's own sign-in, which stays on e2e-sbx-p1. Sign in on Providers to use one everywhere.",
       );
     });
 
@@ -190,7 +190,7 @@ describe("<TerminalAccountFirstMention /> on a composer with a sandbox staged", 
     expect(
       screen.getByTestId("terminal-account-first-mention").textContent,
     ).toBe(
-      "e2e-sbx-p1's own sign-in, which stays on e2e-sbx-p1. Link a plan to use one everywhere.",
+      "e2e-sbx-p1's own sign-in, which stays on e2e-sbx-p1. Sign in on Providers to use one everywhere.",
     );
   });
 

@@ -15,7 +15,10 @@ import {
  * - `signed out`: the terminal login's definitive verdict, from `auth` or the
  *   ambient profile row (`isProviderAmbientSignedOut`).
  * - `own login`: the terminal login is signed in, which works on this
- *   computer only. Not for Traycer, whose sign-in is the person's account.
+ *   computer only. A login the tool reports as `configured` (Codex's saved
+ *   login, which it does not check until a run) counts, as the Profiles
+ *   card's own-login row reads it. Not for Traycer, whose sign-in is the
+ *   person's account.
  *
  * `null` while nothing above is known yet (a probe still running, a status
  * that is not an answer), so the rail never states a guess.
@@ -29,8 +32,21 @@ export function providerRailStateWord(state: ProviderCliState): string | null {
   if (managed > 1) return `${managed} profiles`;
   if (state.apiKey.configured) return "key";
   if (isProviderAmbientSignedOut(state)) return "signed out";
-  if (state.providerId !== "traycer" && isProviderAmbientAuthenticated(state)) {
+  if (
+    state.providerId !== "traycer" &&
+    (isProviderAmbientAuthenticated(state) || ambientLoginConfigured(state))
+  ) {
     return "own login";
   }
   return null;
+}
+
+function ambientLoginConfigured(state: ProviderCliState): boolean {
+  return (
+    state.auth.status === "configured" ||
+    state.profiles.some(
+      (profile) =>
+        profile.kind === "ambient" && profile.auth.status === "configured",
+    )
+  );
 }

@@ -4,9 +4,11 @@ import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import {
   useConfigurationGuideQuery,
   useConfigurationGuideMutations,
+  useConfigurationGuideWritable,
 } from "@/hooks/environment/team/use-guide-query";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import {
@@ -19,24 +21,27 @@ import {
   typedWriteIssue,
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
-import { usePickedTeamLabel, useConfigurationName } from "./team-pick-label";
+import { useConfigurationName } from "./team-pick-label";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { ConfigurationReadFailed } from "./team-read-failed";
 
 export function TeamGuide(): ReactNode {
-  const source = useConfigurationSource();
   const scope = useTeamViewingHost();
   const query = useConfigurationGuideQuery();
+  const read = useBoundedRead(query);
   const canEdit = useCanEditConfiguration();
-  const name =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
+  const name = useConfigurationName();
+  const writable = useConfigurationGuideWritable();
   const [picking, setPicking] = useState(false);
+  const [writing, setWriting] = useState(false);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
-  const notServed = query.data?.outcome === "not_served";
+  const data = query.data;
+  const editable = canEdit && writable;
   let body: ReactNode = <MutedAgentSpinner />;
-  if (scope.client === null || notServed)
+  // A build with no server pool reads the guide from the picked host, which
+  // answers `not_served` when it does not run this configuration.
+  if (data?.outcome === "not_served")
     body = (
       <TeamContentNeedsHost
         content="guide"
@@ -44,24 +49,33 @@ export function TeamGuide(): ReactNode {
         onPickHost={() => setPicking(true)}
       />
     );
-  else if (query.isError)
+  else if (read.failed && query.data === undefined)
     body = (
-      <ConfigurationReadFailed
-        page="selection guide"
-        onRetry={() => void query.refetch()}
-      />
+      <ConfigurationReadFailed page="selection guide" onRetry={read.retry} />
     );
-  else if (query.data !== undefined && query.data.outcome !== "not_served") {
-    body = canEdit ? (
+  else if (data?.outcome === "unset")
+    body =
+      writing && editable ? (
+        <TeamGuideEditor
+          key={`unset:${data.revision}`}
+          text=""
+          revision={data.revision}
+          onIssue={setIssue}
+        />
+      ) : (
+        <TeamGuideUnset onWrite={editable ? () => setWriting(true) : null} />
+      );
+  else if (data?.outcome === "ok") {
+    body = editable ? (
       <TeamGuideEditor
-        key={`${scope.viewingHost?.hostId}:${query.data.revision}`}
-        text={query.data.text}
-        revision={query.data.revision}
+        key={`${scope.viewingHost?.hostId}:${data.revision}`}
+        text={data.text}
+        revision={data.revision}
         onIssue={setIssue}
       />
     ) : (
       <MarkdownEditPreview
-        value={query.data.text}
+        value={data.text}
         onChange={() => {}}
         readOnly
         placeholder={undefined}
@@ -80,15 +94,43 @@ export function TeamGuide(): ReactNode {
   );
 }
 
+/**
+ * A configuration whose room holds no guide yet: its agents get the default
+ * until someone saves one. `onWrite` is null for a reader who cannot edit.
+ */
+function TeamGuideUnset(props: {
+  readonly onWrite: (() => void) | null;
+}): ReactNode {
+  const name = useConfigurationName();
+  return (
+    <p
+      role="status"
+      className="flex flex-wrap items-baseline gap-x-1 text-ui-sm text-muted-foreground"
+    >
+      {`${name}'s agents use the default selection guide until someone saves one.`}
+      {props.onWrite === null ? null : (
+        <Button
+          type="button"
+          variant="link"
+          size="inline"
+          onClick={props.onWrite}
+        >
+          Write one
+        </Button>
+      )}
+    </p>
+  );
+}
+
 function TeamGuideEditor(props: {
   readonly text: string;
   readonly revision: string;
   /** A save's or a reset's answer: a lost compare-and-set, or not saved. */
   readonly onIssue: (issue: ConfigurationWriteIssue) => void;
 }): ReactNode {
+  const source = useConfigurationSource();
   const personal = useConfigurationIsPersonal();
   const teamName = useConfigurationName();
-  const source = useConfigurationSource();
   const { set, reset } = useConfigurationGuideMutations();
   const [value, setValue] = useState(props.text);
   const [confirm, setConfirm] = useState(false);

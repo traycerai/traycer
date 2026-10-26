@@ -9,8 +9,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 
 /**
- * Grant plus the acceptance seat sentences and Accept. There is no GUI
- * invite-Accept surface yet; export this for the host that later mounts it.
+ * Grant plus the acceptance seat sentences and Accept, as the Environment
+ * dropdown's `Review` on an invited team shows it (`InviteAcceptDialog`).
  */
 export function InviteAcceptGrant(props: {
   readonly role: TeamRole;

@@ -30,6 +30,7 @@ import { fallbackPolicySchema } from "@traycer/protocol/host/fallback-policy";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationModelRoutingQuery } from "@/hooks/environment/team/use-model-routing-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import {
@@ -40,6 +41,7 @@ import { useConfigurationRoutingPreviewQuery } from "@/hooks/environment/team/us
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
+import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -69,6 +71,7 @@ type TeamRoutingSnapshot = {
 export function TeamModelRouting(): ReactNode {
   const personal = useConfigurationIsPersonal();
   const query = useConfigurationModelRoutingQuery();
+  const read = useBoundedRead(query);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   let editor: ReactNode = null;
   if (query.data !== undefined) {
@@ -92,12 +95,9 @@ export function TeamModelRouting(): ReactNode {
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationWriteFeedback issue={issue} />
-      {query.isPending ? <MutedAgentSpinner /> : null}
-      {query.isError ? (
-        <ConfigurationReadFailed
-          page="model routing"
-          onRetry={() => void query.refetch()}
-        />
+      {read.pending ? <MutedAgentSpinner /> : null}
+      {read.failed ? (
+        <ConfigurationReadFailed page="model routing" onRetry={read.retry} />
       ) : null}
       {editor}
     </SettingsPanelShell>
@@ -144,17 +144,11 @@ function TeamRoutingDefaults(props: {
   let state: ReactNode = <MutedAgentSpinner />;
   if (scope.client === null) {
     state = (
-      <p role="status" className="text-ui-sm text-muted-foreground">
-        Model tiers need a host running {teamName}.{" "}
-        <Button
-          type="button"
-          variant="link"
-          size="sm"
-          onClick={() => setPicking(true)}
-        >
-          Pick one.
-        </Button>
-      </p>
+      <TeamContentNeedsHost
+        content="model-tiers"
+        teamName={teamName}
+        onPickHost={() => setPicking(true)}
+      />
     );
   } else if (!query.isPending) {
     state = (

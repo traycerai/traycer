@@ -56,7 +56,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
-  botTabMoveTarget,
   botTabOpenState,
   type BotTabPausedReason,
 } from "@/components/bots/bot-tab-open-state";
@@ -71,13 +70,13 @@ function isBotTabView(value: string): value is BotTabView {
 /**
  * A bot's tab (Tracy Bots). The person never picks the machine a bot runs
  * on: the tab opens through the host it was created on (this host, from
- * Home), asks it `bot.open`, and follows the answer -
- * - another host serves the bot and this client can reach it: the tab is
- *   rebound there silently, and this surface remounts on it;
- * - this host serves it (bound here, or claimed here because its host was
- *   away): the full tab;
- * - nobody can serve it from here: the paused state, which names no machine;
- *   the channel list and a queued post keep working through this host.
+ * Home), asks it `bot.open`, and stays there whatever the answer (T65) -
+ * the tab's host serves the bot's channel, its threads and what the bot is
+ * doing, whether it runs the bot (bound here, or claimed here because its
+ * host was away) or another host does; the bot's host only runs its turns.
+ * When no host can run them the paused banner says so, naming no machine,
+ * above the channel, and a post waits for delivery. Under the hood alone is
+ * the bot's host's to show.
  *
  * While its team's onboarding locks the team's chat (`teamOnboardingGate`,
  * as the sidebar's channel rows read it) the tab is not opened and shows the
@@ -95,7 +94,9 @@ function isBotTabView(value: string): value is BotTabView {
  * reads that host - the stream, the conversation list, every write. A tab
  * left on a host this client can no longer dial is moved back to the app's
  * host by the next open from Home (`HomeBotRow`), which may read that host;
- * the tab itself never reads the app-wide host.
+ * the tab itself never reads the app-wide host. While anything about that
+ * host is unknown - its methods, `bot.open`'s answer, the stream - the tab
+ * shows its connecting state, never nothing.
  */
 export function BotTabSurface(props: {
   readonly botId: string;
@@ -110,7 +111,7 @@ export function BotTabSurface(props: {
   // write the tab offers; without it the tab shows the update notice and no
   // control that would call a method the host lacks.
   const support = useHostMethodSupport(hostId, "bot.open");
-  if (support === null) return null;
+  if (support === null) return <BotTabConnecting />;
   if (!support) {
     return (
       <div
@@ -142,7 +143,6 @@ function BotTabBody(props: {
   const client = useTabHostClient();
   const closeBotTab = useBotTabsStore((s) => s.closeBotTab);
   const setBotTabTitle = useBotTabsStore((s) => s.setBotTabTitle);
-  const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
   const [view, setView] = useState<BotTabView>("messages");
 
   const botList = useBotListQuery(client, true);
@@ -181,17 +181,7 @@ function BotTabBody(props: {
   const openState = botTabOpenState({
     response: answer,
     error: answer === undefined ? openError : null,
-    tabHostId: hostId,
-    connectable,
   });
-  const moveToHostId = botTabMoveTarget({
-    response: answer,
-    tabHostId: hostId,
-    connectable,
-  });
-  useEffect(() => {
-    if (moveToHostId !== null) rebindBotTab(botId, moveToHostId);
-  }, [botId, moveToHostId, rebindBotTab]);
 
   // A deleted bot has no tab: the store removal closes it everywhere. Two
   // signals say so - the stream's `deleted` frame, and a `bot.list` answer
@@ -283,19 +273,7 @@ function BotTabBody(props: {
     snapshot === null ||
     openState.kind === "opening"
   ) {
-    return (
-      <div
-        className="flex h-full items-center justify-center text-muted-foreground"
-        aria-busy="true"
-        data-testid="bot-tab-connecting"
-      >
-        <AgentSpinningDots
-          className={undefined}
-          testId={undefined}
-          variant={undefined}
-        />
-      </div>
-    );
+    return <BotTabConnecting />;
   }
 
   return (
@@ -363,7 +341,6 @@ function BotTabContent(props: {
         : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
-  const paused = pausedReason !== null;
   // Who wrote each channel row. A host without the method shows the other
   // members by id.
   const membersSupported =
@@ -485,7 +462,6 @@ function BotTabContent(props: {
                 botTitle={snapshot.bot.title}
                 directive={snapshot.bot.directive}
                 appConversationChatId={snapshot.bot.appConversationChatId}
-                paused={paused}
                 resolveMember={resolveMember}
                 openThread={openThread}
                 onOpenThread={setOpenThread}
@@ -503,7 +479,7 @@ function BotTabContent(props: {
                 trunkChatId={snapshot.bot.trunkChatId}
                 tasks={snapshot.tasks}
                 openRequestCount={snapshot.openRequestCount}
-                paused={paused}
+                boundHost={snapshot.boundHost}
                 environmentLabel={environmentLabel}
                 environmentBots={environmentBots}
                 sessionChatId={sessionChatId}
@@ -637,6 +613,23 @@ function environmentBotsOf(
   return bots.filter((bot) => bot.environmentId === environmentId);
 }
 
+/** The tab while anything about its host is unknown. */
+function BotTabConnecting(): ReactNode {
+  return (
+    <div
+      className="flex h-full items-center justify-center text-muted-foreground"
+      aria-busy="true"
+      data-testid="bot-tab-connecting"
+    >
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </div>
+  );
+}
+
 function ErrorNotice(props: {
   readonly text: string;
   readonly onRetry: () => void;
@@ -728,7 +721,7 @@ function BotChannelHeader(props: {
 }
 
 /**
- * The paused state: why the bot cannot be served to this tab now, with no
+ * The paused banner: why no host can run the bot's turns now, with no
  * machine named, and Retry where asking again can change the answer.
  */
 function PausedBanner(props: {

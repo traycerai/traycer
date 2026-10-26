@@ -40,6 +40,28 @@ vi.mock("@/components/settings/details/overview-card-details-line", () => ({
   ),
 }));
 
+// Export diagnostics opens the same drawer on its export tab; a marker here
+// shows whether, and on which tab, the card asked for it.
+vi.mock("@/components/settings/details/settings-details-button", () => ({
+  SettingsDetailsDialog: (props: {
+    readonly open: boolean;
+    readonly initialTab: string;
+  }) =>
+    props.open ? (
+      <div data-testid="details-dialog" data-tab={props.initialTab} />
+    ) : null,
+}));
+vi.mock(
+  "@/components/settings/details/use-host-settings-details-subject",
+  () => ({
+    useHostSettingsDetailsSubject: () => ({
+      environmentId: "env-a",
+      kind: "host_settings",
+      key: "old",
+    }),
+  }),
+);
+
 const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
 const STOPPED_AT = Date.UTC(2026, 9, 21, 12);
 
@@ -51,6 +73,14 @@ function renderCard(
   status: EnvironmentStatusResponseV11,
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): void {
+  renderCardWithRetry(status, handlers, true);
+}
+
+function renderCardWithRetry(
+  status: EnvironmentStatusResponseV11,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  retrySupported: boolean,
+): void {
   const { client } = buildEnvironmentClient({ hostId: "old", handlers });
   recordNegotiatedHostManifest("old", {
     "environment.status": { major: 1, minor: 1 },
@@ -58,6 +88,9 @@ function renderCard(
     "environment.review.record": { major: 1, minor: 0 },
     "environment.move.stopPreview": { major: 1, minor: 0 },
     "environment.move.stop": { major: 1, minor: 0 },
+    ...(retrySupported
+      ? { "environment.setup.retry": { major: 1, minor: 0 } }
+      : {}),
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -116,6 +149,27 @@ describe("<HostOverviewSettingsCard />", () => {
     });
   });
 
+  it("puts Details on the Local line, between the sentence and Move to Personal", () => {
+    renderCard(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+        setup: { stage: "moving_settings", state: "awaiting_consent" },
+      }),
+      {},
+    );
+
+    const line = screen.getByTestId("host-settings-card-local").parentElement;
+    expect(
+      Array.from(line?.children ?? []).map((child) => child.textContent),
+    ).toEqual([
+      "Settings on this computer only.",
+      "Details",
+      "Move to Personal",
+    ]);
+    expect(screen.getAllByTestId("card-details")).toHaveLength(1);
+  });
+
   it("shows N of M items applied while moving", () => {
     renderCard(
       environmentStatusFixture({
@@ -140,6 +194,95 @@ describe("<HostOverviewSettingsCard />", () => {
       "Moving this computer's settings to Personal · 2 of 4 items applied",
     );
     expect(screen.queryByTestId("host-settings-card-move")).toBeNull();
+    // Details sits on the progress line's own row, not as a line of the card.
+    const details = screen.getAllByTestId("card-details");
+    expect(details).toHaveLength(1);
+    const row = screen.getByTestId("host-settings-card-progress").parentElement;
+    expect(row?.contains(details[0])).toBe(true);
+    expect(row).not.toBe(screen.getByTestId("host-settings-card"));
+    expect(details[0].parentElement).toBe(row);
+  });
+
+  it("shows no count while the move has registered no item", () => {
+    renderCard(
+      environmentStatusFixture({
+        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        setup: { stage: "moving_settings", state: "running" },
+      }),
+      {},
+    );
+
+    expect(
+      screen
+        .getByTestId("host-settings-card-progress")
+        .textContent.replace(/\s+/g, " "),
+    ).toBe("Moving this computer's settings to Personal");
+  });
+
+  describe("when the move stopped", () => {
+    const stoppedStatus = (state: "stalled" | "failed") =>
+      environmentStatusFixture({
+        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        setup: { stage: "moving_settings", state },
+        items: [
+          itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),
+          itemStatusFixture({ kind: "variable", key: "B", status: "pending" }),
+          itemStatusFixture({ kind: "variable", key: "C", status: "pending" }),
+        ],
+        pendingUploads: [pendingUploadFixture({ kind: "variable", key: "D" })],
+      });
+
+    it("says it timed out when it stalled, with the items left", () => {
+      renderCard(stoppedStatus("stalled"), {});
+
+      expect(
+        screen.getByTestId("host-settings-card-move-stopped").textContent,
+      ).toBe("Moving stopped: it timed out. 3 items left.");
+      expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+      expect(screen.queryByTestId("card-details")).toBeNull();
+    });
+
+    it("says it couldn't finish when it failed", () => {
+      renderCard(stoppedStatus("failed"), {});
+
+      expect(
+        screen.getByTestId("host-settings-card-move-stopped").textContent,
+      ).toBe("Moving stopped: it couldn't finish. 3 items left.");
+    });
+
+    it("sends environment.setup.retry from Retry", async () => {
+      const retries: unknown[] = [];
+      renderCard(stoppedStatus("stalled"), {
+        "environment.setup.retry": (request) => {
+          retries.push(request);
+          return { attemptId: "retry-1" };
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(retries).toEqual([{}]));
+    });
+
+    it("offers no Retry on a host without environment.setup.retry", () => {
+      renderCardWithRetry(stoppedStatus("failed"), {}, false);
+
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      ).toBeTruthy();
+    });
+
+    it("opens the Details drawer on Export diagnostics", () => {
+      renderCard(stoppedStatus("failed"), {});
+      expect(screen.queryByTestId("details-dialog")).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+
+      expect(screen.getByTestId("details-dialog").dataset.tab).toBe("export");
+    });
   });
 
   it("leaves a configuration's sandbox defaults out of the items moving", () => {

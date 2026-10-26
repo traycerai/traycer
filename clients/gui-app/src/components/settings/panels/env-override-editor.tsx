@@ -14,6 +14,7 @@ import {
   isCredentialShapedEnvName,
   urlCarriesCredentials,
 } from "@/components/providers/credential-bearing-values";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -278,15 +279,20 @@ export function EnvOverrideEditor(props: {
   readonly namePlaceholder: string;
   readonly emptyLabel: string;
   /**
-   * A short note beside a row's name, by key ("Pending", "Overridden on
-   * dev-box"). An empty map for a list with nothing to say.
+   * A short note under a row, by key ("Pending", "dev-box uses: error · Use
+   * everywhere"). An empty map for a list with nothing to say.
    */
-  readonly rowNotes: ReadonlyMap<string, string>;
+  readonly rowNotes: ReadonlyMap<string, ReactNode>;
   /**
    * Rows on hold until the person chooses, by key, each with its `Review`
    * control. Such a row shows its name only, never its value.
    */
   readonly onHold: ReadonlyMap<string, ReactNode>;
+  /**
+   * Rows a secret sets, by key, each with the secret's name: "NAME · from
+   * the secret NAME · Secrets", with no value and nothing to edit here.
+   */
+  readonly claimedBy: ReadonlyMap<string, string>;
   /**
    * Set where a value that looks like a key must not be stored as a
    * variable: such a value is refused in its row with the refusal for its
@@ -346,6 +352,16 @@ export function EnvOverrideEditor(props: {
             if (review !== undefined) {
               return (
                 <EnvHeldRow key={entry.key} name={entry.key} review={review} />
+              );
+            }
+            const secretName = props.claimedBy.get(entry.key);
+            if (secretName !== undefined) {
+              return (
+                <EnvClaimedRow
+                  key={entry.key}
+                  name={entry.key}
+                  secretName={secretName}
+                />
               );
             }
             if (savedKeyShaped(entry)) {
@@ -416,7 +432,7 @@ function EnvOverrideRow(props: {
   readonly disabled: boolean;
   readonly credentialRefusal: string | null;
   readonly keyRefusal: KeyRefusalFor;
-  readonly note: string | null;
+  readonly note: ReactNode;
   readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
@@ -609,7 +625,7 @@ function EnvMaskedRow(props: {
   readonly entry: EnvOverrideValue;
   readonly disabled: boolean;
   readonly keyRefusal: KeyRefusalFor;
-  readonly note: string | null;
+  readonly note: ReactNode;
   readonly details: ReactNode;
   readonly onDelete: (key: string) => void;
 }) {
@@ -693,6 +709,32 @@ function EnvHeldRow(props: {
       <span className="font-mono text-foreground">{props.name}</span>
       {" · on hold until you choose · "}
       {props.review}
+    </li>
+  );
+}
+
+/** A variable a secret sets: the secret's, read and changed on Secrets. */
+function EnvClaimedRow(props: {
+  readonly name: string;
+  readonly secretName: string;
+}) {
+  return (
+    <li
+      className="px-3 py-2.5 text-ui-sm text-muted-foreground"
+      data-testid="env-claimed-row"
+    >
+      <span className="font-mono text-foreground">{props.name}</span>
+      {" · from the secret "}
+      <span className="font-mono">{props.secretName}</span>
+      {" · "}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        onClick={() => navigateToSettingsSection("secrets")}
+      >
+        Secrets
+      </Button>
     </li>
   );
 }

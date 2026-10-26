@@ -6,6 +6,7 @@ import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-ch
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
@@ -33,6 +34,7 @@ export function TeamVariablesAndShells(): ReactNode {
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
   const query = useConfigurationVariablesQuery();
+  const read = useBoundedRead(query);
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const outcome = (result: EnvironmentConfigurationItemWriteResponse): void =>
@@ -53,13 +55,13 @@ export function TeamVariablesAndShells(): ReactNode {
     >
       <ConfigurationOsPicker value={os} onChange={setOs} />
       <ConfigurationWriteFeedback issue={issue} />
-      {query.isError ? (
+      {read.failed ? (
         <ConfigurationReadFailed
           page="variables and shells"
-          onRetry={() => void query.refetch()}
+          onRetry={read.retry}
         />
       ) : null}
-      {query.isPending ? <MutedAgentSpinner /> : null}
+      {read.pending ? <MutedAgentSpinner /> : null}
       {query.data === undefined ? null : (
         <>
           <h2 className="text-ui-sm font-medium">Variables</h2>

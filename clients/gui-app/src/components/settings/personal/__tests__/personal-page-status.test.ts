@@ -405,6 +405,14 @@ describe("moveRowLabel", () => {
     [{ kind: "variable", key: "EDITOR", label: "EDITOR" }, "EDITOR"],
     [{ kind: "mcp_server", key: "gh", label: "github-mcp" }, "github-mcp"],
     [{ kind: "env_override", key: "no-such:X", label: "X" }, "X"],
+    [
+      {
+        kind: "env_override",
+        key: "claude-code:ANTHROPIC_BASE_URL",
+        label: "ANTHROPIC_BASE_URL",
+      },
+      "ANTHROPIC_BASE_URL (Claude Code)",
+    ],
   ])("names the row %j as %s", (row, label) => {
     expect(moveRowLabel(row)).toBe(label);
   });

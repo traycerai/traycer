@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { Button } from "@/components/ui/button";
+import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { useConfigurationSource } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
@@ -35,17 +35,11 @@ export function TeamVariableLiveFacts(): ReactNode {
         <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
       </div>
       {scope.client === null ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Live values need a host running {name}.{" "}
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={() => setPicking(true)}
-          >
-            Pick one.
-          </Button>
-        </p>
+        <TeamContentNeedsHost
+          content="live-values"
+          teamName={name}
+          onPickHost={() => setPicking(true)}
+        />
       ) : (
         <>
           {shell.isError || variables.isError ? (

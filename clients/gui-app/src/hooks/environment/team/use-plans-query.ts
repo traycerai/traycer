@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -22,7 +23,7 @@ export function useConfigurationPlansQuery(): UseQueryResult<
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   return useHostQuery({
     cacheKeyIdentity: [viewerId],
     client,
@@ -50,7 +51,7 @@ export function useConfigurationPlanUnlinkPreview(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   return useHostQuery({
     cacheKeyIdentity: [viewerId, previewId],
     client,

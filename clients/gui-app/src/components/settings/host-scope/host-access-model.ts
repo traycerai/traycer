@@ -164,15 +164,20 @@ export const LOCAL_VALUES_RESTART_NOTE =
  */
 export function terminalAccountSentence(hostName: string | null): string {
   return hostName === null
-    ? "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere."
-    : `${hostName}'s own sign-in, which stays on ${hostName}. Link a plan to use one everywhere.`;
+    ? "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere."
+    : `${hostName}'s own sign-in, which stays on ${hostName}. Sign in on Providers to use one everywhere.`;
 }
 
-/** A kept value's name: the variable, or the provider and its variable. */
+/** A team host's Terminal account line: only an admin links a team's plan. */
+export function teamTerminalAccountSentence(teamName: string): string {
+  return `This host's own sign-in, which stays on this host. An admin can link a plan on ${teamName}'s Providers to use one everywhere.`;
+}
+
+/** A kept value's name: the variable, or `<NAME> (<Provider>)` for an override. */
 export function localOverrideLabel(override: LocalOverride): string {
   const { target } = override;
   if (target.kind === "variable") return target.key;
-  return `${providerDisplayName(target.providerId)}: ${target.key}`;
+  return `${target.key} (${providerDisplayName(target.providerId)})`;
 }
 
 /** The same target, compared by what it names. */

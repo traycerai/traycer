@@ -1,3 +1,4 @@
+import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import type {
   MembersListMember,
   RemovePreviewModel,
@@ -38,9 +39,23 @@ export const HOW_TRAYCER_HANDLES_THIS = "How Traycer handles this";
 
 export const ACCEPT_LABEL = "Accept";
 
-export const PENDING_REMOVAL_LABEL = "pending";
+/** The title over an invitation's grant and Accept. */
+export function inviteAcceptTitle(teamName: string): string {
+  return `You're invited to ${teamName}`;
+}
 
-export const DONE_REMOVAL_LABEL = "done";
+/** An invitation withdrawn or already answered by the time Accept was pressed. */
+export const INVITATION_GONE = "This invitation is no longer open.";
+
+/**
+ * A removal still waiting on the team's hosts: "removing · waiting for 2
+ * hosts", or "removing" while the count is unknown. A done removal leaves
+ * the list, so it has no label.
+ */
+export function pendingRemovalLabel(hostCount: number | null): string {
+  if (hostCount === null || hostCount === 0) return "removing";
+  return `removing · waiting for ${countNoun(hostCount, "host")}`;
+}
 
 export const RETRY_LABEL = "Retry";
 
@@ -467,6 +482,18 @@ export function inviteRoleLabel(): string {
 
 export function inviteSentLabel(): string {
   return "Invitation sent";
+}
+
+/**
+ * The sent dialog's body. Every invitation is answered `sent` and waits for
+ * the invited person's acceptance; no invite adds a member at once.
+ */
+export function inviteSentBody(
+  email: string,
+  teamName: string,
+  role: TeamRole,
+): string {
+  return `We emailed ${email}. They join ${teamName} as ${withIndefiniteArticle(role)} when they accept.`;
 }
 
 export const DONE_LABEL = "Done";

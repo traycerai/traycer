@@ -37,7 +37,10 @@ export function TracyEntryAvatar(props: {
   );
 }
 
-/** The hover card's body: the bot, and what it is doing while it works. */
+/**
+ * The hover card's body: the bot, and what it is doing while it works, or
+ * "Idle" when it is known to be; nothing when its state is not known.
+ */
 export function TracyEntryHoverBody(props: {
   readonly title: string;
   readonly signals: TracyEntrySignals;
@@ -47,9 +50,11 @@ export function TracyEntryHoverBody(props: {
   return (
     <div data-testid="tracy-entry-hover-body" className="flex flex-col gap-1">
       <div className="text-ui-sm font-medium text-foreground">{title}</div>
-      <div className="text-muted-foreground">
-        {working ? (signals.step ?? "Replying…") : "Idle"}
-      </div>
+      {working || signals.idle ? (
+        <div className="text-muted-foreground">
+          {working ? (signals.step ?? "Replying…") : "Idle"}
+        </div>
+      ) : null}
     </div>
   );
 }

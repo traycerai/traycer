@@ -2,6 +2,15 @@
  * Query-key builders for non-Traycer Host `AuthService` reads.
  */
 export const authQueryKeys = {
+  environmentInvitations: (
+    authService: object | null,
+    userId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "environment-invitations",
+    authService,
+    userId,
+  ],
   // `authService: object` keys the query to the live AuthService instance,
   // mirroring the runner-host `traycerCli` keying. Prefix-stable so a broad
   // `["auth"]` invalidation still drops it.

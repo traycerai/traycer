@@ -362,7 +362,7 @@ describe("the five kinds' copy", () => {
       presentationOf("team.role.changed", PAYLOADS["team.role.changed"]),
     ).toEqual({
       title: "Your role changed",
-      body: "Acme • You are now an admin, were a viewer",
+      body: "Acme • You're now an admin (you were a viewer).",
     });
     expect(
       presentationOf("team.role.changed", {
@@ -370,13 +370,13 @@ describe("the five kinds' copy", () => {
         from: "owner",
         to: "editor",
       }).body,
-    ).toBe("Acme • You are now an editor, were an owner");
+    ).toBe("Acme • You're now an editor (you were an owner).");
     expect(
       presentationOf("team.role.changed", {
         ...PAYLOADS["team.role.changed"],
         to: "billing",
       }).body,
-    ).toBe("Acme • You are now billing, were a viewer");
+    ).toBe("Acme • You're now billing (you were a viewer).");
   });
 
   it("words a computer back on its own settings", () => {

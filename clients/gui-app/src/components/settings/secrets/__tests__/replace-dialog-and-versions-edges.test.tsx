@@ -18,7 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsReplaceValueRequest,
   EnvironmentSecretsReplaceValueResponse,
   EnvironmentSecretsUndoResponse,
@@ -68,8 +68,8 @@ const HOST_ID = "host-edges";
 const TYPED = "sk_live_EDGE_VALUE_77aa";
 
 function secretFixture(
-  overrides: Partial<EnvironmentSecret>,
-): EnvironmentSecret {
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -81,6 +81,8 @@ function secretFixture(
     currentVersionId: "ver-3",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
@@ -137,7 +139,7 @@ interface DialogMount {
 }
 
 function mountDialog(
-  secret: EnvironmentSecret,
+  secret: EnvironmentSecretV12,
   answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
 ): DialogMount {
   const requests: EnvironmentSecretsReplaceValueRequest[] = [];
@@ -269,7 +271,7 @@ describe("the Replace value dialog's answers", () => {
 
 /** The parent that owns `open`, as the secret row does, with a way to reopen. */
 function ReopenableReplaceDialog(props: {
-  readonly secret: EnvironmentSecret;
+  readonly secret: EnvironmentSecretV12;
   readonly client: HostClient<HostRpcRegistry>;
 }): ReactNode {
   const [open, setOpen] = useState(true);
@@ -342,11 +344,11 @@ describe("the Replace value dialog across a close and a reopen", () => {
 interface RerenderableDialog {
   readonly requests: EnvironmentSecretsReplaceValueRequest[];
   /** What a re-read of the list does: the same open dialog gets a new secret. */
-  readonly showSecret: (secret: EnvironmentSecret) => void;
+  readonly showSecret: (secret: EnvironmentSecretV12) => void;
 }
 
 function mountRerenderableDialog(
-  secret: EnvironmentSecret,
+  secret: EnvironmentSecretV12,
   answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
 ): RerenderableDialog {
   const requests: EnvironmentSecretsReplaceValueRequest[] = [];
@@ -360,7 +362,7 @@ function mountRerenderableDialog(
     },
   });
   const queryClient = testQueryClient();
-  const dialogFor = (shown: EnvironmentSecret): ReactNode =>
+  const dialogFor = (shown: EnvironmentSecretV12): ReactNode =>
     underCache(
       queryClient,
       <ReplaceSecretValueDialog
@@ -473,7 +475,7 @@ describe("the Replace value dialog's expected version", () => {
 });
 
 function mountVersions(
-  secret: EnvironmentSecret,
+  secret: EnvironmentSecretV12,
   versions: SecretVersion[],
   undoAnswer: EnvironmentSecretsUndoResponse,
 ): void {

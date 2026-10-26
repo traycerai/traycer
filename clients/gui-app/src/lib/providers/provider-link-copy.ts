@@ -12,6 +12,10 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 
 export const LINK_INTRO =
   "This signs Traycer in to your plan once. It will be offered on every host and sandbox you use; it counts as a device on your plan.";
+/** The intro on a team: the team's agents use the plan on its hosts. */
+export function teamLinkIntro(teamName: string): string {
+  return `This signs Traycer in to your plan once. ${teamName}'s agents use it on every host running ${teamName}; it counts as a device on your plan.`;
+}
 export const LINK_SIGN_IN_LINE =
   "Sign in on claude.ai, then paste the code it shows.";
 export const LINK_DEVICE_LINE =

@@ -8,7 +8,7 @@ import { useTerminalAccountMentionStore } from "@/stores/onboarding/terminal-acc
 /**
  * The Terminal account's sentence, under the composer's account picker the
  * first time it names one, for the host the run goes to: "This computer's
- * own sign-in, which stays on this computer. Link a plan to use one
+ * own sign-in, which stays on this computer. Sign in on Providers to use one
  * everywhere.", or, in place of `this computer`, the staged sandbox's name
  * while one is staged (the run goes there) and otherwise the host's name on
  * any other host. Shown until the picker that showed it closes, then never

@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -103,7 +104,11 @@ const handlers = {
 };
 
 function negotiateEverywhere(): void {
-  for (const hostId of [mockLocalHostEntry.hostId, VIEWING_HOST.hostId]) {
+  for (const hostId of [
+    mockLocalHostEntry.hostId,
+    VIEWING_HOST.hostId,
+    POOL_HOST_ID,
+  ]) {
     negotiateMethodsOn(hostId, {
       "environment.configuration.mcpServers.list": V10,
       "environment.configuration.mcpServers.delete": V10,
@@ -115,7 +120,7 @@ function negotiateEverywhere(): void {
 }
 
 describe("MCP servers and Skills on a build with a server pool", () => {
-  it("reads and writes MCP servers through the window's own host", async () => {
+  it("reads and writes MCP servers through the pool", async () => {
     negotiateEverywhere();
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), handlers);
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
@@ -135,19 +140,19 @@ describe("MCP servers and Skills on a build with a server pool", () => {
     await waitFor(() => {
       expect(
         hostIdsOf(harness, "environment.configuration.mcpServers.setEnabled"),
-      ).toEqual([mockLocalHostEntry.hostId]);
+      ).toEqual([POOL_HOST_ID]);
     });
     await waitFor(() => {
       expect(
         hostIdsOf(harness, "environment.configuration.mcpServers.delete"),
-      ).toEqual([mockLocalHostEntry.hostId]);
+      ).toEqual([POOL_HOST_ID]);
     });
     expect(
       new Set(hostIdsOf(harness, "environment.configuration.mcpServers.list")),
-    ).toEqual(new Set([mockLocalHostEntry.hostId]));
+    ).toEqual(new Set([POOL_HOST_ID]));
   });
 
-  it("reads and writes Skills through the viewing host", async () => {
+  it("reads and writes Skills through the pool", async () => {
     negotiateEverywhere();
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), handlers);
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
@@ -164,10 +169,10 @@ describe("MCP servers and Skills on a build with a server pool", () => {
     await waitFor(() => {
       expect(
         hostIdsOf(harness, "environment.configuration.skills.remove"),
-      ).toEqual([VIEWING_HOST.hostId]);
+      ).toEqual([POOL_HOST_ID]);
     });
     expect(
       new Set(hostIdsOf(harness, "environment.configuration.skills.list")),
-    ).toEqual(new Set([VIEWING_HOST.hostId]));
+    ).toEqual(new Set([POOL_HOST_ID]));
   });
 });

@@ -36,10 +36,10 @@ export interface ShellConfigSnapshot {
  *     and the host it manages has not.
  *
  * The panel is presentational against this interface, so the two paths cannot
- * drift into two different editors. Commands take explicit callbacks rather
- * than returning promises because the panel's save indicators are transient
- * per-control flashes, which is exactly what TanStack's per-`mutate` callbacks
- * are for (and what it correctly drops if the panel unmounts mid-flight).
+ * drift into two different editors. Editor commands take callbacks for
+ * transient per-control save flashes, which TanStack correctly drops after
+ * unmount. Multi-write operations await completion instead, so navigation
+ * cannot discard a required continuation.
  */
 export interface ShellCommandCallbacks {
   readonly onSuccess: () => void;
@@ -98,6 +98,11 @@ export interface ShellConfigController {
     entry: { readonly key: string; readonly value: string | null },
     callbacks: ShellCommandCallbacks,
   ) => void;
+  /** Completion for multi-write operations that must survive panel unmount. */
+  readonly setEnvAsync: (entry: {
+    readonly key: string;
+    readonly value: string | null;
+  }) => Promise<void>;
   readonly deleteEnv: (key: string, callbacks: ShellCommandCallbacks) => void;
   /**
    * Rename an override as a SINGLE operation: write `newKey`, then drop

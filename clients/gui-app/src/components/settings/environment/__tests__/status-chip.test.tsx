@@ -1,6 +1,14 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
 import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
@@ -12,16 +20,30 @@ import {
   itemStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 
-afterEach(cleanup);
+// Dates read against now: this year drops the year, today drops the date.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
+});
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 const REPORTED_AT = Date.UTC(2026, 9, 20, 9, 30);
 const STEP_AT = Date.UTC(2026, 9, 20, 9, 5);
 
 function formatted(at: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
+  const day = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
   }).format(at);
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(at);
+  return `${day} ${clock}`;
 }
 
 interface PoolReport {
@@ -249,47 +271,75 @@ describe("the detail rows of a pool source", () => {
     );
   }
 
-  it("offers Install and Repair per reason, each stamped at its step", async () => {
-    const { onRecover } = openProblems();
+  it("lists one row per host, however many of its items failed", async () => {
+    const { onRecover } = renderChip(
+      poolOf(
+        [
+          reportWith("dev-box", [
+            {
+              itemKey: "variable:MISSING_CLI",
+              state: "not_applied",
+              reason: "not_installed",
+              at: STEP_AT,
+            },
+            {
+              itemKey: "variable:OTHER",
+              state: "not_applied",
+              reason: "apply_failed",
+              at: STEP_AT,
+            },
+            appliedItem("variable:FINE"),
+          ]),
+          reportWith("ops-box", [
+            {
+              itemKey: "variable:READONLY",
+              state: "not_applied",
+              reason: "permission_denied",
+              at: STEP_AT,
+            },
+          ]),
+          reportWith("sandbox-1", [
+            {
+              itemKey: "variable:PAUSED",
+              state: "waiting_resume",
+              reason: null,
+              at: STEP_AT,
+            },
+          ]),
+        ],
+        kindsPage,
+      ),
+    );
     await userEvent.click(screen.getByRole("button"));
 
     const rows = screen.getAllByRole("listitem");
     expect(rows.map((row) => row.textContent)).toEqual([
-      expect.stringContaining("dev-box · MISSING_CLI"),
-      expect.stringContaining("dev-box · READONLY"),
-      expect.stringContaining("dev-box · OTHER"),
-      expect.stringContaining("dev-box · PAUSED"),
+      expect.stringContaining("dev-box"),
+      expect.stringContaining("ops-box"),
+      expect.stringContaining("sandbox-1"),
     ]);
     for (const row of rows) {
-      expect(row.textContent).toContain(formatted(STEP_AT));
       expect(row.textContent).toContain(
         `Last reported ${formatted(REPORTED_AT)}`,
       );
     }
-    expect(screen.queryByText(/FINE/)).toBeNull();
+    expect(screen.queryByText(/MISSING_CLI|OTHER|FINE/)).toBeNull();
+    // A paused host states that it applies on resume, with no action; a
+    // failed setting's reason has no Retry, since Retry reruns the setup script.
+    expect(rows[2]?.textContent).toContain("applies when it resumes");
+    expect(within(rows[2]).queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 
     await userEvent.click(
       screen.getByRole("button", { name: "Install on dev-box" }),
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "Repair on dev-box" }),
+      screen.getByRole("button", { name: "Repair on ops-box" }),
     );
     expect(onRecover.mock.calls.map(([recovery]) => recovery)).toEqual([
       { kind: "install", hostId: "host-dev-box" },
-      { kind: "repair", hostId: "host-dev-box" },
+      { kind: "repair", hostId: "host-ops-box" },
     ]);
-  });
-
-  it("shows a failed setting's reason with no Retry, since Retry reruns the setup script", async () => {
-    openProblems();
-    await userEvent.click(screen.getByRole("button"));
-
-    const other = screen
-      .getAllByRole("listitem")
-      .find((row) => row.textContent.includes("OTHER"));
-    expect(other?.textContent).toContain("apply_failed");
-    expect(within(other as HTMLElement).queryByRole("button")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("offers Retry on a failed setup script", async () => {
@@ -313,49 +363,6 @@ describe("the detail rows of a pool source", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRecover.mock.calls.map(([recovery]) => recovery)).toEqual([
       { kind: "retry", hostId: "host-dev-box" },
-    ]);
-  });
-
-  it("states that a paused host applies when it resumes, with no action", async () => {
-    openProblems();
-    await userEvent.click(screen.getByRole("button"));
-
-    const paused = screen
-      .getAllByRole("listitem")
-      .find((row) => row.textContent.includes("PAUSED"));
-    expect(paused?.textContent).toContain("applies when it resumes");
-    expect(within(paused as HTMLElement).queryByRole("button")).toBeNull();
-  });
-
-  it("splits kind:key at the first colon and keeps the rest as the key", async () => {
-    renderChip(
-      poolOf(
-        [
-          reportWith("dev-box", [
-            {
-              itemKey: "env_override:claude:API_URL",
-              state: "not_applied",
-              reason: "apply_failed",
-              at: STEP_AT,
-            },
-            {
-              itemKey: "mcp_server:docs:v2",
-              state: "not_applied",
-              reason: "apply_failed",
-              at: STEP_AT,
-            },
-          ]),
-        ],
-        kindsPage,
-      ),
-    );
-    await userEvent.click(screen.getByRole("button"));
-
-    expect(
-      screen.getAllByRole("listitem").map((row) => row.textContent),
-    ).toEqual([
-      expect.stringContaining("dev-box · API_URL"),
-      expect.stringContaining("dev-box · docs:v2"),
     ]);
   });
 
@@ -419,7 +426,7 @@ describe("the detail rows of a pool source", () => {
     expect(onDetails).toHaveBeenCalledOnce();
   });
 
-  it("says the last report is unknown for a host that never reported", async () => {
+  it("prints no unknown text for a host that never reported", async () => {
     renderChip([
       poolConfigurationChip(
         { ...poolReport("dev-box"), lastReportedAt: null },
@@ -428,7 +435,10 @@ describe("the detail rows of a pool source", () => {
       ),
     ]);
     await userEvent.click(screen.getByRole("button"));
-    expect(screen.getByText("Last report unknown")).toBeTruthy();
+    const popover = screen.getByRole("listitem").parentElement;
+    expect(popover?.textContent).toContain("dev-box");
+    expect(popover?.textContent).not.toMatch(/unknown/i);
+    expect(screen.queryByText(/Last report/)).toBeNull();
   });
 });
 
@@ -445,7 +455,7 @@ describe("the detail rows of the host source", () => {
     });
   }
 
-  it("gives each problem its recovery and shows an unknown step time", async () => {
+  it("shows the host once, with no unknown time, and offers its first recovery", async () => {
     const { onRecover } = renderChip([
       hostChip({
         items: [
@@ -482,29 +492,19 @@ describe("the detail rows of the host source", () => {
     await userEvent.click(screen.getByRole("button"));
 
     const rows = screen.getAllByRole("listitem");
-    expect(rows).toHaveLength(4);
-    for (const row of rows) {
-      expect(row.textContent).toContain("Not applied · unknown");
-      expect(row.textContent).toContain(
-        `Last reported ${formatted(REPORTED_AT)}`,
-      );
-    }
-    // A failed setting shows its reason; only the setup script reruns.
-    const broken = rows.find((row) => row.textContent.includes("BROKEN"));
-    expect(broken?.textContent).toContain("Couldn't apply this setting");
-    expect(within(broken as HTMLElement).queryByRole("button")).toBeNull();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("dev-box");
+    expect(rows[0]?.textContent).not.toMatch(/unknown/i);
+    expect(rows[0]?.textContent).toContain(
+      `Last reported ${formatted(REPORTED_AT)}`,
+    );
     await userEvent.click(
       screen.getByRole("button", { name: "Install on dev-box" }),
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Repair on dev-box" }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(onRecover.mock.calls.map(([recovery]) => recovery)).toEqual([
-      { kind: "install", hostId: "host-a" },
-      { kind: "repair", hostId: "host-a" },
-      { kind: "retry", hostId: "host-a" },
-    ]);
+    expect(onRecover).toHaveBeenCalledExactlyOnceWith({
+      kind: "install",
+      hostId: "host-a",
+    });
   });
 
   it("asks to update a host that does not support an item yet", async () => {

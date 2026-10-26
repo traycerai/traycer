@@ -118,14 +118,18 @@ export type BotConversationSendResponse = z.infer<
 
 // ---- bot.thread.list (T41) --------------------------------------------- //
 
-/** The post a thread hangs off, as its list row shows it. */
+/**
+ * The post a thread hangs off, as its list row shows it. It names the post
+ * and carries no text: a client reads the text from the channel's row
+ * `messageId` names, and a summary stays one small entry wherever it is
+ * kept (the bot's environment room holds one per thread, T65).
+ */
 export const botThreadAnchorSchema = lazySchema(() =>
   z.object({
     messageId: z.string().min(1),
     requestId: z.string().min(1),
     /** The member who posted it. */
     senderUserId: z.string().min(1).nullable(),
-    text: z.string(),
     sentAt: z.number().int(),
     /** When the thread's verdict resolved the post's request; `null` while open. */
     resolvedAt: z.number().int().nullable(),
@@ -159,7 +163,11 @@ export const botThreadSummarySchema = lazySchema(() =>
 );
 export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;
 
-/** Answered by the bot's bound host, from its own store; most recent activity first. */
+/**
+ * Answered by any host: the bound one from its own store, any other from
+ * the summaries the bound host keeps in the bot's environment room (T65).
+ * Most recent activity first.
+ */
 export const botThreadListRequestSchema = lazySchema(() =>
   z.object({ botId: botIdSchema }),
 );

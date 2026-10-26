@@ -46,6 +46,17 @@ export const viewingHostBoundary: {
   client: HostClient<HostRpcRegistry> | null;
 } = { client: null };
 
+/**
+ * The host this window runs on, as `usePersonalHostScope()` reports it. A
+ * test file that renders a page reading it points that hook here with
+ * `windowHostScopeMock`; `null` is a window with no host of its own.
+ */
+export const windowHostBoundary: { hostId: string | null } = { hostId: null };
+
+export function windowHostScopeMock(): { hostId: string | null } {
+  return { hostId: windowHostBoundary.hostId };
+}
+
 export function requireViewingHostClient(): HostClient<HostRpcRegistry> {
   if (viewingHostBoundary.client === null) {
     throw new Error("no viewing host client mounted");
@@ -257,5 +268,6 @@ function buildTeamPage(
 export function resetTeamPageHarness(): void {
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
+  windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out" });
 }

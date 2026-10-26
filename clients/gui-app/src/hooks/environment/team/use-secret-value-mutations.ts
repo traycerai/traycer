@@ -1,4 +1,8 @@
 import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
@@ -59,7 +63,15 @@ function preflightNamedEnvironment(
 function rereadSecrets(queryClient: QueryClient, hostId: string | null): void {
   for (const method of SECRET_READS) {
     void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, method),
+      queryKey: hostQueryKeys.methodScope(
+        hostRpcServingTierHostId(
+          method,
+          hostId,
+          readProcessHostRpcTierPlan(),
+          null,
+        ),
+        method,
+      ),
     });
   }
 }
