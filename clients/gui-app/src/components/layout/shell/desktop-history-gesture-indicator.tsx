@@ -4,7 +4,6 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { motion, useTransform, type MotionValue } from "motion/react";
 import type { DesktopHistoryGestureAppearance } from "./desktop-history-swipes";
 import { cn } from "@/lib/utils";
-import "./desktop-history-swipes.css";
 
 interface DesktopHistoryGestureIndicatorProps {
   readonly view: DesktopHistoryGestureAppearance;
@@ -26,7 +25,7 @@ export function DesktopHistoryGestureIndicator({
   return createPortal(
     <div
       aria-hidden="true"
-      className="desktop-history-overlay pointer-events-none fixed inset-0 z-[80] overflow-clip"
+      className="desktop-history-overlay pointer-events-none fixed inset-0 z-80 overflow-clip"
       data-testid="desktop-history-gesture"
       data-direction={view.direction}
       data-phase={view.phase}
@@ -53,9 +52,9 @@ export function DesktopHistoryGestureIndicator({
           className={cn(
             "desktop-history-arrow absolute top-1/2 size-5 -translate-y-1/2",
             back ? "right-3" : "left-3",
+            ready ? "scale-112" : "scale-100",
           )}
           strokeWidth={2.25}
-          style={{ scale: ready ? 1.12 : 1 }}
         />
       </motion.div>
     </div>,

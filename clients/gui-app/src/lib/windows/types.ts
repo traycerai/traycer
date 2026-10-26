@@ -242,9 +242,9 @@ export interface DesktopTrackpadScrollEvent {
 }
 
 export interface DesktopTrackpadScrollPhaseBridge {
-  onEvent(
-    handler: (event: DesktopTrackpadScrollEvent) => void,
-  ): { dispose: () => void };
+  onEvent(handler: (event: DesktopTrackpadScrollEvent) => void): {
+    dispose: () => void;
+  };
 }
 
 // Field-for-field match with main's `SupportLogTarget`

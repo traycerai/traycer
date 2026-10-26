@@ -640,7 +640,11 @@ describe("blocked from the start: modal layers, modifier keys, and line-mode whe
     const mounted = mountGesture(DEFAULT_MOUNT);
     mounted.signal("began");
     horizontalWheel(-0.8, document.body, true);
-    mounted.send("changed", { ...PLAIN_TICK, x: ACTIVATION_PX, modified: true });
+    mounted.send("changed", {
+      ...PLAIN_TICK,
+      x: ACTIVATION_PX,
+      modified: true,
+    });
     mounted.send("changed", { ...PLAIN_TICK, x: 200 });
     mounted.signal("ended");
 
@@ -745,7 +749,10 @@ describe("route modals, nested dialogs, and explicit blocking claims", () => {
     const layer = document.createElement("div");
     layer.setAttribute("role", fixture.role);
     if (fixture.historySurface !== undefined)
-      layer.setAttribute("data-history-navigation-surface", fixture.historySurface);
+      layer.setAttribute(
+        "data-history-navigation-surface",
+        fixture.historySurface,
+      );
     // `pointer-events` inherits, so a locked body would otherwise leak "none"
     // onto a plain child div. Real Radix Content sets its own pointer-events
     // explicitly to stay interactive under that same lock, so every fixture
@@ -1478,8 +1485,7 @@ describe("wheel events originating inside an open shadow root", () => {
     readonly ownerHost: boolean;
   }): HTMLElement {
     const host = document.createElement("div");
-    if (options.ownerHost)
-      host.setAttribute("data-history-gesture-owner", "");
+    if (options.ownerHost) host.setAttribute("data-history-gesture-owner", "");
     document.body.appendChild(host);
     const shadowRoot = host.attachShadow({ mode: "open" });
     const inner = document.createElement("div");

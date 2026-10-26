@@ -45,7 +45,9 @@ function main() {
     stdio: "inherit",
   });
   fs.rmSync(sliceDir, { recursive: true, force: true });
-  console.log(`[build-native-addons] wrote ${path.relative(desktopRoot, universal)}`);
+  console.log(
+    `[build-native-addons] wrote ${path.relative(desktopRoot, universal)}`,
+  );
 }
 
 main();

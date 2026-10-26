@@ -42,9 +42,7 @@ function cancellationMotionAllowed(): boolean {
 export function DesktopHistorySwipes(): ReactNode {
   const router = useRouter();
   const trackpad = useDesktopTrackpadScrollPhaseBridge();
-  const [indicators, setIndicators] = useState<readonly GestureIndicator[]>(
-    [],
-  );
+  const [indicators, setIndicators] = useState<readonly GestureIndicator[]>([]);
   useEffect(() => {
     if (trackpad === null) return;
     if (!historyNavChromeAvailable(router.history)) return;
