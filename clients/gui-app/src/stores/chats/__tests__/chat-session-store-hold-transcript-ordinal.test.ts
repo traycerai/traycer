@@ -11,6 +11,7 @@ import {
   HYDRATION_REQUEST_TIMEOUT_MS,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/chats/transcript-window";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -86,7 +87,12 @@ function createHarness(): Harness {
 }
 
 /** 40 rows, the tail (20..39) hydrated, and the reader parked on it. */
-function primeWindowAtTail(harness: Harness): void {
+function primeWindowAtTail(
+  harness: Harness,
+  rowCount: number,
+  tailFromOrdinal: number,
+  tailMessage: Message,
+): void {
   const derived: ChatTranscriptDerived = {
     latestAssistantUsage: null,
     pinnedTodo: null,
@@ -133,11 +139,11 @@ function primeWindowAtTail(harness: Harness): void {
       heldUpdates: [],
       portForwards: [],
       transcriptEpoch: 1,
-      rowCount: 40,
+      rowCount,
       indexRevision: null,
       tail: {
-        fromOrdinal: 20,
-        messages: [userMessage("tail", 20)],
+        fromOrdinal: tailFromOrdinal,
+        messages: [tailMessage],
         events: [],
       },
       derived,
@@ -150,6 +156,30 @@ function primeWindowAtTail(harness: Harness): void {
     .reportVisibleTranscriptRange({ fromOrdinal: 30, toOrdinal: 40 });
 }
 
+function oversizedUserMessage(messageId: string, timestamp: number): Message {
+  return {
+    ...userMessage(messageId, timestamp),
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "x".repeat(TRANSCRIPT_WINDOW_MAX_BYTES + 1024),
+              },
+            ],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+  };
+}
+
 describe("chat-session-store - held transcript ordinals", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -158,7 +188,7 @@ describe("chat-session-store - held transcript ordinals", () => {
   it("hydrates the held row without a viewport move or a jump", () => {
     const harness = createHarness();
     try {
-      primeWindowAtTail(harness);
+      primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       expect(harness.rangeRequests).toEqual([]);
 
       harness.handle.store.getState().holdTranscriptOrdinal(5);
@@ -180,7 +210,7 @@ describe("chat-session-store - held transcript ordinals", () => {
     vi.useFakeTimers();
     const harness = createHarness();
     try {
-      primeWindowAtTail(harness);
+      primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       const releaseFirst = harness.handle.store
         .getState()
         .holdTranscriptOrdinal(5);
@@ -208,7 +238,7 @@ describe("chat-session-store - held transcript ordinals", () => {
   it("is held apart from a find read: releasing the hold leaves the read", () => {
     const harness = createHarness();
     try {
-      primeWindowAtTail(harness);
+      primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       harness.handle.store.getState().requestFindReadOrdinal(6);
       const release = harness.handle.store.getState().holdTranscriptOrdinal(5);
       release();
@@ -216,6 +246,46 @@ describe("chat-session-store - held transcript ordinals", () => {
       const state = harness.handle.store.getState();
       expect(state.findReadOrdinal).toBe(6);
       expect(state.heldReadOrdinals).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+  it("keeps a held row hydrated through a snapshot that pushes the window over budget", () => {
+    const harness = createHarness();
+    try {
+      primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
+      harness.handle.store.getState().holdTranscriptOrdinal(5);
+      const request = harness.rangeRequests[0];
+      expect(request).toMatchObject({ fromOrdinal: 5, toOrdinal: 5 });
+      harness.callbacks().onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: request.requestId,
+          epoch: 1,
+          fromOrdinal: 5,
+          rowIds: ["row-5"],
+          messages: [userMessage("held", 5)],
+          events: [],
+          rowContext: {},
+          reachedStart: false,
+          reachedEnd: false,
+        },
+      });
+      const heldSpan = (): boolean =>
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((span) => span.fromOrdinal === 5);
+      expect(heldSpan()).toBe(true);
+
+      // A new tail row larger than the whole budget: the snapshot path is
+      // over budget and may only drop what is not protected.
+      primeWindowAtTail(harness, 41, 21, oversizedUserMessage("huge", 21));
+
+      expect(harness.handle.store.getState().heldReadOrdinals).toEqual([5]);
+      expect(heldSpan()).toBe(true);
     } finally {
       harness.handle.dispose();
     }

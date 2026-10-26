@@ -8171,11 +8171,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The FRAME's pair, not the store's: this runs before the snapshot's
           // judgement and pending list are published, and protecting the rows
           // the PREVIOUS snapshot was blocked on would protect the wrong ones
-          // for exactly the beat that matters.
-          pendingInterviewOrdinals(
-            frame.snapshot.derived.interviewAnswerability,
-            frame.snapshot.pendingInterviews,
-          ),
+          // for exactly the beat that matters. A held read (a bot thread's
+          // post on show) is the store's own and outlives every frame.
+          [
+            ...pendingInterviewOrdinals(
+              frame.snapshot.derived.interviewAnswerability,
+              frame.snapshot.pendingInterviews,
+            ),
+            ...get().heldReadOrdinals,
+          ],
         );
         // NOW the boundary decision, with the applied window in hand - the
         // fold runs FIRST, deliberately, so everything below reads post-fold
