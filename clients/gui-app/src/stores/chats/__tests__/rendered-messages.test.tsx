@@ -7854,3 +7854,90 @@ describe("useRenderedMessages: the working row is built from the pending turn", 
     expect(workingRow(result.current)?.elapsedStartedAt).toBe(1234);
   });
 });
+
+describe("useRenderedMessages: object artifact creation cards", () => {
+  type AssistantBlock = Extract<
+    Message,
+    { role: "assistant" }
+  >["blocks"][number];
+
+  function commandBlockAt(blockId: string, timestamp: number): AssistantBlock {
+    return {
+      type: "command",
+      blockId,
+      command: "bun test",
+      cwd: "/repo",
+      exitCode: 0,
+      status: "completed",
+      timestamp,
+      backgroundTask: null,
+      stopped: false,
+    };
+  }
+
+  function artifactBlockAt(
+    blockId: string,
+    timestamp: number,
+    kind: "html" | "canvas" | "spec",
+    operation: "create" | "update",
+  ): AssistantBlock {
+    return {
+      type: "artifact_operation",
+      blockId,
+      status: "completed",
+      timestamp,
+      operation,
+      kind,
+      artifactId: `${blockId}-artifact`,
+      title: blockId,
+      beforeHash: null,
+      afterHash: null,
+    };
+  }
+
+  function segmentOrder(blocks: AssistantBlock[]): string[] {
+    const { result } = renderRenderedMessages({
+      messages: [{ ...assistantMessage("turn-1", 2000), blocks }],
+    });
+    return (result.current[0]?.segments ?? []).map((segment) => {
+      if (segment.kind === "artifact_operation")
+        return `card:${segment.artifactKind}`;
+      if (segment.kind === "text") return `text:${segment.markdown}`;
+      return segment.kind;
+    });
+  }
+
+  it("places an HTML creation card right after the activity that preceded it, before the closing reply", () => {
+    expect(
+      segmentOrder([
+        plainTextBlock("t1", 2001, "Working"),
+        commandBlockAt("c1", 2002),
+        plainTextBlock("t2", 2003, "Done"),
+        artifactBlockAt("a1", 2004, "html", "create"),
+      ]),
+    ).toEqual(["text:Working", "command", "card:html", "text:Done"]);
+  });
+
+  it("keeps canvas cards in creation order after the same activity", () => {
+    expect(
+      segmentOrder([
+        commandBlockAt("c1", 2001),
+        plainTextBlock("t1", 2003, "Done"),
+        artifactBlockAt("a1", 2004, "html", "create"),
+        artifactBlockAt("a2", 2005, "canvas", "create"),
+      ]),
+    ).toEqual(["command", "card:html", "card:canvas", "text:Done"]);
+  });
+
+  it("leaves a card that precedes all activity, and non-object or non-create cards, in place", () => {
+    expect(
+      segmentOrder([
+        artifactBlockAt("a0", 2000, "html", "create"),
+        commandBlockAt("c1", 2001),
+        plainTextBlock("t1", 2002, "Done"),
+        artifactBlockAt("a1", 2003, "spec", "create"),
+        artifactBlockAt("a2", 2004, "html", "update"),
+      ]),
+    ).toEqual(["card:html", "command", "text:Done", "card:spec", "card:html"]);
+  });
+});

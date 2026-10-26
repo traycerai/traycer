@@ -4378,6 +4378,43 @@ function renderStoppedTurnsWithoutAssistantRecords(
 const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
   [];
 
+/** Deferred creation cards belong beside activity, before the closing reply. */
+function placeObjectArtifactCards(
+  blocks: ReadonlyArray<OpenContentBlock>,
+): ReadonlyArray<OpenContentBlock> {
+  const ordered: OpenContentBlock[] = [];
+  for (const block of blocks) {
+    if (
+      block.type !== "artifact_operation" ||
+      block.operation !== "create" ||
+      (block.kind !== "html" && block.kind !== "canvas")
+    ) {
+      ordered.push(block);
+      continue;
+    }
+    let insertion = -1;
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const candidate = ordered[index];
+      if (
+        (candidate.type === "tool_call" ||
+          candidate.type === "command" ||
+          candidate.type === "file_change") &&
+        candidate.timestamp <= block.timestamp
+      ) {
+        insertion = index + 1;
+        break;
+      }
+    }
+    if (insertion === -1) {
+      ordered.push(block);
+      continue;
+    }
+    while (ordered[insertion]?.type === "artifact_operation") insertion += 1;
+    ordered.splice(insertion, 0, block);
+  }
+  return ordered;
+}
+
 function buildAssistantSegments(
   blocks: ReadonlyArray<OpenContentBlock>,
   checkpointView: CheckpointManifestView | null,
@@ -4413,7 +4450,7 @@ function buildAssistantSegments(
     targetsByResolutions.set(resolutions, computed);
     return computed;
   };
-  for (const block of blocks) {
+  for (const block of placeObjectArtifactCards(blocks)) {
     if (
       block.type === "error" &&
       codexRetryVisibility(

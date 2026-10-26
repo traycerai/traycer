@@ -133,7 +133,7 @@ export type ChatLinkHandler = (
  * Builds the file-link handler that markdown anchors in chat call when a link
  * points at a file. Two link shapes flow through the handler:
  *
- * - **Artifact links** (`…/epics/<epicId>/artifacts/<chain>/index.md`) resolve
+ * - **Artifact file and folder links** under `…/epics/<epicId>/artifacts/` resolve
  *   via the read-only `epic.resolveArtifactByPath` RPC (against the
  *   ACTIVE/default host, matching sidebar artifact opens) to a stable
  *   `{ artifactId, kind }`, then open the artifact tile: a replaceable PREVIEW
@@ -160,7 +160,8 @@ export type ChatLinkHandler = (
  */
 export function buildChatLinkPolicy(deps: ChatLinkPolicyDeps): ChatLinkHandler {
   return (link, lifecycle) => {
-    if (link.isDirectory) return false;
+    if (link.isDirectory && artifactEpicIdFromLinkPath(link.path) === null)
+      return false;
 
     // Supersession (latest-click-wins): bump the token and SILENTLY cancel any
     // pending projection wait BEFORE branching, so ANY newer click — plain
@@ -219,7 +220,7 @@ export interface ArtifactLinkTarget {
  * not-yet-projected artifact opens as soon as it lands) when it belongs to
  * the currently open epic, or a cross-epic navigate+focus otherwise.
  *
- * Exported/shared so BOTH an already-index.md-shaped link's fast-path
+ * Exported/shared so BOTH an artifact-shaped link's fast-path
  * resolve (`resolveAndOpenArtifactLink`) and a plain-link resolution whose
  * WINNING candidate turned out to be artifact-shaped
  * (`openResolvedWorkspaceTarget`, B) open an artifact the exact same way -
@@ -411,16 +412,9 @@ interface WorkspaceFileProbeTarget {
 }
 
 /**
- * The winning candidate from either an absolute or relative existence-probe
- * race might structurally BE an artifact `index.md` even though it was
- * reached through the plain-workspace-file resolution path rather than the
- * fast-path `artifactEpicIdFromLinkPath(link.path)` check at the top of the
- * handler (which only catches a link ALREADY written index.md-shaped) - e.g.
- * a relative href resolves, against a bound root, onto
- * `.../epics/<id>/artifacts/<chain>/index.md`. Reclassifying the winner here
- * routes it through the artifact resolver (a collab tile) instead of a raw
- * file preview, keeping it capability-equivalent with a link already
- * authored index.md-shaped (B).
+ * A workspace-file probe can resolve a relative link into the artifact tree.
+ * Reclassify that winner through the same artifact resolver as a direct link,
+ * so both paths open the artifact tile instead of its source file.
  */
 export interface ResolvedWorkspaceFileTarget {
   readonly ref: WorkspaceFileRef;

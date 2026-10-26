@@ -552,6 +552,33 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["an artifact directory", "report", true],
+    ["a file inside an html bundle", "report/assets/app.js", false],
+  ])(
+    "resolves %s through the artifact RPC and opens it via the projection waiter",
+    async (_name, relative, isDirectory) => {
+      mocks.resolveArtifactByPath.mockResolvedValue({
+        artifactId: "artifact-html",
+        kind: "html",
+      });
+      const run = buildChatLinkPolicy(makeDeps({}));
+      const path = `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/${relative}`;
+
+      expect(run(fileLink({ path, isDirectory }), lifecycle)).toBe(true);
+      await flush();
+
+      expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+        expect.objectContaining({ epicId: OPEN_EPIC_ID, filePath: path }),
+      );
+      expect(
+        mocks.openProjectedSidebarNodeInTabWhenAvailable,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: "artifact-html" }),
+      );
+    },
+  );
+
   it("navigates a cross-epic artifact link with a fresh focusedAt", async () => {
     mocks.resolveArtifactByPath.mockResolvedValue({
       artifactId: "artifact-cross",
@@ -775,25 +802,8 @@ describe("buildChatLinkPolicy", () => {
     );
   });
 
-  it("opens the direct absolute candidate when it exists, instead of coercing it into a directory reference (A)", async () => {
-    const directRef = {
-      id: "readme-content",
-      workspacePath: "/repo/epics/e1/artifacts/spec",
-      filePath: "README.md",
-    };
-    const dirIndexRef = {
-      id: "readme-index-content",
-      workspacePath: "/repo/epics/e1/artifacts/spec/README.md",
-      filePath: "index.md",
-    };
-    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
-      directRef,
-      dirIndexRef,
-    ]);
-    mocks.fetchWorkspaceFileExists.mockImplementation(
-      (args: { readonly workspacePath: string }) =>
-        Promise.resolve(args.workspacePath === directRef.workspacePath),
-    );
+  it("opens a non-resolving file inside an artifact folder as a plain file preview", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
     const run = buildChatLinkPolicy(makeDeps({}));
 
     run(
@@ -802,9 +812,13 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    // README.md is a real file - not the `index.md` fallback, even though
-    // BOTH candidates were probed.
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "e1",
+        filePath: "/repo/epics/e1/artifacts/spec/README.md",
+      }),
+    );
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent({ id: "content-1" }));
   });
 
   it("falls back to the index.md candidate when the direct absolute target doesn't exist (A, C1)", async () => {
@@ -843,7 +857,7 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "e1",
-        filePath: "/repo/epics/e1/artifacts/01-sub-ticket/index.md",
+        filePath: "/repo/epics/e1/artifacts/01-sub-ticket",
       }),
     );
     expect(
@@ -920,8 +934,7 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "foreign-epic",
-        filePath:
-          "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir/index.md",
+        filePath: "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
       }),
     );
     // Cross-epic (differs from OPEN_EPIC_ID): navigate, not a same-epic preview.
@@ -980,8 +993,7 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "foreign-epic",
-        filePath:
-          "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir/index.md",
+        filePath: "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
       }),
     );
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
@@ -1012,7 +1024,7 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "other-epic",
-        filePath: "/repo/epics/other-epic/artifacts/spec/index.md",
+        filePath: "../../.traycer/epics/other-epic/artifacts/spec",
       }),
     );
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
@@ -1037,7 +1049,7 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner));
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent({ id: "content-1" }));
   });
 
   it("keeps the artifact-null fallback a no-op with out-of-root synthesis disabled (D5)", async () => {
