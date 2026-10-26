@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  redactHomeDirectoryNames,
   redactSensitiveText,
   reduceRequestTargetToPath,
   reduceUrlToOriginAndPath,
@@ -161,5 +162,227 @@ describe("arbitrary-key stem classifier", () => {
     expect(redactSensitiveText("Authorization: token ghs_x")).toBe(
       "Authorization: token <redacted>",
     );
+  });
+});
+
+describe("redactHomeDirectoryNames", () => {
+  it.each([
+    [
+      "/Users/synthetic-user/.traycer/host/install/host-main.cjs",
+      "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+    ],
+    [
+      "/home/synthetic-user/.traycer/host/install/host-runtime/spawn-broker-worker.cjs",
+      "/home/<redacted>/.traycer/host/install/host-runtime/spawn-broker-worker.cjs",
+    ],
+    [
+      "C:\\Users\\SyntheticUser\\.traycer\\host\\install\\host-main.cjs",
+      "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+    ],
+    ["C:/Users/SyntheticUser/x", "C:/Users/<redacted>/x"],
+    ["C:\\\\Users\\\\SyntheticUser\\\\x", "C:\\\\Users\\\\<redacted>\\\\x"],
+    ["file:///Users/synthetic-user/x.js", "file:///Users/<redacted>/x.js"],
+    ["/Users/Synthetic User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/Users/Synthetic  User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/Users/Synthetic\tUser/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    [
+      "C:\\Users\\Synthetic  User\\.traycer\\cli\\main.js",
+      "C:\\Users\\<redacted>\\.traycer\\cli\\main.js",
+    ],
+    ["/home/synthetic-user", "/home/<redacted>"],
+    ["open '/home/synthetic-user'", "open '/home/<redacted>'"],
+    ["/var/home/synthetic-user/x", "/var/home/<redacted>/x"],
+    ["c:\\users\\SyntheticUser\\x", "c:\\users\\<redacted>\\x"],
+    ["/homework/x", "/homework/x"],
+    ["/myhome/x", "/myhome/x"],
+    ["/opt/traycer/x", "/opt/traycer/x"],
+    ["/Users", "/Users"],
+    ["/Users/<redacted>/x", "/Users/<redacted>/x"],
+    // Windows folder names may carry an apostrophe or parentheses; a
+    // following separator ends the name, so all of it goes.
+    [
+      "C:\\Users\\Syn'thetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    [
+      "C:\\Users\\Synthetic (Work)\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    ["/Users/Syn'thetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/Syn'thetic", "/home/<redacted>"],
+    // Leading whitespace is part of a separator-closed name.
+    ["/Users/ Synthetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/\tSynthetic/.traycer/x", "/home/<redacted>/.traycer/x"],
+    [
+      "C:\\Users\\ Synthetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    [
+      "C:\\Users\\\tSynthetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    // A home root in prose with no name after it is left alone.
+    ["under /Users/ and /home/ only", "under /Users/ and /home/ only"],
+    // Prose after a quoted home path is not taken for the name.
+    [
+      "open '/home/synthetic-user' failed, see /tmp/x",
+      "open '/home/<redacted>' failed, see /tmp/x",
+    ],
+    // Home roots behind a mount, drive or volume prefix, and after a delimiter.
+    ["/mnt/c/Users/Syn/x", "/mnt/c/Users/<redacted>/x"],
+    ["/c/Users/Syn/x", "/c/Users/<redacted>/x"],
+    ["/cygdrive/c/Users/Syn/x", "/cygdrive/c/Users/<redacted>/x"],
+    [
+      "/System/Volumes/Data/Users/Syn/x",
+      "/System/Volumes/Data/Users/<redacted>/x",
+    ],
+    [
+      "/Volumes/Macintosh HD/Users/Syn/x",
+      "/Volumes/Macintosh HD/Users/<redacted>/x",
+    ],
+    ["/usr/home/syn/x", "/usr/home/<redacted>/x"],
+    ["\\\\wsl$\\Ubuntu\\home\\syn\\x", "\\\\wsl$\\Ubuntu\\home\\<redacted>\\x"],
+    [
+      "\\\\wsl.localhost\\Ubuntu\\home\\syn\\x",
+      "\\\\wsl.localhost\\Ubuntu\\home\\<redacted>\\x",
+    ],
+    ["    at f (/Users/syn/x.js:1:1)", "    at f (/Users/<redacted>/x.js:1:1)"],
+    ["    at /home/syn/x.js:1:1", "    at /home/<redacted>/x.js:1:1"],
+    ['{"cwd":"/home/syn/x"}', '{"cwd":"/home/<redacted>/x"}'],
+    ["cwd=/home/syn/x", "cwd=/home/<redacted>/x"],
+    ["file:///C:/Users/Syn/x.js", "file:///C:/Users/<redacted>/x.js"],
+    ["file:///mnt/c/Users/Syn/x.js", "file:///mnt/c/Users/<redacted>/x.js"],
+    [
+      '{"p":"C:\\\\Users\\\\Syn\\\\x"}',
+      '{"p":"C:\\\\Users\\\\<redacted>\\\\x"}',
+    ],
+    ["\\\\?\\C:\\Users\\Syn\\x", "\\\\?\\C:\\Users\\<redacted>\\x"],
+    ["PATH=/usr/bin:/home/syn/bin", "PATH=/usr/bin:/home/<redacted>/bin"],
+    ["null/Users/syn/x.html", "null/Users/<redacted>/x.html"],
+    ["[/home/syn/x]", "[/home/<redacted>/x]"],
+    ["a\n/home/syn/x", "a\n/home/<redacted>/x"],
+    // A users or home segment inside a web route, a URL path or a module id is
+    // no home root.
+    [
+      "https://credit.test/api/collab/users/lookup",
+      "https://credit.test/api/collab/users/lookup",
+    ],
+    ["POST /api/collab/users/lookup", "POST /api/collab/users/lookup"],
+    ["/api/collab/users/lookup", "/api/collab/users/lookup"],
+    ["https://api.test/users/42", "https://api.test/users/42"],
+    ["http://localhost:3000/users/42", "http://localhost:3000/users/42"],
+    ["/x/users/42", "/x/users/42"],
+    ["/a/home/feed", "/a/home/feed"],
+    ["https://home/feed", "https://home/feed"],
+    [
+      "@/components/home/landing-draft-surface",
+      "@/components/home/landing-draft-surface",
+    ],
+    // A multiword name ends at the delimiter that closes its quote or bracket.
+    [
+      "ENOENT: no such file or directory, scandir '/Users/Syn Thetic'",
+      "ENOENT: no such file or directory, scandir '/Users/<redacted>'",
+    ],
+    [
+      "EACCES: permission denied, lstat '/home/Syn Thetic'",
+      "EACCES: permission denied, lstat '/home/<redacted>'",
+    ],
+    [
+      "ENOENT: no such file or directory, watch 'C:\\Users\\Syn Thetic'",
+      "ENOENT: no such file or directory, watch 'C:\\Users\\<redacted>'",
+    ],
+    ['open "/Users/Syn Thetic"', 'open "/Users/<redacted>"'],
+    ["(/Users/Syn Thetic)", "(/Users/<redacted>)"],
+    ["`/Users/Syn Thetic`", "`/Users/<redacted>`"],
+    ["[/Users/Syn Thetic]", "[/Users/<redacted>]"],
+    ["{/home/Syn Thetic}", "{/home/<redacted>}"],
+    ['{"cwd":"/home/Syn Thetic"}', '{"cwd":"/home/<redacted>"}'],
+    ["'C:\\Users\\Syn (Work)'", "'C:\\Users\\<redacted>'"],
+    // A closer still closes when punctuation or text follows it.
+    [
+      '{"cwd":"/home/Syn Thetic","pid":1}',
+      '{"cwd":"/home/<redacted>","pid":1}',
+    ],
+    [
+      '{"cwd":"C:\\\\Users\\\\Syn Thetic","pid":1}',
+      '{"cwd":"C:\\\\Users\\\\<redacted>","pid":1}',
+    ],
+    [
+      "failed to open '/Users/Syn Thetic'.",
+      "failed to open '/Users/<redacted>'.",
+    ],
+    ["[ '/Users/Syn Thetic', '/tmp' ]", "[ '/Users/<redacted>', '/tmp' ]"],
+    ["(/home/Syn Thetic), then", "(/home/<redacted>), then"],
+    ["<C:\\Users\\Syn Thetic>.", "<C:\\Users\\<redacted>>."],
+    ['"/Users/Syn Thetic"x', '"/Users/<redacted>"x'],
+    ["{/home/Syn Thetic}x", "{/home/<redacted>}x"],
+    ["'C:\\Users\\Syn (Work)',", "'C:\\Users\\<redacted>',"],
+    // Two quoted paths on one line: each path's name is its own.
+    [
+      "copy '/home/syn a' to '/home/syn b/x'",
+      "copy '/home/<redacted>' to '/home/<redacted>/x'",
+    ],
+    [
+      "copy '/home/syna' to '/home/synb/x'",
+      "copy '/home/<redacted>' to '/home/<redacted>/x'",
+    ],
+    [
+      "'/home/syn' and '/home/other/x'",
+      "'/home/<redacted>' and '/home/<redacted>/x'",
+    ],
+    [
+      "(/home/syn a) and (/home/syn b/x)",
+      "(/home/<redacted>) and (/home/<redacted>/x)",
+    ],
+    // An apostrophe or parentheses inside a name stay part of it.
+    ["'/Users/O'Brien Syn/x'", "'/Users/<redacted>/x'"],
+    ["'/Users/O'Brien'", "'/Users/<redacted>'"],
+    ["'/Users/O'Brien Syn'", "'/Users/<redacted>'"],
+    ["'/Users/O'Brien Syn',", "'/Users/<redacted>',"],
+    ["'/Users/O'Brien'.", "'/Users/<redacted>'."],
+    ["'/Users/O'Brien", "'/Users/<redacted>"],
+    ["C:\\Users\\Syn (Work) Two\\x", "C:\\Users\\<redacted>\\x"],
+    ["C:\\Users\\a(b)\\x", "C:\\Users\\<redacted>\\x"],
+    // A name a separator ends keeps every bracket, brace and parenthesis,
+    // with the spaces inside them.
+    [
+      "C:\\Users\\Syn (Work Account)\\.traycer\\cli\\main.js",
+      "C:\\Users\\<redacted>\\.traycer\\cli\\main.js",
+    ],
+    ["/Users/Syn (Work Account)/x", "/Users/<redacted>/x"],
+    ["C:\\Users\\Syn [Thetic]\\x", "C:\\Users\\<redacted>\\x"],
+    ["/home/Syn [Thetic]/x", "/home/<redacted>/x"],
+    ["/home/Syn {Thetic}/x", "/home/<redacted>/x"],
+    ["C:\\Users\\Syn (Thetic\\x", "C:\\Users\\<redacted>\\x"],
+    ["/home/Syn (Thetic/x", "/home/<redacted>/x"],
+    ["C:\\Users\\Syn x)\\y", "C:\\Users\\<redacted>\\y"],
+    ["C:\\Users\\'Syn x\\y", "C:\\Users\\<redacted>\\y"],
+    ["/Users/(Syn) Thetic/x", "/Users/<redacted>/x"],
+    ["'C:\\Users\\Syn (Work Account)'", "'C:\\Users\\<redacted>'"],
+    ["(C:\\Users\\Syn (Work Account))", "(C:\\Users\\<redacted>)"],
+    [
+      '{"cwd":"C:\\\\Users\\\\Syn (Work Account)\\\\x"}',
+      '{"cwd":"C:\\\\Users\\\\<redacted>\\\\x"}',
+    ],
+    // Paths next to each other stay apart, whatever their brackets.
+    [
+      "copy '/home/syn (a)' to '/home/syn [b]/x'",
+      "copy '/home/<redacted>' to '/home/<redacted>/x'",
+    ],
+    ["[/home/a] [/home/b/x]", "[/home/<redacted>] [/home/<redacted>/x]"],
+    ["(/home/a) (/home/b c/x)", "(/home/<redacted>) (/home/<redacted>/x)"],
+    ["copy '/home/syn a' to 'x/y'", "copy '/home/<redacted>' to 'x/y'"],
+    // A closer that pairs with no opener ends only the bare name; a route keeps its segment.
+    ["at /Users/syn is gone)", "at /Users/<redacted> is gone)"],
+    ["at /Users/syn is gone).", "at /Users/<redacted> is gone)."],
+    ["POST /api/collab/users/lookup'", "POST /api/collab/users/lookup'"],
+    ["POST /api/collab/users/lookup',", "POST /api/collab/users/lookup',"],
+    [
+      "'https://credit.test/api/collab/users/lookup'",
+      "'https://credit.test/api/collab/users/lookup'",
+    ],
+  ])("rewrites %j to %j", (input, expected) => {
+    expect(redactHomeDirectoryNames(input)).toBe(expected);
+    expect(redactHomeDirectoryNames(expected)).toBe(expected);
   });
 });
