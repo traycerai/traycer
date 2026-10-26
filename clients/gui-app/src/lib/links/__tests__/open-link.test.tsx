@@ -14,6 +14,7 @@ import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/br
 import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { LinkTargetContext } from "@/lib/links/link-target-context";
+import { setMobileApp } from "@/lib/mobile-app";
 import {
   useOpenLink,
   useOpenLinkIn,
@@ -224,6 +225,36 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  setMobileApp(false);
+});
+
+describe("useOpenLink in the installed mobile app", () => {
+  beforeEach(() => {
+    setMobileApp(true);
+  });
+
+  // The setting is hidden there, but a value persisted before the build was
+  // installed (or synced from a desktop) may still say "in-app".
+  it("opens a configured in-app link in the phone's browser, alt-click included", () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", click({ altKey: true }));
+
+    expect(harness.bridged).toEqual([DOCS_URL, DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+  });
+
+  it("offers no in-app destination and lands an explicit in-app request outside", () => {
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    expect(result.current.canOpenInApp).toBe(false);
+    result.current.openLinkIn(DOCS_URL, "in-app");
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
 });
 
 describe("useOpenLink", () => {
