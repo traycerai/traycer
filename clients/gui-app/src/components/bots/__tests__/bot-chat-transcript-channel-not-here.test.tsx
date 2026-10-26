@@ -211,7 +211,7 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
     mountTranscript(CHANNEL_SURFACE);
 
     expect(screen.getByTestId("bot-channel-intro").textContent).toContain(
-      "This is the beginning of #Release Bot.",
+      "This is the beginning of your channel with Release Bot.",
     );
     expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
     expect(retry).not.toHaveBeenCalled();

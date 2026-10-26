@@ -1,4 +1,5 @@
 import { useId, useMemo, type ReactNode } from "react";
+import { ExternalLink } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,11 @@ import {
   EMPTY_HOME_BOTS_MODEL,
 } from "@/lib/home-bots/bots-model";
 import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
+import { useDashboardPageOpener } from "@/components/settings/host-scope/use-dashboard-page-opener";
+import {
+  createTeamDashboardUrl,
+  hasNoTeamEnvironment,
+} from "@/lib/home-bots/create-team-dashboard";
 
 /** The Home tab's own section heading, so this reads as one of its bands. */
 const HEADING_CLASS_NAME = "tracking-[0.08em] uppercase";
@@ -28,7 +34,9 @@ const NO_MACHINES: ReadonlySet<string> = new Set();
 
 /**
  * The bots band on Home (Tracy Bots): every environment the reader belongs
- * to, side by side, each with its bots and its own create form.
+ * to, side by side, each with its bots and its own create form, and, for a
+ * reader in no team, a card that opens the dashboard page where a team is
+ * made.
  *
  * Read through the app-wide host like the rest of Home. The host answers for
  * every environment from the cloud, so which host serves the list does not
@@ -175,6 +183,7 @@ export function HomeBotsSection(): ReactNode {
             hostId={hostId}
           />
         ))}
+        <CreateTeamCard environments={environments.data.environments} />
       </div>
     );
   }
@@ -196,6 +205,40 @@ export function HomeBotsSection(): ReactNode {
         ) : null}
       </div>
       {body}
+    </section>
+  );
+}
+
+/**
+ * Where a team's card would be, for a reader in no team: the dashboard page
+ * that makes one, outside the app. Nothing once a team is listed, or with no
+ * shell to open it.
+ */
+function CreateTeamCard(props: {
+  readonly environments: ReadonlyArray<EnvironmentDescriptor>;
+}): ReactNode {
+  const open = useDashboardPageOpener(createTeamDashboardUrl);
+  if (open === null || !hasNoTeamEnvironment(props.environments)) return null;
+  return (
+    <section
+      data-testid="home-bots-create-team"
+      aria-label="Create a team"
+      className="flex min-w-0 flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 p-3"
+    >
+      <h3 className="font-medium text-ui-sm text-foreground">Teams</h3>
+      <p className="text-ui-xs text-muted-foreground">
+        A team&apos;s bots work for everyone on the team.
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="home-bots-create-team-open"
+        onClick={open}
+      >
+        <ExternalLink className="size-3.5 shrink-0" aria-hidden />
+        Create a team
+      </Button>
     </section>
   );
 }

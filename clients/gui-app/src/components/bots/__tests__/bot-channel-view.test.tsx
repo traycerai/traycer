@@ -268,6 +268,7 @@ function PostStub(props: {
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -408,7 +409,7 @@ describe("<BotChannelView /> channel", () => {
     expect(composer.getAttribute("data-thread-id")).toBe("none");
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
     expect(composer.getAttribute("data-placeholder")).toBe(
-      "Message #Release Bot",
+      "Message Release Bot",
     );
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     expect(
@@ -824,6 +825,24 @@ describe("<BotChannelView /> open thread", () => {
         .getByTestId("stub-bot-channel-composer")
         .getAttribute("data-thread-id"),
     ).toBe("none");
+  });
+
+  it("draws the thread in a pane as wide as the person set it, beside a channel labelled by the bot's title", () => {
+    useBotPaneWidthsStore.getState().setWidthPx("thread", 700);
+    mount({ openThreadPostId: "post-a" });
+
+    const pane = screen.getByTestId("bot-thread-pane");
+    expect(pane.style.getPropertyValue("--bot-pane-width")).toBe("700px");
+    expect(within(pane).getByTestId("bot-thread-panel")).toBeTruthy();
+    expect(
+      within(pane)
+        .getByTestId("bot-thread-pane-resize-handle")
+        .getAttribute("aria-label"),
+    ).toBe("Resize thread");
+    expect(screen.getByRole("region", { name: "Release Bot" })).toBe(
+      screen.getByTestId("bot-channel"),
+    );
+    useBotPaneWidthsStore.getState().resetWidth("thread");
   });
 
   it("shows the thread's cost in the header only when the host can say", () => {

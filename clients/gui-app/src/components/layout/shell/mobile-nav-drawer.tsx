@@ -52,7 +52,10 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
-import { TracyEntryAvatar } from "@/components/layout/tabs/tracy-strip-entry";
+import {
+  TRACY_ENTRY_LABEL,
+  TracyEntryIcon,
+} from "@/components/layout/tabs/tracy-strip-entry";
 import { cn } from "@/lib/utils";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
@@ -350,7 +353,6 @@ function MobileNavTracyRow(props: {
   return (
     <MobileNavTracyButton
       botId={record.botId}
-      title={record.title}
       onOpen={(botId) => {
         if (hostId !== null) {
           rebindUnreachableBotTab(
@@ -369,7 +371,6 @@ function MobileNavTracyRow(props: {
 
 function MobileNavTracyButton(props: {
   readonly botId: string;
-  readonly title: string;
   readonly onOpen: (botId: string) => void;
 }): ReactNode {
   const signals = useTracyEntrySignals(props.botId);
@@ -384,18 +385,14 @@ function MobileNavTracyButton(props: {
         props.onOpen(props.botId);
       }}
     >
-      <TracyEntryAvatar
-        botId={props.botId}
-        title={props.title}
-        className={undefined}
-      />
+      <TracyEntryIcon className={undefined} />
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left",
           signals.unread && "font-semibold",
         )}
       >
-        {props.title}
+        {TRACY_ENTRY_LABEL}
       </span>
     </Button>
   );

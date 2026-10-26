@@ -33,7 +33,7 @@ export function BotMessageComposer(props: {
   readonly threadId: string | null;
   /** The question or proposal the reply answers, opening its thread; `null` otherwise. */
   readonly announcementId: string | null;
-  /** "Message #name" on a channel, "Reply…" in a thread, as Slack labels them. */
+  /** "Message name" on a channel, "Reply…" in a thread, as Slack labels them. */
   readonly placeholder: string;
   /** The accessible name of the box. */
   readonly label: string;

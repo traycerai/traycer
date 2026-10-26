@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
-import { replyRowIdFor } from "@/lib/bots/reply-row";
+import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
 function assistantRow(input: {
@@ -60,5 +60,56 @@ describe("replyRowIdFor", () => {
     ];
     expect(replyRowIdFor(rows, "absent-reply")).toBeNull();
     expect(replyRowIdFor([], "absent-reply")).toBeNull();
+  });
+});
+
+describe("replyFollowsPost", () => {
+  function post(id: string): ChatMessage {
+    return { ...makeMessage(0, "user"), persistentMessageId: id };
+  }
+
+  it("is true when the row right after the post is the reply, or a turn that folds it in", () => {
+    const direct = [
+      post("post-1"),
+      assistantRow({
+        id: "assistant:a",
+        persistentMessageId: "reply-1",
+        turnMessageIds: null,
+      }),
+    ];
+    expect(replyFollowsPost(direct, "post-1", "reply-1")).toBe(true);
+
+    const folded = [
+      post("post-1"),
+      assistantRow({
+        id: "assistant:turn",
+        persistentMessageId: "record-last",
+        turnMessageIds: ["record-first", "record-last"],
+      }),
+    ];
+    expect(replyFollowsPost(folded, "post-1", "record-first")).toBe(true);
+  });
+
+  it("is false when another row sits between the post and its reply, or the reply comes before it", () => {
+    const reply = assistantRow({
+      id: "assistant:a",
+      persistentMessageId: "reply-1",
+      turnMessageIds: null,
+    });
+    expect(
+      replyFollowsPost(
+        [post("post-1"), post("post-2"), reply],
+        "post-1",
+        "reply-1",
+      ),
+    ).toBe(false);
+    expect(replyFollowsPost([reply, post("post-1")], "post-1", "reply-1")).toBe(
+      false,
+    );
+  });
+
+  it("is false when the post is the last row, or is not in the rendered rows", () => {
+    expect(replyFollowsPost([post("post-1")], "post-1", "reply-1")).toBe(false);
+    expect(replyFollowsPost([], "post-1", "reply-1")).toBe(false);
   });
 });

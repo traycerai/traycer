@@ -76,6 +76,7 @@ const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const PRESENTATION: ChatBotPresentation = {
   botTitle: "Tracy",
   scrollToMessage: null,
+  replyFollowsPost: null,
   repliedPost: null,
   threadLine: null,
   openThread: null,
@@ -298,7 +299,7 @@ describe("the bot's card", () => {
       ),
     );
     const working = within(card).getByTestId("bot-profile-working");
-    expect(working.textContent).toBe("Working in #Tracy · 1m 23sRan bun test");
+    expect(working.textContent).toBe("Working in Tracy · 1m 23sRan bun test");
 
     act(() =>
       tab.session.emit({

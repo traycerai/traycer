@@ -472,6 +472,13 @@ export const PERSIST_STORES = [
     leaf: "bot-tabs",
     kind: "static",
   },
+  // The bot tab's channel sidebar and thread panel widths, one pair per
+  // device (`bot-pane-widths-store.ts`).
+  {
+    camelName: "botPaneWidths",
+    leaf: "bot-pane-widths",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).

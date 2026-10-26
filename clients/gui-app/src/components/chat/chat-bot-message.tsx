@@ -7,6 +7,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/messages";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { RetrospectiveSheetReview } from "@/components/settings/move/retrospective-sheet-link";
 import { retrospectiveSheetLinkHostId } from "@/components/settings/move/retrospective-sheet-link-host";
@@ -37,14 +38,21 @@ import { TextSegment } from "./segments/text-segment";
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
  * Bots, decision 41): the sender's picture, their name and the time, then
- * the text. A member's message carries the state of the request it opened
- * and, in the channel, the line that opens its thread; the bot's row carries
- * the "APP" tag Slack puts beside an app's name, and an announcement its
- * kind on a coloured bar, as Slack draws an app's attachment. A question or
- * a proposal carries the line that opens the thread a member answers it in,
- * and a reply that asks carries its options as buttons. A bot that answers
- * posts itself (reply mode `direct`) replies in the channel, its row naming
- * the post it answers; the post's line opens a thread under it on demand.
+ * the text. A member's message carries a jump to the reply that answered it
+ * where that reply is not right under it and, in the channel, the line of
+ * its thread once the thread has a reply; the bot's row carries the "APP"
+ * tag Slack puts beside an app's name, and an announcement its kind on a
+ * coloured bar, as Slack draws an app's attachment. A question or a
+ * proposal carries the line of the thread a member answers it in, and a
+ * reply that asks carries its options as buttons. A bot that answers posts
+ * itself (reply mode `direct`) replies in the channel, its row naming the
+ * post it answers.
+ *
+ * In the channel, "Reply in thread" is among the row's hover actions, as
+ * Slack offers it on every message: a member's post and a question or
+ * proposal open their own thread, and a direct reply opens the thread under
+ * the post it answers, since a thread hangs off a post or a question, not
+ * off a reply. Any other announcement takes no thread.
  */
 export function ChatBotMessage(props: {
   readonly message: ChatMessageModel;
@@ -69,12 +77,14 @@ export function ChatBotMessage(props: {
     postId === null || presentation.threadLine === null
       ? null
       : presentation.threadLine(postId);
-  // A direct post has no thread until a member replies under it: its line
-  // opens the box whose first reply starts one, as under a question.
+  // A direct post has no thread until a member replies under it: its
+  // action opens the box whose first reply starts one, as under a question.
   const openThread =
     message.conversationRequest?.direct === true
       ? presentation.openAnnouncementThread
       : presentation.openThread;
+  const replyInThread =
+    postId === null || openThread === null ? null : () => openThread(postId);
   return (
     <BotMessageFrame
       avatar={
@@ -90,19 +100,21 @@ export function ChatBotMessage(props: {
       sentAt={sentAt}
       instanceId={message.id}
       testId="bot-member-row"
+      replyInThread={replyInThread}
     >
       {body}
       {message.conversationRequest === undefined ? null : (
-        <ConversationRequestLine
+        <AnsweredReplyLink
           request={message.conversationRequest}
+          postId={postId}
           inChannel={presentation.threadLine !== null}
         />
       )}
-      {postId === null || openThread === null ? null : (
+      {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
           botTitle={presentation.botTitle}
-          onOpen={() => openThread(postId)}
+          onOpen={replyInThread}
         />
       )}
     </BotMessageFrame>
@@ -111,7 +123,8 @@ export function ChatBotMessage(props: {
 
 /**
  * The bot's own row: a reply, or an announcement on its coloured bar; a
- * reply's options, and the thread line under a question or proposal.
+ * reply's options, and the thread line under a question or proposal once
+ * its thread has a reply.
  */
 function BotRow(props: {
   readonly message: ChatMessageModel;
@@ -122,13 +135,7 @@ function BotRow(props: {
   const { message, presentation, sentAt, body } = props;
   const announcement = message.announcement ?? null;
   const repliesTo = message.repliesTo ?? null;
-  const announcementId = message.persistentMessageId;
-  const openAnnouncementThread = presentation.openAnnouncementThread;
-  const answerable =
-    announcement !== null &&
-    (announcement.kind === "question" || announcement.kind === "proposal") &&
-    announcementId !== null &&
-    openAnnouncementThread !== null;
+  const { replyInThread, threadLine } = botRowThread(message, presentation);
   return (
     <BotMessageFrame
       avatar={<BotAvatar size="lg" />}
@@ -137,6 +144,7 @@ function BotRow(props: {
       sentAt={sentAt}
       instanceId={message.id}
       testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
+      replyInThread={replyInThread}
     >
       {repliesTo === null ? null : (
         <RepliedPostLine postId={repliesTo} presentation={presentation} />
@@ -154,15 +162,45 @@ function BotRow(props: {
           onChoose={presentation.chooseOption}
         />
       )}
-      {answerable ? (
+      {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
-          line={presentation.threadLine?.(announcementId) ?? null}
+          line={threadLine}
           botTitle={presentation.botTitle}
-          onOpen={() => openAnnouncementThread(announcementId)}
+          onOpen={replyInThread}
         />
-      ) : null}
+      )}
     </BotMessageFrame>
   );
+}
+
+/**
+ * The thread a bot's row opens from its hover actions, and the line of it
+ * the row carries: a question or proposal's own thread, and for a direct
+ * reply the thread under the post it answers, whose line is under that
+ * post. Any other row of the bot takes none.
+ */
+function botRowThread(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation,
+): {
+  readonly replyInThread: (() => void) | null;
+  readonly threadLine: ChatBotThreadLine | null;
+} {
+  const kind = message.announcement?.kind ?? null;
+  const answerableId =
+    kind === "question" || kind === "proposal"
+      ? message.persistentMessageId
+      : null;
+  const anchorId = answerableId ?? message.repliesTo ?? null;
+  const open = presentation.openAnnouncementThread;
+  return {
+    replyInThread:
+      anchorId === null || open === null ? null : () => open(anchorId),
+    threadLine:
+      answerableId === null || presentation.threadLine === null
+        ? null
+        : presentation.threadLine(answerableId),
+  };
 }
 
 /**
@@ -181,6 +219,8 @@ export function BotMessageFrame(props: {
   /** Names the time stamp for the layout editor; a message id. */
   readonly instanceId: string;
   readonly testId: string;
+  /** Opens the row's thread, from its hover actions; `null` for a row that takes none. */
+  readonly replyInThread: (() => void) | null;
   readonly children: ReactNode;
 }): ReactElement {
   const nameClassName = "truncate text-ui-sm font-semibold text-foreground";
@@ -190,7 +230,7 @@ export function BotMessageFrame(props: {
   return (
     <div
       data-testid={props.testId}
-      className="group/message flex w-full gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3"
+      className="group/message relative flex w-full gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-foreground/3"
     >
       {carded ? (
         <BotIdentityTrigger>
@@ -237,6 +277,43 @@ export function BotMessageFrame(props: {
         </div>
         {props.children}
       </div>
+      {props.replyInThread === null ? null : (
+        <MessageActions onReplyInThread={props.replyInThread} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Slack's message actions, floating at the row's top right while it is
+ * hovered or one of them has keyboard focus; always shown on a touch screen,
+ * which has no hover.
+ */
+function MessageActions(props: {
+  readonly onReplyInThread: () => void;
+}): ReactElement {
+  return (
+    <div
+      data-testid="bot-message-actions"
+      className="pointer-events-none absolute top-1 right-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 opacity-0 shadow-sm transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
+    >
+      <TooltipWrapper
+        label="Reply in thread"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Reply in thread"
+          data-testid="bot-message-reply-in-thread"
+          onClick={props.onReplyInThread}
+        >
+          <MessageSquareText aria-hidden="true" />
+        </Button>
+      </TooltipWrapper>
     </div>
   );
 }
@@ -419,67 +496,77 @@ function RepliedPostLine(props: {
 }
 
 /**
- * The state of the request a member's message opened: `Open` until the bot
- * resolves it, `Resolved` after, with a jump to the reply that resolved it
- * when that reply is in this list: in a thread, or in the channel for a
- * direct post, whose reply is in the channel. Read off the member's row,
- * which is where the host keeps it; the reply row says nothing about the
- * request.
+ * "See reply" under a member's message the bot has answered, a jump to the
+ * reply when that reply is in this list (in a thread, or in the channel for
+ * a direct post, whose reply is in the channel) and not the row right under
+ * the message. Whether a message still waits for its answer is the bot's
+ * own bookkeeping and is not drawn. Read off the member's row, which is
+ * where the host keeps it; the reply row says nothing about the request.
  */
-function ConversationRequestLine(props: {
+function AnsweredReplyLink(props: {
   readonly request: ConversationRequest;
+  /** The member's message, by its message id; `null` before it is written. */
+  readonly postId: string | null;
   readonly inChannel: boolean;
-}): ReactElement {
-  const { request, inChannel } = props;
-  const presented =
-    useContext(ChatBotPresentationContext)?.scrollToMessage ?? null;
+}): ReactNode {
+  const { request, postId, inChannel } = props;
+  const presentation = useContext(ChatBotPresentationContext);
   const scrollToMessage =
-    inChannel && request.direct !== true ? null : presented;
-  const open = request.resolvedAt === null;
-  const replyId = request.resolvedByMessageId;
+    inChannel && request.direct !== true
+      ? null
+      : (presentation?.scrollToMessage ?? null);
+  const replyId =
+    request.resolvedAt === null ? null : request.resolvedByMessageId;
+  if (replyId === null || scrollToMessage === null) return null;
+  if (
+    postId !== null &&
+    presentation?.replyFollowsPost?.(postId, replyId) === true
+  ) {
+    return null;
+  }
   return (
-    <div
-      className="flex flex-wrap items-center gap-2 text-ui-xs text-muted-foreground"
-      data-testid="conversation-request"
-      data-request-id={request.requestId}
-      data-request-state={open ? "open" : "resolved"}
+    <Button
+      type="button"
+      variant="link"
+      size="xs"
+      className="self-start"
+      onClick={() => scrollToMessage(replyId)}
+      data-testid="conversation-request-reply-link"
     >
-      <Badge variant={open ? "warning" : "success"} size="xs">
-        {open ? "Open" : "Resolved"}
-      </Badge>
-      {open || replyId === null || scrollToMessage === null ? null : (
-        <Button
-          type="button"
-          variant="link"
-          size="xs"
-          onClick={() => scrollToMessage(replyId)}
-          data-testid="conversation-request-reply-link"
-        >
-          See reply
-        </Button>
-      )}
-    </div>
+      See reply
+    </Button>
   );
 }
 
 const THREAD_LINE_STACK_MAX = 3;
 
 /**
+ * Whether a post's thread has something for its line to show: a reply, or
+ * the bot answering in it now. Before that the thread is reached through
+ * the row's "Reply in thread" action.
+ */
+function threadStarted(
+  line: ChatBotThreadLine | null,
+): line is ChatBotThreadLine {
+  return line !== null && (line.replyCount > 0 || line.replying);
+}
+
+/**
  * Slack's line under a post: who is in the thread, "N replies" and when the
- * last one landed, the way into the thread. A thread with no reply yet offers "Reply in thread",
- * the action Slack puts on a post. An unread reply in a thread the viewer
- * took part in shows as a dot and bold count. While the bot is answering in
- * the thread, the line says so in place of when the last reply landed.
+ * last one landed, the way into the thread. An unread reply in a thread the
+ * viewer took part in shows as a dot and bold count. While the bot is
+ * answering in the thread, the line says so in place of when the last reply
+ * landed.
  */
 function ThreadLine(props: {
-  readonly line: ChatBotThreadLine | null;
+  readonly line: ChatBotThreadLine;
   readonly botTitle: string;
   readonly onOpen: () => void;
 }): ReactElement {
   const { line, botTitle, onOpen } = props;
-  const replies = line?.replyCount ?? 0;
-  const unread = line?.unread ?? false;
-  const replying = line?.replying ?? false;
+  const replies = line.replyCount;
+  const unread = line.unread;
+  const replying = line.replying;
   return (
     <button
       type="button"
@@ -488,28 +575,19 @@ function ThreadLine(props: {
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
-      {replies === 0 && !replying ? (
-        <span className="flex items-center gap-1 font-medium text-primary">
-          <MessageSquareText className="size-3.5" aria-hidden="true" />
-          Reply in thread
-        </span>
-      ) : (
-        <>
-          <AvatarStack
-            identities={line?.participants ?? []}
-            max={THREAD_LINE_STACK_MAX}
-            size="xs"
-            label="In this thread"
-            testId="bot-thread-participants"
-          />
-          <ThreadLineCount replies={replies} unread={unread} />
-          <ThreadLineStatus
-            lastReplyAt={line?.lastReplyAt ?? null}
-            replying={replying}
-            botTitle={botTitle}
-          />
-        </>
-      )}
+      <AvatarStack
+        identities={line.participants}
+        max={THREAD_LINE_STACK_MAX}
+        size="xs"
+        label="In this thread"
+        testId="bot-thread-participants"
+      />
+      <ThreadLineCount replies={replies} unread={unread} />
+      <ThreadLineStatus
+        lastReplyAt={line.lastReplyAt}
+        replying={replying}
+        botTitle={botTitle}
+      />
     </button>
   );
 }

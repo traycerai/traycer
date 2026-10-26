@@ -8,7 +8,6 @@
  * connectable hosts, the notification indicators and the bot's activity (the
  * real protocol schemas do not load in this suite's jsdom).
  */
-import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -167,7 +166,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => ({ getActiveHostId: () => "host-a" }),
 }));
-vi.mock("@/hooks/bots/use-bot-activity", () => ({
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => scripted.activity,
 }));
 vi.mock(
@@ -460,10 +460,8 @@ describe("the fixed Tracy entry - top strip", () => {
     const scroller = screen.getByTestId("header-tab-strip-scroll");
 
     expect(entry.textContent).toContain("Tracy");
-    // The bot's picture is a squircle, as a bot's is everywhere (T62).
-    expect(avatarShape(within(entry).getByTestId("bot-avatar"))).toBe(
-      "squircle",
-    );
+    expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -803,6 +801,51 @@ describe("the fixed Tracy entry - signals", () => {
     expect(body.textContent).toContain("Reading the plan");
   });
 
+  it("shows the timer and the step while a thread replies and the trunk is idle", async () => {
+    scripted.activity = {
+      trunk: { state: "idle", startedAt: null, step: null, requestId: null },
+      threads: {
+        "thread-1": {
+          state: "replying",
+          startedAt: Date.now() - 2 * 60_000,
+          step: "Reading the diff",
+          requestId: "req-9",
+        },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "2m",
+    );
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("Reading the diff");
+    expect(body.textContent).not.toContain("Idle");
+  });
+
+  it("shows the timer for a thread that replies while no trunk is open", async () => {
+    scripted.activity = {
+      trunk: null,
+      threads: {
+        "thread-1": {
+          state: "replying",
+          startedAt: Date.now() - 4 * 60_000,
+          step: null,
+          requestId: null,
+        },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "4m",
+    );
+  });
+
   it("shows no timer and an Idle hover while Tracy is not replying", async () => {
     scripted.activity = {
       trunk: { state: "idle", startedAt: null, step: null, requestId: null },
@@ -888,6 +931,42 @@ describe("the fixed Tracy entry - signals", () => {
   );
 });
 
+describe("the fixed Tracy entry - a main bot with any title", () => {
+  beforeEach(() => {
+    scripted.list = {
+      bots: [bot(TRACY, PERSONAL_ENV, "Release Notes", null)],
+      mainBotIds: { [PERSONAL_ENV]: TRACY },
+    };
+  });
+
+  it("is labelled Tracy with the Tracy glyph in the top strip, and the hover names the bot and its activity", async () => {
+    scripted.activity = replying("Reading the plan");
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.textContent).toContain("Tracy");
+    expect(entry.textContent).not.toContain("Release Notes");
+    expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent.startsWith("Release Notes")).toBe(true);
+    expect(body.textContent).toContain("Reading the plan");
+  });
+
+  it("is labelled Tracy with the Tracy glyph in the vertical strip", async () => {
+    mountSideStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.getAttribute("aria-label")).toBe("Tracy");
+    expect(entry.textContent).not.toContain("Release Notes");
+    expect(
+      within(entry).getAllByTestId("tracy-entry-icon").length,
+    ).toBeGreaterThan(0);
+  });
+});
+
 describe("the fixed Tracy entry - Alt-digit", () => {
   beforeEach(tracyIsMainBot);
 
@@ -946,9 +1025,11 @@ describe("the fixed Tracy entry - vertical strip", () => {
     const topBlock = screen.getByTestId("side-strip-top-block");
 
     expect(topBlock.contains(entry)).toBe(true);
-    for (const avatar of within(entry).getAllByTestId("bot-avatar")) {
-      expect(avatarShape(avatar)).toBe("squircle");
-    }
+    expect(
+      within(entry).getAllByTestId("tracy-entry-icon").length,
+    ).toBeGreaterThan(0);
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expect(entry.getAttribute("aria-label")).toBe("Tracy");
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
