@@ -62,6 +62,10 @@ vi.mock("@/components/home/bots/home-bots-section", () => ({
   HomeBotsSection: () => null,
 }));
 
+vi.mock("@/components/home-focus/home-getting-started-section", () => ({
+  HomeGettingStartedSection: () => null,
+}));
+
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@tanstack/react-router")>();

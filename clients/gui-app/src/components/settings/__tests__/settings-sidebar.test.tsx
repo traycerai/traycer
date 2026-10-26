@@ -92,6 +92,9 @@ vi.mock("@/components/settings/environment/team-pick-label", () => ({
 vi.mock("@/components/settings/environment/team-rows", () => ({
   TeamRows: () => null,
 }));
+vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
+  InviteAcceptDialog: () => null,
+}));
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
 // client. Not done by default, as for a new account.
