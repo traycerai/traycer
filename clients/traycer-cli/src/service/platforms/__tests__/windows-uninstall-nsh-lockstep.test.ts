@@ -354,36 +354,51 @@ describe("windows OS-native uninstall macro: the autostart is cleaned up only fo
     );
   });
 
-  it("proves Desktop ownership before it reads the task's principal: only exactly 'desktop' goes on", () => {
+  it("proves Desktop ownership before it reads the task's principal: only a root object whose source is exactly the string 'desktop' goes on", () => {
     const line = readProbeLine(readUninstallMacro());
     const read = line.indexOf("Get-Content");
-    const exit5 = line.lastIndexOf("exit 5");
+    const gate = line.indexOf("if(-not ((");
+    const lastExit = line.lastIndexOf("exit 5");
     const principal = line.indexOf("Definition.Principal.UserId");
     expect(read).toBeGreaterThan(-1);
-    expect(exit5).toBeGreaterThan(read);
-    expect(principal).toBeGreaterThan(exit5);
-    // The gate between the read and the second exit passes only a manifest
-    // whose source is exactly (case-sensitively) desktop; a guard that fired
-    // only on a NAMED other source would let an unknown owner through.
-    const gate = line.slice(line.indexOf("exit 5") + 1, exit5);
-    expect(gate).toContain("-ceq 'desktop'");
-    expect(gate).not.toMatch(/-ne 'desktop'|-eq 'desktop'/);
-    expect(gate).toMatch(/if\(-not /);
+    expect(gate).toBeGreaterThan(read);
+    expect(lastExit).toBeGreaterThan(gate);
+    expect(principal).toBeGreaterThan(lastExit);
+    // `-ceq` on an array filters instead of comparing, so the source must be
+    // proven a [string] first; and a root array must not reach the gate as
+    // its single (unwrapped or enumerated) element, so the root must be a
+    // PSCustomObject. All three conditions, in this order, then the exact
+    // case-sensitive comparison. A named-other-source test would let an
+    // unknown owner through.
+    const condition = line.slice(gate, lastExit);
+    const root = condition.indexOf(
+      "$$m -is [System.Management.Automation.PSCustomObject]",
+    );
+    const type = condition.indexOf("$$m.source -is [string]");
+    const exact = condition.indexOf("$$m.source -ceq 'desktop'");
+    expect(root).toBeGreaterThan(-1);
+    expect(type).toBeGreaterThan(root);
+    expect(exact).toBeGreaterThan(type);
+    expect(condition).not.toMatch(/-ne 'desktop'|-eq 'desktop'/);
   });
 
-  it("treats a missing, unreadable, malformed or source-less manifest as unknown ownership, and unknown keeps the autostart", () => {
+  it("treats a missing, unreadable, malformed, root-array or source-less manifest as unknown ownership, and unknown keeps the autostart", () => {
     const line = readProbeLine(readUninstallMacro());
     const read = line.indexOf("Get-Content");
-    const firstExit = line.indexOf("exit 5");
-    const head = line.slice(read, firstExit + "exit 5".length);
-    // A failed read exits 5 itself - there is no fallthrough with a null
-    // manifest - and the gate after it needs a parsed manifest.
-    expect(head).toContain("-ErrorAction Stop");
-    expect(head).toMatch(/catch\{exit 5$/);
-    expect(line).toMatch(
-      /if\(-not \(\$\$m -and \(\$\$m\.source -ceq 'desktop'\)\)\)\{exit 5\}/,
-    );
-    expect(line.split("exit 5")).toHaveLength(3);
+    const rootCheck = line.indexOf(".TrimStart().StartsWith('{')");
+    const parse = line.indexOf("ConvertFrom-Json");
+    const gate = line.indexOf("if(-not ((");
+    // The raw text must start with an object brace BEFORE it is parsed, so a
+    // root array never reaches ConvertFrom-Json (whose result PowerShell 7
+    // unwraps to its one element).
+    expect(line.slice(read, rootCheck)).toContain("-ErrorAction Stop");
+    expect(rootCheck).toBeGreaterThan(read);
+    expect(parse).toBeGreaterThan(rootCheck);
+    expect(line.slice(rootCheck, parse)).toContain("exit 5");
+    // A failed read or parse exits 5 itself - there is no fallthrough with a
+    // null manifest.
+    expect(line.slice(parse, gate)).toMatch(/catch\{exit 5\};$/);
+    expect(line.split("exit 5")).toHaveLength(4);
   });
 
   it("does nothing when Desktop ownership is not proven: the arm for 5 runs no command and deletes nothing", () => {

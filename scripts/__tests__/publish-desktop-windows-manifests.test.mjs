@@ -162,7 +162,7 @@ describe("desktop Scoop manifest", () => {
     const gate = indexOf("$cli.source");
     expect(lines[read]).toContain("'.traycer\\cli\\manifest.json'");
     expect(lines[gate]).toBe(
-      "if (-not ($cli -and ($cli.source -ceq 'desktop'))) { return }",
+      "if (-not (($cli -is [System.Management.Automation.PSCustomObject]) -and ($cli.source -is [string]) -and ($cli.source -ceq 'desktop'))) { return }",
     );
     // Inside the uninstall-only guard, and ahead of every line that touches
     // the task, the folder or the launcher.
@@ -177,6 +177,15 @@ describe("desktop Scoop manifest", () => {
     ]) {
       expect(indexOf(effect), effect).toBeGreaterThan(gate);
     }
+    // The raw text must start with an object brace before it is parsed, so a
+    // root array never reaches ConvertFrom-Json (which PowerShell 7 unwraps
+    // to its one element).
+    expect(lines[read].indexOf("StartsWith('{')")).toBeGreaterThan(
+      lines[read].indexOf("Get-Content"),
+    );
+    expect(lines[read].indexOf("ConvertFrom-Json")).toBeGreaterThan(
+      lines[read].indexOf("StartsWith('{')"),
+    );
     // An unreadable manifest leaves $cli null, which RETURNS: unknown
     // ownership keeps the autostart.
     expect(lines[read]).toContain("catch {}");

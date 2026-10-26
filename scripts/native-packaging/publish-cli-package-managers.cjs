@@ -460,9 +460,11 @@ ManifestVersion: ${WINGET_MANIFEST_VERSION}
 // `scoop uninstall` only (never on `scoop update`, which also runs it), it
 // removes the host's logon task when the task is this account's, the account's
 // launcher, and the `\Traycer` task folder once empty - only when the CLI's
-// install manifest says `desktop`. Any other source is a separately installed
-// CLI that still runs the host after Desktop is gone, and a missing,
-// unreadable or source-less manifest proves nothing, so all three stay.
+// install manifest is a JSON object whose `source` is the string `desktop`.
+// Any other source is a separately installed CLI that still runs the host
+// after Desktop is gone, and a missing, unreadable or malformed manifest (a
+// root array, or a list `source`, which `-ceq` would filter rather than
+// compare) proves nothing, so all three stay.
 // Everything is best-effort.
 function renderDesktopScoopManifest({
   version,
@@ -496,8 +498,8 @@ function renderDesktopScoopManifest({
       script: [
         "if ($cmd -eq 'uninstall') {",
         "  $cli = $null",
-        `  try { $cli = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '${DESKTOP_WINDOWS_CLI_MANIFEST_TAIL}') -ErrorAction Stop | ConvertFrom-Json } catch {}`,
-        "  if (-not ($cli -and ($cli.source -ceq 'desktop'))) { return }",
+        `  try { $raw = Get-Content -Raw -LiteralPath (Join-Path $env:USERPROFILE '${DESKTOP_WINDOWS_CLI_MANIFEST_TAIL}') -ErrorAction Stop; if ($raw.TrimStart().StartsWith('{')) { $cli = ConvertFrom-Json $raw } } catch {}`,
+        "  if (-not (($cli -is [System.Management.Automation.PSCustomObject]) -and ($cli.source -is [string]) -and ($cli.source -ceq 'desktop'))) { return }",
         "  try {",
         "    $s = New-Object -ComObject Schedule.Service",
         "    $s.Connect()",

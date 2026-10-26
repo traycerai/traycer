@@ -92,10 +92,13 @@
     ; belong to whichever Traycer CLI registered them, and Desktop coexists
     ; with a CLI a package manager or the user installed (`cli-reconcile.ts`
     ; never overwrites one). The CLI's install manifest, beside the launcher,
-    ; names that install's `source`. Only `desktop` proves the host is this
-    ; app's to remove. Any other source is a CLI that outlives this uninstall,
-    ; and a missing, unreadable or source-less manifest proves nothing, so in
-    ; every case but `desktop` the task, the launcher and the folder stay.
+    ; names that install's `source`. Only a JSON object whose `source` is the
+    ; string `desktop` proves the host is this app's to remove. Any other
+    ; source is a CLI that outlives this uninstall, and a missing, unreadable
+    ; or malformed manifest proves nothing - a root array, or a `source` that
+    ; is a list (`-ceq` on a list filters it, and a non-empty result is true)
+    ; - so in every case but that one the task, the launcher and the folder
+    ; stay.
     ;
     ; The probe, a PowerShell bounded by nsExec's /TIMEOUT (a stalled
     ; Schedule.Service RPC or account lookup answers `timeout`, which is not 0
@@ -114,7 +117,7 @@
     ; principal that reads back as an account name is resolved to one first.
     ; Nothing about either account is printed. `$R1` holds the answer: the
     ; same code re-runs GetParameters into it right after this macro.
-    nsExec::ExecToLog /TIMEOUT=30000 `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$m=Get-Content -Raw -LiteralPath (Join-Path $$env:USERPROFILE '${TRAYCER_CLI_MANIFEST_TAIL}') -ErrorAction Stop|ConvertFrom-Json}catch{exit 5};if(-not ($$m -and ($$m.source -ceq 'desktop'))){exit 5};try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect()}catch{exit 4};try{$$t=$$s.GetFolder('\').GetTask('${TRAYCER_WINDOWS_TASK_NAME}')}catch{$$e=$$_.Exception;if($$e.InnerException){$$e=$$e.InnerException};if(($$e.HResult -eq -2147024894) -or ($$e.HResult -eq -2147024893)){exit 2};exit 4};try{$$u=[string]$$t.Definition.Principal.UserId;if($$u -notmatch '^S-1-[0-9]+(-[0-9]+)+$$'){$$u=(New-Object System.Security.Principal.NTAccount($$u)).Translate([System.Security.Principal.SecurityIdentifier]).Value};$$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;if($$u -ieq $$me){exit 0};exit 3}catch{exit 4}"`
+    nsExec::ExecToLog /TIMEOUT=30000 `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$r=Get-Content -Raw -LiteralPath (Join-Path $$env:USERPROFILE '${TRAYCER_CLI_MANIFEST_TAIL}') -ErrorAction Stop;if(-not $$r.TrimStart().StartsWith('{')){exit 5};$$m=ConvertFrom-Json $$r}catch{exit 5};if(-not (($$m -is [System.Management.Automation.PSCustomObject]) -and ($$m.source -is [string]) -and ($$m.source -ceq 'desktop'))){exit 5};try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect()}catch{exit 4};try{$$t=$$s.GetFolder('\').GetTask('${TRAYCER_WINDOWS_TASK_NAME}')}catch{$$e=$$_.Exception;if($$e.InnerException){$$e=$$e.InnerException};if(($$e.HResult -eq -2147024894) -or ($$e.HResult -eq -2147024893)){exit 2};exit 4};try{$$u=[string]$$t.Definition.Principal.UserId;if($$u -notmatch '^S-1-[0-9]+(-[0-9]+)+$$'){$$u=(New-Object System.Security.Principal.NTAccount($$u)).Translate([System.Security.Principal.SecurityIdentifier]).Value};$$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;if($$u -ieq $$me){exit 0};exit 3}catch{exit 4}"`
     Pop $R1
 
     ${if} $R1 == "0"
