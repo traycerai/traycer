@@ -1254,6 +1254,52 @@ describe("<RateLimitPopover /> rail", () => {
     ]);
   });
 
+  it("follows the saved usage order, slotting a tab the order cannot name beside its canonical neighbour", () => {
+    // The strip draws Claude before Codex once the user drags it there; the
+    // rail (and Overview, which walks the same tabs) must read the same way.
+    // Traycer is not a windowed provider so the arrangement never names it;
+    // its canonical neighbour ahead is Claude Code, so it moves with Claude.
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
+      { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+      kilocode: readyResult({
+        provider: "kilocode",
+        available: true,
+        creditBalance: 5,
+        passState: null,
+      }),
+    };
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: false }),
+    );
+    const arrangement = useLayoutStore.getState().arrangement;
+    useLayoutStore.getState().setArrangement({
+      ...arrangement,
+      usageProviders: [
+        "claude-code",
+        ...arrangement.usageProviders.filter((id) => id !== "claude-code"),
+      ],
+    });
+    renderPopover();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+      "Overview",
+      "Claude Code",
+      "Traycer Inference",
+      "Codex",
+      "Kilo Code",
+    ]);
+  });
+
   it("lands on Overview, stacking every provider's condensed block", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
