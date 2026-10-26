@@ -49,6 +49,14 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+// The thread panel reads its post's text from the channel's session; none is
+// loaded here.
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
+  useChatSessionHandleForContainer: () => null,
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -172,7 +180,6 @@ const LISTED_THREAD: BotThreadSummary = {
     messageId: POST_ID,
     requestId: "req-thread",
     senderUserId: "user-teammate",
-    text: "Ship the release today?",
     sentAt: 1_000,
     resolvedAt: null,
   },
@@ -216,7 +223,6 @@ function mount(openThread: BotOpenThread | null): void {
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={CHANNEL_ID}
-            paused={false}
             resolveMember={resolveMember}
             openThread={openThread}
             onOpenThread={vi.fn()}

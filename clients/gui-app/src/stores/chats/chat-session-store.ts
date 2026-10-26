@@ -1440,6 +1440,14 @@ export interface ChatSessionState {
    */
   readonly findReadOrdinal: number | null;
   /**
+   * The rows a surface outside the transcript shows and so needs hydrated,
+   * one entry per hold: a bot thread's post, shown in its thread panel from
+   * the channel's row (Tracy Bots T65). Never a viewport move. Separate
+   * from the jump and the find read for the same reason they are separate
+   * from each other. See {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly heldReadOrdinals: ReadonlyArray<number>;
+  /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
    * Separate from {@link accumulatedFileChanges} rather than replacing it,
@@ -1960,6 +1968,8 @@ export interface ChatSessionState {
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   /** See the implementation - names the ordinal a find index read needs. */
   requestFindReadOrdinal: (ordinal: number | null) => void;
+  /** See the implementation - holds a row hydrated for a surface that shows it. */
+  holdTranscriptOrdinal: (ordinal: number) => () => void;
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -6952,6 +6962,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
           jumpTargetOrdinal: null,
           findReadOrdinal: null,
+          // `heldReadOrdinals` stays: each hold belongs to the surface still
+          // showing its row and ends only by that surface's release, so a
+          // re-upgrade keeps the row held and no earlier release can take
+          // a later hold of the same ordinal.
           accumulatedFileChangeSummaries: [],
           accumulatedSummaryGenerationSeated: false,
           accumulatedSummaryAssemblyStarted: false,
@@ -8160,11 +8174,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The FRAME's pair, not the store's: this runs before the snapshot's
           // judgement and pending list are published, and protecting the rows
           // the PREVIOUS snapshot was blocked on would protect the wrong ones
-          // for exactly the beat that matters.
-          pendingInterviewOrdinals(
-            frame.snapshot.derived.interviewAnswerability,
-            frame.snapshot.pendingInterviews,
-          ),
+          // for exactly the beat that matters. A held read (a bot thread's
+          // post on show) is the store's own and outlives every frame.
+          [
+            ...pendingInterviewOrdinals(
+              frame.snapshot.derived.interviewAnswerability,
+              frame.snapshot.pendingInterviews,
+            ),
+            ...get().heldReadOrdinals,
+          ],
         );
         // NOW the boundary decision, with the applied window in hand - the
         // fold runs FIRST, deliberately, so everything below reads post-fold
@@ -10366,6 +10384,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       jumpTargetOrdinal: null,
       findReadOrdinal: null,
+      heldReadOrdinals: [],
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
@@ -10438,6 +10457,29 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (get().findReadOrdinal === ordinal) return;
         set({ findReadOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
+      },
+
+      /**
+       * Holds the row at `ordinal` hydrated until the returned release: for
+       * a surface outside the transcript that shows the row, such as a bot
+       * thread's post in its panel. Like a find read, it never moves the
+       * viewport, so this is what fetches the row; held, not one-shot, so the
+       * row stays while the surface shows it.
+       */
+      holdTranscriptOrdinal: (ordinal: number) => {
+        set({ heldReadOrdinals: [...get().heldReadOrdinals, ordinal] });
+        requestPlannedHydration();
+        let released = false;
+        return () => {
+          if (released || disposed) return;
+          released = true;
+          const held = get().heldReadOrdinals;
+          const at = held.indexOf(ordinal);
+          if (at === -1) return;
+          set({
+            heldReadOrdinals: [...held.slice(0, at), ...held.slice(at + 1)],
+          });
+        };
       },
       wake: () => {
         if (disposed) return;
@@ -14626,6 +14668,7 @@ function pendingInterviewOrdinals(
  *
  * The find read is the same circle with no scroll at all at the end of it: it
  * never moves the viewport, so nothing but this list will ever fetch its row.
+ * A held read (a bot thread's post) is a find read that lasts while it is shown.
  */
 function requiredHydrationOrdinalsOf(
   state: ChatSessionState,
@@ -14637,7 +14680,11 @@ function requiredHydrationOrdinalsOf(
     state.pendingInterviews,
   );
   let ordinals = interviews;
-  for (const extra of [state.jumpTargetOrdinal, state.findReadOrdinal]) {
+  for (const extra of [
+    state.jumpTargetOrdinal,
+    state.findReadOrdinal,
+    ...state.heldReadOrdinals,
+  ]) {
     if (extra === null || ordinals.includes(extra)) continue;
     ordinals = [...ordinals, extra];
   }

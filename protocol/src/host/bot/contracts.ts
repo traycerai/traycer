@@ -198,8 +198,9 @@ export const botConversationSendV10 = defineRpcContract({
 /**
  * `bot.thread.list@1.0` (T41): the threads of a bot's channel, each with its
  * anchor post, reply count, last reply, open requests and cost. Answered by
- * the bot's bound host from its own store (the thread records live there);
- * any other host refuses it. Same optional posture as the namespace.
+ * the bot's bound host from its own store (the thread records live there),
+ * and by any other host from the summaries the bound host keeps in the
+ * bot's environment room (T65). Same optional posture as the namespace.
  */
 export const botThreadListV10 = defineRpcContract({
   method: "bot.thread.list",

@@ -12,6 +12,11 @@ export interface TracyEntrySignals {
   readonly workingSince: number | null;
   /** What the running turn is doing now, when it says. */
   readonly step: string | null;
+  /**
+   * The bot's trunk is known to be idle. `false` while no host has written
+   * its state, or while the tab's host cannot read it: unknown is not idle.
+   */
+  readonly idle: boolean;
 }
 
 /**
@@ -37,5 +42,6 @@ export function useTracyEntrySignals(botId: string): TracyEntrySignals {
     unread: state !== null && (state.unreadDone || state.unreadFailure),
     workingSince: replying ? (trunk.startedAt ?? null) : null,
     step: replying ? trunk.step : null,
+    idle: trunk?.state === "idle",
   };
 }
