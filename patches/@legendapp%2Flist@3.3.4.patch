@@ -1,7 +1,8 @@
 diff --git a/react-native.web.js b/react-native.web.js
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..6428c53754dc69e29fc364509adb573c910b81c7 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
-@@ -5637,6 +5637,11 @@
+@@ -5637,6 +5637,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -13,7 +14,7 @@ diff --git a/react-native.web.js b/react-native.web.js
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5672,7 +5677,9 @@
+@@ -5672,7 +5677,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -24,10 +25,41 @@ diff --git a/react-native.web.js b/react-native.web.js
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
+@@ -6123,10 +6130,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+       isWindowScroll: () => isWindowScroll,
+       scrollBy: (x, y) => {
+         const target = getScrollTarget();
+-        if (!target || typeof target.scrollBy !== "function") {
++        if (!target || typeof target.scrollTo !== "function") {
+           return;
+         }
+-        target.scrollBy({ behavior: "auto", left: x, top: y });
++        // Absolute for the same reason as scrollAdjustBy below.
++        const isWindowTarget = typeof window !== "undefined" && target === window;
++        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
++        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
++        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
+       },
+       scrollTo: (options) => {
+         const { x = 0, y = 0, animated = true } = options;
+@@ -6390,7 +6401,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
+ }
+ function scrollAdjustBy(el, left, top) {
+-  el.scrollBy({ behavior: "auto", left, top });
++  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
++  // more on the next scroll event), which doubles every position adjustment
++  // during a touch fling. Write the absolute target instead; it lands once on
++  // every engine.
++  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
+ }
+ function ScrollAdjust() {
+   const ctx = useStateContext();
 diff --git a/react-native.web.mjs b/react-native.web.mjs
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..398e2eaa326d808f95fcf54ee8c398378b0df13f 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
-@@ -5616,6 +5616,11 @@
+@@ -5616,6 +5616,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -39,7 +71,7 @@ diff --git a/react-native.web.mjs b/react-native.web.mjs
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5651,7 +5656,9 @@
+@@ -5651,7 +5656,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -50,10 +82,41 @@ diff --git a/react-native.web.mjs b/react-native.web.mjs
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
+@@ -6102,10 +6109,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+       isWindowScroll: () => isWindowScroll,
+       scrollBy: (x, y) => {
+         const target = getScrollTarget();
+-        if (!target || typeof target.scrollBy !== "function") {
++        if (!target || typeof target.scrollTo !== "function") {
+           return;
+         }
+-        target.scrollBy({ behavior: "auto", left: x, top: y });
++        // Absolute for the same reason as scrollAdjustBy below.
++        const isWindowTarget = typeof window !== "undefined" && target === window;
++        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
++        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
++        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
+       },
+       scrollTo: (options) => {
+         const { x = 0, y = 0, animated = true } = options;
+@@ -6369,7 +6380,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
+ }
+ function scrollAdjustBy(el, left, top) {
+-  el.scrollBy({ behavior: "auto", left, top });
++  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
++  // more on the next scroll event), which doubles every position adjustment
++  // during a touch fling. Write the absolute target instead; it lands once on
++  // every engine.
++  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
+ }
+ function ScrollAdjust() {
+   const ctx = useStateContext();
 diff --git a/react.js b/react.js
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad1126225f854c9e 100644
 --- a/react.js
 +++ b/react.js
-@@ -1143,6 +1143,7 @@
+@@ -1143,6 +1143,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
    }
    return true;
  }
@@ -61,7 +124,7 @@ diff --git a/react.js b/react.js
  function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
    var _a3, _b, _c, _d;
    const state = ctx.state;
-@@ -1158,8 +1159,18 @@
+@@ -1158,8 +1159,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
    }
    let size;
    const renderedSize = sizes.get(key);
@@ -82,7 +145,7 @@ diff --git a/react.js b/react.js
        return renderedSize;
      }
    }
-@@ -1168,9 +1179,9 @@
+@@ -1168,9 +1179,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
      setSize(ctx, key, size, notifyTotalSize);
      return size;
    }
@@ -94,7 +157,7 @@ diff --git a/react.js b/react.js
      if (averageSizeForType !== void 0) {
        size = roundSize(averageSizeForType);
      }
-@@ -4318,7 +4329,10 @@
+@@ -4318,7 +4329,10 @@ function calculateItemsInView(ctx, params = {}) {
          }
        }
      }
@@ -106,7 +169,7 @@ diff --git a/react.js b/react.js
      if (dataChanged) {
        resetLayoutCachesForDataChange(state);
      }
-@@ -4806,6 +4820,11 @@
+@@ -4806,6 +4820,11 @@ function updateItemSizesBatch(ctx, measurements) {
  function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    var _a3, _b;
    const state = ctx.state;
@@ -118,7 +181,7 @@ diff --git a/react.js b/react.js
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -5637,6 +5656,11 @@
+@@ -5637,6 +5656,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -130,7 +193,7 @@ diff --git a/react.js b/react.js
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5672,7 +5696,9 @@
+@@ -5672,7 +5696,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -141,7 +204,37 @@ diff --git a/react.js b/react.js
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -7054,7 +7080,8 @@
+@@ -6123,10 +6149,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+       isWindowScroll: () => isWindowScroll,
+       scrollBy: (x, y) => {
+         const target = getScrollTarget();
+-        if (!target || typeof target.scrollBy !== "function") {
++        if (!target || typeof target.scrollTo !== "function") {
+           return;
+         }
+-        target.scrollBy({ behavior: "auto", left: x, top: y });
++        // Absolute for the same reason as scrollAdjustBy below.
++        const isWindowTarget = typeof window !== "undefined" && target === window;
++        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
++        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
++        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
+       },
+       scrollTo: (options) => {
+         const { x = 0, y = 0, animated = true } = options;
+@@ -6390,7 +6420,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
+ }
+ function scrollAdjustBy(el, left, top) {
+-  el.scrollBy({ behavior: "auto", left, top });
++  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
++  // more on the next scroll event), which doubles every position adjustment
++  // during a touch fling. Write the absolute target instead; it lands once on
++  // every engine.
++  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
+ }
+ function ScrollAdjust() {
+   const ctx = useStateContext();
+@@ -7054,7 +7088,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -152,9 +245,10 @@ diff --git a/react.js b/react.js
    }
    has(key) {
 diff --git a/react.mjs b/react.mjs
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10b8da15e5 100644
 --- a/react.mjs
 +++ b/react.mjs
-@@ -1122,6 +1122,7 @@
+@@ -1122,6 +1122,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
    }
    return true;
  }
@@ -162,7 +256,7 @@ diff --git a/react.mjs b/react.mjs
  function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
    var _a3, _b, _c, _d;
    const state = ctx.state;
-@@ -1137,8 +1138,18 @@
+@@ -1137,8 +1138,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
    }
    let size;
    const renderedSize = sizes.get(key);
@@ -183,7 +277,7 @@ diff --git a/react.mjs b/react.mjs
        return renderedSize;
      }
    }
-@@ -1147,9 +1158,9 @@
+@@ -1147,9 +1158,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
      setSize(ctx, key, size, notifyTotalSize);
      return size;
    }
@@ -195,7 +289,7 @@ diff --git a/react.mjs b/react.mjs
      if (averageSizeForType !== void 0) {
        size = roundSize(averageSizeForType);
      }
-@@ -4297,7 +4308,10 @@
+@@ -4297,7 +4308,10 @@ function calculateItemsInView(ctx, params = {}) {
          }
        }
      }
@@ -207,7 +301,7 @@ diff --git a/react.mjs b/react.mjs
      if (dataChanged) {
        resetLayoutCachesForDataChange(state);
      }
-@@ -4785,6 +4799,11 @@
+@@ -4785,6 +4799,11 @@ function updateItemSizesBatch(ctx, measurements) {
  function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    var _a3, _b;
    const state = ctx.state;
@@ -219,7 +313,7 @@ diff --git a/react.mjs b/react.mjs
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -5616,6 +5635,11 @@
+@@ -5616,6 +5635,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -231,7 +325,7 @@ diff --git a/react.mjs b/react.mjs
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5651,7 +5675,9 @@
+@@ -5651,7 +5675,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -242,7 +336,37 @@ diff --git a/react.mjs b/react.mjs
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -7033,7 +7059,8 @@
+@@ -6102,10 +6128,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+       isWindowScroll: () => isWindowScroll,
+       scrollBy: (x, y) => {
+         const target = getScrollTarget();
+-        if (!target || typeof target.scrollBy !== "function") {
++        if (!target || typeof target.scrollTo !== "function") {
+           return;
+         }
+-        target.scrollBy({ behavior: "auto", left: x, top: y });
++        // Absolute for the same reason as scrollAdjustBy below.
++        const isWindowTarget = typeof window !== "undefined" && target === window;
++        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
++        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
++        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
+       },
+       scrollTo: (options) => {
+         const { x = 0, y = 0, animated = true } = options;
+@@ -6369,7 +6399,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
+ }
+ function scrollAdjustBy(el, left, top) {
+-  el.scrollBy({ behavior: "auto", left, top });
++  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
++  // more on the next scroll event), which doubles every position adjustment
++  // during a touch fling. Write the absolute target instead; it lands once on
++  // every engine.
++  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
+ }
+ function ScrollAdjust() {
+   const ctx = useStateContext();
+@@ -7033,7 +7067,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
