@@ -13,6 +13,7 @@
  * refreshes live when the user rebinds `app.settings.open`.
  */
 import { useMemo } from "react";
+import { useSettingsSectionOffered } from "@/hooks/settings/use-settings-section-offered";
 import {
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,
@@ -76,16 +77,19 @@ const OPEN_EPICS_ITEM: CommandItem = {
 const SETTINGS_SUBPAGE: CommandSubpage = {
   id: "nav:settings",
   title: "Open settings",
-  useItems: (ctx: CommandContext) =>
-    useMemo<ReadonlyArray<CommandItem>>(
+  useItems: (ctx: CommandContext) => {
+    // The rail's rows: a page whose preview feature is not on is not offered.
+    const offered = useSettingsSectionOffered();
+    return useMemo<ReadonlyArray<CommandItem>>(
       () =>
         visibleSettingsSections().flatMap((section) =>
-          ctx.pathname !== `/settings/${section.id}`
+          ctx.pathname !== `/settings/${section.id}` && offered(section.id)
             ? [buildSectionItem(section)]
             : [],
         ),
-      [ctx.pathname],
-    ),
+      [ctx.pathname, offered],
+    );
+  },
 };
 
 function buildSettingsEntryItem(

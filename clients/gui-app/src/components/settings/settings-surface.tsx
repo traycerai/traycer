@@ -6,6 +6,7 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useSettingsSectionOffered } from "@/hooks/settings/use-settings-section-offered";
 import { cn } from "@/lib/utils";
 import "./settings-touch-targets.css";
 
@@ -19,7 +20,11 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
   });
   // `null` at `/settings` itself - the index, which is depth 0 of the phone
   // drill-down and NOT a section.
-  const section = settingsSectionFromPath(sectionPath);
+  const pathSection = settingsSectionFromPath(sectionPath);
+  // A page whose preview feature is not on opens General, as the modal does.
+  const offered = useSettingsSectionOffered();
+  const section =
+    pathSection === null || offered(pathSection) ? pathSection : "general";
   // Phone rules, unchanged in intent from when they lived on the route shell:
   // the rail is a pointer-width affordance, so below md the surface stacks and
   // drills down instead - the index lists the sections, a section shows its

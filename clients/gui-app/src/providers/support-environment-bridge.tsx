@@ -22,6 +22,7 @@ import {
   type SupportEnvironmentPolicy,
   type SupportEnvironmentRotationRead,
 } from "@/lib/support-environment-section";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /**
  * Writes the selected host's environment section into the support-context
@@ -51,7 +52,12 @@ const OWN_ENVIRONMENT_PARAMS = { environmentId: null };
 function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
   const { hostId } = props;
   const client = useHostClientForHostId(hostId);
-  const statusSupported = useHostMethodSupport(hostId, "environment.status");
+  // Without environments (unread included) the bundle reads none of them:
+  // every read below waits on the status one.
+  const environments = usePreviewFeature("environments");
+  const statusSupported =
+    useHostMethodSupport(hostId, "environment.status") === true &&
+    environments === "on";
   const attemptsSupported = useHostMethodSupport(
     hostId,
     "environment.setup.attempts",
@@ -71,7 +77,7 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
     client,
     method: "environment.status",
     params: NO_PARAMS,
-    options: { enabled: statusSupported === true },
+    options: { enabled: statusSupported },
   });
   const attempts = useHostQuery<HostRpcRegistry, "environment.setup.attempts">({
     cacheKeyIdentity: undefined,
@@ -79,7 +85,7 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
     method: "environment.setup.attempts",
     params: NO_PARAMS,
     options: {
-      enabled: statusSupported === true && attemptsSupported === true,
+      enabled: statusSupported && attemptsSupported === true,
     },
   });
   const list = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
@@ -87,14 +93,14 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
     client,
     method: "environment.secrets.list",
     params: OWN_ENVIRONMENT_PARAMS,
-    options: { enabled: statusSupported === true && listSupported === true },
+    options: { enabled: statusSupported && listSupported === true },
   });
   const reach = useHostQuery<HostRpcRegistry, "environment.reachDiagnostics">({
     cacheKeyIdentity: undefined,
     client,
     method: "environment.reachDiagnostics",
     params: { epicId },
-    options: { enabled: statusSupported === true && reachSupported === true },
+    options: { enabled: statusSupported && reachSupported === true },
   });
   const [policy, setPolicy] = useState<SupportEnvironmentPolicy | null>(null);
   const [rotations, setRotations] = useState<
@@ -108,7 +114,7 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
   useEffect(() => {
     // Until this host has answered, nothing is known about it: a previous
     // host's section never stands in for the selected one.
-    if (statusSupported !== true || statusData === null) {
+    if (!statusSupported || statusData === null) {
       setSupportEnvironmentSection(unavailableField());
       return;
     }

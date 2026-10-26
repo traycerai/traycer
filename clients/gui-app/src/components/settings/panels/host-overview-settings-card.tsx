@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /**
  * The Overview's settings card: whether this computer's settings are its
@@ -97,12 +98,15 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly hostName: string;
   readonly usable: boolean;
 }): ReactNode {
+  // Without environments (unread included) there is no card to draw.
+  const environments = usePreviewFeature("environments");
   const status = useEnvironmentStatusRead(
     props.client,
     props.hostId,
-    props.usable,
+    props.usable && environments === "on",
   );
   if (
+    environments !== "on" ||
     props.client === null ||
     props.hostId === null ||
     status.data === null ||

@@ -136,6 +136,7 @@ import {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamModelRouting } from "@/components/settings/environment/team-model-routing";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /**
  * Settings ▸ Host ▸ Fallback.
@@ -159,6 +160,9 @@ export function FallbackSettingsPanel(): ReactNode {
 function HostFallbackSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the page is this host's own.
+  const personal = pick.kind === "personal" && environments === "on";
   const realBinding = useHostBinding();
 
   // The same governed narrow the agent-guide section makes, for the same
@@ -178,7 +182,7 @@ function HostFallbackSettingsPanel(): ReactNode {
     <SettingsPanelShell
       title="Model routing"
       description={
-        pick.kind === "personal"
+        personal
           ? "Applies to your agents on every computer and sandbox running Personal."
           : fallbackPanelDescription(scope)
       }

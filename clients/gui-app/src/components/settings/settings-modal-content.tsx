@@ -1,3 +1,4 @@
+import { useSettingsSectionOffered } from "@/hooks/settings/use-settings-section-offered";
 import { useRef, type ReactNode } from "react";
 import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
 import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
@@ -58,16 +59,19 @@ export interface SettingsModalContentProps {
  * The section is REMEMBERED across launches, so it can also name a section
  * this build does not offer - and the rail beside it would then have no row
  * for the panel on screen. That falls back to General too, keyed off the
- * offered list rather than off the reason a section is missing from it.
+ * offered list rather than off the reason a section is missing from it,
+ * and so does a section whose preview feature is not on for this person.
  */
 export function SettingsModalContent(
   props: SettingsModalContentProps,
 ): ReactNode {
   const { setSection } = useSystemTabModalActions();
+  const offered = useSettingsSectionOffered();
   const requested: SettingsSectionId = props.section ?? "general";
-  const section: SettingsSectionId = isSettingsSectionVisible(requested)
-    ? requested
-    : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
+  const section: SettingsSectionId =
+    isSettingsSectionVisible(requested) && offered(requested)
+      ? requested
+      : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">

@@ -33,6 +33,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
+import type { PreviewFeature } from "@/lib/auth/preview-features";
 
 export type SettingsSectionId =
   | "dev-artifact-proof"
@@ -549,6 +550,27 @@ export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   "agent-definitions": "agents",
   "browser-agent-access": "permissions",
 };
+
+/**
+ * Sections offered only while a preview feature is on: their pages exist only
+ * for an environment or a sandbox. Every other section works without either.
+ */
+const PREVIEW_FEATURE_SECTIONS: Readonly<
+  Partial<Record<SettingsSectionId, PreviewFeature>>
+> = {
+  secrets: "environments",
+  members: "environments",
+  "machine-setup": "environments",
+  "agent-definitions": "environments",
+  sandboxes: "sandboxes",
+};
+
+/** The preview feature `sectionId` needs on, or `null` for none. */
+export function settingsSectionPreviewFeature(
+  sectionId: SettingsSectionId,
+): PreviewFeature | null {
+  return PREVIEW_FEATURE_SECTIONS[sectionId] ?? null;
+}
 
 /**
  * Both offered lists, resolved once at module load.

@@ -207,6 +207,8 @@ const VIEW_COPY: Readonly<
     {
       readonly title: string;
       readonly description: string;
+      /** Without environments the page is this host's own. */
+      readonly hostDescription: string;
       readonly empty: string;
     }
   >
@@ -215,18 +217,21 @@ const VIEW_COPY: Readonly<
     title: "Providers",
     description:
       "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.",
+    hostDescription: "Sign-ins, keys and tools for each coding agent on this host.",
     empty: "No providers on this host.",
   },
   "mcp-servers": {
     title: "MCP servers",
     description:
       "The MCP servers each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+    hostDescription: "The MCP servers each coding agent can use on this host.",
     empty: "No provider on this host supports MCP servers.",
   },
   skills: {
     title: "Skills",
     description:
       "The skills each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+    hostDescription: "The skills each coding agent can use on this host.",
     empty: "No provider on this host supports skills.",
   },
 };
@@ -237,6 +242,17 @@ const VIEW_COPY: Readonly<
  */
 function localProvidersDescription(hostName: string): string {
   return `Sign-ins, keys and tools for each coding agent on ${hostName}.`;
+}
+
+function useProvidersPanelDescription(view: ProvidersPanelView): string {
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  // Without environments (unread included) the page is this host's own.
+  if (environments !== "on") return VIEW_COPY[view].hostDescription;
+  if (view === "providers" && pick.kind === "local") {
+    return localProvidersDescription(pick.hostName);
+  }
+  return VIEW_COPY[view].description;
 }
 
 /**
@@ -526,11 +542,7 @@ function ProvidersSettingsPanelInner({
   const isMobile = useIsMobileViewport();
   const view = useContext(ProvidersPanelViewContext);
   const copy = VIEW_COPY[view];
-  const pick = useEnvironmentPick();
-  const description =
-    view === "providers" && pick.kind === "local"
-      ? localProvidersDescription(pick.hostName)
-      : copy.description;
+  const description = useProvidersPanelDescription(view);
   return (
     <SettingsPanelShell
       title={copy.title}

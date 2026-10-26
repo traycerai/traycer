@@ -27,6 +27,7 @@ import {
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import { providerEnvSubtitle } from "./provider-env-subtitle";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -74,8 +75,11 @@ export function ProviderEnvOverridesSection({
 }) {
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
   // A team is read from the cloud (`TeamProviders`): this tab is Personal on
-  // a host running it, or a Local row's computer.
-  const local = useEnvironmentPick().kind === "local";
+  // a host running it, or a Local row's computer. Without environments
+  // (unread included) it is always this computer's own.
+  const pick = useEnvironmentPick();
+  const environments = usePreviewFeature("environments");
+  const local = pick.kind === "local" || environments !== "on";
   const setOverride = useProvidersSetEnvOverride();
   const deleteOverride = useProvidersDeleteEnvOverride();
   // A provider's env overrides are where its keys live (`ANTHROPIC_API_KEY`,

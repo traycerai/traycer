@@ -1,5 +1,6 @@
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { useSettingsSectionOffered } from "@/hooks/settings/use-settings-section-offered";
 import { ChevronRight, Search, X } from "lucide-react";
 import {
   InputGroup,
@@ -67,9 +68,14 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   // renders inside the settings modal as well as in the tab.
   const navigate = useNavigate();
 
+  // Nor a page whose preview feature is not on for this person.
+  const offered = useSettingsSectionOffered();
   const results = useMemo(
-    () => searchSettings(query, availability),
-    [query, availability],
+    () =>
+      searchSettings(query, availability).filter((result) =>
+        offered(result.entry.section),
+      ),
+    [query, availability, offered],
   );
   const active = isSettingsSearchActive(query);
   // Clamped rather than stored-and-corrected: `results` shrinks as the user

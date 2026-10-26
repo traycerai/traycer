@@ -25,6 +25,7 @@ import {
   useEnvironmentStatusRead,
 } from "@/hooks/environment/use-environment-reads";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import {
   useMoveSheetStore,
   type MoveSheetTarget,
@@ -99,10 +100,15 @@ export function FirstTaskChatGuide(props: {
 function GettingStartedToast() {
   const computer = useThisComputer();
   const completedAt = useOnboardingStore((state) => state.completedAt);
-  const held = useHeldOnThisComputer(computer, completedAt !== null);
-  const notMoved = useNotMovedOnThisComputer(computer, completedAt !== null);
+  // Nothing moves or is held without environments: the plain reminder.
+  const environments = usePreviewFeature("environments");
+  const reads = completedAt !== null && environments === "on";
+  const held = useHeldOnThisComputer(computer, reads);
+  const notMoved = useNotMovedOnThisComputer(computer, reads);
   // Neither toast until the review and the status answer, so the reminder
-  // never shows for a moment before another toast replaces it.
+  // never shows for a moment before another toast replaces it. Unread waits
+  // the same way: the verdict may yet turn the reads on.
+  if (environments === "unread") return null;
   if (held === "pending" || notMoved === "pending") return null;
   if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
   const moveTarget =

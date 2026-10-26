@@ -11,6 +11,7 @@ import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiate
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
+import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 
 /** A computer whose own settings are not in Personal yet (it has a Local row). */
 const RUNS_OWN_SETTINGS = "Runs its own settings, not in Personal yet";
@@ -34,24 +35,22 @@ export function HostEnvironmentSection(props: {
 }): ReactNode {
   const { scope } = props;
   const usable = isHostScopeUsable(scope.status) && scope.client !== null;
-  const sandbox = scope.host?.kind === "sandbox";
+  // Without environments (unread included) a host runs nothing to name.
+  const environments = usePreviewFeature("environments") === "on";
+  const shown = usable && environments && scope.host?.kind !== "sandbox";
   const support = useHostMethodSupport(scope.hostId, "environment.host.read");
   const binding = useEnvironmentHostReadQuery(
     scope.client,
     scope.hostId,
-    usable && !sandbox && support === true,
+    shown && support === true,
   );
-  const status = useEnvironmentStatusRead(
-    scope.client,
-    scope.hostId,
-    usable && !sandbox,
-  );
+  const status = useEnvironmentStatusRead(scope.client, scope.hostId, shown);
   const version =
     useHostNegotiatedMethodVersions(
       scope.hostId === null ? NO_HOSTS : [scope.hostId],
       "environment.status",
     ).get(scope.hostId ?? "") ?? null;
-  if (!usable || sandbox || support !== true || binding.data === undefined) {
+  if (!shown || support !== true || binding.data === undefined) {
     return null;
   }
   const local =
