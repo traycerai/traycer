@@ -3,6 +3,7 @@ import type {
   BotListResponse,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
+import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { usePreviewFeature } from "@/hooks/auth/use-preview-feature";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
@@ -39,6 +40,11 @@ const NONE: TracyResolution = { kind: "none" };
 export function TracyEntryController(): null {
   const show = useSettingsStore((state) => state.showTracy);
   const bots = usePreviewFeature("bots");
+  // Closing tabs takes a verdict the record actually carries: a record
+  // without the field (a body served below 3.1) reads as off for drawing,
+  // never for closing.
+  const user = useAuthUser().data ?? null;
+  const carriesVerdict = user !== null && user.previewFeatures !== undefined;
   const hostId = useEffectiveHostId();
   const client = useHostClient();
   const supported = useHostMethodSupport(hostId, "bot.list") === true;
@@ -58,13 +64,14 @@ export function TracyEntryController(): null {
 
   useEffect(() => {
     // A read off closes every bot tab, the entry's first: nothing in them
-    // can answer. Unread changes nothing, so a restored entry waits (undrawn)
-    // for the read rather than closing on every cold start.
-    if (bots === "off") {
+    // can answer. Unread, or off from a record carrying no verdict, changes
+    // nothing, so a restored entry waits (undrawn) for a real answer rather
+    // than closing on every cold start or on an older record's shape.
+    if (bots === "off" && carriesVerdict) {
       releaseEveryBotTab();
       return;
     }
-    if (bots === "unread") return;
+    if (bots !== "on") return;
     const store = useBotTabsStore.getState();
     const fixedBotId = store.fixedBotId;
     if (!show) {
@@ -76,7 +83,7 @@ export function TracyEntryController(): null {
     if (botId === null || title === null) return;
     store.openBotTab({ botId, hostId, title });
     store.setFixedBotId(botId);
-  }, [botId, bots, hostId, resolution.kind, show, title]);
+  }, [botId, bots, carriesVerdict, hostId, resolution.kind, show, title]);
 
   useEffect(() => {
     // After the change that moved it settles: a reconciliation appends a
