@@ -179,32 +179,25 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
   const runner = useStagedSandboxRunner();
   const text = send?.text ?? "";
   const epicId = send?.epicId ?? null;
-  useEffect(
-    () => holdHandoffOwner(surfaceKey, null, SEND_OWNER_STAYS),
-    [surfaceKey],
-  );
-  // Starts the send's run, and takes up one a reload stopped, on the same
-  // key: never a second sandbox. Creation and wake failures wait for a line
-  // action; the agent's readiness continues to be observed below.
+  const requestKind = send?.request.kind ?? null;
+  usePendingSendRecovery(props.id, send, stage);
+  // Creation and wake failures wait for a line action; agent readiness
+  // continues to be observed by the delivery driver below.
   const phase = stage?.phase ?? null;
   const failed = stage !== null && stage.failure !== null;
-  // Nothing is created or woken before the send's task exists. A send
-  // rehydrated with its task never confirmed lost that create to a reload:
-  // it is dropped, so no sandbox is billed for a task that is not there.
   const epicConfirmed = send?.epicConfirmed;
-  const lostTask =
-    send !== null &&
-    !epicConfirmed &&
-    !pendingSandboxSendHandedHere(props.id) &&
-    ownsPendingSandboxSendExclusively(props.id);
-  // Its message goes back to a start-task draft: the send held its only copy.
-  useEffect(() => {
-    if (lostTask) returnPendingSandboxSend(props.id);
-  }, [lostTask, props.id]);
   useEffect(() => {
     if (epicId === null || !epicConfirmed) return;
     const current = readStagedSandbox(surfaceKey);
-    if (current === null || current.failure !== null) return;
+    if (current === null) return;
+    // Older persisted terminal sends predate the stage's terminal intent.
+    // The captured request is authoritative on reload and on a failed retry.
+    if (requestKind === "terminal" && !current.openTerminal) {
+      useStagedSandboxStore.getState().report(surfaceKey, {
+        openTerminal: true,
+      });
+    }
+    if (current.failure !== null) return;
     const request = {
       fallbackName: stagedSandboxFallbackName(text),
       taskId: epicId,
@@ -217,19 +210,48 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
     } else if (current.phase === "creating" && !stagedRunActive(surfaceKey)) {
       runner(surfaceKey, false, { ...request, resume: true });
     }
-  }, [epicConfirmed, epicId, failed, phase, runner, surfaceKey, text]);
-  // A send whose stage is gone has nothing left to deliver into: its message
-  // goes back to its composer.
-  const orphaned = send !== null && stage === null;
-  useEffect(() => {
-    if (orphaned) returnPendingSandboxSend(props.id);
-  }, [orphaned, props.id]);
+  }, [
+    epicConfirmed,
+    epicId,
+    failed,
+    phase,
+    requestKind,
+    runner,
+    surfaceKey,
+    text,
+  ]);
   // A terminal asked for in place of an agent waits on no agent: the task's
   // strip opens it once the sandbox is up.
   if (send === null || stage === null || send.request.kind === "terminal") {
     return null;
   }
   return <PendingSendDelivery send={send} stage={stage} />;
+}
+
+/** Retains the send's stage ownership and recovers interrupted task creation. */
+function usePendingSendRecovery(
+  id: string,
+  send: PendingSandboxSend | null,
+  stage: StagedSandbox | null,
+): void {
+  const surfaceKey = pendingSendSurfaceKey(id);
+  useEffect(
+    () => holdHandoffOwner(surfaceKey, null, SEND_OWNER_STAYS),
+    [surfaceKey],
+  );
+  // Only exclusive ownership proves an unconfirmed task was interrupted.
+  // Without it another window can still be creating this send's task.
+  const lostTask =
+    send !== null &&
+    !send.epicConfirmed &&
+    !pendingSandboxSendHandedHere(id) &&
+    ownsPendingSandboxSendExclusively(id);
+  const orphaned = send !== null && stage === null;
+  useEffect(() => {
+    // In either case this record holds the message's only copy. Return it
+    // to its composer before ending a send that cannot deliver it.
+    if (lostTask || orphaned) returnPendingSandboxSend(id);
+  }, [id, lostTask, orphaned]);
 }
 
 /**
@@ -263,6 +285,7 @@ function PendingSendDelivery(props: {
   const sandboxRow = useWatchedSandboxRow(
     active ? stage.createdSandboxId : null,
     surfaceKey,
+    send.userId,
   );
   const refetchAgent = agent.refetch;
   const refetchSandboxes = sandboxRow.refetch;
@@ -415,8 +438,10 @@ function useDefaultModelOnHost(
 function useWatchedSandboxRow(
   sandboxId: string | null,
   surfaceKey: string,
+  userId: string | null,
 ): {
   readonly failed: boolean;
+  readonly ready: boolean;
   readonly refetch: () => Promise<unknown>;
 } {
   const [mountedAt] = useState(() => Date.now());
@@ -438,9 +463,11 @@ function useWatchedSandboxRow(
   const resting = row?.state === "suspended" || row?.state === "stopped";
   const wake = useStagedSandboxWaker();
   useEffect(() => {
+    if ((useAuthStore.getState().profile?.userId ?? null) !== userId) return;
     if (resting) wake(surfaceKey);
-  }, [resting, surfaceKey, wake]);
+  }, [resting, surfaceKey, userId, wake]);
   useEffect(() => {
+    if ((useAuthStore.getState().profile?.userId ?? null) !== userId) return;
     if (rowFailure === null) return;
     const current = readStagedSandbox(surfaceKey);
     if (
@@ -455,8 +482,12 @@ function useWatchedSandboxRow(
           ? { ...rowFailure, step: "delivering" }
           : rowFailure,
     });
-  }, [rowFailure, surfaceKey]);
-  return { failed: rowFailure !== null, refetch: sandboxList.refetch };
+  }, [rowFailure, surfaceKey, userId]);
+  return {
+    failed: rowFailure !== null,
+    ready: rowVerdict?.kind === "awake",
+    refetch: sandboxList.refetch,
+  };
 }
 
 /**
@@ -544,7 +575,7 @@ function prepareAndDeliverSend(input: {
       ) {
         return;
       }
-      deliverPendingSend({
+      return deliverPendingSend({
         send,
         stage: latest,
         hostId,
@@ -558,13 +589,18 @@ function prepareAndDeliverSend(input: {
     .finally(() => deliveriesPreparing.delete(send.id));
 }
 
-/** Sends preparing images or awaiting a fork's create response. */
+/** Sends preparing images or awaiting their create response. */
 const deliveriesPreparing = new Set<string>();
 
 /** The sandbox is up and the message did not reach it: Retry or another host. */
 function notSent(surfaceKey: string): void {
   const current = readStagedSandbox(surfaceKey);
-  if (current === null || current.failure !== null) return;
+  if (
+    current === null ||
+    (current.failure !== null && !isAgentReadinessFailure(current.failure))
+  ) {
+    return;
+  }
   useStagedSandboxStore
     .getState()
     .report(surfaceKey, { failure: { kind: "not-sent" } });
@@ -621,13 +657,11 @@ type CreateChatAsync = (
 ) => Promise<CreateChatResponseV12>;
 
 /**
- * Hands the message to the agent on the sandbox, once: the send is marked
- * delivered and its stage cleared before the create goes out, so a reload
- * mid-create never sends it a second time. The new agent's first-turn
- * handoff, which is persisted, owns the create's outcome from here, as it
- * does for an agent started on any host.
+ * Keeps the message pending until the sandbox accepts its create. Stable
+ * chat, message and action ids let a reload take up the same create safely;
+ * a refusal or failure keeps the message and sandbox for an explicit Retry.
  */
-function deliverPendingSend(input: {
+async function deliverPendingSend(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly hostId: string;
@@ -636,7 +670,7 @@ function deliverPendingSend(input: {
   readonly content: JsonContent;
   readonly attachmentsByHash: boolean;
   readonly createChat: CreateChatAsync;
-}): void {
+}): Promise<void> {
   const { send, stage, hostId, settings } = input;
   if (send.request.kind !== "chat") return;
   const now = Date.now();
@@ -666,19 +700,35 @@ function deliverPendingSend(input: {
     createdAt: now,
   });
   useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
-  usePendingSandboxSendStore.getState().markDelivered(send.id, {
-    chatId,
-    hostId,
-    sandboxId: stage.createdSandboxId ?? "",
-    readySeconds: Math.max(
-      0,
-      Math.round((now - (stage.startedAt ?? now)) / 1000),
-    ),
-  });
-  useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
+  const surfaceKey = pendingSendSurfaceKey(send.id);
+  const isCurrent = (): boolean => {
+    const { sends } = usePendingSandboxSendStore.getState();
+    const currentStage = readStagedSandbox(surfaceKey);
+    return (
+      Object.hasOwn(sends, send.id) &&
+      sends[send.id].delivery === null &&
+      currentStage?.phase === "handoff" &&
+      currentStage.createdHostId === hostId &&
+      currentStage.clientRequestId === stage.clientRequestId &&
+      (useAuthStore.getState().profile?.userId ?? null) === userId
+    );
+  };
   const scope = { hostId, userId, epicId };
-  void input
-    .createChat({
+  const failed = (): void => {
+    if (!isCurrent()) return;
+    useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+    useInitialChatHandoffStore
+      .getState()
+      .markFailedByAction(
+        scope,
+        chatId,
+        clientActionId,
+        "Couldn't create the agent.",
+      );
+    notSent(surfaceKey);
+  };
+  try {
+    const response = await input.createChat({
       epicId,
       hostId,
       parentId: send.request.parentId,
@@ -703,37 +753,30 @@ function deliverPendingSend(input: {
                 ? { attachmentsByHash: true as const }
                 : {}),
             },
-    })
-    .then((response) => {
-      if (response.refusal !== undefined) {
-        useEpicCanvasStore.getState().clearChatTitlePending(chatId);
-        useInitialChatHandoffStore
-          .getState()
-          .markFailedByAction(
-            scope,
-            chatId,
-            clientActionId,
-            "Couldn't create the agent.",
-          );
-        return;
-      }
-      if (response.initialTurnStarted === true) {
-        useInitialChatHandoffStore
-          .getState()
-          .markInitialTurnStarted(scope, chatId);
-      }
-    })
-    .catch(() => {
-      useEpicCanvasStore.getState().clearChatTitlePending(chatId);
+    });
+    if (!isCurrent()) return;
+    if (response.refusal !== undefined) {
+      failed();
+      return;
+    }
+    usePendingSandboxSendStore.getState().markDelivered(send.id, {
+      chatId,
+      hostId,
+      sandboxId: stage.createdSandboxId ?? "",
+      readySeconds: Math.max(
+        0,
+        Math.round((now - (stage.startedAt ?? now)) / 1000),
+      ),
+    });
+    useStagedSandboxStore.getState().clear(surfaceKey);
+    if (response.initialTurnStarted === true) {
       useInitialChatHandoffStore
         .getState()
-        .markFailedByAction(
-          scope,
-          chatId,
-          clientActionId,
-          "Couldn't create the agent.",
-        );
-    });
+        .markInitialTurnStarted(scope, chatId);
+    }
+  } catch {
+    failed();
+  }
 }
 
 /**
@@ -993,41 +1036,77 @@ function useOpenTerminalWhenUp(
   stage: StagedSandbox | null,
   openTerminal: (() => void) | null,
 ): void {
-  const terminalReady =
-    send !== null &&
-    send.request.kind === "terminal" &&
-    stage !== null &&
-    stage.phase === "handoff" &&
-    stage.failure === null &&
-    openTerminal !== null;
-  const sendId = send?.id ?? null;
+  const sendId = send?.request.kind === "terminal" ? send.id : null;
+  const userId = send?.userId ?? null;
+  const surfaceKey = sendId === null ? "" : pendingSendSurfaceKey(sendId);
+  const [owned, setOwned] = useState(false);
   useEffect(() => {
-    if (!terminalReady || sendId === null) return;
+    if (sendId === null) return;
     let disposed = false;
     const ownership = holdPendingSandboxSendOwnership(sendId);
     void ownership.ready.then((granted) => {
-      const { sends } = usePendingSandboxSendStore.getState();
-      const current = sends[sendId];
-      const currentStage = readStagedSandbox(pendingSendSurfaceKey(sendId));
-      if (
-        disposed ||
-        !granted ||
-        !Object.hasOwn(sends, sendId) ||
-        current.delivery !== null ||
-        currentStage?.phase !== "handoff" ||
-        currentStage.failure !== null ||
-        (useAuthStore.getState().profile?.userId ?? null) !== current.userId
-      ) {
-        return;
+      if (disposed || !granted) return;
+      if ((useAuthStore.getState().profile?.userId ?? null) !== userId) return;
+      // A historical terminal record can predate the stage's intent flag.
+      // Restore it before the row watcher can wake its resting sandbox.
+      const current = readStagedSandbox(surfaceKey);
+      if (current !== null && !current.openTerminal) {
+        useStagedSandboxStore.getState().report(surfaceKey, {
+          openTerminal: true,
+        });
       }
-      openTerminal();
-      endPendingSandboxSend(sendId);
+      setOwned(true);
     });
     return () => {
       disposed = true;
       ownership.release();
     };
-  }, [openTerminal, sendId, terminalReady]);
+  }, [sendId, surfaceKey, userId]);
+  const watching =
+    owned &&
+    sendId !== null &&
+    send?.epicConfirmed === true &&
+    stage?.phase === "handoff" &&
+    stage.failure === null;
+  const hostId = watching ? stage.createdHostId : null;
+  const sandboxRow = useWatchedSandboxRow(
+    watching ? stage.createdSandboxId : null,
+    surfaceKey,
+    userId,
+  );
+  const refetchSandboxes = sandboxRow.refetch;
+  useEffect(() => {
+    if (!watching) return;
+    return startVisibleInterval({
+      tick: () => {
+        void refetchSandboxes();
+      },
+      intervalMs: READINESS_POLL_MS,
+      fireOnShow: true,
+    });
+  }, [refetchSandboxes, watching]);
+  // A cached endpoint and cwd do not prove the sandbox is still awake.
+  const terminalReady = watching && sandboxRow.ready && openTerminal !== null;
+  useEffect(() => {
+    if (!terminalReady) return;
+    const { sends } = usePendingSandboxSendStore.getState();
+    if (!Object.hasOwn(sends, sendId)) return;
+    const current = sends[sendId];
+    const currentStage = readStagedSandbox(surfaceKey);
+    if (
+      !ownsPendingSandboxSend(sendId) ||
+      !current.epicConfirmed ||
+      current.delivery !== null ||
+      currentStage?.phase !== "handoff" ||
+      currentStage.failure !== null ||
+      currentStage.createdHostId !== hostId ||
+      (useAuthStore.getState().profile?.userId ?? null) !== current.userId
+    ) {
+      return;
+    }
+    openTerminal();
+    endPendingSandboxSend(sendId);
+  }, [hostId, openTerminal, sendId, surfaceKey, terminalReady]);
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   render,
   screen,
   within,
+  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +35,9 @@ import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-st
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -170,6 +173,12 @@ const testState = vi.hoisted(() => ({
       readonly initialTurnStarted: boolean;
     }>
   >(() => Promise.resolve({ initialTurnStarted: false })),
+  attachEnvironment: vi.fn<
+    (input: {
+      readonly epicId: string;
+      readonly teamId: string;
+    }) => Promise<{ readonly attached: true }>
+  >(() => Promise.resolve({ attached: true })),
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   /** The editor's @/slash menu dismissal. */
@@ -310,6 +319,19 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutateAsync: testState.createChat,
   }),
 }));
+
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    useEpicAttachEnvironment: () => ({
+      isPending: false,
+      mutateAsync: testState.attachEnvironment,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({
@@ -604,7 +626,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.getState().setSignedOut();
   testState.createChat.mockClear();
+  testState.attachEnvironment.mockReset();
+  testState.attachEnvironment.mockResolvedValue({ attached: true });
   testState.createTerminalAgent.mockClear();
   testState.onSubmitted.mockClear();
   testState.dismissSuggestion.mockClear();
@@ -715,10 +740,29 @@ const NEW_SANDBOX: StagedSandboxTarget = {
   wakeString: null,
 };
 
+const TEAM_SANDBOX: StagedSandboxTarget = {
+  ...NEW_SANDBOX,
+  configuration: { kind: "team", teamId: "team-9", teamName: "Acme" },
+};
+
 function onlyPendingSend() {
   const sends = Object.values(usePendingSandboxSendStore.getState().sends);
   expect(sends).toHaveLength(1);
   return sends[0];
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason: unknown) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("new-conversation modal refusals at Send", () => {
@@ -799,6 +843,171 @@ describe("new-conversation modal refusals at Send", () => {
 });
 
 describe("new-conversation modal's send on a staged sandbox", () => {
+  it("attaches a team-staged chat before handing its draft to the sandbox", async () => {
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+
+    await act(async () => {
+      attach.resolve({ attached: true });
+      await attach.promise;
+    });
+    await waitFor(() => {
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches a team-staged terminal request before taking the stage", async () => {
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+    });
+    const openTerminalInstead = testState.sandboxStaging?.openTerminalInstead;
+    if (openTerminalInstead === null || openTerminalInstead === undefined) {
+      throw new Error("expected the modal to offer Open terminal instead");
+    }
+
+    act(() => {
+      openTerminalInstead();
+    });
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+
+    await act(async () => {
+      attach.resolve({ attached: true });
+      await attach.promise;
+    });
+    await waitFor(() => {
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "terminal" },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the staged chat and draft when its team attachment is refused", async () => {
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    await act(async () => {
+      attach.reject(
+        new HostRpcError({
+          code: "FORBIDDEN",
+          message: "This task cannot be attached to that team.",
+          requestId: "request-attach-refused",
+          method: "epic.attachEnvironment",
+          fatalDetails: null,
+        }),
+      );
+      await attach.promise.catch(() => undefined);
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the staged chat and draft when the account changes during attachment", async () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "modal-user", userName: "Modal", email: "modal@example.com" },
+        { userId: "modal-user", username: "Modal" },
+        [],
+      );
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledWith({
+        epicId: "epic-1",
+        teamId: "team-9",
+      });
+    });
+    act(() => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "other-user",
+          userName: "Other",
+          email: "other@example.com",
+        },
+        { userId: "other-user", username: "Other" },
+        [],
+      );
+    });
+    await act(async () => {
+      attach.resolve({ attached: true });
+      await attach.promise;
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+
   it("hands the send to this task and closes, though this host's workspace folder is unresolved", () => {
     // The sandbox starts empty: the chip reads Empty sandbox and the
     // workspace controls are hidden.

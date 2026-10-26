@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
   type SandboxSetupLineFacts,
@@ -138,8 +139,8 @@ function useStagedSandboxRunDeps(): StagedSandboxRunDeps | null {
             directory: binding.directory,
             queryClient,
             userId,
-            wake: (hostId: string) =>
-              startSandboxWake(queryClient, binding, hostId, "send").then(
+            wake: (hostId: string, gesture: SandboxVerbGesture) =>
+              startSandboxWake(queryClient, binding, hostId, gesture).then(
                 (outcome) => outcome !== null && outcome.kind === "awake",
               ),
             now: Date.now,

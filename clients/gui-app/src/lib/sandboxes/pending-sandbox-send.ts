@@ -132,7 +132,7 @@ export function handPendingSandboxSend(
     ownerId: null,
     sendTaken: true,
     terminalLaunch: null,
-    openTerminal: false,
+    openTerminal: input.request.kind === "terminal",
   });
   usePendingSandboxSendStore.getState().add({
     id,

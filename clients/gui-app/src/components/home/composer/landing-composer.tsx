@@ -105,6 +105,7 @@ import {
   useStagedSandboxStore,
   useStagedTerminalLaunch,
   type HandoffOwnerWatch,
+  type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -120,6 +121,7 @@ import {
   handPendingSandboxSend,
   pickedRunSettings,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
@@ -799,15 +801,9 @@ export function LandingComposer(props: LandingComposerProps) {
     [runtime, unboundRuntime],
   );
 
-  /** Whether the submit went ahead. */
-  const handleSubmit = useCallback((): boolean => {
-    if (!canSubmit) return false;
-    // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
-    // opens at once and the message waits in it, behind the setup line,
-    // until the agent the person picked is ready on the sandbox. It runs
-    // on that agent and model, never one this host would swap in.
-    const staged = readStagedSandbox(composerSurfaceKey);
-    if (staged !== null && staged.phase !== "handoff") {
+  /** Hands this draft to its task, preserving the staged sandbox and owner. */
+  const submitStagedSandbox = useCallback(
+    (staged: StagedSandbox): boolean => {
       // An agent signed out on the staged configuration is refused here,
       // before anything is created or woken; the draft and the chip stay.
       const signedOut = stagedSignInCheck(staged);
@@ -831,6 +827,10 @@ export function LandingComposer(props: LandingComposerProps) {
       const refusal = actions.startTaskOnStagedSandbox({
         draftId: draftId ?? createdUnboundDraftIdRef.current,
         owner,
+        sandboxTeamId:
+          staged.target.configuration.kind === "team"
+            ? staged.target.configuration.teamId
+            : null,
         text,
         hand: (epicId) => {
           const id = handPendingSandboxSend({
@@ -847,6 +847,9 @@ export function LandingComposer(props: LandingComposerProps) {
           return id === null
             ? null
             : {
+                isCurrent: () =>
+                  usePendingSandboxSendStore.getState().sends[id]?.delivery ===
+                  null,
                 confirm: () => confirmPendingSandboxSendEpic(id),
                 giveBack: () => {
                   const returned = returnPendingSandboxSend(id);
@@ -864,6 +867,31 @@ export function LandingComposer(props: LandingComposerProps) {
       );
       if (refusal === null) setComposerExpanded(false);
       return refusal === null;
+    },
+    [
+      actions,
+      composerSurfaceKey,
+      draftId,
+      owner,
+      pickerStore,
+      raiseHostNotice,
+      setComposerExpanded,
+      stagedSend,
+      stagedSignInCheck,
+      toolbarStore,
+    ],
+  );
+
+  /** Whether the submit went ahead. */
+  const handleSubmit = useCallback((): boolean => {
+    if (!canSubmit) return false;
+    // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
+    // opens at once and the message waits in it, behind the setup line,
+    // until the agent the person picked is ready on the sandbox. It runs
+    // on that agent and model, never one this host would swap in.
+    const staged = readStagedSandbox(composerSurfaceKey);
+    if (staged !== null && staged.phase !== "handoff") {
+      return submitStagedSandbox(staged);
     }
     // An agent that cannot run on this sandbox is refused at Send, with the
     // configuration's Providers; the draft and the chip stay as they were.
@@ -918,8 +946,7 @@ export function LandingComposer(props: LandingComposerProps) {
     raiseHostNotice,
     sandboxAgentGate.notice,
     setComposerExpanded,
-    stagedSend,
-    stagedSignInCheck,
+    submitStagedSandbox,
     teamSandboxHarnessBlockedFor,
     toolbarStore,
   ]);

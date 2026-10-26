@@ -48,7 +48,7 @@ export type StagedSandboxTarget =
  * - `staged`: picked, nothing created.
  * - `creating`: the first action ran; the create or wake is under way.
  * - `handoff`: the sandbox is awake, its settings applied and its host
- *   connected; the composer is resubmitting on it.
+ *   connected; its pending send or composer action may proceed there.
  */
 export type StagedSandboxPhase = "staged" | "creating" | "handoff";
 
@@ -170,11 +170,14 @@ export function refusedBeforeCreate(
  * that key created failed (naming it again answers with the same failed row).
  * Every other stage may have an accepted, billed create behind it on its way,
  * which the next action names again so the server answers with the same row.
+ * A wake failure keeps that sandbox, including one originally picked as New.
  */
 export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
   if (stage.clientRequestId === null) return true;
   if (stage.failure === null) return false;
-  if (stage.failure.kind === "failed") return stage.target.kind === "new";
+  if (stage.failure.kind === "failed") {
+    return stage.target.kind === "new" && stage.failure.code !== "wake";
+  }
   return refusedBeforeCreate(stage.failure, stage.createdSandboxId);
 }
 

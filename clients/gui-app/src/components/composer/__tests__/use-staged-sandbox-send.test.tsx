@@ -24,20 +24,24 @@ import {
   type SandboxCatalogue,
   type SandboxCreateRequest,
   type SandboxSummary,
+  type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   openLandingStagedTerminal,
   stagedSandboxFallbackName,
   startStagedTerminal,
   useStagedSandboxHandoff,
+  useStagedSandboxRunner,
   useStagedSandboxSend,
   type StagedResubmit,
+  type StagedSandboxRunner,
   type StagedSandboxSend,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
@@ -91,6 +95,14 @@ const mocks = vi.hoisted(() => ({
       options.onSuccess();
     },
   ),
+  startSandboxWake: vi.fn<
+    (
+      client: QueryClient,
+      binding: unknown,
+      hostId: string,
+      gesture: SandboxVerbGesture | null,
+    ) => Promise<SandboxWakeOutcome | null>
+  >(() => Promise.resolve({ kind: "failed", detail: "Test wake stopped" })),
 }));
 
 vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
@@ -98,6 +110,10 @@ vi.mock("@/lib/sandboxes/staged-sandbox-run", async (importOriginal) => ({
     typeof import("@/lib/sandboxes/staged-sandbox-run")
   >()),
   runStagedSandbox: mocks.runStagedSandbox,
+}));
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>()),
+  startSandboxWake: mocks.startSandboxWake,
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
@@ -247,13 +263,18 @@ function Harness(props: {
     ownerId: null,
     claimsSend: false,
   });
+  const runner = useStagedSandboxRunner();
   useEffect(() => {
     latestSend = send;
   }, [send]);
+  useEffect(() => {
+    latestRunner = runner;
+  }, [runner]);
   return <>{send.line}</>;
 }
 
 let latestSend: StagedSandboxSend | null = null;
+let latestRunner: StagedSandboxRunner | null = null;
 
 function mount(openTerminal: (target: TerminalLaunchTarget) => void): void {
   render(
@@ -277,11 +298,17 @@ beforeEach(() => {
   mocks.findById.mockReset();
   mocks.repairMutate.mockClear();
   mocks.repairHostIds.length = 0;
+  mocks.startSandboxWake.mockReset();
+  mocks.startSandboxWake.mockResolvedValue({
+    kind: "failed",
+    detail: "Test wake stopped",
+  });
 });
 
 afterEach(() => {
   cleanup();
   latestSend = null;
+  latestRunner = null;
 });
 
 describe("useStagedSandboxSend's setup line", () => {
@@ -338,6 +365,25 @@ describe("useStagedSandboxSend's setup line", () => {
 
     expect(mocks.runStagedSandbox).not.toHaveBeenCalled();
     expect(readStagedSandbox(SURFACE)?.phase).toBe("staged");
+  });
+
+  it("retries waking the already-created New sandbox without making a replacement", () => {
+    stageCreated("booting", {
+      kind: "failed",
+      code: "wake",
+      step: "booting",
+    });
+    mount(vi.fn());
+
+    fireEvent.click(screen.getByTestId("sandbox-setup-retry"));
+
+    expect(screen.queryByTestId("sandbox-setup-retry-creation")).toBeNull();
+    expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
+      SURFACE,
+      false,
+      expect.objectContaining({ taskId: "epic-1" }),
+      expect.any(Object),
+    );
   });
 
   it("names the sandbox the send creates and counts as a stopwatch", () => {
@@ -1262,6 +1308,41 @@ describe("openLandingStagedTerminal", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
       NEW_HOST,
     );
+  });
+
+  it("wakes the staged host with the landing terminal gesture", async () => {
+    const actual = await vi.importActual<
+      typeof import("@/lib/sandboxes/staged-sandbox-run")
+    >("@/lib/sandboxes/staged-sandbox-run");
+    mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    mount(vi.fn());
+    const runner = latestRunner;
+    if (runner === null) throw new Error("expected the staged sandbox runner");
+
+    expect(openLandingStagedTerminal(SURFACE, runner).kind).toBe("taken");
+
+    await waitFor(() => {
+      expect(mocks.startSandboxWake).toHaveBeenCalledWith(
+        expect.any(QueryClient),
+        expect.any(Object),
+        NEW_HOST,
+        "open-terminal",
+      );
+    });
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+        kind: "failed",
+        code: "wake",
+      });
+    });
   });
 });
 

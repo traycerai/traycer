@@ -11,6 +11,7 @@ import { QueryClient } from "@tanstack/react-query";
 import type {
   SandboxCreateRequest,
   SandboxSummary,
+  SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
@@ -27,6 +28,7 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
 import {
   createFailure,
+  rewakeStagedSandbox,
   runStagedSandbox,
   settleVerdict,
   STAGED_CREATE_BUDGET_MS,
@@ -209,9 +211,9 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
   const directory = new ScriptedDirectory(script);
   directories.push(directory);
   const clock = { now: 1_000_000, sleeps: 0 };
-  const wake = vi.fn<(hostId: string) => Promise<boolean>>(() =>
-    Promise.resolve(wakeResult),
-  );
+  const wake = vi.fn<
+    (hostId: string, gesture: SandboxVerbGesture) => Promise<boolean>
+  >(() => Promise.resolve(wakeResult));
   const deps: StagedSandboxRunDeps = {
     auth,
     directory,
@@ -691,7 +693,7 @@ describe("runStagedSandbox on a resting sandbox", () => {
     await run(false, deps);
 
     expect(wake).toHaveBeenCalledTimes(1);
-    expect(wake).toHaveBeenCalledWith("host-resting");
+    expect(wake).toHaveBeenCalledWith("host-resting", "send");
     expect(auth.requests).toEqual([]);
     expect(stageOf()).toMatchObject({
       phase: "handoff",
@@ -701,6 +703,115 @@ describe("runStagedSandbox on a resting sandbox", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
       "host-resting",
     );
+  });
+
+  it("wakes a New sandbox that was already created after a failed wake instead of creating it again", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+    const { auth, wake, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("keeps the accepted New sandbox and request key when its wake fails again", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+    const requestId = stageOf().clientRequestId;
+    const { auth, wake, deps } = harness({}, false);
+
+    await run(true, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
+    expect(stageOf()).toMatchObject({
+      phase: "creating",
+      clientRequestId: requestId,
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+  });
+
+  it("wakes the same created sandbox after Cancel retains it while it is resting", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+    const requestId = stageOf().clientRequestId;
+    store.cancel(surfaceKey);
+    const { auth, wake, deps } = harness(
+      {
+        lists: [
+          listOf(row({ state: "suspended" })),
+          listOf(row({ state: "awake", guestConfigured: true })),
+        ],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "send");
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      clientRequestId: requestId,
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("re-wakes a staged landing terminal with the open-terminal gesture", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      phase: "handoff",
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+      openTerminal: true,
+    });
+    const { wake, deps } = harness(
+      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
+      true,
+    );
+
+    await rewakeStagedSandbox(surfaceKey, deps);
+
+    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "open-terminal");
+    expect(readStagedSandbox(surfaceKey)).toBeNull();
+    expect(useLandingPanelStore.getState().terminalRequest).toMatchObject({
+      surfaceKey,
+      hostId: NEW_HOST_ID,
+    });
   });
 
   it("fails on the wake step when the wake did not bring it up", async () => {

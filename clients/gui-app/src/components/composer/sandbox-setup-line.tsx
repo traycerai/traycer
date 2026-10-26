@@ -339,7 +339,9 @@ function SandboxProgressLine(props: {
 }): ReactNode {
   const { stage } = props;
   const failure = stage.failure;
-  const resuming = stage.target.kind === "existing";
+  const resuming =
+    stage.target.kind === "existing" ||
+    (failure?.kind === "failed" && failure.code === "wake");
   const name = props.name;
   const configuration = configurationLabel(
     stageConfigurationCopy(stage.target.configuration),

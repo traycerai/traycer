@@ -34,6 +34,8 @@ import type {
   SandboxCreateRequest,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
+import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
@@ -115,6 +117,8 @@ const mocks = vi.hoisted(() => ({
   answerVersion: 0,
   createChatCalls: [] as unknown[],
   createChatError: null as Error | null,
+  createChatDeferred: null as Promise<CreateChatResponseV12> | null,
+  createChatRefusal: null as CreateChatResponseV12["refusal"] | null,
   openTile: vi.fn<(intent: unknown) => void>(),
   openEnvironmentPage:
     vi.fn<
@@ -142,7 +146,12 @@ const mocks = vi.hoisted(() => ({
   listReadAt: 0,
   refetchSandboxes: vi.fn<() => Promise<undefined>>(),
   /** The sandbox wake the staged run asks for, by host. */
-  wake: vi.fn<(hostId: string) => Promise<{ readonly kind: "awake" }>>(),
+  wake: vi.fn<
+    (
+      hostId: string,
+      gesture: SandboxVerbGesture,
+    ) => Promise<{ readonly kind: "awake" }>
+  >(),
   /** What reached the sandbox's client, in order: puts, then the create. */
   wire: [] as string[],
 }));
@@ -257,9 +266,13 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
       if (mocks.createChatError !== null) {
         return Promise.reject(mocks.createChatError);
       }
+      if (mocks.createChatDeferred !== null) return mocks.createChatDeferred;
       return Promise.resolve({
         chatId: input.chatId,
         initialTurnStarted: true,
+        ...(mocks.createChatRefusal === null
+          ? {}
+          : { refusal: mocks.createChatRefusal }),
       });
     },
   }),
@@ -321,7 +334,8 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
     _queryClient: unknown,
     _binding: unknown,
     hostId: string,
-  ) => mocks.wake(hostId),
+    gesture: SandboxVerbGesture,
+  ) => mocks.wake(hostId, gesture),
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
@@ -335,11 +349,14 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-sandbox-list-query")
   >()),
-  useSandboxList: () => ({
-    data: { sandboxes: mocks.sandboxes },
-    dataUpdatedAt: mocks.listReadAt,
-    refetch: mocks.refetchSandboxes,
-  }),
+  useSandboxList: () => {
+    useAnswerVersion();
+    return {
+      data: { sandboxes: mocks.sandboxes },
+      dataUpdatedAt: mocks.listReadAt,
+      refetch: mocks.refetchSandboxes,
+    };
+  },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ mutate: vi.fn() }),
@@ -399,6 +416,16 @@ const TEAM_TARGET: StagedSandboxTarget = {
 
 function answerHost(hostId: string, answers: HostAnswers): void {
   mocks.hostAnswers.set(hostId, answers);
+  notifyAnswerListeners();
+}
+
+function answerSandboxRows(sandboxes: SandboxSummary[], readAt: number): void {
+  mocks.sandboxes = sandboxes;
+  mocks.listReadAt = readAt;
+  notifyAnswerListeners();
+}
+
+function notifyAnswerListeners(): void {
   mocks.answerVersion += 1;
   act(() => {
     for (const listener of mocks.answerListeners) listener();
@@ -540,6 +567,17 @@ function listAnswers(rows: SandboxSummary[]): SandboxListFetchResult {
   return { kind: "ok", response: { sandboxes: rows } };
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 function userSignedIn(): void {
   useAuthStore
     .getState()
@@ -556,6 +594,8 @@ beforeEach(() => {
   mocks.hostAnswers.clear();
   mocks.createChatCalls.length = 0;
   mocks.createChatError = null;
+  mocks.createChatDeferred = null;
+  mocks.createChatRefusal = null;
   mocks.openTile.mockReset();
   mocks.openEnvironmentPage.mockReset();
   mocks.environments = [];
@@ -910,16 +950,15 @@ describe("a send waiting for the requested agent on its sandbox", () => {
       phase: "creating",
       created: true,
     });
-    mocks.listSandboxes.mockResolvedValue(
-      listAnswers([
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "awake",
-          guestConfigured: true,
-        }),
-      ]),
-    );
+    const ready = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+      guestConfigured: true,
+    });
+    mocks.listReadAt = Date.now() + 60_000;
+    mocks.sandboxes = [ready];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([ready]));
     mount();
 
     await waitFor(() => {
@@ -1676,7 +1715,7 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
         });
       });
       expect(mocks.wake).toHaveBeenCalledTimes(1);
-      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST);
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
       expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe(keyBefore);
 
       await act(async () => {
@@ -1694,6 +1733,88 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
       await waitForCreateChats(1);
       expect(mocks.wake).toHaveBeenCalledTimes(1);
       expect(mocks.createSandbox).not.toHaveBeenCalled();
+    },
+  );
+
+  it("re-wakes a terminal request from a legacy handoff with the open-terminal gesture", async () => {
+    seed({
+      send: { request: { kind: "terminal" }, text: "" },
+      target: NEW_TARGET,
+      phase: "handoff",
+      created: true,
+      elapsedSeconds: 24,
+    });
+    useStagedSandboxStore.getState().report(SURFACE, { openTerminal: false });
+    mocks.listReadAt = FRESH;
+    mocks.sandboxes = [rowIn("suspended")];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+    mocks.wake.mockImplementation((hostId, gesture) =>
+      Promise.resolve({ kind: "awake" as const }).then((result) => {
+        if (hostId === SANDBOX_HOST && gesture === "open-terminal") {
+          mocks.sandboxes = [rowIn("awake")];
+        }
+        return result;
+      }),
+    );
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "open-terminal");
+    });
+    await waitFor(() => {
+      expect(mocks.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+  });
+
+  it.each(["no row", "a stale awake row"] as const)(
+    "waits for a fresh sandbox row before opening after seeing %s",
+    async (staleProjection) => {
+      seed({
+        send: { request: { kind: "terminal" }, text: "" },
+        target: NEW_TARGET,
+        phase: "handoff",
+        created: true,
+        elapsedSeconds: 24,
+      });
+      useStagedSandboxStore.getState().report(SURFACE, { openTerminal: false });
+      mocks.listReadAt = 0;
+      mocks.sandboxes = staleProjection === "no row" ? [] : [rowIn("awake")];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+      const wake = deferred<{ readonly kind: "awake" }>();
+      mocks.wake.mockReturnValue(wake.promise);
+      answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+      mount();
+
+      await waitFor(() => {
+        const current = readStagedSandbox(SURFACE);
+        expect(
+          current?.openTerminal === true ||
+            mocks.openTile.mock.calls.length > 0,
+        ).toBe(true);
+      });
+      expect(mocks.openTile).not.toHaveBeenCalled();
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+
+      answerSandboxRows([rowIn("suspended")], Date.now() + 60_000);
+      await waitFor(() => {
+        expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "open-terminal");
+      });
+      expect(mocks.openTile).not.toHaveBeenCalled();
+
+      answerSandboxRows([rowIn("awake")], Date.now() + 60_000);
+      await act(async () => {
+        wake.resolve({ kind: "awake" });
+        await wake.promise;
+      });
+
+      await waitFor(() => {
+        expect(mocks.openTile).toHaveBeenCalledTimes(1);
+      });
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     },
   );
 
@@ -1894,6 +2015,39 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
 });
 
 describe("a fork waiting on its sandbox", () => {
+  it("keeps a fork wake classified as a send", async () => {
+    const request = {
+      kind: "fork" as const,
+      parentId: null,
+      title: "Sandbox fork",
+      forkSource: {
+        boundary: "assistantMessage" as const,
+        sourceChatId: "source-chat",
+        assistantMessageId: "assistant-message-1",
+        interviewBlockId: null,
+        carriedInterviews: "settled" as const,
+        sourceOwnerUserId: null,
+      },
+      tabId: "tab-1",
+    };
+    seed({ ...SEEDED, send: { request } });
+    mocks.listReadAt = Date.now() + 60_000;
+    const resting = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "suspended",
+    });
+    mocks.sandboxes = [resting];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([resting]));
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+    });
+    expect(createChatCalls()).toEqual([]);
+  });
+
   it("retains a fork when its actual sandbox host is v1.0 and dispatches it once only after explicit Retry on v1.1", async () => {
     const request = {
       kind: "fork" as const,
@@ -2010,6 +2164,186 @@ describe("a fork waiting on its sandbox", () => {
       createChatCalls()[0]?.input.chatId,
     );
   });
+});
+
+describe("a terminal request handed to a staged sandbox", () => {
+  it("persists its open-terminal intent and uses that gesture on the requested host", async () => {
+    const sourceSurface = "modal-terminal-request";
+    useStagedSandboxStore.getState().stage(sourceSurface, RESUME_TARGET);
+    const sendId = handPendingSandboxSend({
+      fromSurfaceKey: sourceSurface,
+      epicId: "epic-1",
+      request: { kind: "terminal" },
+      content: MESSAGE_CONTENT,
+      text: "",
+      settings: PICKED_SETTINGS,
+      epicConfirmed: true,
+      now: Date.now(),
+    });
+    if (sendId === null) throw new Error("expected a staged terminal send");
+    const surfaceKey = pendingSendSurfaceKey(sendId);
+    expect.soft(readStagedSandbox(surfaceKey)?.openTerminal).toBe(true);
+    const ready = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+      guestConfigured: true,
+    });
+    mocks.listReadAt = Date.now() + 60_000;
+    mocks.sandboxes = [ready];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([ready]));
+
+    mount();
+
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "open-terminal");
+    });
+    await waitFor(() => {
+      expect(mocks.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(
+      SANDBOX_HOST,
+    );
+    expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(sendId);
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(surfaceKey)).toBeNull();
+  });
+
+  it("recovers the open-terminal gesture for a rehydrated record without its intent flag", async () => {
+    const sourceSurface = "rehydrated-terminal-request";
+    useStagedSandboxStore.getState().stage(sourceSurface, RESUME_TARGET);
+    const sendId = handPendingSandboxSend({
+      fromSurfaceKey: sourceSurface,
+      epicId: "epic-1",
+      request: { kind: "terminal" },
+      content: MESSAGE_CONTENT,
+      text: "",
+      settings: PICKED_SETTINGS,
+      epicConfirmed: true,
+      now: Date.now(),
+    });
+    if (sendId === null) throw new Error("expected a staged terminal send");
+    const surfaceKey = pendingSendSurfaceKey(sendId);
+    useStagedSandboxStore.getState().report(surfaceKey, {
+      openTerminal: false,
+    });
+    expect(readStagedSandbox(surfaceKey)?.openTerminal).toBe(false);
+    const ready = sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "awake",
+      guestConfigured: true,
+    });
+    mocks.listReadAt = Date.now() + 60_000;
+    mocks.sandboxes = [ready];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([ready]));
+
+    mount();
+
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "open-terminal");
+    });
+    await waitFor(() => {
+      expect(mocks.openTile).toHaveBeenCalledTimes(1);
+    });
+    expect(JSON.stringify(mocks.openTile.mock.calls[0][0])).toContain(sendId);
+  });
+});
+
+describe("a pending chat create", () => {
+  it("keeps the send and its stage until the sandbox accepts the create", async () => {
+    seed(SEEDED);
+    const create = deferred<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+    ).toBeNull();
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      createdSandboxId: SANDBOX_ID,
+    });
+
+    await act(async () => {
+      create.resolve({ chatId: createChatCalls()[0].input.chatId });
+      await create.promise;
+    });
+    await waitFor(() => {
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+      ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+    });
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it.each(["refusal", "rejection"] as const)(
+    "keeps a chat after RPC %s and retries with the same create IDs",
+    async (outcome) => {
+      seed(SEEDED);
+      if (outcome === "refusal") {
+        mocks.createChatRefusal = {
+          kind: "local-store-unavailable",
+          message: "The local store is busy.",
+          remedy: "Try again after the other window closes.",
+        };
+      } else {
+        mocks.createChatError = new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Chat create failed.",
+          requestId: "request-1",
+          method: "epic.createChat",
+          fatalDetails: null,
+        });
+      }
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "not-sent",
+        });
+      });
+      const firstInput = createChatCalls()[0]?.input;
+      expect(firstInput).toBeDefined();
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+      ).toBeNull();
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.request.kind,
+      ).toBe("chat");
+      expect(
+        within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+          name: "Retry",
+        }),
+      ).toBeDefined();
+
+      mocks.createChatError = null;
+      mocks.createChatRefusal = null;
+      fireEvent.click(
+        within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+          name: "Retry",
+        }),
+      );
+
+      await waitForCreateChats(2);
+      expect(createChatCalls()[1]?.input).toMatchObject({
+        chatId: firstInput.chatId,
+        initialMessage: {
+          messageId: firstInput.initialMessage?.messageId,
+          clientActionId: firstInput.initialMessage?.clientActionId,
+        },
+      });
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+        ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+      });
+    },
+  );
 });
 
 describe("the ready line above an agent whose first message waited", () => {

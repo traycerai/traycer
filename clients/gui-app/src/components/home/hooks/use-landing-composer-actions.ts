@@ -27,6 +27,12 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
+import {
+  ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
+  isAttachEnvironmentUnsupported,
+  useEpicAttachmentClient,
+  useEpicAttachEnvironment,
+} from "@/hooks/epic/use-epic-attach-environment-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import {
   authorizesCloudCapability,
@@ -216,16 +222,20 @@ export interface LandingStagedSandboxTaskArgs {
   readonly draftId: string | null;
   /** As `LandingComposerSubmitArgs.owner`. */
   readonly owner: LandingOwnerTeam | null;
+  /** The sandbox's team, independent of the task's placement and owner. */
+  readonly sandboxTeamId: string | null;
   /** The message, as the task's first prompt. */
   readonly text: string;
   /**
    * Hands the message to the new task, before it opens: `confirm` once the
-   * task is created, which lets the sandbox start; `giveBack` ends it if the
-   * task is refused or fails, and returns the start-task draft that holds
-   * the message again (the task replaced the draft it came from). `null`
+   * task is created and attached to the sandbox's team, which lets the sandbox
+   * start; `giveBack` ends the send if either step fails and returns the draft
+   * holding the message again (the task replaced its original draft). `null`
    * when there was nothing to hand, and nothing is created.
    */
   readonly hand: (epicId: string) => {
+    /** The send is still pending, rather than cancelled or returned. */
+    readonly isCurrent: () => boolean;
     readonly confirm: () => void;
     readonly giveBack: () => string | null;
   } | null;
@@ -341,9 +351,8 @@ interface FinalizeLandingSubmissionInput {
  * `target` is the composer's resolved placement (selection model §54), and it
  * is the ONLY host any create below touches: the epic create, its folded chat
  * seed, and the terminal-agent chain all run on `target.client`, whose host
- * identity is re-validated at the top of each action. There is deliberately no
- * `useHostClient()` here - resolving the app-wide client would let the chip
- * name one machine while the create landed on another.
+ * identity is re-validated at the top of each action. A staged sandbox's team
+ * attachment alone may use another personal host; it never changes placement.
  */
 export function useLandingComposerActions(
   target: LandingPlacementTarget,
@@ -351,6 +360,9 @@ export function useLandingComposerActions(
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createEpic = useEpicCreateForClient(target.client);
+  const attachClient = useEpicAttachmentClient(target.client);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
     target.resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -1609,6 +1621,13 @@ export function useLandingComposerActions(
       }
       const ownerRefusal = refuseTeamOwner(args.owner, placement.hostId);
       if (ownerRefusal !== null) return ownerRefusal;
+      const attachTeamId =
+        args.sandboxTeamId !== null && args.sandboxTeamId !== args.owner?.teamId
+          ? args.sandboxTeamId
+          : null;
+      if (attachTeamId !== null && attachClient === null) {
+        return { message: ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY };
+      }
       const hostId = placement.hostId;
       const epicId = uuidv4();
       const handed = args.hand(epicId);
@@ -1626,12 +1645,19 @@ export function useLandingComposerActions(
         epicTitle: "",
         draftId: args.draftId,
       });
-      // The task never came to be, and it replaced the draft the message
-      // came from: the message goes back to a draft, opened for a resend.
-      const refused = (): void => {
-        unmarkEpicCreatedThisSession(epicId);
+      const sameAccount = (): boolean =>
+        (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
+      // A create or attachment refusal returns the only message copy. An
+      // attachment refusal leaves the already-created task on its placement.
+      const giveBack = (): void => {
+        if (!sameAccount() || !handed.isCurrent()) return;
         const draftId = handed.giveBack();
         if (draftId !== null) openLandingDraft(navigate, draftId);
+      };
+      const refused = (): void => {
+        if (!sameAccount()) return;
+        unmarkEpicCreatedThisSession(epicId);
+        giveBack();
       };
       void createLandingEpic({
         epicId,
@@ -1648,25 +1674,39 @@ export function useLandingComposerActions(
         chat: null,
         owner: epicCreateOwnerFor(args.owner),
       })
-        .then((response) => {
+        .then(async (response) => {
+          if (!sameAccount()) return;
           // A refusal resolves; `useEpicCreateForClient` says why.
           if (response.refusal !== undefined) {
             refused();
             return;
           }
-          // Re-anchored on completion for the identity that sent it, as
-          // the terminal-agent create does.
-          if (
-            (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId
-          ) {
-            markEpicCreatedThisSession(epicId, hostId);
+          markEpicCreatedThisSession(epicId, hostId);
+          if (!handed.isCurrent()) return;
+          // The task stays on its placement, with its chosen owner. Its team
+          // sandbox may serve it only after this personal-host attachment.
+          if (attachTeamId !== null) {
+            try {
+              await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
+            } catch (error) {
+              if (!isAttachEnvironmentUnsupported(error)) {
+                giveBack();
+                return;
+              }
+            }
           }
-          handed.confirm();
+          if (sameAccount() && handed.isCurrent()) handed.confirm();
         }, refused)
         .catch(() => undefined);
       return null;
     },
-    [createLandingEpic, navigate, resolveAdmittedPlacement],
+    [
+      attachClient,
+      attachEnvironmentAsync,
+      createLandingEpic,
+      navigate,
+      resolveAdmittedPlacement,
+    ],
   );
 
   const placementAdmitsTask = useCallback(
@@ -1685,6 +1725,7 @@ export function useLandingComposerActions(
       // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
       isPending:
         createEpic.isPending ||
+        attachEnvironment.isPending ||
         terminalAgentCreate.isPending ||
         attachmentUpload !== null,
       // The upload burst's position, for the composer to render beside its
@@ -1693,6 +1734,7 @@ export function useLandingComposerActions(
     }),
     [
       attachmentUpload,
+      attachEnvironment.isPending,
       createEpic.isPending,
       placementAdmitsTask,
       selectTerminalAgent,

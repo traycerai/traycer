@@ -86,6 +86,13 @@ import {
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  isAttachEnvironmentUnsupported,
+  toastAttachEnvironmentNeedsOwnHost,
+  useEpicAttachmentClient,
+  useEpicAttachEnvironment,
+} from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
   latestCreatedConversationOwner,
@@ -98,6 +105,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicConversationPlacement } from "@/hooks/host/use-composer-placement";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   bindNewChatDraftHost,
   unbindNewChatDraftHost,
@@ -845,6 +853,7 @@ export function NewConversationModalBody(props: {
   // body's queries, the host-FROZEN client every create below is sent on, and
   // the submit-time refusal all come out of one hook.
   const sessionHostId = useEpicSessionHostId();
+  const sessionHostClient = useEpicSessionHostClient();
   useEffect(() => {
     if (sessionHostId === null) return;
     bindNewChatDraftHost(epicId, sessionHostId);
@@ -1042,7 +1051,14 @@ export function NewConversationModalBody(props: {
     submitTarget.client,
     resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
-  const isSubmitting = createChat.isPending || terminalAgentCreate.isPending;
+  const { isSubmitting, handStagedSandbox } = useStagedTaskAttachment({
+    epicId,
+    sessionHostId,
+    placementHostId: resolvedHostId,
+    sessionClient: sessionHostClient,
+    placementClient: submitTarget.client,
+    otherCreatePending: createChat.isPending || terminalAgentCreate.isPending,
+  });
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     hostClient,
@@ -1067,18 +1083,24 @@ export function NewConversationModalBody(props: {
   // `Open terminal instead`: the staged sandbox opens a terminal in this
   // task in place of an agent, and the modal closes with the draft kept.
   const openTerminalInstead = useCallback((): void => {
-    const handed = handPendingSandboxSend({
-      fromSurfaceKey: newConversationSurfaceKey(epicId),
-      epicId,
-      request: { kind: "terminal" },
-      content: createEmptyNewConversationContent(),
-      text: "",
-      settings: pickedRunSettings(toolbarStore.getState()),
-      epicConfirmed: true,
-      now: Date.now(),
+    const surfaceKey = newConversationSurfaceKey(epicId);
+    const staged = readStagedSandbox(surfaceKey);
+    if (staged === null) return;
+    const settings = pickedRunSettings(toolbarStore.getState());
+    handStagedSandbox(surfaceKey, staged, () => {
+      const handed = handPendingSandboxSend({
+        fromSurfaceKey: surfaceKey,
+        epicId,
+        request: { kind: "terminal" },
+        content: createEmptyNewConversationContent(),
+        text: "",
+        settings,
+        epicConfirmed: true,
+        now: Date.now(),
+      });
+      if (handed !== null) onSubmitted();
     });
-    if (handed !== null) onSubmitted();
-  }, [epicId, onSubmitted, toolbarStore]);
+  }, [epicId, handStagedSandbox, onSubmitted, toolbarStore]);
   const sandboxStaging = useInTaskSandboxStagingSurface(
     epicId,
     newConversationSurfaceKey(epicId),
@@ -1739,18 +1761,21 @@ export function NewConversationModalBody(props: {
         captured,
         pickerStore.getState().knownSlashCommands,
       );
-      const handed = handPendingSandboxSend({
-        fromSurfaceKey: stagedKey,
-        epicId,
-        // The pane this modal was opened for, as the ordinary create takes it.
-        request: { kind: "chat", parentId, placement },
-        content,
-        text: composerDisplayPlainText(content),
-        settings: pickedRunSettings(toolbarStore.getState()),
-        epicConfirmed: true,
-        now: Date.now(),
+      const settings = pickedRunSettings(toolbarStore.getState());
+      handStagedSandbox(stagedKey, staged, () => {
+        const handed = handPendingSandboxSend({
+          fromSurfaceKey: stagedKey,
+          epicId,
+          // The pane this modal was opened for, as the ordinary create takes it.
+          request: { kind: "chat", parentId, placement },
+          content,
+          text: composerDisplayPlainText(content),
+          settings,
+          epicConfirmed: true,
+          now: Date.now(),
+        });
+        if (handed !== null) cleanupAfterSubmit();
       });
-      if (handed !== null) cleanupAfterSubmit();
       return;
     }
     // This host's own gate, after the stage's: a staged sandbox is not this
@@ -2051,6 +2076,7 @@ export function NewConversationModalBody(props: {
   }, [
     canSubmit,
     cleanupAfterSubmit,
+    handStagedSandbox,
     epicId,
     parentId,
     pickerStore,
@@ -2304,6 +2330,81 @@ export function NewConversationModalBody(props: {
       />
     </ComposerStagedSurfaceKeyProvider>
   );
+}
+
+/** Attaches a staged task before handing its current draft to the sandbox. */
+function useStagedTaskAttachment(input: {
+  readonly epicId: string;
+  readonly sessionHostId: string | null;
+  readonly placementHostId: string | null;
+  readonly sessionClient: HostClient<HostRpcRegistry> | null;
+  readonly placementClient: HostClient<HostRpcRegistry> | null;
+  readonly otherCreatePending: boolean;
+}): {
+  readonly isSubmitting: boolean;
+  readonly handStagedSandbox: (
+    surfaceKey: string,
+    staged: StagedSandbox,
+    hand: () => void,
+  ) => void;
+} {
+  const { epicId } = input;
+  const taskHostTeamId = useHostOwnerTeamId(
+    input.sessionHostId ?? input.placementHostId,
+  );
+  const attachClient = useEpicAttachmentClient(
+    input.sessionClient ?? input.placementClient,
+  );
+  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironmentAsync = attachEnvironment.mutateAsync;
+  const stageAttachmentRef = useRef<StagedSandbox | null>(null);
+  // A team's sandbox can serve this task only after the person's own host
+  // attached it. Keep the stage and draft until that step succeeds.
+  const handStagedSandbox = useCallback(
+    (surfaceKey: string, staged: StagedSandbox, hand: () => void): void => {
+      if (stageAttachmentRef.current !== null) return;
+      const configuration = staged.target.configuration;
+      if (
+        configuration.kind !== "team" ||
+        configuration.teamId === taskHostTeamId
+      ) {
+        hand();
+        return;
+      }
+      if (attachClient === null) {
+        toastAttachEnvironmentNeedsOwnHost();
+        return;
+      }
+      const userId = useAuthStore.getState().profile?.userId ?? null;
+      const generation = captureComposerSubmitGeneration(
+        () =>
+          useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+            ?.revision ?? 0,
+      );
+      const stillCurrent = (): boolean =>
+        (useAuthStore.getState().profile?.userId ?? null) === userId &&
+        readStagedSandbox(surfaceKey) === staged &&
+        generation.stillCurrent();
+      stageAttachmentRef.current = staged;
+      void attachEnvironmentAsync({ epicId, teamId: configuration.teamId })
+        .then(() => {
+          if (stillCurrent()) hand();
+        })
+        .catch((error: unknown) => {
+          if (isAttachEnvironmentUnsupported(error) && stillCurrent()) hand();
+        })
+        .finally(() => {
+          if (stageAttachmentRef.current === staged) {
+            stageAttachmentRef.current = null;
+          }
+        });
+    },
+    [attachClient, attachEnvironmentAsync, epicId, taskHostTeamId],
+  );
+  return {
+    isSubmitting: input.otherCreatePending || attachEnvironment.isPending,
+    handStagedSandbox,
+  };
 }
 
 /**

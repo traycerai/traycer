@@ -875,10 +875,6 @@ function sandboxRowLines(
 }
 
 /**
- * A staged sandbox's own price: its row's awake rate, exact. `null` only
- * while its row has not answered, or where the server prices it at nothing.
- */
-/**
  * The staged target's price: an existing sandbox's from its row, a New
  * one's from the catalogue (`null` until it answers).
  */
