@@ -25,6 +25,7 @@ import { LinkPhonePanel } from "@/components/settings/panels/link-phone-panel";
 import { DeleteAccountSettingsPanel } from "@/components/settings/panels/delete-account-settings-panel";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
+import { AlertsSettingsPanel } from "@/components/settings/panels/alerts-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import {
   McpServersSettingsPanel,
@@ -110,6 +111,7 @@ const SETTINGS_PANELS = {
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,
   "app-notifications": AppNotificationsSettingsPanel,
+  alerts: AlertsSettingsPanel,
   providers: ProvidersSettingsPanel,
   secrets: SecretsSettingsPanel,
   "mcp-servers": McpServersSettingsPanel,

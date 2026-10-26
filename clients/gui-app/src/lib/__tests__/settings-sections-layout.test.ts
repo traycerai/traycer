@@ -1,10 +1,11 @@
 /**
  * Getting started leads the whole list, Browser is the third Application-group
- * entry, and the Application group ends with Layout, then Diagnostics. Account
- * follows it, so Sessions - the first Account entry - is the tenth desktop
- * entry and takes leader digit 0; everything after it (the rest of Account,
- * all of Environment, the host group) has no digit, Providers included.
- * Desktop's Host ("Overview") is the twenty-seventh entry. Mobile omits
+ * entry, Alerts follows Sounds, and the Application group ends with Layout,
+ * then Diagnostics - the tenth desktop entry, which takes leader digit 0.
+ * Account follows it, so Sessions - the first Account entry - and everything
+ * after it (the rest of Account, all of Environment, the host group) has no
+ * digit, Providers included. Desktop's Host ("Overview") is the twenty-eighth
+ * entry. Mobile omits
  * Keybindings and Link mobile app. This suite pins the positions against
  * `visibleSettingsSections()`, the same list the leader-digit dispatcher walks.
  * Vitest runs as a dev build, so that list includes the two dev-only proof
@@ -24,19 +25,29 @@ afterEach(() => {
 });
 
 describe("Layout section placement and digit reassignment", () => {
-  it("offers layout on desktop at index 7 (leader digit 8), with Diagnostics after it on 9", () => {
+  it("offers layout on desktop at index 8 (leader digit 9), with Diagnostics after it on 0", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const layoutIndex = sections.findIndex(
       (section) => section.id === "layout",
     );
-    expect(layoutIndex).toBe(7);
-    expect(singleDigitLeaderDigitFor(layoutIndex)).toBe("8");
+    expect(layoutIndex).toBe(8);
+    expect(singleDigitLeaderDigitFor(layoutIndex)).toBe("9");
     const diagnosticsIndex = sections.findIndex(
       (section) => section.id === "app-diagnostics",
     );
-    expect(diagnosticsIndex).toBe(8);
-    expect(singleDigitLeaderDigitFor(diagnosticsIndex)).toBe("9");
+    expect(diagnosticsIndex).toBe(9);
+    expect(singleDigitLeaderDigitFor(diagnosticsIndex)).toBe("0");
+  });
+
+  it("files Alerts straight after Sounds in the Application group", () => {
+    setMobileApp(false);
+    const sections = visibleSettingsSections();
+    const ids = sections.map((section) => section.id);
+    expect(ids.indexOf("alerts")).toBe(ids.indexOf("app-notifications") + 1);
+    expect(sections.find((section) => section.id === "alerts")?.group).toBe(
+      "app",
+    );
   });
 
   it("offers layout in the installed mobile app too", () => {
@@ -45,28 +56,23 @@ describe("Layout section placement and digit reassignment", () => {
     expect(ids).toContain("layout");
     // One slot earlier than on desktop: "keybindings" is omitted in the
     // installed mobile app and sits ahead of layout.
-    expect(ids.indexOf("layout")).toBe(6);
+    expect(ids.indexOf("layout")).toBe(7);
   });
 
-  it("gives Sessions, the first Account entry, leader digit 0 at index 9", () => {
+  it("leaves Sessions, the first Account entry, and every section after it - Providers included - without a leader digit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const devicesIndex = sections.findIndex(
       (section) => section.id === "devices",
     );
-    expect(devicesIndex).toBe(9);
-    expect(singleDigitLeaderDigitFor(devicesIndex)).toBe("0");
-  });
-
-  it("leaves every section after Sessions - Providers included - without a leader digit", () => {
-    setMobileApp(false);
-    const sections = visibleSettingsSections();
+    expect(devicesIndex).toBe(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
     const providersIndex = sections.findIndex(
       (section) => section.id === "providers",
     );
-    // The four other desktop Account pages sit ahead of Providers.
-    expect(providersIndex).toBe(14);
+    // The five desktop Account pages sit ahead of Providers.
+    expect(providersIndex).toBe(15);
     for (const id of [
+      "devices",
       "link-phone",
       "providers",
       "mcp-servers",
@@ -130,11 +136,11 @@ describe("Layout section placement and digit reassignment", () => {
     ).toBe("personal");
   });
 
-  it("pushes host (Overview) to index 26, past the single-digit leader limit", () => {
+  it("pushes host (Overview) to index 27, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(26);
+    expect(hostIndex).toBe(27);
     expect(hostIndex).toBeGreaterThan(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
     expect(hostIndex).toBeGreaterThanOrEqual(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
   });
@@ -145,7 +151,9 @@ describe("Layout section placement and digit reassignment", () => {
     // Getting started leads the list and owns digit 1.
     expect(sections[0]?.id).toBe("getting-started");
     expect(singleDigitLeaderDigitFor(0)).toBe("1");
-    expect(sections[SINGLE_DIGIT_LEADER_INDEX_LIMIT - 1]?.id).toBe("devices");
+    expect(sections[SINGLE_DIGIT_LEADER_INDEX_LIMIT - 1]?.id).toBe(
+      "app-diagnostics",
+    );
     const hostIndex = sections.findIndex((section) => section.id === "host");
     expect(hostIndex).toBeGreaterThanOrEqual(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
     for (let index = 0; index < SINGLE_DIGIT_LEADER_INDEX_LIMIT; index += 1) {

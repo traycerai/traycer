@@ -219,8 +219,10 @@ export const SETTINGS_SEARCH_FIXTURES = [
     hostScope: null,
     shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
   },
+  // Sounds is not listed: its chime rows fold into the page, so it has no
+  // anchored entry to land.
   {
-    section: "app-notifications",
+    section: "alerts",
     hostScope: null,
     shells: [
       {

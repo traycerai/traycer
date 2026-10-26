@@ -3,7 +3,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -16,22 +15,11 @@ import type {
   PushPermissionState,
 } from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
-import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
-import {
-  isPushPermissionRowAvailable,
-  isSystemNotificationsRowAvailable,
-  type SettingsAvailabilityContext,
-} from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 const playNotificationChimeSoundMock = vi.hoisted(() => vi.fn());
-
-vi.mock("@/lib/settings-navigation", () => ({
-  navigateToSettingsSection: navigateToSettingsSectionMock,
-}));
 
 vi.mock("@/lib/notifications/notification-chime", async (importOriginal) => ({
   ...(await importOriginal<
@@ -42,7 +30,6 @@ vi.mock("@/lib/notifications/notification-chime", async (importOriginal) => ({
 
 afterEach(() => {
   cleanup();
-  navigateToSettingsSectionMock.mockClear();
   playNotificationChimeSoundMock.mockClear();
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
@@ -138,136 +125,19 @@ describe("<AppNotificationsSettingsPanel />", () => {
     expect(persistSelection).toHaveBeenCalledWith("failure", "classic");
   });
 
-  it("owns this phone's OS push permission", async () => {
+  // The OS and push rows and the Notification events pointer live on Alerts;
+  // with every bridge present, none of them is drawn here.
+  it("draws only the chimes, whatever bridges the shell carries", () => {
     renderPanel({
-      pushPermission: fakePushPermission("denied"),
-      systemSettings: null,
-    });
-
-    expect(
-      await screen.findByText("Push notifications on this phone"),
-    ).toBeTruthy();
-    const action = await screen.findByTestId("push-permission-action");
-    expect(action.textContent).toContain("Open Settings");
-    expect(action.hasAttribute("disabled")).toBe(false);
-  });
-
-  it("always draws the Notifications group with the Notification events row", () => {
-    renderPanel({ pushPermission: null, systemSettings: null });
-
-    expect(
-      screen.getByTestId("app-notifications-notifications-section"),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("heading", { level: 2, name: "Notifications" }),
-    ).toBeTruthy();
-    expect(screen.getByText("Notification events")).toBeTruthy();
-    expect(screen.queryByText("OS notifications")).toBeNull();
-    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
-  });
-
-  it("draws the OS notifications row only with the system-settings bridge", () => {
-    renderPanel({
-      pushPermission: null,
+      pushPermission: fakePushPermission("granted"),
       systemSettings: { open: () => Promise.resolve() },
     });
 
-    expect(screen.getByText("OS notifications")).toBeTruthy();
+    expect(screen.getAllByRole("combobox")).toHaveLength(4);
+    expect(screen.queryByText("OS notifications")).toBeNull();
     expect(screen.queryByText("Push notifications on this phone")).toBeNull();
-    expect(
-      screen
-        .getByTestId("app-notifications-notifications-section")
-        .contains(screen.getByText("OS notifications")),
-    ).toBe(true);
-  });
-
-  it("points desktop users to native notification settings", async () => {
-    const open = vi.fn(() => Promise.resolve());
-    renderPanel({
-      pushPermission: null,
-      systemSettings: { open },
-    });
-
-    expect(screen.getByText("OS notifications")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("system-notification-settings-action"));
-
-    await waitFor(() => {
-      expect(open).toHaveBeenCalledOnce();
-    });
-  });
-
-  it("points event-level controls to the selected host", () => {
-    renderPanel({ pushPermission: null, systemSettings: null });
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open Host Notifications" }),
-    );
-
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("notifications");
-  });
-
-  // The search index offers the OS notifications and Push notifications rows
-  // exactly where they render: each bridge alone, both, and neither — the
-  // last is what catches an entry left always-available while its row is gated.
-  describe("search targets", () => {
-    const cases: ReadonlyArray<{
-      readonly name: string;
-      readonly capabilities: NotificationCapabilities;
-      readonly system: boolean;
-      readonly push: boolean;
-    }> = [
-      {
-        name: "every bridge absent",
-        capabilities: { pushPermission: null, systemSettings: null },
-        system: false,
-        push: false,
-      },
-      {
-        name: "only the OS notification-settings bridge",
-        capabilities: {
-          pushPermission: null,
-          systemSettings: { open: () => Promise.resolve() },
-        },
-        system: true,
-        push: false,
-      },
-      {
-        name: "only the push-permission bridge",
-        capabilities: {
-          pushPermission: fakePushPermission("granted"),
-          systemSettings: null,
-        },
-        system: false,
-        push: true,
-      },
-      {
-        name: "both bridges",
-        capabilities: {
-          pushPermission: fakePushPermission("prompt"),
-          systemSettings: { open: () => Promise.resolve() },
-        },
-        system: true,
-        push: true,
-      },
-    ];
-
-    for (const testCase of cases) {
-      it(`matches the index with ${testCase.name}`, () => {
-        const { container, runnerHost } = mountPanel(testCase.capabilities);
-        const context: SettingsAvailabilityContext = {
-          runnerHost,
-          featureSettings: null,
-          mobileApp: false,
-          phoneLayout: false,
-        };
-        expect(isSystemNotificationsRowAvailable(context)).toBe(
-          testCase.system,
-        );
-        expect(isPushPermissionRowAvailable(context)).toBe(testCase.push);
-
-        assertSettingsSearchTargets("app-notifications", context, container);
-      });
-    }
+    expect(screen.queryByText("Notification events")).toBeNull();
+    expect(screen.queryAllByRole("switch")).toEqual([]);
   });
 });
 
@@ -277,14 +147,6 @@ interface NotificationCapabilities {
 }
 
 function renderPanel(capabilities: NotificationCapabilities): void {
-  mountPanel(capabilities);
-}
-
-/** Mounts the panel and returns the runner host it was mounted under. */
-function mountPanel(capabilities: NotificationCapabilities): {
-  readonly container: HTMLElement;
-  readonly runnerHost: IRunnerHost;
-} {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -299,12 +161,11 @@ function mountPanel(capabilities: NotificationCapabilities): {
       systemSettings: capabilities.systemSettings,
     },
   });
-  const { container } = render(
+  render(
     <Providers queryClient={queryClient} runnerHost={runnerHost}>
       <AppNotificationsSettingsPanel />
     </Providers>,
   );
-  return { container, runnerHost };
 }
 
 function Providers(props: {
