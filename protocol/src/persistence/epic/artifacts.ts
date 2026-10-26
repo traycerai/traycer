@@ -337,15 +337,27 @@ export const deletedEpicArtifactSchemaPreHtml = lazySchema(() =>
   ]),
 );
 export const deletedHtmlArtifactSchema = lazySchema(() =>
-  z.object({ kind: z.literal("html"), ...baseDeletedEpicArtifactFields }),
+  z.object({
+    kind: z.literal("html"),
+    ...baseDeletedEpicArtifactFields,
+    deletionUnderstood: z.boolean().default(false),
+  }),
 );
 export type DeletedHtmlArtifact = z.infer<typeof deletedHtmlArtifactSchema>;
 export const deletedCanvasArtifactSchema = lazySchema(() =>
-  z.object({ kind: z.literal("canvas"), ...baseDeletedEpicArtifactFields }),
+  z.object({
+    kind: z.literal("canvas"),
+    ...baseDeletedEpicArtifactFields,
+    deletionUnderstood: z.boolean().default(false),
+  }),
 );
 export type DeletedCanvasArtifact = z.infer<typeof deletedCanvasArtifactSchema>;
 export const deletedFileArtifactSchema = lazySchema(() =>
-  z.object({ kind: z.literal("file"), ...baseDeletedEpicArtifactFields }),
+  z.object({
+    kind: z.literal("file"),
+    ...baseDeletedEpicArtifactFields,
+    deletionUnderstood: z.boolean().default(false),
+  }),
 );
 export type DeletedFileArtifact = z.infer<typeof deletedFileArtifactSchema>;
 
@@ -370,9 +382,8 @@ export function buildDeletedEpicArtifact(
   artifact: EpicArtifact,
   deletedAt: string,
 ): DeletedEpicArtifact {
-  return {
+  const common = {
     id: artifact.id,
-    kind: artifact.kind,
     title: artifact.title,
     artifactRoomId:
       "artifactRoomId" in artifact && artifact.artifactRoomId.length > 0
@@ -392,4 +403,17 @@ export function buildDeletedEpicArtifact(
         ? artifact.status
         : null,
   };
+  switch (artifact.kind) {
+    case "html":
+    case "canvas":
+    case "file":
+      // A legacy host can write a tombstone before its unsupported-kind delete
+      // throws. Only this constructor acknowledges a deletion that understood it.
+      return { ...common, kind: artifact.kind, deletionUnderstood: true };
+    case "spec":
+    case "ticket":
+    case "story":
+    case "review":
+      return { ...common, kind: artifact.kind };
+  }
 }
