@@ -349,7 +349,7 @@ describe("<PushPermissionSection />", () => {
     // Built on the REAL app query client: its 60s `staleTime` is the whole
     // point. The `onChange` subscription is disposed while this row is
     // unmounted, so nothing invalidates in between - leave a person to change
-    // the switch in the OS Settings app between two visits to Sounds
+    // the switch in the OS Settings app between two visits to Alerts
     // and a cached answer would show them "Off · Open Settings" on a phone
     // where push is already on.
     const permission = doubleFor("denied");

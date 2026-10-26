@@ -1,11 +1,11 @@
 /**
  * `useSurfaceHostPin` / `useSurfaceHostPinWithDefault` (task-default
- * addendum): a task panel (git-diff, pull-requests, file-tree, new-terminal,
- * browsers) resolves the sole host named by its task's GUI chats and
- * terminal agents ({@link useEpicNodeHostIds}) BEFORE `effective` - and,
- * for the panels with their own caller-supplied default (pull-requests, the
- * canvas host), the task default precedes that fallback too, which in turn
- * precedes `effective`. Composers never get one.
+ * addendum): a task panel (git-diff, file-tree, new-terminal, browsers)
+ * resolves the sole host named by its task's GUI chats and terminal agents
+ * ({@link useEpicNodeHostIds}) BEFORE `effective` - and, where the caller
+ * also supplies its own default (the palette's browser and terminal flows),
+ * the task default precedes that fallback too, which in turn precedes
+ * `effective`. Composers never get one.
  *
  * `resolvedFrom` is only on {@link SurfaceHostPinWithDefault}, so a case that
  * asserts which tier answered renders through `useSurfaceHostPinWithDefault`
@@ -62,7 +62,6 @@ import {
 
 const TASK_PANEL_KINDS = [
   "git-diff",
-  "pull-requests",
   "file-tree",
   "new-terminal",
   "browsers",
@@ -131,23 +130,23 @@ describe("task-default resolution", () => {
     expect(result.current.resolvedFrom).toBe("effective");
   });
 
-  it("precedes the caller's own default (pull-requests' canvas host) with a sole task host", () => {
+  it("precedes the caller's own default with a sole task host", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
     const { result } = renderHook(() =>
-      useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
+      useSurfaceHostPinWithDefault(panelKey("browsers"), "caller-host"),
     );
     expect(result.current.resolvedHostId).toBe("task-host");
     expect(result.current.resolvedFrom).toBe("default");
   });
 
   it("keeps the caller's own default when the task has zero or multiple agent hosts", () => {
-    const surfaceKey = panelKey("pull-requests");
+    const surfaceKey = panelKey("browsers");
     for (const nodeHostIds of [new Set<string>(), new Set(["a", "b"])]) {
       boundary.nodeHostIds = nodeHostIds;
       const { result, unmount } = renderHook(() =>
-        useSurfaceHostPinWithDefault(surfaceKey, "canvas-host"),
+        useSurfaceHostPinWithDefault(surfaceKey, "caller-host"),
       );
-      expect(result.current.resolvedHostId).toBe("canvas-host");
+      expect(result.current.resolvedHostId).toBe("caller-host");
       unmount();
     }
   });
@@ -179,46 +178,45 @@ describe("task-default resolution", () => {
 });
 
 /**
- * `pull-requests` is the one panel with all four tiers live at once: an
- * explicit pin, the task's sole agent host, the caller's own canvas-host
- * default, and finally `effective`. `[taskHostId, defaultHostId].find(...)`
- * in `use-surface-host-pin.ts` walks exactly this chain, applying the same
- * lease rule to each candidate in turn.
+ * A task panel with a caller default has four tiers: an explicit pin, the
+ * task's sole agent host, the caller's own default, and finally `effective`.
+ * `[taskHostId, defaultHostId].find(...)` in `use-surface-host-pin.ts` walks
+ * exactly this chain, applying the same lease rule to each candidate in turn.
  */
-describe("the pull-requests four-tier chain (pin, task default, canvas default, effective)", () => {
-  it("falls from a dead sole task host through to a live canvas default", () => {
+describe("the four-tier chain (pin, task default, caller default, effective)", () => {
+  it("falls from a dead sole task host through to a live caller default", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [dead("task-host"), ready("canvas-host")];
+    boundary.leases = [dead("task-host"), ready("caller-host")];
     boundary.authorityAttached = true;
     const { result } = renderHook(() =>
-      useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
+      useSurfaceHostPinWithDefault(panelKey("browsers"), "caller-host"),
     );
-    expect(result.current.resolvedHostId).toBe("canvas-host");
+    expect(result.current.resolvedHostId).toBe("caller-host");
     expect(result.current.resolvedFrom).toBe("default");
-    expect(result.current.followingHostId).toBe("canvas-host");
+    expect(result.current.followingHostId).toBe("caller-host");
   });
 
-  it("falls from a sole task host absent from a known fleet through to a live canvas default", () => {
+  it("falls from a sole task host absent from a known fleet through to a live caller default", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
     // The fleet HAS spoken (attached, non-empty leases), but none of them
     // names "task-host" - `isSurfacePinDeposed` treats a host missing from a
     // known fleet the same as a dead one, not as "unknown yet".
-    boundary.leases = [ready("canvas-host")];
+    boundary.leases = [ready("caller-host")];
     boundary.authorityAttached = true;
     const { result } = renderHook(() =>
-      useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
+      useSurfaceHostPinWithDefault(panelKey("browsers"), "caller-host"),
     );
-    expect(result.current.resolvedHostId).toBe("canvas-host");
+    expect(result.current.resolvedHostId).toBe("caller-host");
     expect(result.current.resolvedFrom).toBe("default");
-    expect(result.current.followingHostId).toBe("canvas-host");
+    expect(result.current.followingHostId).toBe("caller-host");
   });
 
-  it("falls from a dead task host AND a dead canvas default all the way to effective", () => {
+  it("falls from a dead task host AND a dead caller default all the way to effective", () => {
     boundary.nodeHostIds = new Set(["task-host"]);
-    boundary.leases = [dead("task-host"), dead("canvas-host")];
+    boundary.leases = [dead("task-host"), dead("caller-host")];
     boundary.authorityAttached = true;
     const { result } = renderHook(() =>
-      useSurfaceHostPinWithDefault(panelKey("pull-requests"), "canvas-host"),
+      useSurfaceHostPinWithDefault(panelKey("browsers"), "caller-host"),
     );
     expect(result.current.resolvedHostId).toBe("effective-host");
     expect(result.current.resolvedFrom).toBe("effective");

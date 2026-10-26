@@ -18,6 +18,7 @@ import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip
 import { TabStripKeybindingBridge } from "@/components/layout/tabs/tab-strip-keybinding-bridge";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { MobileDrawerHistoryGateProvider } from "@/components/layout/shell/mobile-drawer-history-gate";
+import { DesktopHistorySwipes } from "@/components/layout/shell/desktop-history-swipes";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
@@ -228,6 +229,7 @@ function AppShellBody(props: AppShellProps) {
                     because they are this screen leaving rather than a layer
                     over the app. */}
                   {historySwipeTransition}
+                  <DesktopHistorySwipes />
                 </>
               }
             />

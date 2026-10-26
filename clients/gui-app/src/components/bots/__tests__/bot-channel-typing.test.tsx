@@ -679,12 +679,13 @@ describe("<BotChannelView /> a channel nobody has written in", () => {
     mountChannel([]);
 
     const intro = await screen.findByTestId("bot-channel-intro");
-    expect(within(intro).getByText("#Tracy", { selector: "p" })).toBeTruthy();
+    expect(within(intro).getByText("Tracy", { selector: "p" })).toBeTruthy();
     expect(
       within(intro).getByText(
         (_content, element) =>
           element?.tagName === "P" &&
-          element.textContent === "This is the beginning of #Tracy.",
+          element.textContent ===
+            "This is the beginning of your channel with Tracy.",
       ),
     ).toBeTruthy();
     expect(within(intro).getByText(DIRECTIVE)).toBeTruthy();

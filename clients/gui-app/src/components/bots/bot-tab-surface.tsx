@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { EllipsisVertical, Hash } from "lucide-react";
+import { EllipsisVertical } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,7 @@ import {
   type BotOpenThread,
 } from "@/stores/bots/bot-open-thread-store";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
+import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import {
@@ -413,9 +414,16 @@ function BotTabContent(props: {
   return (
     <BotIdentityContext value={identity}>
       <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-        <aside className="hidden min-h-0 w-1/5 max-w-64 shrink-0 flex-col border-r border-border/60 @3xl:flex">
+        <BotResizablePane
+          pane="sidebar"
+          edge="right"
+          label="Resize channels"
+          className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-border/60 @3xl:flex"
+          handleClassName=""
+          testId="bot-channel-sidebar-pane"
+        >
           <BotChannelSidebar activeBotId={botId} hostId={hostId} />
-        </aside>
+        </BotResizablePane>
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <Tabs
             value={view}
@@ -654,7 +662,7 @@ function ErrorNotice(props: {
 
 /**
  * Slack's channel header: the bot's picture (its card on hover and click),
- * `# name`, the ⋮ that opens the channel's settings, and the channel's views
+ * its name, the ⋮ that opens the channel's settings, and the channel's views
  * under it. What the bot is for is the top of its channel; nothing else
  * sits here.
  */
@@ -685,11 +693,10 @@ function BotChannelHeader(props: {
           </button>
         </BotIdentityTrigger>
         <h1
-          className="flex min-w-0 items-center gap-1 text-ui-md font-bold text-foreground"
+          className="min-w-0 truncate text-ui-md font-bold text-foreground"
           data-testid="bot-tab-title"
         >
-          <Hash className="size-4 shrink-0" aria-hidden="true" />
-          <span className="truncate">{props.title}</span>
+          {props.title}
         </h1>
         <Button
           ref={settingsButtonRef}

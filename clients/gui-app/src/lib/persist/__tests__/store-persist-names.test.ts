@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -210,6 +211,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useSurfaceHostSelectionStore",
     useSurfaceHostSelectionStore,
     "traycer-gui-app:surface-host-selection:anon",
+  ],
+  [
+    "useBotPaneWidthsStore",
+    useBotPaneWidthsStore,
+    "traycer-gui-app:bot-pane-widths",
   ],
 ];
 

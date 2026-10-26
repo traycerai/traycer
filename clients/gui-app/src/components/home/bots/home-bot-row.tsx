@@ -7,11 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
+import { botWorkingOf, liveActivityOf } from "@/hooks/bots/use-bot-activity";
 import {
   rebindUnreachableBotTab,
   useBotTabsStore,
 } from "@/stores/bots/bot-tabs-store";
-import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import {
   buildHomeBotRow,
   homeBotState,
@@ -55,8 +55,13 @@ const STATE_BADGE_VARIANTS = {
  * the conversation's rows, not this number, decide what is open.
  *
  * The row never names the machine the bot runs on: it says working, idle or
- * paused (`homeBotState`). Opening it opens the tab through this window's
- * host, which asks `bot.open` where the bot is served and follows the answer.
+ * paused (`homeBotState`), working while the snapshot's activity has the
+ * trunk or any thread replying. Idle says the bot's state is known, so with
+ * no reading of it (no snapshot, no host has written the trunk, or a stream
+ * closed for good, whose last reading nothing will move) the row says
+ * nothing rather than idle. Opening it opens the tab through this
+ * window's host, which asks `bot.open` where the bot is served and follows
+ * the answer.
  */
 export function HomeBotRow(props: {
   readonly bot: BotRecord;
@@ -92,11 +97,11 @@ export function HomeBotRow(props: {
     [bot, subscription.snapshot],
   );
   const now = useSampledNow();
-  const working = useEpicAgentActivity(bot.botId).working.size > 0;
+  const working = botWorkingOf(liveActivityOf(subscription));
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  const state = homeBotState({
-    working,
+  const reading = homeBotState({
+    working: working === true,
     boundHostId: row.boundHostId,
     directoryHostIds: hostReach.directoryHostIds,
     connectableHostIds: hostReach.connectableHostIds,
@@ -105,6 +110,7 @@ export function HomeBotRow(props: {
     environmentOwnerKind,
     personalHostIds: hostReach.personalHostIds,
   });
+  const state = reading === "idle" && working === null ? null : reading;
   const openRequests = row.openRequestCount ?? 0;
 
   return (
@@ -138,14 +144,16 @@ export function HomeBotRow(props: {
           {isMain ? <MainBotBadge testId="home-bot-main" /> : null}
         </span>
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs text-muted-foreground">
-          <Badge
-            variant={STATE_BADGE_VARIANTS[state]}
-            size="xs"
-            data-testid="home-bot-state"
-            data-state={state}
-          >
-            {STATE_LABELS[state]}
-          </Badge>
+          {state === null ? null : (
+            <Badge
+              variant={STATE_BADGE_VARIANTS[state]}
+              size="xs"
+              data-testid="home-bot-state"
+              data-state={state}
+            >
+              {STATE_LABELS[state]}
+            </Badge>
+          )}
           {row.tasksTracking === null ? null : (
             <span data-testid="home-bot-tasks">
               {row.tasksTracking === 1

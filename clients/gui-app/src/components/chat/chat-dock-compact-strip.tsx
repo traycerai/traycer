@@ -1,12 +1,6 @@
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { cn } from "@/lib/utils";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import * as m from "motion/react-m";
 import { Bot, FileDiff, ListChecks, type LucideIcon } from "lucide-react";
 import { MessageSquareClock } from "@/components/notifications/message-square-clock";
@@ -102,14 +96,17 @@ function glyphShimmerOpacity(elapsedMs: number): number {
  * its count.
  */
 function ShimmeringGlyph(props: { readonly icon: LucideIcon }) {
-  const ref = useRef<SVGSVGElement | null>(null);
   const write = useCallback((element: SVGSVGElement, elapsedMs: number) => {
     element.style.opacity = glyphShimmerOpacity(elapsedMs).toFixed(3);
   }, []);
   const clear = useCallback((element: SVGSVGElement) => {
     element.style.opacity = "";
   }, []);
-  useStatusAnimation(ref, write, clear, STATUS_ANIMATION_PULSE_CADENCE_MS);
+  const ref = useStatusAnimation(
+    write,
+    clear,
+    STATUS_ANIMATION_PULSE_CADENCE_MS,
+  );
   const Icon = props.icon;
   return (
     <Icon

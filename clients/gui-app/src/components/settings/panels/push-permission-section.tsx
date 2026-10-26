@@ -3,7 +3,7 @@ import type {
   PushPermissionState,
   PushSeverity,
 } from "@traycer-clients/shared/platform/runner-host";
-import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
+import { ALERTS } from "@/components/settings/panels/alerts-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -44,23 +44,23 @@ const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
 
 const READ_FAILED = "Couldn't read this phone's notification setting.";
 
-// In the chime rows' order, so the two lists read alike.
+// In the Sounds page's chime rows' order, so the two lists read alike.
 const SEVERITY_ROWS: ReadonlyArray<{
   readonly severity: PushSeverity;
   readonly row: SettingsRowDefinition;
 }> = [
   {
     severity: "needs_action",
-    row: APP_NOTIFICATIONS.definitions.pushNeedsAction,
+    row: ALERTS.definitions.pushNeedsAction,
   },
-  { severity: "failure", row: APP_NOTIFICATIONS.definitions.pushFailure },
-  { severity: "done", row: APP_NOTIFICATIONS.definitions.pushDone },
-  { severity: "info", row: APP_NOTIFICATIONS.definitions.pushInfo },
+  { severity: "failure", row: ALERTS.definitions.pushFailure },
+  { severity: "done", row: ALERTS.definitions.pushDone },
+  { severity: "info", row: ALERTS.definitions.pushInfo },
 ];
 
 /**
  * The OS push permission of the phone this renderer runs on, and under it the
- * severities that phone is pushed for. They belong under Application → Sounds
+ * severities that phone is pushed for. They belong under Application → Alerts
  * because they never vary with the selected host.
  *
  * The permission row exists because the OS remembers a refusal forever - the
@@ -73,7 +73,7 @@ const SEVERITY_ROWS: ReadonlyArray<{
  * The row is labelled "on this phone", never "on this device": in this GUI
  * "device" is the UI word for a HOST (Settings → Devices lists hosts), so
  * "this device" would read as one more host-scoped setting - the exact
- * confusion the row is here to end. Its rows sit in the Sounds page's
+ * confusion the row is here to end. Its rows sit in the Alerts page's
  * Notifications group, which the panel draws.
  *
  * The gate is the only thing rendered above them: every hook the rows use
@@ -82,9 +82,7 @@ const SEVERITY_ROWS: ReadonlyArray<{
  */
 export function PushPermissionSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
-  if (
-    !APP_NOTIFICATIONS.definitions.pushNotifications.availableWhen(availability)
-  ) {
+  if (!ALERTS.definitions.pushNotifications.availableWhen(availability)) {
     return null;
   }
   return <PushPermissionRows />;
@@ -108,7 +106,7 @@ function PushPermissionRow(props: {
   const openSettings = usePushPermissionOpenSettingsMutation();
   return (
     <SettingsRow
-      row={APP_NOTIFICATIONS.definitions.pushNotifications}
+      row={ALERTS.definitions.pushNotifications}
       status={viewDescription(view)}
       control={
         <div

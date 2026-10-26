@@ -217,6 +217,7 @@ describe("reordering the visible providers preserves the omitted ones' own slots
       "opencode",
       "cursor",
       "antigravity",
+      "kimi",
     ]);
     // openrouter's INDEX, specifically - not merely "still present" - is
     // what "preserve omitted slots" actually claims: it sat between the two
@@ -228,6 +229,7 @@ describe("reordering the visible providers preserves the omitted ones' own slots
       "opencode",
       "cursor",
       "antigravity",
+      "kimi",
     ]);
 
     // One undoable gesture, same as every other arrangement write.

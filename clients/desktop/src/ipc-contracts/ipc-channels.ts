@@ -168,6 +168,7 @@ export const RunnerHostInvoke = {
   epicVisibilitySnapshot: "runnerHost:windows:epicVisibility:snapshot",
   epicVisibilityReport: "runnerHost:windows:epicVisibility:report",
   windowVisibilitySnapshot: "runnerHost:windows:windowVisibility:snapshot",
+  backgroundRenderingSet: "runnerHost:windows:backgroundRendering:set",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
   perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
@@ -541,6 +542,9 @@ export const RunnerHostEvent = {
   // (browser/dev, the single-window topology D16 names).
   registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
+  // macOS trackpad finger-sequence transitions (NSEvent scroll phase) for the
+  // history swipe gesture; see `trackpad-scroll-phase-types.ts`.
+  trackpadScrollPhase: "runnerHost:event:trackpad:scrollPhase",
   browserViewGuestMountRequested:
     "runnerHost:event:browserView:guest:mountRequested",
   browserViewGuestReleaseRequested:

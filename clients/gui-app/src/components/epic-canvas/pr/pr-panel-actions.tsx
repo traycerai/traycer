@@ -9,7 +9,7 @@ import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 
 const PR_REFRESH_TIMEOUT_MS = 10_000;
 
-/** Actions share the body's selected-host subscription on desktop and mobile. */
+/** Actions share the body's canvas-host subscription on desktop and mobile. */
 export function PrPanelActions(props: {
   readonly subscription: PrListSubscriptionResult;
   readonly enabled: boolean;

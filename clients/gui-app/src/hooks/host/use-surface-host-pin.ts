@@ -152,9 +152,9 @@ function useSurfaceHostPinResolved(
     selection !== null && isSurfacePinDeposed(selection, fleet)
       ? null
       : selection;
-  // A task's sole agent host precedes the caller's existing fallback (the
-  // canvas host for PRs). Apply the pin's lease rule to both, so a dead task
-  // host falls through while an expected restart holds its selection.
+  // A task's sole agent host precedes the caller's own fallback. Apply the
+  // pin's lease rule to both, so a dead task host falls through while an
+  // expected restart holds its selection.
   const honoredDefaultHostId =
     [taskHostId, defaultHostId].find(
       (hostId) => hostId !== null && !isSurfacePinDeposed(hostId, fleet),

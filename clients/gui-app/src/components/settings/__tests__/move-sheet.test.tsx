@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -730,6 +731,77 @@ describe("<MoveSheet />", () => {
     ]);
   });
 
+  it("keeps an invalid held key local by default and when its variable choice is toggled back", async () => {
+    const heldKeyPlan = plan("hash-held-key", {
+      looksLikeAKey: [row("api_key", "api_key", null)],
+    });
+    const variableChoice = mount({
+      plans: [heldKeyPlan],
+      acceptAnswers: [ACCEPTED],
+    });
+    const initialRow = await screen.findByTestId("move-sheet-key-row");
+    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
+    expect(initialRow.textContent).not.toContain("would become a secret");
+    expect(
+      within(initialRow)
+        .getByRole("button", {
+          name: "Leave on this computer only",
+        })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    fireEvent.click(
+      within(initialRow).getByRole("button", { name: "Leave as a variable" }),
+    );
+    expect(
+      within(initialRow)
+        .getByRole("button", {
+          name: "Leave as a variable",
+        })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await waitFor(() => {
+      expect(variableChoice.accepts[0]?.keyChoices).toEqual([
+        { key: "api_key", choice: "variable" },
+      ]);
+      expect(useMoveSheetStore.getState().target).toBeNull();
+    });
+
+    cleanup();
+    useMoveSheetStore.setState({ target: null });
+
+    const toggledBack = mount({
+      plans: [heldKeyPlan],
+      acceptAnswers: [ACCEPTED],
+    });
+    const toggledRow = await screen.findByTestId("move-sheet-key-row");
+    const variableButton = within(toggledRow).getByRole("button", {
+      name: "Leave as a variable",
+    });
+    fireEvent.click(variableButton);
+    expect(variableButton.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(variableButton);
+
+    expect(variableButton.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      within(toggledRow)
+        .getByRole("button", {
+          name: "Leave on this computer only",
+        })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.queryByTestId("move-sheet-moves")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("move-sheet-accept"));
+    await waitFor(() => {
+      expect(toggledBack.accepts[0]?.keyChoices).toEqual([
+        { key: "api_key", choice: "stays" },
+      ]);
+      expect(useMoveSheetStore.getState().target).toBeNull();
+    });
+  });
+
   it("re-reads the plan on plan_changed, says so, and sends the new hash next", async () => {
     const changed = plan("hash-2", {
       moves: [row("EDITOR", "EDITOR", null)],
@@ -951,6 +1023,70 @@ describe("<MoveSheet />", () => {
       ]);
       expect(rowButtons(1)).toEqual(["Leave on this computer only"]);
       expect(rowButtons(2)).toEqual([]);
+    });
+
+    it("offers secret storage only for names the secret intake accepts", async () => {
+      const overlongName = `A${"B".repeat(128)}`;
+      const { accepts } = mount({
+        plans: [
+          planWith(
+            "hash-secret-names",
+            {
+              moves: [
+                row("region", "region", null),
+                row("_PRIVATE", "_PRIVATE", null),
+                row(overlongName, overlongName, null),
+                rowOfKind(
+                  "claude-code:region",
+                  "env_override",
+                  "Claude Code override",
+                ),
+                row("GITHUB_TOKEN", "GITHUB_TOKEN", null),
+              ],
+            },
+            { personalHoldsSecrets: false, itemChoices: true },
+          ),
+        ],
+        acceptAnswers: [ACCEPTED],
+      });
+      const showAll = await screen.findByRole("button", {
+        name: "Show all 5",
+      });
+      fireEvent.click(showAll);
+
+      const rows = await within(
+        screen.getByTestId("move-sheet-moves"),
+      ).findAllByTestId("move-sheet-moves-row");
+      expect(rows).toHaveLength(5);
+      for (const index of [0, 1, 2, 3]) {
+        expect(
+          within(rows[index]).queryByRole("button", {
+            name: "Mark as a secret",
+          }),
+        ).toBeNull();
+        expect(
+          within(rows[index]).getByRole("button", {
+            name: "Leave on this computer only",
+          }),
+        ).toBeTruthy();
+      }
+      expect(
+        within(rows[4]).getByRole("button", {
+          name: "Mark as a secret",
+        }),
+      ).toBeTruthy();
+
+      fireEvent.click(
+        within(rows[4]).getByRole("button", {
+          name: "Leave on this computer only",
+        }),
+      );
+      fireEvent.click(screen.getByTestId("move-sheet-accept"));
+      await waitFor(() =>
+        expect(accepts[0]?.keyChoices).toEqual([
+          { key: "item:variable:GITHUB_TOKEN", choice: "stays" },
+        ]),
+      );
     });
 
     it("offers no choice on a host that does not honour them, and sends no item entry", async () => {

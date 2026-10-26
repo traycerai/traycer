@@ -16,7 +16,11 @@ import type {
   BotSubscribeServerFrame,
 } from "@traycer/protocol/host/bot/schemas";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
-import { useBotActivity } from "@/hooks/bots/use-bot-activity";
+import {
+  botWorkingOf,
+  replyingSessionOf,
+  useBotActivity,
+} from "@/hooks/bots/use-bot-activity";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
 
@@ -236,5 +240,53 @@ describe("useBotActivity", () => {
     act(() => tab.session.emit(activityFrame({ kind: "trunk" }, REPLYING)));
 
     expect(tab.current()).toBeNull();
+  });
+});
+
+describe("replyingSessionOf and botWorkingOf", () => {
+  const IDLE: BotSessionActivity = {
+    state: "idle",
+    startedAt: null,
+    step: null,
+    requestId: null,
+  };
+  const LATER: BotSessionActivity = {
+    ...REPLYING,
+    startedAt: 2_000,
+    step: "later",
+  };
+  const EARLIER: BotSessionActivity = {
+    ...REPLYING,
+    startedAt: 1_000,
+    step: "earlier",
+  };
+
+  it("names the trunk's turn before a thread's, and the earliest-started of several threads", () => {
+    expect(replyingSessionOf({ trunk: LATER, threads: { a: EARLIER } })).toBe(
+      LATER,
+    );
+    expect(
+      replyingSessionOf({ trunk: IDLE, threads: { a: LATER, b: EARLIER } }),
+    ).toBe(EARLIER);
+    expect(
+      replyingSessionOf({
+        trunk: null,
+        threads: { a: { ...REPLYING, startedAt: null }, b: EARLIER },
+      }),
+    ).toBe(EARLIER);
+  });
+
+  it("is null while nothing replies, a failed or parked session included", () => {
+    expect(replyingSessionOf(null)).toBeNull();
+    expect(
+      replyingSessionOf({ trunk: IDLE, threads: { a: FAILED } }),
+    ).toBeNull();
+  });
+
+  it("says working for any replying session, idle once the trunk is known and none replies, and unknown otherwise", () => {
+    expect(botWorkingOf({ trunk: null, threads: { a: EARLIER } })).toBe(true);
+    expect(botWorkingOf({ trunk: IDLE, threads: { a: IDLE } })).toBe(false);
+    expect(botWorkingOf({ trunk: null, threads: {} })).toBeNull();
+    expect(botWorkingOf(null)).toBeNull();
   });
 });

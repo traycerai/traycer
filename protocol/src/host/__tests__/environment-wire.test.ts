@@ -85,13 +85,13 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
   "environment.review",
+  "environment.secrets.list",
 ]);
 
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
   "providers.link",
   "providers.linkComplete",
-  "environment.secrets.list",
   "environment.secrets.create",
   "environment.secrets.verify",
   "environment.secrets.replaceValue",

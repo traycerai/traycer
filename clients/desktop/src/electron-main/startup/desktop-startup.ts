@@ -209,6 +209,7 @@ import {
   installScreenMonitor,
   readDisplayTopology,
 } from "../app/screen-monitor";
+import { installTrackpadScrollPhaseMonitor } from "../app/trackpad-scroll-phase-monitor";
 import { hardenDefaultSession } from "../app/security";
 import {
   getRegisteredAccelerator,
@@ -993,6 +994,14 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   installScreenMonitor((reason, topology) => {
     bridge.fanOut(RunnerHostEvent.displayTopologyChange, { reason, topology });
   });
+  // Every window gets the stream; AppKit already routed the wheel ticks to
+  // the window under the pointer, and the renderer only claims a sequence
+  // once its own DOM wheel ticks confirm it is that window.
+  bridge.disposeFns.push(
+    installTrackpadScrollPhaseMonitor((event) => {
+      bridge.fanOut(RunnerHostEvent.trackpadScrollPhase, event);
+    }),
+  );
 
   const menu = new MenuController({
     appName: appDisplayName,

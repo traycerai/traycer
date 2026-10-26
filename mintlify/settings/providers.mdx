@@ -44,9 +44,10 @@ Tabs depend on the provider. A provider opens on its first tab.
 
 | Tab                   | What it holds                                                                                          | Shown for                                                                     |
 | --------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| **General** | The [session name template](#claude-code-session-names). | Claude Code |
 | **Account**           | The provider's [API key](#account).                                                                    | Cursor, Kiro, Droid, OpenRouter, Hugging Face, Amp                            |
 | **Profiles & Limits** | [Managed profiles](#managed-profiles) and their usage limits.                                          | Claude Code, Codex, Grok, Antigravity                                         |
-| **Usage limits**      | The provider's usage limits, or your Traycer subscription for Traycer Inference.                       | OpenCode, Traycer Inference, Cursor, OpenRouter, Kilo Code, Hugging Face      |
+| **Usage limits**      | The provider's usage limits, or your Traycer subscription for Traycer Inference.                       | OpenCode, Traycer Inference, Cursor, OpenRouter, Kilo Code, Hugging Face, Kimi |
 | **CLI & Args**        | The [CLI binary and its versions](#cli-binary-and-arguments), and Terminal interface CLI arguments.    | Every provider                                                                |
 | **Env**               | [Environment variables](#environment-variables) for that provider.                                     | Every provider                                                                |
 | **Permissions**       | Who reviews that provider's commands in Auto mode.                                                     | Every provider                                                                |
@@ -56,6 +57,27 @@ Tabs depend on the provider. A provider opens on its first tab.
 | **Skills**            | [Skills](/settings/providers/skills).                                                                  | Every provider except Hermes Agent, Oh My Pi, Devin, Pi, Reasonix, Antigravity, and Command Code |
 
 Usage limits and the banners that appear when a limit is reached are covered in [Usage limits and model routing](/agents-and-models/usage-limits-and-routing).
+
+## Claude Code Session Names
+
+In **Providers → Claude Code → General**, the **Session name** group controls the names of new Claude Code sessions on the **Terminal** interface. It applies to the host selected in Settings.
+
+Edit **Name template**, check the sample preview, then press Enter or leave the field to save. **Reset** restores `Traycer · {project} · {date}`.
+
+| Placeholder | Value |
+| --- | --- |
+| `{project}` | Working folder name |
+| `{repository}` | Git repository name |
+| `{branch}` | Current Git branch |
+| `{task}` | Task title when the session starts |
+| `{agent}` | Agent title when the session starts |
+| `{agent_id}` | First eight characters of the agent ID |
+| `{date}` | Date on the host, as `YYYY-MM-DD` |
+| `{time}` | Time on the host, as `HH-MM` |
+
+For example, `{project} · {branch} · {date}` includes the working folder, branch, and date. Missing values are left out; new Tasks and agents may not have titles yet.
+
+Resuming a session keeps its existing name, including a name set with Claude Code's `/rename`. Changing the template does not rename existing sessions or Chat interface agents.
 
 ## Account
 

@@ -264,7 +264,7 @@ predicates; it never imports the assembled index or the search consumer.
   `null` for a rendered card, `"Providers"` for that page's region groups.
 - **Availability composes for containment only.** A row's effective
   `availableWhen` is its own AND its group's. The merged groups (General ▸
-  Agents, Browser ▸ Agents, Sounds ▸ Notifications) are drawn in every shell,
+  Agents, Browser ▸ Agents, Alerts ▸ Notifications) are drawn in every shell,
   so each gated row in them carries its own predicate (Agent roles, OS
   notifications, Push notifications). A contribution target is not a
   container: contributing never changes the target's availability.
@@ -445,9 +445,9 @@ different answers:
   promise the row, so no shell offers it. "Detected dev origins" shipped as a
   result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Agent roles and OS notifications need a
-  desktop bridge; Push notifications needs `pushPermission`; Voice input and Prevent
-  sleep hide in the mobile app, and Layout's "Show the status bar on small
-  screens" row exists only there) - indexed, with
+  desktop bridge; Push notifications needs `pushPermission`; Voice input, Prevent
+  sleep and Opening behavior's Links group hide in the mobile app, and Layout's
+  "Show the status bar on small screens" row exists only there) - indexed, with
   the definition's
   `availableWhen` set to the gate's **named predicate** in
   `lib/settings/settings-availability.ts`. The panel gates the row (or group)
@@ -627,6 +627,12 @@ to join.
   the row alone and gates it, and the panel draws the group. The panel gates
   nothing; the group holds the branch prefix in every shell, so it is never a
   heading over an empty card.
+- **Opening behavior ▸ Links** (`opening-behavior-panel.tsx`,
+  `isLinkOpenRowAvailable = !mobileApp`) - the build sends every web link to
+  the phone's own browser (`useLinkOpeners` in `lib/links/open-link.ts`): its
+  browser tile only views a host's browser and carries none of the user's
+  sign-ins, so "In Traycer" vs "In default browser" would decide nothing. The
+  modifier legend under the page goes with it. Tile placement stays.
 - **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
   The installed mobile app is the phone layout at every width, so nothing can make them apply there.
   A narrow BROWSER tab keeps them, live, with the note "Applies on wider windows." (the Minimap's: "Shows on wider windows with a mouse."), because widening the window is the way back - the layout form's shell rule (Layout, below).
@@ -910,7 +916,7 @@ Personal; if it is about your account rather than your settings it sits under
 Account; the rest is the app itself.
 
 - **Application** - General, Appearance, Browser, Opening behavior, Sounds,
-  Keybindings, Layout, Diagnostics.
+  Alerts, Keybindings, Layout, Diagnostics.
 - **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
   and Delete account on mobile. Read through the window's own host, never
   through the picker.
@@ -1724,18 +1730,20 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): two groups.
-  - **Chimes** (`panels/notification-chime-settings-section.tsx`): one
-    dropdown per kind of alert. Untitled, because the page is already named
-    for it.
-  - **Notifications** (anchor `app-notifications-notifications`): where the
-    alerts themselves are configured. **OS notifications** on a desktop with
-    the system-settings bridge (`system-notification-settings-section.tsx`),
-    **Push notifications on this phone** in the phone app
-    (`push-permission-section.tsx`; "this phone", never "this device", which
-    is the UI word for a host), and **Notification events**, a pointer to the
-    selected host's Notifications page, in every shell. System, This phone
-    and Events were three groups of one row each.
+  `/settings/app-notifications`): one group, **Chimes**
+  (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
+  of alert. Untitled, because the page is already named for it. The id still
+  says notifications: the OS and push rows moved to Alerts, and ids do not
+  change.
+- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
+  group, **Notifications** (anchor `alerts-notifications`), where the alerts
+  themselves are configured. **OS notifications** on a desktop with the
+  system-settings bridge (`system-notification-settings-section.tsx`),
+  **Push notifications on this phone** and its four severity switches in the
+  phone app (`push-permission-section.tsx`; "this phone", never "this
+  device", which is the UI word for a host), and **Notification events**, a
+  pointer to the selected host's Notifications page, in every shell. It was
+  the Sounds page's second group; it moved because push is not a sound.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
   `/settings/opening-behavior`): link routing (Open links and per-link-type
   choices), general tile placement and per-type overrides

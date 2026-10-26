@@ -92,6 +92,9 @@ vi.mock("@/components/settings/environment/team-pick-label", () => ({
 vi.mock("@/components/settings/environment/team-rows", () => ({
   TeamRows: () => null,
 }));
+vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
+  InviteAcceptDialog: () => null,
+}));
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
 // client. Not done by default, as for a new account.
@@ -354,15 +357,19 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(section?.label).toBe("Agents");
   });
 
-  it("labels application sounds apart from host notification events", () => {
-    const app = SETTINGS_SECTIONS.find(
+  it("labels application sounds and alerts apart from host notification events", () => {
+    const sounds = SETTINGS_SECTIONS.find(
       (section) => section.id === "app-notifications",
     );
+    const alerts = SETTINGS_SECTIONS.find((section) => section.id === "alerts");
     const host = SETTINGS_SECTIONS.find(
       (section) => section.id === "notifications",
     );
-    expect(app?.label).toBe("Sounds");
+    expect(sounds?.label).toBe("Sounds");
+    expect(alerts?.label).toBe("Alerts");
     expect(host?.label).toBe("Notifications");
+    // Different controls, so different icons too (the rail-table rule).
+    expect(new Set([sounds?.icon, alerts?.icon, host?.icon]).size).toBe(3);
   });
 
   it("puts Getting started before General in the application settings order", () => {
@@ -715,6 +722,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["browser", "app"],
   ["opening-behavior", "app"],
   ["app-notifications", "app"],
+  ["alerts", "app"],
   ["keybindings", "app"],
   ["layout", "app"],
   ["app-diagnostics", "app"],

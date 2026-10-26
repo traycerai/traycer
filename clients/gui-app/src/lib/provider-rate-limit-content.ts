@@ -301,11 +301,13 @@ export function resolveProviderPlanLabel(
     // None of the credit providers report a tier - Hugging Face's billing-usage
     // endpoint carries no plan field either, and Cursor's current-period usage
     // reports the plan's SIZE (an included-credit allowance) but never its
-    // NAME - so all four render no chip.
+    // NAME - so all four render no chip. Kimi's usage endpoint carries no plan
+    // field either.
     case "openrouter":
     case "kilocode":
     case "huggingface":
     case "cursor":
+    case "kimi":
       return null;
   }
 }

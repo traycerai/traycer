@@ -1,4 +1,9 @@
 import * as Sentry from "@sentry/node";
+import {
+  scrubSentryEventInPlace,
+  scrubSentrySpanInPlace,
+  scrubSentryTransactionInPlace,
+} from "@traycer-clients/shared/platform/sentry-scrub";
 import { config } from "./config";
 import { trackingHttpModule } from "./sentry-transport";
 
@@ -20,6 +25,23 @@ if (dsn) {
     tracesSampleRate: samplingRate,
     profilesSampleRate: samplingRate,
     attachStacktrace: true,
+    // The client scrubber every other Traycer client runs. The CLI's frames
+    // and the SDK's child-process breadcrumbs name absolute paths under the
+    // person's home folder, and an error message carries whatever it quotes.
+    beforeSend: (event) => {
+      scrubSentryEventInPlace(event);
+      return event;
+    },
+    // `beforeSend` never sees a transaction, and child spans travel outside
+    // the transaction event.
+    beforeSendTransaction: (event) => {
+      scrubSentryTransactionInPlace(event);
+      return event;
+    },
+    beforeSendSpan: (span) => {
+      scrubSentrySpanInPlace(span);
+      return span;
+    },
     integrations: [
       Sentry.onUncaughtExceptionIntegration({
         exitEvenIfOtherHandlersAreRegistered: false,

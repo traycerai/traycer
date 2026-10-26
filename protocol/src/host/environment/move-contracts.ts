@@ -18,6 +18,7 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { SANDBOX_SECRET_NAME_PATTERN } from "@traycer/protocol/host/secret-intake-catalogue";
 import {
   environmentItemKindSchema,
   environmentOsSchema,
@@ -196,6 +197,18 @@ export function environmentMoveItemChoiceKey(
   key: string,
 ): string {
   return `${ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX}${kind}:${key}`;
+}
+
+/** A variable row's secret name, or null when intake cannot store it. */
+export function environmentMoveSecretName(
+  kind: string,
+  key: string,
+): string | null {
+  if (kind !== "variable" && kind !== "env_override") return null;
+  const separator = key.indexOf(":");
+  if (kind === "env_override" && separator <= 0) return null;
+  const name = kind === "variable" ? key : key.slice(separator + 1);
+  return SANDBOX_SECRET_NAME_PATTERN.test(name) ? name : null;
 }
 
 /**

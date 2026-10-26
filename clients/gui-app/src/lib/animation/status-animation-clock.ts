@@ -1,5 +1,5 @@
-import { useLayoutEffect, useSyncExternalStore, type RefObject } from "react";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useCallback, useSyncExternalStore } from "react";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   isDocumentVisible,
   subscribeDocumentVisibility,
@@ -53,8 +53,23 @@ export type StatusAnimationWriter = (elapsedMs: number) => void;
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
-/** Writer -> cadence in ms (a positive multiple of the tick). */
-const writers = new Map<StatusAnimationWriter, number>();
+/**
+ * One subscribed writer. `element` is the node it animates; `null` means the
+ * writer is not tied to a node and always ticks. `onScreen` is the shared
+ * IntersectionObserver's last answer for that node, `true` until the first one
+ * arrives so a writer already on screen never waits a frame.
+ */
+interface WriterRegistration {
+  readonly cadenceMs: number;
+  readonly element: Element | null;
+  onScreen: boolean;
+}
+
+const writers = new Map<StatusAnimationWriter, WriterRegistration>();
+const writersByElement = new Map<Element, Set<StatusAnimationWriter>>();
+let intersectionObserver: IntersectionObserver | null = null;
+/** Writers whose element is on screen (or untracked): the interval runs only while this is > 0. */
+let onScreenWriters = 0;
 const reducedMotionSubscribers = new Set<() => void>();
 let intervalHandle: number | null = null;
 let elapsedMs = 0;
@@ -79,10 +94,88 @@ function documentHidden(): boolean {
 
 function tick(): void {
   elapsedMs += STATUS_ANIMATION_TICK_MS;
-  for (const [writer, cadenceMs] of writers) {
-    if (elapsedMs % cadenceMs !== 0) continue;
+  for (const [writer, registration] of writers) {
+    if (!registration.onScreen) continue;
+    if (elapsedMs % registration.cadenceMs !== 0) continue;
     writer(elapsedMs);
   }
+}
+
+function sharedIntersectionObserver(): IntersectionObserver | null {
+  if (intersectionObserver !== null) return intersectionObserver;
+  if (typeof IntersectionObserver !== "function") return null;
+  intersectionObserver = new IntersectionObserver(handleIntersections);
+  return intersectionObserver;
+}
+
+/**
+ * Off screen means what the eye cannot see, decided off the main thread's
+ * critical path: the IntersectionObserver reports a node scrolled out of its
+ * scroller, clipped away, or outside the viewport, with no layout read in the
+ * tick. Concealed keep-alive tab bodies are gated earlier, in the hooks
+ * (`useTileBodyVisible`), because `visibility:hidden` still intersects.
+ */
+function handleIntersections(entries: IntersectionObserverEntry[]): void {
+  for (const entry of entries) {
+    const subscribed = writersByElement.get(entry.target);
+    if (subscribed === undefined) continue;
+    for (const writer of Array.from(subscribed)) {
+      const registration = writers.get(writer);
+      if (registration === undefined) continue;
+      setWriterOnScreen(writer, registration, entry.isIntersecting);
+    }
+  }
+}
+
+function observeWriter(
+  writer: StatusAnimationWriter,
+  element: Element | null,
+): void {
+  const observer = element === null ? null : sharedIntersectionObserver();
+  if (element === null || observer === null) return;
+  const subscribed = writersByElement.get(element);
+  if (subscribed !== undefined) {
+    subscribed.add(writer);
+    return;
+  }
+  writersByElement.set(element, new Set([writer]));
+  observer.observe(element);
+}
+
+function unobserveWriter(
+  writer: StatusAnimationWriter,
+  element: Element | null,
+): void {
+  if (element === null) return;
+  const subscribed = writersByElement.get(element);
+  if (subscribed === undefined) return;
+  subscribed.delete(writer);
+  if (subscribed.size > 0) return;
+  writersByElement.delete(element);
+  intersectionObserver?.unobserve(element);
+}
+
+/**
+ * A writer coming back on screen is written at once at the SHARED logical
+ * time, so it resumes in phase with every other indicator instead of showing
+ * the frame it was left at; the interval starts with the first on-screen
+ * writer and stops with the last.
+ */
+function setWriterOnScreen(
+  writer: StatusAnimationWriter,
+  registration: WriterRegistration,
+  onScreen: boolean,
+): void {
+  if (registration.onScreen === onScreen) return;
+  registration.onScreen = onScreen;
+  if (!onScreen) {
+    onScreenWriters -= 1;
+    if (onScreenWriters === 0) stop();
+    return;
+  }
+  onScreenWriters += 1;
+  writer(elapsedMs);
+  start();
 }
 
 /** Snaps a requested cadence to a positive multiple of the tick. */
@@ -94,7 +187,7 @@ function normalizeCadence(cadenceMs: number): number {
 function start(): void {
   if (
     intervalHandle !== null ||
-    writers.size === 0 ||
+    onScreenWriters === 0 ||
     documentHidden() ||
     prefersReducedMotion()
   )
@@ -143,22 +236,45 @@ export function statusAnimationElapsedMs(): number {
 
 /**
  * Subscribes a writer to the shared clock at `cadenceMs` (snapped to a
- * multiple of the tick); returns the unsubscribe. The interval exists only
- * while at least one writer is subscribed, the document is visible and
- * reduced motion is off; a writer subscribed under reduced motion is simply
- * never ticked until the preference turns off.
+ * multiple of the tick); returns the unsubscribe. `element` is the node the
+ * writer animates: the writer is ticked only while that node is on screen
+ * (`null` for a writer tied to no node, which always ticks). A writer whose
+ * node is replaced resubscribes with the new one. The interval exists only
+ * while at least one subscribed writer is on screen, the document is visible
+ * and reduced motion is off; a writer subscribed under reduced motion is
+ * simply never ticked until the preference turns off.
  */
 export function subscribeStatusAnimation(
   writer: StatusAnimationWriter,
   cadenceMs: number,
+  element: Element | null,
 ): () => void {
-  writers.set(writer, normalizeCadence(cadenceMs));
+  const previous = writers.get(writer);
+  if (previous !== undefined) removeWriter(writer, previous);
+  const registration: WriterRegistration = {
+    cadenceMs: normalizeCadence(cadenceMs),
+    element,
+    onScreen: true,
+  };
+  writers.set(writer, registration);
+  onScreenWriters += 1;
+  observeWriter(writer, element);
   attachListenersOnce();
   start();
   return () => {
-    writers.delete(writer);
-    if (writers.size === 0) stop();
+    if (writers.get(writer) === registration)
+      removeWriter(writer, registration);
   };
+}
+
+function removeWriter(
+  writer: StatusAnimationWriter,
+  registration: WriterRegistration,
+): void {
+  writers.delete(writer);
+  unobserveWriter(writer, registration.element);
+  if (registration.onScreen) onScreenWriters -= 1;
+  if (onScreenWriters === 0) stop();
 }
 
 function subscribeReducedMotion(notify: () => void): () => void {
@@ -183,58 +299,65 @@ export function useReducedMotion(): boolean {
 }
 
 /**
- * Drives one element from the shared clock. `write` runs once synchronously
- * (pre-paint, so the first frame is already in place) and then on every tick
- * while mounted; `clear` removes what `write` set, and runs when the
- * subscription ends - unmount, a `write` identity change, or reduced motion
- * turning on - so the stylesheet's static rules take over. Keep both
- * referentially stable (`useCallback`): the effect resubscribes when either
- * changes. Under reduced motion neither runs and nothing subscribes.
+ * Drives one element from the shared clock; returns the callback ref to put on
+ * that element. On attach `write` runs once synchronously (in the commit, so
+ * the first frame is already in place before paint) and then on every tick
+ * while the element is on screen; `clear` removes what `write` set, and runs
+ * when the subscription ends - detach, a host element swapped by a
+ * polymorphic `as` (React detaches the old node and attaches the new one), a
+ * `write` identity change, or reduced motion turning on - so the stylesheet's
+ * static rules take over. Keep `write` and `clear` referentially stable
+ * (`useCallback`): the ref changes, and so resubscribes, when either does.
+ * Under reduced motion neither runs and nothing subscribes.
  *
  * The target may be an HTML or an SVG element - both carry the inline `style`
  * a writer writes, and a glyph animated in place (a chip's lucide icon) is an
- * `<svg>`, not a wrapper around one.
+ * `<svg>`, not a wrapper around one. `cadenceMs` is one of the
+ * `STATUS_ANIMATION_*_CADENCE_MS` constants.
  *
- * Each tick re-reads `ref`, so a host element swapped underneath the same
- * component (a polymorphic `as` prop) picks up the animation on the next tick.
- * `cadenceMs` is one of the `STATUS_ANIMATION_*_CADENCE_MS` constants.
- *
- * A pane kept mounted but hidden (`TopLevelTabHost` keeps inactive tabs under
- * `display:none`) cannot paint, so its writers unsubscribe while the pane is
- * hidden (`usePaneVisible`, `true` outside a pane) and resume on the next show
- * - the same gate the stream flush coordinator's hidden tier follows.
+ * Only an indicator someone can see is ticked. A body that cannot paint
+ * unsubscribes: a hidden keep-alive pane (`TopLevelTabHost` keeps inactive
+ * tabs under `display:none`) and an unselected tab body kept mounted under
+ * `visibility:hidden` (retained chats, every terminal tab), both read through
+ * `useTileBodyVisible` (`true` outside a pane or tab) - the same gate the
+ * stream flush coordinator's hidden tier follows. An element that is mounted
+ * and shown but scrolled out or outside the viewport stays subscribed and is
+ * simply not ticked until the clock's IntersectionObserver sees it again.
  */
 export function useStatusAnimation<T extends HTMLElement | SVGElement>(
-  ref: RefObject<T | null>,
   write: (element: T, elapsedMs: number) => void,
   clear: (element: T) => void,
   cadenceMs: number,
-): void {
+): (element: T | null) => (() => void) | undefined {
   const reducedMotion = useReducedMotion();
-  const paneVisible = usePaneVisible();
-  useLayoutEffect(() => {
-    if (reducedMotion || !paneVisible) return;
-    const mounted = ref.current;
-    if (mounted === null) return;
-    // The element last written: `ref` is re-read per tick (not in the
-    // cleanup, where React may already have detached it) so a swapped host
-    // element is picked up and the one that was animated is the one cleared.
-    let target = mounted;
-    write(target, elapsedMs);
-    const unsubscribe = subscribeStatusAnimation((elapsed) => {
-      target = ref.current ?? target;
-      write(target, elapsed);
-    }, cadenceMs);
-    return () => {
-      unsubscribe();
-      clear(target);
-    };
-  }, [ref, write, clear, cadenceMs, reducedMotion, paneVisible]);
+  const bodyVisible = useTileBodyVisible();
+  return useCallback(
+    (element: T | null) => {
+      if (element === null || reducedMotion || !bodyVisible) return undefined;
+      write(element, elapsedMs);
+      const unsubscribe = subscribeStatusAnimation(
+        (elapsed) => {
+          write(element, elapsed);
+        },
+        cadenceMs,
+        element,
+      );
+      return () => {
+        unsubscribe();
+        clear(element);
+      };
+    },
+    [write, clear, cadenceMs, reducedMotion, bodyVisible],
+  );
 }
 
 /** Test seam: drops every writer and listener, stops the interval and rewinds the clock. */
 export function resetStatusAnimationClockForTests(): void {
   writers.clear();
+  writersByElement.clear();
+  intersectionObserver?.disconnect();
+  intersectionObserver = null;
+  onScreenWriters = 0;
   reducedMotionSubscribers.clear();
   stop();
   detachListeners();

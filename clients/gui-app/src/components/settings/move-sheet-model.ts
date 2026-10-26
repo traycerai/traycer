@@ -1,5 +1,6 @@
 import {
   environmentMoveItemChoiceKey,
+  environmentMoveSecretName,
   type EnvironmentMoveAcceptRequest,
   type EnvironmentMovePlanResponseV12,
 } from "@traycer/protocol/host/environment/move-contracts";
@@ -14,12 +15,16 @@ export type MoveRow = MovePlan["rows"]["moves"][number];
 export type MoveKeyChoice =
   EnvironmentMoveAcceptRequest["keyChoices"][number]["choice"];
 
-/**
- * A row that looks like a key moves as a secret unless the person chooses
- * `Leave as a variable` (it moves as a plain variable) or `Leave on this
- * computer only` (it stays).
- */
-export const DEFAULT_KEY_CHOICE: MoveKeyChoice = "secret";
+/** A secret choice that intake cannot store keeps the value local. */
+export function moveKeyChoice(
+  row: MoveRow,
+  choice: MoveKeyChoice,
+): MoveKeyChoice {
+  return choice === "secret" &&
+    environmentMoveSecretName(row.kind, row.key) === null
+    ? "stays"
+    : choice;
+}
 
 export const MOVE_DISCLOSURE =
   "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
@@ -137,7 +142,10 @@ export function moveRowChoices(
 ): { readonly secret: boolean; readonly stays: boolean } {
   if (!plan.itemChoices) return { secret: false, stays: false };
   const plain = row.kind === "variable" || row.kind === "env_override";
-  return { secret: plain, stays: plain || row.kind === "secret" };
+  return {
+    secret: environmentMoveSecretName(row.kind, row.key) !== null,
+    stays: plain || row.kind === "secret",
+  };
 }
 
 /** How a row in Moves goes: as planned, or as the person chose on it. */
@@ -166,7 +174,9 @@ export function movesSectionRows(
   return [
     ...plan.rows.moves.flatMap((row): MovesSectionRow[] => {
       const choiceKey = moveItemChoiceKey(row);
-      const choice = plan.itemChoices ? choices.get(choiceKey) : undefined;
+      const requested = plan.itemChoices ? choices.get(choiceKey) : undefined;
+      const choice =
+        requested === undefined ? undefined : moveKeyChoice(row, requested);
       if (choice === "stays") return [];
       return [
         {
@@ -178,7 +188,7 @@ export function movesSectionRows(
       ];
     }),
     ...plan.rows.looksLikeAKey.flatMap((row): MovesSectionRow[] => {
-      const choice = choices.get(row.key) ?? DEFAULT_KEY_CHOICE;
+      const choice = moveKeyChoice(row, choices.get(row.key) ?? "secret");
       if (choice === "stays") return [];
       return [
         {
@@ -216,12 +226,13 @@ export function rowsLeftHere(
 } {
   return {
     items: plan.itemChoices
-      ? plan.rows.moves.filter(
-          (row) => choices.get(moveItemChoiceKey(row)) === "stays",
-        )
+      ? plan.rows.moves.filter((row) => {
+          const choice = choices.get(moveItemChoiceKey(row));
+          return choice !== undefined && moveKeyChoice(row, choice) === "stays";
+        })
       : [],
     keys: plan.rows.looksLikeAKey.filter(
-      (row) => (choices.get(row.key) ?? DEFAULT_KEY_CHOICE) === "stays",
+      (row) => moveKeyChoice(row, choices.get(row.key) ?? "secret") === "stays",
     ),
   };
 }
@@ -349,13 +360,15 @@ export function moveAcceptRequest(
     keyChoices: [
       ...plan.rows.looksLikeAKey.map((row) => ({
         key: row.key,
-        choice: choices.get(row.key) ?? DEFAULT_KEY_CHOICE,
+        choice: moveKeyChoice(row, choices.get(row.key) ?? "secret"),
       })),
       ...(plan.itemChoices
         ? plan.rows.moves.flatMap((row) => {
             const key = moveItemChoiceKey(row);
             const choice = choices.get(key);
-            return choice === undefined ? [] : [{ key, choice }];
+            return choice === undefined
+              ? []
+              : [{ key, choice: moveKeyChoice(row, choice) }];
           })
         : []),
     ],

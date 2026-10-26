@@ -306,6 +306,7 @@ function Harness(props: {
     props.openAtMount
       ? {
           environmentId: ENV,
+          isTeam: true,
           teamName: "acme",
           botCount: props.botCount,
           opener: null,
@@ -319,6 +320,7 @@ function Harness(props: {
         onClick={(event) =>
           setTeam({
             environmentId: ENV,
+            isTeam: true,
             teamName: "acme",
             botCount: props.botCount,
             opener: event.currentTarget,
@@ -516,6 +518,37 @@ describe("<TeamBotSetupDialog /> once onboarding no longer applies", () => {
       expect(screen.queryByTestId("team-bot-setup-dialog")).toBeNull();
     },
   );
+});
+
+describe("<TeamBotSetupDialog /> for the personal environment", () => {
+  it("gives the create form titled New bot, with no onboarding even when a team read would lock", () => {
+    mocks.read = LOCKED;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TeamBotSetupDialog
+          team={{
+            environmentId: "env-me",
+            isTeam: false,
+            teamName: "Personal",
+            botCount: 0,
+            opener: null,
+          }}
+          connectableHostIds={CONNECTABLE}
+          environmentBindings={BINDINGS}
+          onClose={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(within(dialog()).getByText("New bot")).toBeTruthy();
+    expect(
+      within(dialog())
+        .getByTestId("stub-create-bot-form")
+        .getAttribute("data-environment-id"),
+    ).toBe("env-me");
+    expect(screen.queryByTestId("bot-onboarding-area")).toBeNull();
+    expect(screen.queryByTestId("team-bot-setup-loading")).toBeNull();
+  });
 });
 
 describe("<TeamBotSetupDialog /> before the onboarding read answers", () => {

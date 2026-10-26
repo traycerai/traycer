@@ -7,6 +7,7 @@ import type {
   DesktopMenuPopupBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
+  DesktopTrackpadScrollPhaseBridge,
   DesktopZoomBridge,
 } from "@/lib/windows/types";
 
@@ -62,6 +63,13 @@ export function resolveDesktopZoomBridge(
 ): DesktopZoomBridge | null {
   const value: unknown = Reflect.get(runnerHost, "zoom");
   return isDesktopZoomBridge(value) ? value : null;
+}
+
+export function resolveDesktopTrackpadScrollPhaseBridge(
+  runnerHost: IRunnerHost,
+): DesktopTrackpadScrollPhaseBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "trackpadScrollPhase");
+  return isDesktopTrackpadScrollPhaseBridge(value) ? value : null;
 }
 
 export function resolveDesktopHostControllerStatusBridge(
@@ -120,6 +128,12 @@ function isDesktopAppUpdatesBridge(
 
 function isDesktopPowerBridge(value: unknown): value is DesktopPowerBridge {
   return isRecord(value) && typeof value.setSleepBlocked === "function";
+}
+
+function isDesktopTrackpadScrollPhaseBridge(
+  value: unknown,
+): value is DesktopTrackpadScrollPhaseBridge {
+  return isRecord(value) && typeof value.onEvent === "function";
 }
 
 function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {
