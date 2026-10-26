@@ -302,6 +302,16 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(applyButton().disabled).toBe(true);
   });
 
+  it("says only that the next turn uses what is applied, not what the bot runs on", () => {
+    mountPanel(BOT, null, false);
+
+    expect(
+      screen.getByText("The next turn uses what you apply here."),
+    ).toBeTruthy();
+    expect(screen.getByTestId("stub-harness-model-picker")).toBeTruthy();
+    expect(screen.queryByText(/Runs on/)).toBeNull();
+  });
+
   it("enables Apply once the person picks another model, and applies exactly that", async () => {
     const user = userEvent.setup();
     mountPanel(BOT, null, false);

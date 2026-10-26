@@ -11,6 +11,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
@@ -52,6 +53,7 @@ export function HomeBotsSection(): ReactNode {
   const support = useHostMethodSupport(hostId, "bot.list");
   const enabled = support === true;
   const environments = useEnvironmentListQuery(client, enabled);
+  useRereadEnvironmentListOnFocus(enabled);
   const bots = useBotListQuery(client, enabled);
   // A teammate's change to the list refetches it without waiting for focus.
   useBotListChangedSubscriptionForApp(enabled);

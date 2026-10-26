@@ -8,7 +8,20 @@
  * environment's machine list.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
@@ -172,6 +185,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
 }));
 
 import { HomeBotsSection } from "@/components/home/bots/home-bots-section";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 const PERSONAL: EnvironmentDescriptor = {
   environmentId: "env-personal",
@@ -222,9 +236,28 @@ function resolveBothQueries(): void {
 
 function mountSection(): void {
   render(
-    <StrictMode>
-      <HomeBotsSection />
-    </StrictMode>,
+    <QueryClientProvider client={new QueryClient()}>
+      <StrictMode>
+        <HomeBotsSection />
+      </StrictMode>
+    </QueryClientProvider>,
+  );
+}
+
+/** A real query over what the host's `environment.list` answers, for the focus re-read. */
+const hostAnswer = { environments: [] as EnvironmentDescriptor[] };
+
+function useLiveEnvironmentList(enabled: boolean): unknown {
+  return useQuery(
+    queryOptions({
+      queryKey: [
+        ...hostQueryKeys.methodScope("host-1", "environment.list"),
+        {},
+      ],
+      queryFn: () => Promise.resolve({ environments: hostAnswer.environments }),
+      enabled,
+      staleTime: Infinity,
+    }),
   );
 }
 
@@ -607,6 +640,30 @@ describe("HomeBotsSection create a team", () => {
       "https://platform.traycer.ai/settings?create-team=1",
     );
     expect(mocks.openLink.mock.calls[0]?.[1]).toBe("account");
+  });
+
+  it("re-reads the environment list when the window regains focus, so a team made on the dashboard replaces the card", async () => {
+    hostAnswer.environments = [PERSONAL];
+    mocks.useEnvironmentListQuery.mockImplementation((_client, enabled) =>
+      useLiveEnvironmentList(enabled),
+    );
+    mocks.state.bots.data = { bots: [], mainBotIds: null };
+    mountSection();
+    await screen.findByTestId("home-bots-create-team");
+
+    hostAnswer.environments = [PERSONAL, TEAM];
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByTestId("home-bots-group")
+          .map((group) => group.getAttribute("data-environment-id")),
+      ).toEqual(["env-personal", "env-team"]);
+    });
+    expect(screen.queryByTestId("home-bots-create-team")).toBeNull();
   });
 
   it("draws no card when a team is listed, or with no shell to open it", () => {

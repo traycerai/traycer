@@ -8,7 +8,13 @@
  */
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import {
@@ -204,6 +210,77 @@ describe("<BotResizablePane />", () => {
 
     expect(element.style.getPropertyValue("--bot-pane-width")).toBe("600px");
   });
+});
+
+describe("<BotResizablePane /> drawn narrower than its stored width", () => {
+  const STORED_PX = 400;
+  const DRAWN_PX = 300;
+
+  /** Reports a size as soon as it observes, as a laid-out pane's observer does. */
+  class StubResizeObserver implements ResizeObserver {
+    constructor(private readonly callback: () => void) {}
+    observe(): void {
+      this.callback();
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+
+  /** A pane a cap holds at DRAWN_PX though the store says STORED_PX. */
+  function mountCapped(
+    pane: BotPane,
+    edge: "left" | "right",
+  ): { readonly handle: HTMLElement } {
+    vi.stubGlobal("ResizeObserver", StubResizeObserver);
+    useBotPaneWidthsStore.getState().setWidthPx(pane, STORED_PX);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, DRAWN_PX, 800),
+    );
+    render(<Panes pane={pane} edge={edge} />);
+    return { handle: screen.getByTestId("pane-resize-handle") };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("announces the drawn width, not the stored one", () => {
+    const { handle } = mountCapped("sidebar", "right");
+
+    expect(handle.getAttribute("aria-valuenow")).toBe(String(DRAWN_PX));
+  });
+
+  it.each([
+    {
+      pane: "sidebar" as const,
+      edge: "right" as const,
+      key: "ArrowRight",
+      width: DRAWN_PX + 24,
+    },
+    {
+      pane: "thread" as const,
+      edge: "left" as const,
+      key: "ArrowLeft",
+      width: DRAWN_PX + 24,
+    },
+    {
+      pane: "sidebar" as const,
+      edge: "right" as const,
+      key: "ArrowLeft",
+      width: DRAWN_PX - 24,
+    },
+  ])(
+    "nudges the $pane from the drawn width on $key",
+    ({ pane, edge, key, width }) => {
+      const { handle } = mountCapped(pane, edge);
+
+      act(() => {
+        fireEvent.keyDown(handle, { key });
+      });
+
+      expect(useBotPaneWidthsStore.getState().widthPx[pane]).toBe(width);
+    },
+  );
 });
 
 describe("the stored pane widths", () => {

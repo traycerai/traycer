@@ -266,11 +266,11 @@ describe("<HomeBotRow /> state", () => {
     expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
   });
 
-  it("says Idle, not Working, for a team bot while the registry has not answered which hosts are personal", () => {
+  it("says Working for a replying team bot while the registry has not answered which hosts are personal", () => {
     mocks.state.snapshot = snapshotWith({ trunk: REPLYING, threads: {} });
     mountRow({ ...OWN_AND_DIALABLE, personal: null });
 
-    expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
+    expect(stateBadge()).toEqual({ text: "Working", state: "working" });
   });
 
   it("says Idle for a personal environment's bot on the same dialable personal host", () => {

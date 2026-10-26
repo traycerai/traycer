@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
-import { botWorkingOf } from "@/hooks/bots/use-bot-activity";
+import { botWorkingOf, liveActivityOf } from "@/hooks/bots/use-bot-activity";
 import {
   rebindUnreachableBotTab,
   useBotTabsStore,
@@ -57,8 +57,9 @@ const STATE_BADGE_VARIANTS = {
  * The row never names the machine the bot runs on: it says working, idle or
  * paused (`homeBotState`), working while the snapshot's activity has the
  * trunk or any thread replying. Idle says the bot's state is known, so with
- * no reading of it (no snapshot, or no host has written the trunk) the row
- * says nothing rather than idle. Opening it opens the tab through this
+ * no reading of it (no snapshot, no host has written the trunk, or a stream
+ * closed for good, whose last reading nothing will move) the row says
+ * nothing rather than idle. Opening it opens the tab through this
  * window's host, which asks `bot.open` where the bot is served and follows
  * the answer.
  */
@@ -96,7 +97,7 @@ export function HomeBotRow(props: {
     [bot, subscription.snapshot],
   );
   const now = useSampledNow();
-  const working = botWorkingOf(subscription.snapshot?.activity ?? null);
+  const working = botWorkingOf(liveActivityOf(subscription));
   const navigate = useNavigate();
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const reading = homeBotState({

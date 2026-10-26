@@ -2,7 +2,10 @@ import type {
   BotActivity,
   BotSessionActivity,
 } from "@traycer/protocol/host/bot/schemas";
-import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
+import {
+  useBotSubscriptionForHost,
+  type BotSubscriptionResult,
+} from "@/hooks/bots/use-bot-subscription";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 export type { BotActivity, BotSessionActivity };
@@ -26,13 +29,25 @@ export function useBotActivity(botId: string): BotActivity | null {
   const hostId = useBotTabsStore(
     (state) => lookupBotTab(state.tabs, botId)?.hostId ?? null,
   );
-  const { snapshot, error, deleted } = useBotSubscriptionForHost({
+  const subscription = useBotSubscriptionForHost({
     botId,
     hostId: hostId ?? "",
     enabled: hostId !== null,
   });
-  if (hostId === null || error !== null || deleted) return null;
-  return snapshot?.activity ?? null;
+  if (hostId === null) return null;
+  return liveActivityOf(subscription);
+}
+
+/**
+ * A subscription's activity while it can still move: `null` once the
+ * stream closed for good or the bot is gone, since no frame will update the
+ * last snapshot the cache keeps. A reconnect is not a close and keeps it.
+ */
+export function liveActivityOf(
+  subscription: BotSubscriptionResult,
+): BotActivity | null {
+  if (subscription.error !== null || subscription.deleted) return null;
+  return subscription.snapshot?.activity ?? null;
 }
 
 /**

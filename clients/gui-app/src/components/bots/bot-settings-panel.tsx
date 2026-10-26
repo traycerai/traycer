@@ -533,9 +533,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
     >
       <span className="text-ui-sm font-medium text-foreground">Model</span>
       <p className="text-ui-xs text-muted-foreground">
-        Runs on {bot.harness} · {bot.model}
-        {bot.effort === null ? null : ` · ${bot.effort}`}. The next turn uses
-        what you apply here.
+        The next turn uses what you apply here.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <HarnessModelPicker

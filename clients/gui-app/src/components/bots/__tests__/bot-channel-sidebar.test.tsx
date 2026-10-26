@@ -12,6 +12,12 @@
  * the dialog's focus on closing is read off the real thing.
  */
 import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
+import {
+  act,
   cleanup,
   render,
   screen,
@@ -87,11 +93,26 @@ vi.mock("@/hooks/bots/use-bot-onboarding-query", () => ({
     return { status: data === undefined ? "pending" : "success", data };
   },
 }));
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    data: { environments: mocks.state.environments },
-  }),
-}));
+// A real query over the host's `environment.list`, which answers whatever the
+// test last set; `mount` seeds it, so the first render is synchronous.
+vi.mock("@/hooks/bots/use-environment-list-query", async () => {
+  const { queryOptions, useQuery } = await import("@tanstack/react-query");
+  const { hostQueryKeys } = await import("@/lib/query-keys/host-query-keys");
+  return {
+    useEnvironmentListQuery: () =>
+      useQuery(
+        queryOptions({
+          queryKey: [
+            ...hostQueryKeys.methodScope("host-tab", "environment.list"),
+            {},
+          ],
+          queryFn: () =>
+            Promise.resolve({ environments: mocks.state.environments }),
+          staleTime: Infinity,
+        }),
+      ),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({ data: { bots: mocks.state.bots } }),
 }));
@@ -130,6 +151,7 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
 }));
 
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const TAB_HOST = "host-tab";
@@ -211,7 +233,19 @@ function row(botId: string): HTMLElement {
 }
 
 function mount(activeBotId: string): void {
-  render(<BotChannelSidebar activeBotId={activeBotId} hostId={TAB_HOST} />);
+  const queryClient = new QueryClient();
+  const seeded = queryOptions({
+    queryKey: [...hostQueryKeys.methodScope(TAB_HOST, "environment.list"), {}],
+    queryFn: () => Promise.resolve({ environments: mocks.state.environments }),
+  });
+  queryClient.setQueryData(seeded.queryKey, {
+    environments: mocks.state.environments,
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <BotChannelSidebar activeBotId={activeBotId} hostId={TAB_HOST} />
+    </QueryClientProvider>,
+  );
 }
 
 beforeEach(() => {
@@ -559,6 +593,29 @@ describe("<BotChannelSidebar /> create a team", () => {
       "https://platform.traycer.ai/settings?create-team=1",
     );
     expect(mocks.openLink.mock.calls[0]?.[1]).toBe("account");
+  });
+
+  it("re-reads the environment list when the window regains focus, so a team made on the dashboard replaces Create a team", async () => {
+    mocks.state.environments = [environment("env-me", "Personal", "user")];
+    mocks.state.bots = [];
+    mount("bot-notes");
+    expect(screen.getByTestId("bot-channel-create-team")).toBeTruthy();
+    expect(screen.queryAllByTestId("bot-channel-section")).toHaveLength(1);
+
+    mocks.state.environments = [
+      environment("env-me", "Personal", "user"),
+      environment("env-team", "Acme", "organization"),
+    ];
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
+    });
+    expect(
+      within(section("env-team")).getByRole("button", { name: "Acme" }),
+    ).toBeTruthy();
   });
 
   it("draws nothing when a team environment is present, or when there is no shell to open it", () => {

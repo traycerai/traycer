@@ -15,6 +15,7 @@ import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -64,6 +65,7 @@ export function BotChannelSidebar(props: {
   const { activeBotId, hostId } = props;
   const client = useTabHostClient();
   const environments = useEnvironmentListQuery(client, true);
+  useRereadEnvironmentListOnFocus(true);
   const bots = useBotListQuery(client, true);
   const connectable = useConnectableHostIds();
   const bindings = useHostEnvironmentBindings(connectable.hostIds, true);
