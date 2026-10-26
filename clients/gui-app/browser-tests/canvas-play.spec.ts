@@ -3,12 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // Browser regressions for canvas Play and fullscreen: claims jsdom cannot
-// decide because they depend on the SAME iframe document surviving a DOM
-// move (fullscreen's manual top-layer popover promotes the existing canvas
-// in place) and on real wheel/paint behaviour (ctrl-wheel zoom, Fit/Fill
-// width). Store rules and the toolbar's own button wiring stay in Vitest
-// (`components/canvas-artifact/__tests__/`); this file only proves what a
-// real browser session shows.
+// decide because they depend on the SAME iframe document surviving the
+// fullscreen transitions (the current tile is absolute-positioned, with no
+// manual top-layer popover) and on real wheel/paint behaviour (ctrl-wheel
+// zoom, Fit/Fill width). Store rules and the toolbar's own button wiring stay
+// in Vitest (`components/canvas-artifact/__tests__/`); this file only proves
+// what a real browser session shows.
 
 test.use({ viewport: { width: 1400, height: 900 }, actionTimeout: 10_000 });
 
@@ -476,8 +476,7 @@ test.describe("the comment draft composer", () => {
     // Selecting the Comment TOOL is what turns comment mode on
     // (`chooseTool`: `setCommenting(next === "comment")`); the sidebar's
     // Comments toggle reaches the same `commenting` flag by a separate
-    // path, and once it is on either way the toolbar - the tool included -
-    // hides, so the tool must be picked first, while it is still visible.
+    // path. The toolbar stays up either way.
     await commentTool(page).click();
     // Empty canvas below both boards (laid out at y 0..420, 0.6 zoom).
     const pane = page.getByRole("application", { name: "Canvas workspace" });

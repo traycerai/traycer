@@ -22,8 +22,7 @@ interface BotOpenThreadState {
 /**
  * Which thread each bot tab has open, held above the tab's views so the
  * thread survives a switch between the channel's tabs (an announcement's
- * thread nobody has started yet still opens as the box that starts it), and
- * read by `useBotActivity`, which follows the open thread's own session.
+ * thread nobody has started yet still opens as the box that starts it).
  * Closing the tab drops its entry (`closeBotTab`). Not persisted: a restart
  * opens the channel with no thread.
  */

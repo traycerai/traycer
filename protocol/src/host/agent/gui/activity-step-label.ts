@@ -9,10 +9,10 @@
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 
 /** The longest an activity label's detail runs before it is cut. */
-export const ACTIVITY_LABEL_MAX_LENGTH = 96;
+const ACTIVITY_LABEL_MAX_LENGTH = 96;
 const ACTIVITY_LABEL_ELLIPSIS = "...";
 
-export type ActivityToolKind =
+type ActivityToolKind =
   | "explore"
   | "read"
   | "search"

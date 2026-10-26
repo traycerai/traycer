@@ -75,12 +75,10 @@ function viewWith(
     play: false,
     commenting,
     setCommenting: () => undefined,
-    viewOnly: false,
     order: [BOARD],
     sourceForBoard: () => null,
     revealBoard,
     revealCanvasPoint: () => true,
-    setTool: () => undefined,
     clearNodeSelection: () => undefined,
   };
 }

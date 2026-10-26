@@ -718,7 +718,6 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
   const CHANNEL = "conversation-app";
   const TEAM_OWNER: BotOwner = {
     kind: "team",
-    environmentId: "env-team",
     name: "Acme",
     members: [
       { userId: "user-1", displayName: "Ada", avatarUrl: null },
