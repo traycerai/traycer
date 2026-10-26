@@ -205,10 +205,18 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
     ],
   },
+  // The Links group hides in the installed mobile app, where every web link
+  // opens in the phone's own browser; tile placement renders everywhere.
   {
     section: "opening-behavior",
     hostScope: null,
-    shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
+    shells: [
+      { name: "every bridge absent", context: NO_BRIDGES },
+      {
+        name: "the installed mobile app",
+        context: { ...NO_BRIDGES, mobileApp: true, phoneLayout: true },
+      },
+    ],
   },
   // Every anchored entry on this page (search, browser placement,
   // agent-opened tabs) renders unconditionally; the dev-origins/website-

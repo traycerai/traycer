@@ -445,9 +445,9 @@ different answers:
   promise the row, so no shell offers it. "Detected dev origins" shipped as a
   result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Agent roles and OS notifications need a
-  desktop bridge; Push notifications needs `pushPermission`; Voice input and Prevent
-  sleep hide in the mobile app, and Layout's "Show the status bar on small
-  screens" row exists only there) - indexed, with
+  desktop bridge; Push notifications needs `pushPermission`; Voice input, Prevent
+  sleep and Opening behavior's Links group hide in the mobile app, and Layout's
+  "Show the status bar on small screens" row exists only there) - indexed, with
   the definition's
   `availableWhen` set to the gate's **named predicate** in
   `lib/settings/settings-availability.ts`. The panel gates the row (or group)
@@ -627,6 +627,12 @@ to join.
   the row alone and gates it, and the panel draws the group. The panel gates
   nothing; the group holds the branch prefix in every shell, so it is never a
   heading over an empty card.
+- **Opening behavior ▸ Links** (`opening-behavior-panel.tsx`,
+  `isLinkOpenRowAvailable = !mobileApp`) - the build sends every web link to
+  the phone's own browser (`useLinkOpeners` in `lib/links/open-link.ts`): its
+  browser tile only views a host's browser and carries none of the user's
+  sign-ins, so "In Traycer" vs "In default browser" would decide nothing. The
+  modifier legend under the page goes with it. Tile placement stays.
 - **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
   The installed mobile app is the phone layout at every width, so nothing can make them apply there.
   A narrow BROWSER tab keeps them, live, with the note "Applies on wider windows." (the Minimap's: "Shows on wider windows with a mouse."), because widening the window is the way back - the layout form's shell rule (Layout, below).

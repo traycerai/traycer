@@ -6,6 +6,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsDensity } from "@/providers/settings-density-context";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import { altLabel, modLabel, shiftLabel } from "@/lib/keybindings/platform";
@@ -64,6 +65,7 @@ export function OpeningBehaviorPanel(): ReactNode {
   const setTilePlacement = useSettingsStore((s) => s.setTilePlacement);
   const compact = useSettingsDensity() === "compact";
   const singleTileViewport = useIsMobileViewport();
+  const availability = useSettingsAvailabilityContext();
 
   return (
     <SettingsPanelShell
@@ -72,61 +74,69 @@ export function OpeningBehaviorPanel(): ReactNode {
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-        <SettingsGroup
-          group={OPENING_BEHAVIOR.definitions.links}
-          showTitle
-          tone="default"
-          dataTestId="settings-opening-links"
-          fill={false}
-        >
-          <SettingsRow
-            row={OPENING_BEHAVIOR.definitions.openLinks}
-            control={
-              <EnumSelect
-                labels={LINK_OPEN_DEFAULT_LABELS}
-                isValue={isLinkOpenDefault}
-                value={linkOpen.default}
-                onValueChange={(value) => {
-                  trackOpeningBehaviorSetting("linkOpen");
-                  setLinkOpen({ default: value });
-                }}
-                ariaLabel="Open links"
-              />
-            }
-          />
-          {linkOpen.default === "per-kind" ? (
-            <div className="bg-foreground/3">
-              <LinkKindRow
-                row={OPENING_BEHAVIOR.definitions.linkMarkdown}
-                value={linkOpen.markdown}
-                onValueChange={(markdown) => {
-                  setLinkOpen({ markdown });
-                }}
-              />
-              <LinkKindRow
-                row={OPENING_BEHAVIOR.definitions.linkTerminal}
-                value={linkOpen.terminal}
-                onValueChange={(terminal) => {
-                  setLinkOpen({ terminal });
-                }}
-              />
-              <LinkKindRow
-                row={OPENING_BEHAVIOR.definitions.linkGithub}
-                value={linkOpen.github}
-                onValueChange={(github) => {
-                  setLinkOpen({ github });
-                }}
-              />
-              <LinkKindRow
-                row={OPENING_BEHAVIOR.definitions.linkImages}
-                value={linkOpen.image}
-                onValueChange={(image) => {
-                  setLinkOpen({ image });
-                }}
-              />
-            </div>
-          ) : null}
-        </SettingsGroup>
+        {/*
+          The installed mobile app opens every web link in the phone's own
+          browser (`useLinkOpeners`), so a Links group there would offer a
+          choice that decides nothing. Gated on the definition's own
+          `availableWhen`, the predicate the search index reads.
+        */}
+        {OPENING_BEHAVIOR.definitions.links.availableWhen(availability) ? (
+          <SettingsGroup
+            group={OPENING_BEHAVIOR.definitions.links}
+            showTitle
+            tone="default"
+            dataTestId="settings-opening-links"
+            fill={false}
+          >
+            <SettingsRow
+              row={OPENING_BEHAVIOR.definitions.openLinks}
+              control={
+                <EnumSelect
+                  labels={LINK_OPEN_DEFAULT_LABELS}
+                  isValue={isLinkOpenDefault}
+                  value={linkOpen.default}
+                  onValueChange={(value) => {
+                    trackOpeningBehaviorSetting("linkOpen");
+                    setLinkOpen({ default: value });
+                  }}
+                  ariaLabel="Open links"
+                />
+              }
+            />
+            {linkOpen.default === "per-kind" ? (
+              <div className="bg-foreground/3">
+                <LinkKindRow
+                  row={OPENING_BEHAVIOR.definitions.linkMarkdown}
+                  value={linkOpen.markdown}
+                  onValueChange={(markdown) => {
+                    setLinkOpen({ markdown });
+                  }}
+                />
+                <LinkKindRow
+                  row={OPENING_BEHAVIOR.definitions.linkTerminal}
+                  value={linkOpen.terminal}
+                  onValueChange={(terminal) => {
+                    setLinkOpen({ terminal });
+                  }}
+                />
+                <LinkKindRow
+                  row={OPENING_BEHAVIOR.definitions.linkGithub}
+                  value={linkOpen.github}
+                  onValueChange={(github) => {
+                    setLinkOpen({ github });
+                  }}
+                />
+                <LinkKindRow
+                  row={OPENING_BEHAVIOR.definitions.linkImages}
+                  value={linkOpen.image}
+                  onValueChange={(image) => {
+                    setLinkOpen({ image });
+                  }}
+                />
+              </div>
+            ) : null}
+          </SettingsGroup>
+        ) : null}
 
         <SettingsGroup
           group={OPENING_BEHAVIOR.definitions.tilePlacement}
@@ -202,9 +212,16 @@ export function OpeningBehaviorPanel(): ReactNode {
           ) : null}
         </SettingsGroup>
 
-        <p className="px-1 text-ui-sm text-muted-foreground">
-          {MODIFIER_LEGEND}
-        </p>
+        {/*
+          Mouse modifiers over the choices above. In the installed mobile app
+          there is no link choice to flip and the single-tile note already
+          covers placement, so the legend would describe nothing it has.
+        */}
+        {OPENING_BEHAVIOR.definitions.links.availableWhen(availability) ? (
+          <p className="px-1 text-ui-sm text-muted-foreground">
+            {MODIFIER_LEGEND}
+          </p>
+        ) : null}
       </div>
     </SettingsPanelShell>
   );
