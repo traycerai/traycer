@@ -1183,29 +1183,37 @@ describe("buildChatLinkPolicy", () => {
     },
   );
 
-  it("opens the index.md candidate for an unresolved artifact directory link when the probe confirms it exists", async () => {
-    const indexRef = {
-      id: "report-index",
-      workspacePath: `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/report`,
-      filePath: "index.md",
-    };
-    mocks.resolveArtifactByPath.mockResolvedValue(null);
-    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
-      indexRef,
-    ]);
-    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
-    const run = buildChatLinkPolicy(makeDeps({}));
-
-    run(
-      fileLink({
-        path: `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/report`,
-        isDirectory: true,
-      }),
-      lifecycle,
+  it("opens the index.md candidate the real helper generates for an unresolved artifact directory link when the probe confirms it", async () => {
+    const actual = await vi.importActual<
+      typeof import("@/components/epic-canvas/workspace-file/workspace-file-link-ref")
+    >("@/components/epic-canvas/workspace-file/workspace-file-link-ref");
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockImplementation(
+      actual.candidateWorkspaceFileRefsForAbsoluteLinkPath,
     );
+    const root = "/Users/me/.traycer";
+    const directory = `${root}/epics/${OPEN_EPIC_ID}/artifacts/report`;
+    // Only the directory's index.md exists; the bare directory path reads as
+    // missing, exactly like `workspace.readFile` on a directory.
+    mocks.fetchWorkspaceFileExists.mockImplementation((args) =>
+      Promise.resolve(args.filePath.endsWith("/index.md")),
+    );
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    const run = buildChatLinkPolicy(makeDeps({ workspaceRoots: [root] }));
+
+    run(fileLink({ path: directory, isDirectory: true }), lifecycle);
     await flush();
 
-    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(indexRef));
+    expect(openTile).toHaveBeenCalledTimes(1);
+    // Each generated ref carries a fresh random instance id, so compare the
+    // address the helper derived rather than the whole object.
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent(
+        expect.objectContaining({
+          workspacePath: root,
+          filePath: `epics/${OPEN_EPIC_ID}/artifacts/report/index.md`,
+        }),
+      ),
+    );
     expect(onAsyncFailure).not.toHaveBeenCalled();
   });
 
