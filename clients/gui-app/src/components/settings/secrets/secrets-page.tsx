@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
@@ -94,7 +95,8 @@ export function SecretsPage(props: {
 }): ReactNode {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
-  const list = useEnvironmentSecretsQuery(props.client);
+  const configurationClient = usePoolTierHostClient(props.client);
+  const list = useEnvironmentSecretsQuery(configurationClient);
   const read = useBoundedRead(list);
   const configurationName = useConfigurationName();
   const canEdit = useCanEditConfiguration();
@@ -161,7 +163,7 @@ export function SecretsPage(props: {
             <SecretRow
               key={secret.secretId}
               secret={secret}
-              client={props.client}
+              client={configurationClient}
               hostId={props.hostId}
               hostName={props.hostName}
               onChanged={reread}
@@ -171,7 +173,7 @@ export function SecretsPage(props: {
             <RemovedSecretRow
               key={entry.id}
               removed={entry}
-              client={props.client}
+              client={configurationClient}
               hostId={props.hostId}
               hostName={props.hostName}
               onChanged={reread}
@@ -199,7 +201,7 @@ export function SecretsPage(props: {
           key={configurationKey}
           open={adding}
           prefill={null}
-          client={props.client}
+          client={configurationClient}
           onOpenChange={setAdding}
         />
       ) : null}

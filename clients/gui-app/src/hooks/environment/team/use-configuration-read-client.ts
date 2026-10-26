@@ -1,8 +1,7 @@
-import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useTeamViewingHost } from "./use-team-viewing-host";
-import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 
 /**
  * The client a configuration's pool-only read is sent through. In a build
@@ -14,5 +13,5 @@ export function useConfigurationReadClient(): HostClient<HostRpcRegistry> {
   const scope = useTeamViewingHost();
   const surface = useHostClient();
   const client = scope.client ?? surface;
-  return useMemo(() => resolvePoolTierHostClient(client), [client]);
+  return usePoolTierHostClient(client);
 }

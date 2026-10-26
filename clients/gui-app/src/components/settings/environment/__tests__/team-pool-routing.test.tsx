@@ -15,6 +15,8 @@ import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/envir
 import { PageChip } from "@/components/settings/personal/page-chip";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
+import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   configurationItem,
   hostIdsOf,
@@ -22,6 +24,7 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
 } from "./team-configuration-test-support";
 
 // A team page reads its hosts from the host list; this window's own host
@@ -55,6 +58,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
 });
 
 const environmentList = {
@@ -91,6 +95,14 @@ const members: EnvironmentMembersResponseV12 = {
   legacyMembers: [],
 };
 
+function removeSurfaceHost(): void {
+  useSelectionAuthorityStore.getState().reset();
+  teamHostBoundary.client =
+    requireTeamHostClient().createRequesterForHostId(null);
+  expect(useSelectionAuthorityStore.getState().effectiveHostId).toBeNull();
+  expect(requireTeamHostClient().getActiveHostId()).toBeNull();
+}
+
 describe("team pages on a build with a server pool", () => {
   it("reads the team's records and members from the pool, whichever host the window is on", async () => {
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
@@ -106,6 +118,7 @@ describe("team pages on a build with a server pool", () => {
       "environment.members": () => members,
       "environment.list": () => environmentList,
     });
+    removeSurfaceHost();
     render(<TeamPermissions>{null}</TeamPermissions>, {
       wrapper: harness.Wrapper,
     });
@@ -166,6 +179,7 @@ describe("team pages on a build with a server pool", () => {
       }),
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
+    removeSurfaceHost();
     render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
       wrapper: harness.Wrapper,
     });
@@ -189,6 +203,54 @@ describe("team pages on a build with a server pool", () => {
     expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([
       POOL_HOST_ID,
     ]);
+    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
+      new Set([POOL_HOST_ID]),
+    );
+    expect(new Set(hostIdsOf(harness, "environment.plans.list"))).toEqual(
+      new Set([POOL_HOST_ID]),
+    );
+  });
+
+  it("rereads pool environment membership after a forbidden item save with no surface host", async () => {
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "variable",
+            key: "NODE_ENV",
+            os: "any",
+            value: { value: "production" },
+          }),
+        ],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "forbidden",
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+      "environment.list": () => environmentList,
+    });
+    removeSurfaceHost();
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    const value = await screen.findByLabelText("NODE_ENV value");
+    const listReadsBefore = hostIdsOf(harness, "environment.list").length;
+    await userEvent.clear(value);
+    await userEvent.type(value, "staging");
+    await userEvent.click(
+      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
+        "button",
+        { name: "Save" },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(hostIdsOf(harness, "environment.configuration.items.put")).toEqual(
+        [POOL_HOST_ID],
+      );
+      expect(hostIdsOf(harness, "environment.list").length).toBeGreaterThan(
+        listReadsBefore,
+      );
+    });
     expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
       new Set([POOL_HOST_ID]),
     );

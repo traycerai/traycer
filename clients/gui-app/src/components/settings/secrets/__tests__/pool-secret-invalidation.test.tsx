@@ -62,6 +62,7 @@ import {
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -69,6 +70,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { ReactNode } from "react";
 import type { QueryKey } from "@tanstack/react-query";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -309,7 +311,15 @@ function SecretReadProbe(props: {
   );
 }
 
-function mountPage(state: SecretHostState): TeamPageHarness {
+interface MountPageOptions {
+  readonly noSurfaceHost?: boolean;
+  readonly includeProbe?: boolean;
+}
+
+function mountPage(
+  state: SecretHostState,
+  options: MountPageOptions | undefined,
+): TeamPageHarness {
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "team", environmentId: "env-a" },
   });
@@ -317,17 +327,30 @@ function mountPage(state: SecretHostState): TeamPageHarness {
     poolSource("editor"),
     handlersFor(state),
   );
+  const initialClient = requireTeamHostClient();
+  if (options?.noSurfaceHost === true) {
+    useSelectionAuthorityStore.getState().reset();
+    teamHostBoundary.client = initialClient.createRequesterForHostId(null);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBeNull();
+  }
   const client = requireTeamHostClient();
+  const page = (
+    <SecretsPage
+      client={client}
+      hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
+      hostName={(hostId) => hostId}
+    />
+  );
   render(
-    <>
-      <SecretsPage
-        client={client}
-        hostId={client.getActiveHostId()}
-        emptyText={SECRETS_EMPTY_TEXT}
-        hostName={(hostId) => hostId}
-      />
-      <SecretReadProbe client={client} />
-    </>,
+    options?.includeProbe === false ? (
+      page
+    ) : (
+      <>
+        {page}
+        <SecretReadProbe client={client} />
+      </>
+    ),
     { wrapper: harness.Wrapper },
   );
   return harness;
@@ -448,13 +471,36 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
   openLinkMock.mockReset();
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 describe("secret writes on a build with a server pool", () => {
+  it("reads versions and rotation through the real page with no active surface host", async () => {
+    const harness = mountPage(
+      stateWithSecret({ rotation: rotationFixture() }),
+      {
+        noSurfaceHost: true,
+        includeProbe: false,
+      },
+    );
+    expect(requireTeamHostClient().getActiveHostId()).toBeNull();
+
+    expect(await screen.findByText("STRIPE_KEY")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    expect(await screen.findAllByTestId("secret-version")).toHaveLength(2);
+    expect(await screen.findByTestId("secret-rotation-status")).toBeTruthy();
+
+    for (const method of SECRET_READS) {
+      expect(new Set(hostIdsOf(harness, method))).toEqual(
+        new Set([POOL_HOST_ID]),
+      );
+    }
+  });
+
   it("refreshes pool list, versions, and rotation after create", async () => {
-    const harness = mountPage(stateWithSecret({}));
+    const harness = mountPage(stateWithSecret({}), undefined);
     const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
@@ -473,7 +519,7 @@ describe("secret writes on a build with a server pool", () => {
   });
 
   it("refreshes pool list, versions, and rotation after replace", async () => {
-    const harness = mountPage(stateWithSecret({}));
+    const harness = mountPage(stateWithSecret({}), undefined);
     const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
@@ -497,7 +543,7 @@ describe("secret writes on a build with a server pool", () => {
   });
 
   it("refreshes pool list, versions, and rotation after Remove", async () => {
-    const harness = mountPage(stateWithSecret({}));
+    const harness = mountPage(stateWithSecret({}), undefined);
     const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
@@ -517,7 +563,7 @@ describe("secret writes on a build with a server pool", () => {
   });
 
   it("refreshes pool list, versions, and rotation after Undo", async () => {
-    const harness = mountPage(stateWithSecret({}));
+    const harness = mountPage(stateWithSecret({}), undefined);
     const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
@@ -546,6 +592,7 @@ describe("secret writes on a build with a server pool", () => {
         removed: [{ id: "sec-1", name: "STRIPE_KEY", removal: pending }],
         removal: pending,
       }),
+      undefined,
     );
     const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);

@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -143,7 +144,7 @@ function membersReadState(
  * seats when the host serves it.
  */
 export function MembersPage(props: MembersPageProps): ReactNode {
-  const client = useOptionalHostClient();
+  const client = usePoolTierHostClient(useOptionalHostClient());
   const hostId = useReactiveHostReadiness(client).hostId;
   const membersPresent = useHostMethodSupport(hostId, "environment.members");
   const membersVersion = useHostMethodSchemaVersion(

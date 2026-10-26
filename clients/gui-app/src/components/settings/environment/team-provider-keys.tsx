@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
@@ -17,7 +18,7 @@ import { ConfigurationReadFailed } from "./team-read-failed";
 import { TeamSecretNames } from "./team-secret-names";
 
 export function TeamProviderKeys(): ReactNode {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
   const query = useEnvironmentSecretsQuery(client);
   const canEdit = useCanEditConfiguration();

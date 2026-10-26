@@ -1,5 +1,13 @@
 import "../../../../__tests__/test-browser-apis";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
@@ -8,15 +16,34 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
+import { MembersPage } from "@/components/settings/members/members-page";
 import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { queryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: () => true,
+  useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
+  useHostSupportsMethod: () => true,
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useOptionalHostClient: () => requireTeamHostClient(),
+  useHostDirectory: () => ({
+    findById: (hostId: string) =>
+      hostId === mockLocalHostEntry.hostId ? { label: "This Mac" } : null,
+  }),
+}));
 
 const ENVIRONMENT_ID = "env-a";
 const VIEWER_ID = "u-admin";
@@ -72,6 +99,8 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
+  useAuthStore.setState({ profile: null });
 });
 
 describe("useEnvironmentMembersList on a pooled build", () => {
@@ -202,6 +231,73 @@ describe("useEnvironmentMembersList on a pooled build", () => {
       3,
     );
     expect(hostIdsOf(harness, "environment.members.remove")).toEqual([
+      POOL_HOST_ID,
+    ]);
+  });
+
+  it("sends the real Members invite dialog through the pool with no active host", async () => {
+    const inviteRequests: Array<{ email: string; role: MemberRole }> = [];
+    const harness = mountTeamPageOnPoolBuild(poolSource("admin"), {
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: ENVIRONMENT_ID,
+            ownerKind: "organization",
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "admin",
+            kind: "team",
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+      "environment.members": () => page([member(VIEWER_ID, "admin")], null),
+      "environment.members.seats": () => ({ seats: null }),
+      "environment.members.invite": (request) => {
+        inviteRequests.push({ email: request.email, role: request.role });
+        return { outcome: "sent", seatDelta: null };
+      },
+    });
+    const client = requireTeamHostClient();
+    teamHostBoundary.client = client.createRequesterForHostId(null);
+    useSelectionAuthorityStore.getState().reset();
+    useAuthStore.setState({
+      profile: {
+        userId: VIEWER_ID,
+        userName: "Ada",
+        email: "u-admin@acme.test",
+      },
+    });
+
+    render(<MembersPage environmentId={ENVIRONMENT_ID} />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Invite" }),
+    );
+    await screen.findByTestId("members-invite-email");
+    await waitFor(() => {
+      expect(hostIdsOf(harness, "environment.members.seats")).toEqual([
+        POOL_HOST_ID,
+      ]);
+    });
+    await userEvent.type(
+      screen.getByTestId("members-invite-email"),
+      "new@acme.test",
+    );
+    await userEvent.click(screen.getByTestId("members-invite-submit"));
+
+    expect(await screen.findByText("Invitation sent")).toBeTruthy();
+    expect(inviteRequests).toEqual([
+      { email: "new@acme.test", role: "editor" },
+    ]);
+    expect(new Set(hostIdsOf(harness, "environment.members"))).toEqual(
+      new Set([POOL_HOST_ID]),
+    );
+    expect(hostIdsOf(harness, "environment.members.invite")).toEqual([
       POOL_HOST_ID,
     ]);
   });

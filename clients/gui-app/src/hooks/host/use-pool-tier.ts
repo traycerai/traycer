@@ -12,9 +12,16 @@ import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-clie
 /** {@link resolvePoolTierHostClient}, memoized on the surface's client. */
 export function usePoolTierHostClient(
   surfaceClient: HostClient<HostRpcRegistry>,
-): HostClient<HostRpcRegistry> {
+): HostClient<HostRpcRegistry>;
+export function usePoolTierHostClient(
+  surfaceClient: HostClient<HostRpcRegistry> | null,
+): HostClient<HostRpcRegistry> | null;
+export function usePoolTierHostClient(
+  surfaceClient: HostClient<HostRpcRegistry> | null,
+): HostClient<HostRpcRegistry> | null {
   return useMemo(
-    () => resolvePoolTierHostClient(surfaceClient),
+    () =>
+      surfaceClient === null ? null : resolvePoolTierHostClient(surfaceClient),
     [surfaceClient],
   );
 }

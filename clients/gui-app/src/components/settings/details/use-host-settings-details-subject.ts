@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { OverviewCardLineProps } from "@/components/settings/environment/overview-card-line-props";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -14,7 +15,7 @@ export function useHostSettingsDetailsSubject(
 ): DetailsSubject | null {
   const viewerUserId = useCloudChatViewerId();
   const binding = useHostQuery<HostRpcRegistry, "environment.binding.read">({
-    client: props.client,
+    client: usePoolTierHostClient(props.client),
     method: "environment.binding.read",
     params: { hostId: props.hostId },
     cacheKeyIdentity: [viewerUserId],

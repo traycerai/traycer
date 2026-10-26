@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback } from "react";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -26,8 +27,8 @@ function firsthandHost(host: HostScopeOption): FirsthandHost {
 
 /**
  * THE hosts running a configuration: its host list from the cloud
- * (`environment.host.list`, the binding records), read through the window's
- * host on the viewer's session. Presence never decides membership: a
+ * (`environment.host.list`, the binding records), read through the serving
+ * tier on the viewer's session. Presence never decides membership: a
  * computer with remote access off reports only when its revision moves, so
  * the cloud calls it offline minutes later while it still runs the
  * configuration. For Personal, a host with a Local row is left out, by its
@@ -45,7 +46,7 @@ export function useHostsRunningConfiguration(
     | { readonly kind: "personal" }
     | { readonly kind: "team"; readonly environmentId: string },
 ): HostsRunningConfiguration {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const personalTarget = target.kind === "personal";
   const personal = usePersonalEnvironment(client, personalTarget);
   const environmentId =

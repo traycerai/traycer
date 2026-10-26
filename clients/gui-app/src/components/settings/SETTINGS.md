@@ -934,8 +934,12 @@ into Permissions; agent definitions became the Agents page's Definitions tab.
 
 MCP servers (`mcp-servers`) and Skills (`skills`) are pages of the
 configuration, read from the cloud on Personal and on a team alike, whatever
-the window's host runs (`CLOUD_ONLY_SECTIONS` in `PersonalPageFrame`): no host
-serves an environment-wide form of them. The MCP servers page
+the window's host runs (`CLOUD_ONLY_SECTIONS` in `PersonalPageFrame`). In a
+pool build, configuration read families use the pool requester's readiness,
+capabilities and cache identity even with no selected computer. This includes
+running computers, items, MCP servers, plans, secrets and member dialogs;
+host-owned status, local values and held-item reviews retain their target
+host. The MCP servers page
 (`environment-mcp-servers.tsx`) lists every server once from
 `environment.configuration.mcpServers.list`, with its transport, the tool
 count the viewing host reports, the providers that use it, Tools, Edit,
