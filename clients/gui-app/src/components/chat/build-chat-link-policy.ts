@@ -381,7 +381,7 @@ function openChatWorkspaceFilePreview(
   // The chat tab was torn down (unmount cancels the projection wait, which
   // routes here via `onUnavailable`): never open into a dead tab.
   if (lifecycle.isDisposed()) return false;
-  if (deps.hostId === null) return false;
+  if (deps.hostId === null || link.isDirectory) return false;
   // In-root files keep their root-relative ref (correct header + identity).
   // Only the plain-file branch falls back to synthesizing a root from an
   // out-of-root absolute path's own directory.

@@ -1146,6 +1146,69 @@ describe("buildChatLinkPolicy", () => {
     expect(openTile).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["no local candidate", null, true],
+    [
+      "only candidates whose probes miss",
+      [{ id: "dir-direct", workspacePath: "/repo", filePath: "report" }],
+      false,
+    ],
+  ])(
+    "opens nothing and reports one failure when an unresolved artifact directory link has %s",
+    async (_name, candidates, exists) => {
+      mocks.resolveArtifactByPath.mockResolvedValue(null);
+      mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue(
+        candidates,
+      );
+      mocks.fetchWorkspaceFileExists.mockResolvedValue(exists);
+      mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue({
+        id: "must-not-open",
+      });
+      const run = buildChatLinkPolicy(makeDeps({}));
+
+      expect(
+        run(
+          fileLink({
+            path: `/Users/them/.traycer/epics/${OPEN_EPIC_ID}/artifacts/report`,
+            isDirectory: true,
+          }),
+          lifecycle,
+        ),
+      ).toBe(true);
+      await flush();
+
+      expect(openTile).not.toHaveBeenCalled();
+      expect(mocks.workspaceFileRefFromAbsoluteFilePath).not.toHaveBeenCalled();
+      expect(onAsyncFailure).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("opens the index.md candidate for an unresolved artifact directory link when the probe confirms it exists", async () => {
+    const indexRef = {
+      id: "report-index",
+      workspacePath: `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/report`,
+      filePath: "index.md",
+    };
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      indexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({
+        path: `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/report`,
+        isDirectory: true,
+      }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(indexRef));
+    expect(onAsyncFailure).not.toHaveBeenCalled();
+  });
+
   it("reports a rejected artifact resolution when its safe fallback cannot open", async () => {
     mocks.resolveArtifactByPath.mockRejectedValue(new Error("transport"));
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
