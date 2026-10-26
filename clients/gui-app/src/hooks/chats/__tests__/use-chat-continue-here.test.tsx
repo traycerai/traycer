@@ -108,6 +108,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 
 import { useChatContinueHere } from "../use-chat-continue-here";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 type ContinueHere = {
   readonly eligible: boolean;
   readonly targetLabel: string | null;

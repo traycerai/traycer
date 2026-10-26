@@ -36,6 +36,10 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 const FAILED: SandboxCostsFetchResult = {
   kind: "network-error",
   detail: "the request never completed (TypeError)",

@@ -51,6 +51,10 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 
 /** The day and month a version is dated by, as the page formats them. */

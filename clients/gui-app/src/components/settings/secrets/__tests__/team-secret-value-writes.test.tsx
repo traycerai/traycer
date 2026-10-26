@@ -63,6 +63,10 @@ import {
 } from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 /**
  * A team's Add a secret (Verify and Save) and Replace value go through the
  * host mutation hooks: each request carries the team's environment and the

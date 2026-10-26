@@ -118,6 +118,10 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
 
 import { GettingStartedSettingsPanel } from "@/components/settings/panels/getting-started-settings-panel";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 function storedKeyProvider(): ProviderCliState {
   return {
     ...provider("claude-code", [profile("work", "managed")]),

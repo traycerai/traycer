@@ -50,6 +50,10 @@ import {
   buildConfigHostFixture,
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 // `isWindows()` is computed once at module load from UA hints, so the host
 // platform is faked through a togglable mock rather than a per-test navigator
 // tweak. The rest of the module (mac/modifier helpers) stays real.

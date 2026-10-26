@@ -75,6 +75,10 @@ import type { ReactNode } from "react";
 import type { QueryKey } from "@tanstack/react-query";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
 type SecretReadMethod = (typeof SECRET_READS)[number];

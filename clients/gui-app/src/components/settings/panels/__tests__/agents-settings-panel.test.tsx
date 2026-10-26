@@ -18,6 +18,10 @@ vi.mock("@/components/settings/environment/environment-host-binding", () => ({
 
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
+
 afterEach(() => {
   cleanup();
 });
