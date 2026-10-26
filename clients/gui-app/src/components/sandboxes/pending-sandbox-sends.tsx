@@ -51,7 +51,10 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
-import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import {
+  useSandboxVerb,
+  type SandboxVerbOutcome,
+} from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import {
   sandboxConfigurationOf,
@@ -128,10 +131,13 @@ import {
   type PendingSendFacts,
   type PendingSendBlocker,
   type PendingSendEvent,
+  type PendingSendTransition,
 } from "@/lib/sandboxes/pending-sandbox-send-transition";
 
 /** How often a waiting send re-reads the requested agent's readiness. */
 const READINESS_POLL_MS = 2_000;
+const STOP_INTENT_CODE = "pending-send-stop";
+const stopsInFlight = new Set<string>();
 
 /**
  * A pending send's owner never goes: the send is the task's, not a
@@ -289,44 +295,17 @@ function PendingSendDelivery(props: {
 }): ReactNode {
   const { send, stage } = props;
   const surfaceKey = pendingSendSurfaceKey(send.id);
-  const client = useHostClientForHostId(stage.createdHostId);
-  const active = stage.phase === "handoff";
-  const requested = useRequestedAgentOnHost(
-    active ? client : null,
-    active,
-    send.settings.harnessId,
-  );
-  const needsModel = send.settings.model.length === 0;
-  const model = useDefaultModelOnHost(
-    active && needsModel ? client : null,
-    send.settings.harnessId,
-  );
   const sandbox = useWatchedSandboxRow(
     stage.createdSandboxId,
     surfaceKey,
     send,
   );
-  const environment = useMemo<PendingSendFacts>(
-    () => ({
-      ...sandbox.environment,
-      clientReady: client !== null,
-      agentReady: requested.readiness?.kind === "ready",
-      modelReady: !needsModel || model.model !== null,
-      stageCurrent: stage.phase === "handoff",
-      stageStatus: stage.phase,
-    }),
-    [
-      client,
-      model.model,
-      needsModel,
-      requested.readiness,
-      sandbox.environment,
-      stage.phase,
-    ],
+  const { client, requested, model, environment } = usePendingDeliveryReadiness(
+    send,
+    stage,
+    sandbox.environment,
   );
-  let event = sandboxObservation(stageBlocker(stage), environment);
-  if (model.unavailable && environment.host !== "ended")
-    event = "model-unavailable";
+  const event = sandboxObservation(stageBlocker(stage), environment);
   const plan = transitionPendingSend(
     pendingSendState(send, stageBlocker(stage)),
     event,
@@ -335,6 +314,7 @@ function PendingSendDelivery(props: {
   const polling = plan.effects.includes("poll");
   const refetchAgent = requested.refetch;
   const refetchSandboxes = sandbox.refetch;
+  const refetchModel = model.refetch;
   useEffect(() => {
     if (!polling) return;
     return startVisibleInterval({
@@ -362,6 +342,13 @@ function PendingSendDelivery(props: {
     );
     if (current === null) return;
     if (
+      decision.effects.includes("return-message") ||
+      decision.effects.includes("remove")
+    ) {
+      returnPendingSandboxSend(send.id);
+      return;
+    }
+    if (
       decision.effects.includes("report-provider") &&
       requested.readiness !== null
     ) {
@@ -374,37 +361,24 @@ function PendingSendDelivery(props: {
           : null,
       );
     }
+    if (decision.effects.includes("fetch-model")) refetchModel();
     if (decision.effects.includes("report-not-sent")) notSent(surfaceKey);
     if (!decision.effects.includes("prepare")) return;
     if (current.failure !== null)
       useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
-    const settings = {
-      ...send.settings,
-      model: model.model ?? send.settings.model,
-      profileId: resolveSeededProfileId(
-        send.settings.profileId,
-        requested.profiles,
-        true,
-      ),
-    };
-    const hostId = current.createdHostId;
-    if (hostId === null) return;
-    if (send.request.kind === "fork") {
-      deliverPendingFork({
-        send,
-        request: send.request,
-        stage: current,
-        hostId,
-        settings,
-      });
-    } else if (client !== null) {
-      prepareAndDeliverSend({ send, hostId, client, settings });
-    }
+    preparePendingReadySend({
+      send,
+      stage: current,
+      client,
+      model: model.model,
+      profiles: requested.profiles,
+    });
   }, [
     client,
     environment,
     event,
     model.model,
+    refetchModel,
     requested.profiles,
     requested.readiness,
     send,
@@ -415,6 +389,96 @@ function PendingSendDelivery(props: {
   return null;
 }
 
+/** Executes preparation against the same destination observation the kernel authorized. */
+function preparePendingReadySend(input: {
+  readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly model: string | null;
+  readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+}): void {
+  const { send, stage, client } = input;
+  const settings = {
+    ...send.settings,
+    model: input.model ?? send.settings.model,
+    profileId: resolveSeededProfileId(
+      send.settings.profileId,
+      input.profiles,
+      true,
+    ),
+  };
+  const hostId = stage.createdHostId;
+  if (hostId === null) return;
+  if (send.request.kind === "fork")
+    deliverPendingFork({
+      send,
+      request: send.request,
+      stage,
+      hostId,
+      settings,
+    });
+  else if (client !== null)
+    prepareAndDeliverSend({ send, hostId, client, settings });
+}
+
+interface PendingAgentReadiness {
+  readonly readiness: RequestedAgentReadiness | null;
+  readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+  readonly refetch: () => void;
+}
+
+interface PendingDefaultModel {
+  readonly model: string | null;
+  readonly unavailable: boolean;
+  readonly refetch: () => void;
+}
+
+/** Delivery and explicit Retry observe the same destination query facts. */
+function usePendingDeliveryReadiness(
+  send: PendingSandboxSend,
+  stage: StagedSandbox | null,
+  sandbox: PendingSendFacts,
+): {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly requested: PendingAgentReadiness;
+  readonly model: PendingDefaultModel;
+  readonly environment: PendingSendFacts;
+} {
+  const client = useHostClientForHostId(stage?.createdHostId ?? null);
+  const active = stage?.phase === "handoff" && send.request.kind !== "terminal";
+  const requested = useRequestedAgentOnHost(
+    active ? client : null,
+    active,
+    send.settings.harnessId,
+  );
+  const needsModel = send.settings.model.length === 0;
+  const model = useDefaultModelOnHost(
+    active && needsModel ? client : null,
+    send.settings.harnessId,
+  );
+  const environment = useMemo<PendingSendFacts>(
+    () => ({
+      ...sandbox,
+      clientReady: client !== null,
+      agentReady: requested.readiness?.kind === "ready",
+      modelReady: !needsModel || model.model !== null,
+      modelUnavailable: needsModel && model.unavailable,
+      stageCurrent: stage?.phase === "handoff",
+      stageStatus: stage?.phase ?? "missing",
+    }),
+    [
+      client,
+      model.model,
+      model.unavailable,
+      needsModel,
+      requested.readiness,
+      sandbox,
+      stage?.phase,
+    ],
+  );
+  return { client, requested, model, environment };
+}
+
 /**
  * The requested agent's readiness on the sandbox's host, and the profiles
  * that host offers for it. Nothing is read until the sandbox is `active`.
@@ -423,11 +487,7 @@ function useRequestedAgentOnHost(
   client: HostClient<HostRpcRegistry> | null,
   active: boolean,
   harnessId: GuiHarnessId,
-): {
-  readonly readiness: RequestedAgentReadiness | null;
-  readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
-  readonly refetch: () => void;
-} {
+): PendingAgentReadiness {
   const activity = { enabled: active, subscribed: active };
   const harnesses = useGuiHarnessesQueryForClient(client, activity);
   const providers = useProvidersListForClient(client, activity);
@@ -463,20 +523,28 @@ function useRequestedAgentOnHost(
 function useDefaultModelOnHost(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,
-): { readonly model: string | null; readonly unavailable: boolean } {
+): PendingDefaultModel {
   const models = useGuiHarnessModelsQueryForClient(client, harnessId, null, {
-    enabled: client !== null,
+    // Observe the shared cache; only the kernel's fetch-model effect reads it.
+    enabled: false,
     subscribed: client !== null,
   });
   const model =
     client === null
       ? null
       : (findDefaultModel(models.data?.models ?? [])?.slug ?? null);
+  const refetchModels = models.refetch;
+  const refetch = useCallback((): void => {
+    // Concurrent observers share the active read instead of cancelling it.
+    void refetchModels({ cancelRefetch: false });
+  }, [refetchModels]);
   return {
     model,
+    refetch,
     unavailable:
       client !== null &&
       model === null &&
+      !models.isFetching &&
       (models.isError || models.data !== undefined),
   };
 }
@@ -575,7 +643,7 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
     case "credits":
       return "credits";
     case "settings":
-      return "settings";
+      return failure.code === STOP_INTENT_CODE ? "stop" : "settings";
     case "no-provider":
     case "agent-setup-failed":
       return "provider";
@@ -635,6 +703,11 @@ function useWatchedSandboxRow(
     }
     if (decision.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
+    if (
+      decision.effects.includes("return-message") ||
+      decision.effects.includes("remove")
+    )
+      returnPendingSandboxSend(send.id);
   }, [decision, row.failure, send, stage?.failure, surfaceKey, wake]);
   return {
     failed: row.failure !== null,
@@ -1517,6 +1590,155 @@ function PendingSendItem(props: {
   );
 }
 
+/** Explicit Retry refreshes only the model query authorized by the kernel. */
+function usePendingStagedSendRetry(
+  send: PendingSandboxSend,
+  stage: StagedSandbox | null,
+): () => void {
+  const surfaceKey = pendingSendSurfaceKey(send.id);
+  const row = usePendingSandboxRowFacts(
+    stage?.createdSandboxId ?? null,
+    send.userId,
+    stage?.createdHostId ?? null,
+  );
+  const { model, environment } = usePendingDeliveryReadiness(
+    send,
+    stage,
+    sandboxEnvironment(row, UNKNOWN_PENDING_SEND_FACTS),
+  );
+  return useCallback(() => {
+    const { sends } = usePendingSandboxSendStore.getState();
+    if (!Object.hasOwn(sends, send.id)) return;
+    const current = readStagedSandbox(surfaceKey);
+    if (current === null) return;
+    const decision = transitionPendingSend(
+      pendingSendState(sends[send.id], stageBlocker(current)),
+      "retry",
+      pendingSandboxSendFacts(send.id, {
+        ...environment,
+        stageCurrent: current === stage,
+        stageStatus: current.phase,
+      }),
+    );
+    if (decision.effects.includes("retry"))
+      useStagedSandboxStore.getState().report(surfaceKey, { failure: null });
+    if (decision.effects.includes("fetch-model")) model.refetch();
+    // Clearing the failure notifies the owning driver. It revalidates all
+    // readiness facts before executing preparation or waking the host.
+  }, [environment, model, send.id, stage, surfaceKey]);
+}
+
+/** Stop holds the unsent copy until the mutation or a fresh row proves rest. */
+async function stopPendingSend(
+  id: string,
+  stop: () => Promise<SandboxVerbOutcome>,
+): Promise<void> {
+  const plan = pendingStopDecision(id, "stop", "unknown");
+  if (plan?.effects.includes("hold-stop")) {
+    try {
+      useStagedSandboxStore.getState().report(pendingSendSurfaceKey(id), {
+        failure: { kind: "settings", code: STOP_INTENT_CODE },
+      });
+    } catch {
+      // No stop may start before its intent survives with the pending copy.
+      return;
+    }
+  }
+  if (!plan?.effects.includes("stop-host")) {
+    if (plan?.effects.includes("remove")) returnPendingSandboxSend(id);
+    return;
+  }
+  stopsInFlight.add(id);
+  try {
+    const outcome = await stop();
+    let host: PendingSendFacts["host"] = "unknown";
+    if (outcome.kind === "gone") host = "ended";
+    else if (
+      outcome.kind === "settled" &&
+      (outcome.state === "stopped" || outcome.state === "suspended")
+    )
+      host = "resting";
+    const settled = pendingStopDecision(id, "stop-result", host);
+    if (settled?.effects.includes("remove")) returnPendingSandboxSend(id);
+  } catch {
+    // The mutation owns the line's error. Its existing persisted latch holds
+    // the only message copy, and the row watcher keeps polling for rest.
+    pendingStopDecision(id, "stop-failed", "unknown");
+  } finally {
+    stopsInFlight.delete(id);
+  }
+}
+
+/** Every completion rechecks the current record and the original account. */
+function pendingStopDecision(
+  id: string,
+  event: PendingSendEvent,
+  host: PendingSendFacts["host"],
+): PendingSendTransition | null {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return null;
+  return transitionPendingSend(
+    pendingSendState(
+      sends[id],
+      stageBlocker(readStagedSandbox(pendingSendSurfaceKey(id))),
+    ),
+    event,
+    pendingSandboxSendFacts(id, {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      host,
+      inFlight: stopsInFlight.has(id),
+    }),
+  );
+}
+
+function PendingStopLine(props: {
+  readonly costLine: string;
+  readonly pending: boolean;
+  readonly error: Error | null;
+  readonly canWithdraw: boolean;
+  readonly stop: () => void;
+  readonly giveBack: () => void;
+}): ReactNode {
+  return (
+    <div data-testid="sandbox-setup-line" className="flex flex-col gap-2">
+      <p className="m-0">{props.costLine}</p>
+      <span>{props.error?.message ?? "Waiting for the sandbox to stop."}</span>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="sandbox-setup-stop"
+          disabled={props.pending || !props.canWithdraw}
+          onClick={props.stop}
+        >
+          Stop
+        </Button>
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="sandbox-setup-cancel"
+          disabled={!props.canWithdraw}
+          onClick={props.giveBack}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="sandbox-setup-choose-another-host"
+          disabled={!props.canWithdraw}
+          onClick={props.giveBack}
+        >
+          Choose another host
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function PendingStagedSendItem(props: {
   readonly send: PendingSandboxSend;
   readonly tabId: string;
@@ -1525,6 +1747,7 @@ function PendingStagedSendItem(props: {
   const canWithdraw = usePendingSendWithdrawal(send.id);
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const stage = useStagedSandbox(surfaceKey);
+  const retrySend = usePendingStagedSendRetry(send, stage);
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
@@ -1575,6 +1798,9 @@ function PendingStagedSendItem(props: {
   const backToComposer = (restage: boolean): void => {
     endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
   };
+  const stop = (): void => {
+    void stopPendingSend(send.id, () => verb.mutateAsync("stop"));
+  };
   const name =
     stage.target.name.length > 0
       ? stage.target.name
@@ -1584,33 +1810,37 @@ function PendingStagedSendItem(props: {
       className="flex w-full flex-col gap-2"
       data-testid="pending-sandbox-send"
     >
-      <SandboxSetupLine
-        withdrawalAllowed={canWithdraw}
-        stage={stage}
-        name={name}
-        facts={facts}
-        actions={{
-          onKeepWaiting: () => run(false),
-          onCancel: () => backToComposer(false),
-          onChooseAnotherHost: () => backToComposer(false),
-          onRetryCreation: () => run(true),
-          onRetry: () => run(stagedCreateNeedsFreshKey(stage)),
-          onSendAgain: () =>
-            useStagedSandboxStore
-              .getState()
-              .report(surfaceKey, { failure: null }),
-          onChangeShape: () => backToComposer(true),
-          onRetryApplying: newHost.onRetryApplying,
-          onStop: () => {
-            if (!canWithdrawPendingSandboxSend(send.id)) return;
-            if (stage.createdSandboxId !== null) verb.mutate("stop");
-            backToComposer(false);
-          },
-          onOpenTerminal: newHost.onOpenTerminal,
-          // The configuration's own Providers, a team's included.
-          onOpenProviders: providersOpener(stage.target.configuration),
-        }}
-      />
+      {stageBlocker(stage) === "stop" ? (
+        <PendingStopLine
+          costLine={facts.costLine}
+          pending={verb.isPending}
+          error={verb.error}
+          canWithdraw={canWithdraw}
+          stop={stop}
+          giveBack={() => backToComposer(false)}
+        />
+      ) : (
+        <SandboxSetupLine
+          withdrawalAllowed={canWithdraw}
+          stage={stage}
+          name={name}
+          facts={facts}
+          actions={{
+            onKeepWaiting: () => run(false),
+            onCancel: () => backToComposer(false),
+            onChooseAnotherHost: () => backToComposer(false),
+            onRetryCreation: () => run(true),
+            onRetry: () => run(stagedCreateNeedsFreshKey(stage)),
+            onSendAgain: retrySend,
+            onChangeShape: () => backToComposer(true),
+            onRetryApplying: newHost.onRetryApplying,
+            onStop: stop,
+            onOpenTerminal: newHost.onOpenTerminal,
+            // The configuration's own Providers, a team's included.
+            onOpenProviders: providersOpener(stage.target.configuration),
+          }}
+        />
+      )}
       {send.request.kind === "chat" ? (
         <PendingSandboxMessage text={send.text} />
       ) : null}

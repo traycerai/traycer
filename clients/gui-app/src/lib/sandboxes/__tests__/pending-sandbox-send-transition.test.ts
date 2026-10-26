@@ -47,6 +47,7 @@ const ROWS: ReadonlyArray<Row> = [
   { id: "W.notsent", phase: "waiting", blocker: "not-sent" },
   { id: "W.wake", phase: "waiting", blocker: "wake" },
   { id: "W.none", phase: "waiting", blocker: "none" },
+  { id: "W.stop", phase: "waiting", blocker: "stop" },
   { id: "S.none", phase: "sending", blocker: "none" },
   { id: "S.host", phase: "sending", blocker: "host" },
   { id: "S.credits", phase: "sending", blocker: "credits" },
@@ -90,9 +91,8 @@ const EVENTS: ReadonlyArray<string> = [
   "known-refusal",
   "transport-fail",
   "late-accept",
-  "model-cold",
-  "model-ready",
-  "model-unavailable",
+  "stop-result",
+  "stop-failed",
   "rest",
   "awake",
   "terminal-row",
@@ -152,15 +152,6 @@ const OVERLAY: Readonly<Record<string, Partial<PendingSendFacts>>> = {
     host: "awake",
     agentReady: false,
   },
-  "model-cold": {
-    host: "awake",
-    modelReady: false,
-  },
-  "model-ready": {
-    host: "awake",
-    modelReady: true,
-    agentReady: true,
-  },
   "null-client": {
     host: "awake",
     clientReady: false,
@@ -209,9 +200,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["P", "", "u"],
     "transport-fail": ["P", "", "u"],
     "late-accept": ["P", "", "i"],
-    "model-cold": ["P", "", "u"],
-    "model-ready": ["P", "", "u"],
-    "model-unavailable": ["P", "", "u"],
+    "stop-result": ["P", "", "u"],
+    "stop-failed": ["P", "", "u"],
     rest: ["P", "", "u"],
     awake: ["P", "", "u"],
     "terminal-row": ["P", "", "u"],
@@ -259,9 +249,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["U", "", "u"],
     "transport-fail": ["U", "", "u"],
     "late-accept": ["U", "", "i"],
-    "model-cold": ["U", "", "i"],
-    "model-ready": ["U", "", "i"],
-    "model-unavailable": ["U", "", "i"],
+    "stop-result": ["U", "", "i"],
+    "stop-failed": ["U", "", "i"],
     rest: ["U", "", "i"],
     awake: ["U", "", "i"],
     "terminal-row": ["E", "end-host", "a"],
@@ -288,7 +277,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.host", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.host", "", "i"],
     handoff: ["W.host", "", "i"],
@@ -309,9 +298,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.host", "", "u"],
     "transport-fail": ["W.host", "", "u"],
     "late-accept": ["W.host", "", "i"],
-    "model-cold": ["W.host", "", "i"],
-    "model-ready": ["W.host", "", "i"],
-    "model-unavailable": ["W.host", "", "i"],
+    "stop-result": ["W.host", "", "i"],
+    "stop-failed": ["W.host", "", "i"],
     rest: ["W.host", "poll+wake", "a"],
     awake: ["W.none", "prepare", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -338,7 +326,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.model", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.model", "", "i"],
     handoff: ["W.model", "", "i"],
@@ -359,9 +347,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.model", "", "u"],
     "transport-fail": ["W.model", "", "u"],
     "late-accept": ["W.model", "", "i"],
-    "model-cold": ["W.model", "fetch-model", "a"],
-    "model-ready": ["W.none", "prepare", "a"],
-    "model-unavailable": ["W.notsent", "report-not-sent", "a"],
+    "stop-result": ["W.model", "", "i"],
+    "stop-failed": ["W.model", "", "i"],
     rest: ["W.host", "poll+wake", "a"],
     awake: ["W.model", "fetch-model+poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -388,7 +375,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.provider", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.provider", "", "i"],
     handoff: ["W.provider", "", "i"],
@@ -409,9 +396,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.provider", "", "u"],
     "transport-fail": ["W.provider", "", "u"],
     "late-accept": ["W.provider", "", "i"],
-    "model-cold": ["W.provider", "", "i"],
-    "model-ready": ["W.provider", "", "i"],
-    "model-unavailable": ["W.provider", "", "i"],
+    "stop-result": ["W.provider", "", "i"],
+    "stop-failed": ["W.provider", "", "i"],
     rest: ["W.host", "poll+wake", "a"],
     awake: ["W.none", "prepare", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -438,7 +424,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.credits", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.credits", "retry+poll", "a"],
     handoff: ["W.credits", "", "i"],
@@ -459,9 +445,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.credits", "", "u"],
     "transport-fail": ["W.credits", "", "u"],
     "late-accept": ["W.credits", "", "i"],
-    "model-cold": ["W.credits", "", "i"],
-    "model-ready": ["W.credits", "", "i"],
-    "model-unavailable": ["W.credits", "", "i"],
+    "stop-result": ["W.credits", "", "i"],
+    "stop-failed": ["W.credits", "", "i"],
     rest: ["W.credits", "poll", "a"],
     awake: ["W.credits", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -488,7 +473,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.settings", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.settings", "retry+poll", "a"],
     handoff: ["W.settings", "", "i"],
@@ -509,9 +494,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.settings", "", "u"],
     "transport-fail": ["W.settings", "", "u"],
     "late-accept": ["W.settings", "", "i"],
-    "model-cold": ["W.settings", "", "i"],
-    "model-ready": ["W.settings", "", "i"],
-    "model-unavailable": ["W.settings", "", "i"],
+    "stop-result": ["W.settings", "", "i"],
+    "stop-failed": ["W.settings", "", "i"],
     rest: ["W.settings", "poll", "a"],
     awake: ["W.settings", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -538,7 +522,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.notsent", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.host", "retry+poll", "a"],
     handoff: ["W.notsent", "", "i"],
@@ -559,9 +543,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "", "u"],
     "transport-fail": ["W.notsent", "", "u"],
     "late-accept": ["W.notsent", "", "i"],
-    "model-cold": ["W.notsent", "", "i"],
-    "model-ready": ["W.notsent", "", "i"],
-    "model-unavailable": ["W.notsent", "", "i"],
+    "stop-result": ["W.notsent", "", "i"],
+    "stop-failed": ["W.notsent", "", "i"],
     rest: ["W.notsent", "poll", "a"],
     awake: ["W.notsent", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -588,7 +571,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.wake", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.host", "retry+poll", "a"],
     handoff: ["W.wake", "", "i"],
@@ -609,9 +592,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.wake", "", "u"],
     "transport-fail": ["W.wake", "", "u"],
     "late-accept": ["W.wake", "", "i"],
-    "model-cold": ["W.wake", "", "i"],
-    "model-ready": ["W.wake", "", "i"],
-    "model-unavailable": ["W.wake", "", "i"],
+    "stop-result": ["W.wake", "", "i"],
+    "stop-failed": ["W.wake", "", "i"],
     rest: ["W.wake", "poll", "a"],
     awake: ["W.wake", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -638,7 +620,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     confirm: ["W.none", "", "i"],
     cancel: ["RC", "ret+remove", "a"],
     choose: ["RC", "ret+remove", "a"],
-    stop: ["RC", "stop-host+ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.none", "", "i"],
     handoff: ["W.none", "", "i"],
@@ -659,9 +641,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.none", "", "u"],
     "transport-fail": ["W.none", "", "u"],
     "late-accept": ["W.none", "", "i"],
-    "model-cold": ["W.none", "", "i"],
-    "model-ready": ["W.none", "", "i"],
-    "model-unavailable": ["W.none", "", "i"],
+    "stop-result": ["W.none", "", "i"],
+    "stop-failed": ["W.none", "", "i"],
     rest: ["W.host", "poll+wake", "a"],
     awake: ["W.none", "prepare", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -683,6 +664,55 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "storage-changed": ["W.host", "poll", "a"],
     "disposition-persisted": ["W.none", "", "i"],
     "recovery-complete": ["W.none", "", "i"],
+  },
+  "W.stop": {
+    confirm: ["W.stop", "", "i"],
+    cancel: ["RC", "ret+remove", "a"],
+    choose: ["RC", "ret+remove", "a"],
+    stop: ["W.stop", "hold-stop+stop-host", "a"],
+    return: ["RC", "ret+remove", "a"],
+    retry: ["W.stop", "", "i"],
+    handoff: ["W.stop", "", "i"],
+    "stage-change": ["W.stop", "", "i"],
+    "dialog-close": ["W.stop", "", "i"],
+    "attach-ok": ["W.stop", "", "i"],
+    "attach-unsupported": ["W.stop", "", "i"],
+    "attach-failed": ["W.stop", "", "i"],
+    "agent-ready": ["W.stop", "poll", "a"],
+    "agent-not-ready": ["W.stop", "poll", "a"],
+    prepared: ["W.stop", "", "i"],
+    "prepare-failed": ["W.stop", "", "i"],
+    "claim-saved": ["W.stop", "", "i"],
+    "claim-write-failed": ["W.stop", "", "i"],
+    "host-accept": ["W.stop", "", "u"],
+    "receipt-saved": ["W.stop", "", "u"],
+    "receipt-write-failed": ["W.stop", "", "u"],
+    "known-refusal": ["W.stop", "", "u"],
+    "transport-fail": ["W.stop", "", "u"],
+    "late-accept": ["W.stop", "", "i"],
+    "stop-result": ["W.stop", "poll", "a"],
+    "stop-failed": ["W.stop", "poll", "a"],
+    rest: ["RC", "ret+remove", "a"],
+    awake: ["W.stop", "poll", "a"],
+    "terminal-row": ["E", "end-host", "a"],
+    frozen: ["W.stop", "poll", "a"],
+    unfrozen: ["W.stop", "poll", "a"],
+    settings: ["W.stop", "poll", "a"],
+    "settings-repaired": ["W.stop", "poll", "a"],
+    "wake-failed": ["W.stop", "", "i"],
+    "null-client": ["W.stop", "poll", "a"],
+    "client-restored": ["W.stop", "poll", "a"],
+    "access-lost": ["E", "end-host", "a"],
+    "task-deleted": ["E", "end-host", "a"],
+    "epic-create-failed": ["W.stop", "", "i"],
+    "task-interrupted": ["W.stop", "", "i"],
+    "stage-lost": ["RC", "ret+remove", "a"],
+    "account-away": ["W.stop", "", "i"],
+    "account-back": ["W.stop", "poll", "a"],
+    reload: ["W.stop", "poll", "a"],
+    "storage-changed": ["W.stop", "poll", "a"],
+    "disposition-persisted": ["W.stop", "", "i"],
+    "recovery-complete": ["W.stop", "", "i"],
   },
   "S.none": {
     confirm: ["S.none", "", "i"],
@@ -709,9 +739,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.none", "uncertain", "a"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["S.none", "", "i"],
-    "model-ready": ["S.none", "", "i"],
-    "model-unavailable": ["S.none", "", "i"],
+    "stop-result": ["S.none", "", "i"],
+    "stop-failed": ["S.none", "", "i"],
     rest: ["S.host", "poll+wake", "a"],
     awake: ["S.none", "poll+dispatch", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -759,9 +788,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.host", "uncertain", "a"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["S.host", "", "i"],
-    "model-ready": ["S.host", "", "i"],
-    "model-unavailable": ["S.host", "", "i"],
+    "stop-result": ["S.host", "", "i"],
+    "stop-failed": ["S.host", "", "i"],
     rest: ["S.host", "poll+wake", "a"],
     awake: ["S.none", "poll+dispatch", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -809,9 +837,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.credits", "uncertain", "a"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["S.credits", "", "i"],
-    "model-ready": ["S.credits", "", "i"],
-    "model-unavailable": ["S.credits", "", "i"],
+    "stop-result": ["S.credits", "", "i"],
+    "stop-failed": ["S.credits", "", "i"],
     rest: ["S.credits", "poll", "a"],
     awake: ["S.credits", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -859,9 +886,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.settings", "uncertain", "a"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["S.settings", "", "i"],
-    "model-ready": ["S.settings", "", "i"],
-    "model-unavailable": ["S.settings", "", "i"],
+    "stop-result": ["S.settings", "", "i"],
+    "stop-failed": ["S.settings", "", "i"],
     rest: ["S.settings", "poll", "a"],
     awake: ["S.settings", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -909,9 +935,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.wake", "uncertain", "a"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["S.wake", "", "i"],
-    "model-ready": ["S.wake", "", "i"],
-    "model-unavailable": ["S.wake", "", "i"],
+    "stop-result": ["S.wake", "", "i"],
+    "stop-failed": ["S.wake", "", "i"],
     rest: ["S.wake", "poll", "a"],
     awake: ["S.wake", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -959,9 +984,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.none", "", "i"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["Q.none", "", "i"],
-    "model-ready": ["Q.none", "", "i"],
-    "model-unavailable": ["Q.none", "", "i"],
+    "stop-result": ["Q.none", "", "i"],
+    "stop-failed": ["Q.none", "", "i"],
     rest: ["Q.host", "poll", "a"],
     awake: ["Q.none", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -1009,9 +1033,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.host", "", "i"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["Q.host", "", "i"],
-    "model-ready": ["Q.host", "", "i"],
-    "model-unavailable": ["Q.host", "", "i"],
+    "stop-result": ["Q.host", "", "i"],
+    "stop-failed": ["Q.host", "", "i"],
     rest: ["Q.host", "poll", "a"],
     awake: ["Q.none", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -1059,9 +1082,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.credits", "", "i"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["Q.credits", "", "i"],
-    "model-ready": ["Q.credits", "", "i"],
-    "model-unavailable": ["Q.credits", "", "i"],
+    "stop-result": ["Q.credits", "", "i"],
+    "stop-failed": ["Q.credits", "", "i"],
     rest: ["Q.credits", "poll", "a"],
     awake: ["Q.credits", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -1109,9 +1131,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.settings", "", "i"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["Q.settings", "", "i"],
-    "model-ready": ["Q.settings", "", "i"],
-    "model-unavailable": ["Q.settings", "", "i"],
+    "stop-result": ["Q.settings", "", "i"],
+    "stop-failed": ["Q.settings", "", "i"],
     rest: ["Q.settings", "poll", "a"],
     awake: ["Q.settings", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -1159,9 +1180,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.client", "", "i"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["Q.client", "", "i"],
-    "model-ready": ["Q.client", "", "i"],
-    "model-unavailable": ["Q.client", "", "i"],
+    "stop-result": ["Q.client", "", "i"],
+    "stop-failed": ["Q.client", "", "i"],
     rest: ["Q.client", "poll", "a"],
     awake: ["Q.client", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -1209,9 +1229,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["W.notsent", "known-refusal+report-not-sent", "a"],
     "transport-fail": ["Q.wake", "", "i"],
     "late-accept": ["A", "record-receipt", "a"],
-    "model-cold": ["Q.wake", "", "i"],
-    "model-ready": ["Q.wake", "", "i"],
-    "model-unavailable": ["Q.wake", "", "i"],
+    "stop-result": ["Q.wake", "", "i"],
+    "stop-failed": ["Q.wake", "", "i"],
     rest: ["Q.wake", "poll", "a"],
     awake: ["Q.wake", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
@@ -1259,9 +1278,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["A", "", "i"],
     "transport-fail": ["A", "", "i"],
     "late-accept": ["A", "", "i"],
-    "model-cold": ["A", "", "i"],
-    "model-ready": ["A", "", "i"],
-    "model-unavailable": ["A", "", "i"],
+    "stop-result": ["A", "", "i"],
+    "stop-failed": ["A", "", "i"],
     rest: ["A", "", "i"],
     awake: ["A", "", "i"],
     "terminal-row": ["A", "", "i"],
@@ -1309,9 +1327,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["E", "", "i"],
     "transport-fail": ["E", "", "i"],
     "late-accept": ["E", "", "i"],
-    "model-cold": ["E", "", "i"],
-    "model-ready": ["E", "", "i"],
-    "model-unavailable": ["E", "", "i"],
+    "stop-result": ["E", "", "i"],
+    "stop-failed": ["E", "", "i"],
     rest: ["E", "", "i"],
     awake: ["E", "", "i"],
     "terminal-row": ["RC", "ret+remove", "a"],
@@ -1359,9 +1376,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["D", "", "i"],
     "transport-fail": ["D", "", "i"],
     "late-accept": ["D", "", "i"],
-    "model-cold": ["D", "", "i"],
-    "model-ready": ["D", "", "i"],
-    "model-unavailable": ["D", "", "i"],
+    "stop-result": ["D", "", "i"],
+    "stop-failed": ["D", "", "i"],
     rest: ["D", "", "i"],
     awake: ["D", "", "i"],
     "terminal-row": ["D", "", "i"],
@@ -1409,9 +1425,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["C", "", "i"],
     "transport-fail": ["C", "", "i"],
     "late-accept": ["C", "", "i"],
-    "model-cold": ["C", "", "i"],
-    "model-ready": ["C", "", "i"],
-    "model-unavailable": ["C", "", "i"],
+    "stop-result": ["C", "", "i"],
+    "stop-failed": ["C", "", "i"],
     rest: ["C", "", "i"],
     awake: ["C", "", "i"],
     "terminal-row": ["C", "", "i"],
@@ -1459,9 +1474,8 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "known-refusal": ["R", "", "i"],
     "transport-fail": ["R", "", "i"],
     "late-accept": ["R", "", "i"],
-    "model-cold": ["R", "", "i"],
-    "model-ready": ["R", "", "i"],
-    "model-unavailable": ["R", "", "i"],
+    "stop-result": ["R", "", "i"],
+    "stop-failed": ["R", "", "i"],
     rest: ["R", "", "i"],
     awake: ["R", "", "i"],
     "terminal-row": ["R", "", "i"],
@@ -1526,6 +1540,7 @@ function defaultFacts(rowId: string): PendingSendFacts {
     clientReady: rowId !== "Q.client",
     agentReady: true,
     modelReady: rowId !== "W.model",
+    modelUnavailable: false,
     stageCurrent: true,
     inFlight: false,
     attachPending: false,
@@ -1838,13 +1853,241 @@ describe("guard: an unowned window reports a live claim to a withdrawal", () => 
   });
 });
 
+describe("guard: model availability is the last readiness fact", () => {
+  const READY: Partial<PendingSendFacts> = {
+    host: "awake",
+    agentReady: true,
+    modelReady: false,
+  };
+  /** Every fact that outranks the model, each leaving the host otherwise ready. */
+  const OUTRANKING: ReadonlyArray<
+    readonly [string, Partial<PendingSendFacts>]
+  > = [
+    ["an ended sandbox", { host: "ended" }],
+    ["a frozen sandbox", { frozen: true }],
+    ["unapplied settings", { settingsReady: false }],
+    ["a stage that is only staged", { stageStatus: "staged" }],
+    ["a stage still creating", { stageStatus: "creating" }],
+    ["a resting sandbox", { host: "resting" }],
+    ["a missing client", { clientReady: false }],
+    ["an agent that is not ready", { agentReady: false }],
+  ];
+  const STARTS = ["W.none", "W.model"] as const;
+  const observe = (
+    rowId: string,
+    event: string,
+    overlay: Partial<PendingSendFacts>,
+  ): PendingSendTransition =>
+    run(stateOf("chat", rowId), event, {
+      ...defaultFacts(rowId),
+      ...READY,
+      ...overlay,
+    });
+
+  it.each(
+    STARTS.flatMap((start) =>
+      OUTRANKING.map(([label, facts]) => [start, label, facts] as const),
+    ),
+  )(
+    "from %s an unavailable model changes nothing under %s",
+    (start, _label, outranking) => {
+      const known = observe(start, "observe", {
+        ...outranking,
+        modelUnavailable: false,
+      });
+      const unavailable = observe(start, "observe", {
+        ...outranking,
+        modelUnavailable: true,
+      });
+      expect(unavailable.state).toEqual(known.state);
+      expect(sortedEffects(unavailable)).toEqual(sortedEffects(known));
+      expect(outcomeOf(unavailable)).toEqual(outcomeOf(known));
+    },
+  );
+
+  it.each(STARTS)(
+    "from %s a ready host still reading its model fetches it and polls",
+    (start) => {
+      const transition = observe(start, "observe", { modelUnavailable: false });
+      expect(transition.state).toEqual({
+        kind: "chat",
+        phase: "waiting",
+        blocker: "model",
+      });
+      expect(sortedEffects(transition)).toEqual(["fetch-model", "poll"]);
+    },
+  );
+
+  it.each(STARTS)(
+    "from %s a ready host with no model to send reaches Not sent and keeps polling",
+    (start) => {
+      const transition = observe(start, "observe", { modelUnavailable: true });
+      expect(transition.state).toEqual({
+        kind: "chat",
+        phase: "waiting",
+        blocker: "not-sent",
+      });
+      expect(sortedEffects(transition)).toEqual(["poll", "report-not-sent"]);
+    },
+  );
+
+  it.each(STARTS)(
+    "from %s a resolved model is never reported unavailable",
+    (start) => {
+      const resolved = observe(start, "observe", {
+        modelReady: true,
+        modelUnavailable: true,
+      });
+      expect(sortedEffects(resolved)).not.toContain("report-not-sent");
+      expect(sortedEffects(resolved)).not.toContain("fetch-model");
+    },
+  );
+
+  it("Retry on a latched Not sent fetches the model again instead of trusting the old negative answer", () => {
+    const retry = observe("W.notsent", "retry", { modelUnavailable: true });
+    expect(sortedEffects(retry)).toContain("fetch-model");
+    expect(sortedEffects(retry)).not.toContain("report-not-sent");
+    expect(retry.state.phase).toBe("waiting");
+  });
+
+  it.each(OUTRANKING)(
+    "Retry on a latched Not sent does not fetch the model under %s",
+    (_label, outranking) => {
+      const retry = observe("W.notsent", "retry", {
+        ...outranking,
+        modelUnavailable: true,
+      });
+      expect(sortedEffects(retry)).not.toContain("fetch-model");
+    },
+  );
+
+  it("Retry on a latched Not sent whose model is already resolved fetches nothing", () => {
+    const retry = observe("W.notsent", "retry", {
+      modelReady: true,
+      modelUnavailable: true,
+    });
+    expect(sortedEffects(retry)).not.toContain("fetch-model");
+  });
+});
+
+describe("guard: a requested stop is held until the host answers", () => {
+  const KINDS = ["chat", "fork"] as const;
+  const WAITING = ROWS.filter((row) => row.phase === "waiting").map(
+    (row) => row.id,
+  );
+  const released = (kind: Kind) => ({
+    kind,
+    phase: kind === "chat" ? "returned" : "cancelled",
+    blocker: "none",
+  });
+
+  it.each(
+    KINDS.flatMap((kind) =>
+      (["resting", "ended"] as const).map((host) => [kind, host] as const),
+    ),
+  )(
+    "a %s stop answered with the sandbox %s releases the send",
+    (kind, host) => {
+      const transition = run(stateOf(kind, "W.stop"), "stop-result", {
+        ...defaultFacts("W.stop"),
+        host,
+      });
+      expect(transition.state).toEqual(released(kind));
+      expect(sortedEffects(transition)).toEqual(
+        expectedEffects(kind, "ret+remove"),
+      );
+    },
+  );
+
+  it.each(["awake", "waking", "unknown"] as const)(
+    "a stop answered with the sandbox %s keeps the latch and keeps polling",
+    (host) => {
+      const start = stateOf("chat", "W.stop");
+      const transition = run(start, "stop-result", {
+        ...defaultFacts("W.stop"),
+        host,
+      });
+      expect(transition.state).toEqual(start);
+      expect(sortedEffects(transition)).toEqual(["poll"]);
+    },
+  );
+
+  it.each(WAITING)(
+    "PS.%s.stop while a stop is already in flight requests nothing new and only polls",
+    (rowId) => {
+      const start = stateOf("chat", rowId);
+      const transition = run(start, "stop", {
+        ...factsFor(rowId, "stop"),
+        inFlight: true,
+      });
+      // No new stop was authorized: the blocker is whatever it already was.
+      expect(transition.state).toEqual(start);
+      expect(sortedEffects(transition)).toEqual(["poll"]);
+    },
+  );
+
+  it.each(WAITING.filter((id) => id !== "W.stop"))(
+    "PS.%s.stop holds the latch and requests the stop, returning nothing yet",
+    (rowId) => {
+      const transition = run(
+        stateOf("chat", rowId),
+        "stop",
+        factsFor(rowId, "stop"),
+      );
+      expect(sortedEffects(transition)).toEqual(["hold-stop", "stop-host"]);
+      expect(transition.state.blocker).toBe("stop");
+    },
+  );
+
+  const REPAIRS = [
+    "agent-ready",
+    "agent-not-ready",
+    "awake",
+    "unfrozen",
+    "settings-repaired",
+    "client-restored",
+    "null-client",
+    "reload",
+    "storage-changed",
+    "account-back",
+  ] as const;
+  it.each(REPAIRS)(
+    "%s while a stop is pending never prepares, wakes, fetches or dispatches",
+    (event) => {
+      const transition = run(
+        stateOf("chat", "W.stop"),
+        event,
+        factsFor("W.stop", event),
+      );
+      expect(transition.state.blocker).toBe("stop");
+      expect(
+        transition.effects.filter((effect) =>
+          [
+            "prepare",
+            "wake",
+            "fetch-model",
+            "dispatch",
+            "persist-claim",
+          ].includes(effect),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("a failed stop keeps the latch and keeps polling", () => {
+    const start = stateOf("chat", "W.stop");
+    const transition = run(start, "stop-failed", defaultFacts("W.stop"));
+    expect(transition.state).toEqual(start);
+    expect(sortedEffects(transition)).toEqual(["poll"]);
+  });
+});
+
 describe("guard: an unknown row never wakes, sends or releases", () => {
   const OBSERVATIONS = [
     "rest",
     "awake",
     "terminal-row",
     "agent-ready",
-    "model-ready",
     "unfrozen",
     "settings-repaired",
     "retry",

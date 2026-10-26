@@ -19,6 +19,7 @@ export type PendingSendBlocker =
   | "model"
   | "provider"
   | "not-sent"
+  | "stop"
   | "wake";
 export interface PendingSendState {
   readonly kind: "chat" | "fork" | "terminal";
@@ -40,6 +41,8 @@ export type PendingSendEvent =
   | "cancel"
   | "choose"
   | "stop"
+  | "stop-result"
+  | "stop-failed"
   | "return"
   | "retry"
   | "rest"
@@ -54,7 +57,6 @@ export type PendingSendEvent =
   | "provider-signed-in"
   | "prepare-failed"
   | "wake-failed"
-  | "model-unavailable"
   | "epic-create-failed"
   | "task-deleted"
   | "access-lost"
@@ -64,8 +66,6 @@ export type PendingSendEvent =
   | "storage-changed"
   | "locks-unavailable"
   | "null-client"
-  | "model-cold"
-  | "model-ready"
   | "stage-change"
   | "handoff"
   | "late-accept"
@@ -94,6 +94,7 @@ export interface PendingSendFacts {
   readonly clientReady: boolean;
   readonly agentReady: boolean;
   readonly modelReady: boolean;
+  readonly modelUnavailable: boolean;
   readonly stageCurrent: boolean;
   readonly inFlight: boolean;
   readonly attachPending: boolean;
@@ -116,6 +117,7 @@ export const UNKNOWN_PENDING_SEND_FACTS: PendingSendFacts = {
   clientReady: false,
   agentReady: false,
   modelReady: false,
+  modelUnavailable: false,
   stageCurrent: false,
   inFlight: false,
   attachPending: false,
@@ -139,6 +141,7 @@ export type PendingSendEffect =
   | "return-message"
   | "remove"
   | "stop-host"
+  | "hold-stop"
   | "fetch-model"
   | "report-provider"
   | "report-not-sent"
@@ -226,6 +229,23 @@ const REFRESH_EVENTS = new Set<PendingSendEvent>([
   "reload",
   "account-back",
   "storage-changed",
+]);
+const STOP_OBSERVATIONS = new Set<PendingSendEvent>([
+  "reload",
+  "account-back",
+  "storage-changed",
+  "observe",
+  "stop-result",
+  "awake",
+  "rest",
+  "unfrozen",
+  "settings-repaired",
+  "agent-ready",
+  "agent-not-ready",
+  "frozen",
+  "settings",
+  "null-client",
+  "client-restored",
 ]);
 const REQUEST_EVENTS = new Set<PendingSendEvent>([
   "host-accept",
@@ -331,7 +351,6 @@ function unreachable(
 function withdraw(
   state: PendingSendState,
   facts: PendingSendFacts,
-  stop: boolean,
 ): PendingSendTransition {
   if (!withdrawalAllowed(state, facts))
     return {
@@ -347,7 +366,6 @@ function withdraw(
     blocker: "none",
   };
   const effects: PendingSendEffect[] = [];
-  if (stop && state.phase === "waiting") effects.push("stop-host");
   if (state.kind === "chat") effects.push("return-message");
   effects.push("remove");
   return result(next, effects, facts);
@@ -446,7 +464,7 @@ function endedTransition(
     event === "disposition-persisted" ||
     event === "observe"
   )
-    return withdraw(state, facts, false);
+    return withdraw(state, facts);
   return result(state, [], facts);
 }
 
@@ -499,11 +517,13 @@ function readyHost(
       facts,
     );
   if (!facts.modelReady)
-    return result(
-      { ...state, blocker: "model" },
-      ["fetch-model", "poll"],
-      facts,
-    );
+    return facts.modelUnavailable
+      ? result(
+          { ...state, blocker: "not-sent" },
+          ["report-not-sent", "poll"],
+          facts,
+        )
+      : result({ ...state, blocker: "model" }, ["fetch-model", "poll"], facts);
   return result({ ...state, blocker: "none" }, ["prepare"], facts);
 }
 
@@ -514,6 +534,10 @@ function observe(
 ): PendingSendTransition {
   if (facts.host === "ended") return terminalObservation(state, facts);
   if (state.phase === "unconfirmed") return result(state, [], facts);
+  if (state.blocker === "stop")
+    return facts.host === "resting"
+      ? withdraw(state, facts)
+      : result(state, ["poll"], facts);
   if (facts.frozen)
     return result({ ...state, blocker: "credits" }, ["poll"], facts);
   if (state.blocker === "credits" || state.blocker === "settings")
@@ -587,6 +611,7 @@ function retry(
 ): PendingSendTransition {
   if (
     state.phase === "unconfirmed" ||
+    state.blocker === "stop" ||
     facts.inFlight ||
     (state.phase === "waiting" && !LATCHED_BLOCKERS.has(state.blocker))
   )
@@ -599,7 +624,9 @@ function retry(
         ? state.blocker
         : "none",
   };
-  const plan = observe(next, facts);
+  // Retry requests a new model read; the previous negative cache entry cannot
+  // refuse that read before it starts. All earlier readiness gates still apply.
+  const plan = observe(next, { ...facts, modelUnavailable: false });
   return result(plan.state, ["retry", ...plan.effects], facts);
 }
 
@@ -638,34 +665,7 @@ function waitingReadiness(
 ): PendingSendTransition {
   if (event === "agent-ready" || event === "agent-not-ready")
     return observe(state, facts);
-  if (
-    event === "model-unavailable" &&
-    state.kind !== "terminal" &&
-    !LATCHED_BLOCKERS.has(state.blocker)
-  ) {
-    const needsDefault =
-      !facts.modelReady &&
-      facts.host === "awake" &&
-      facts.clientReady &&
-      facts.agentReady;
-    if (state.blocker === "model" || needsDefault)
-      return result(
-        { ...state, blocker: "not-sent" },
-        ["report-not-sent"],
-        facts,
-      );
-  }
-  if (state.blocker !== "model" || state.kind === "terminal")
-    return result(state, [], facts);
-  if (event === "model-cold") return result(state, ["fetch-model"], facts);
-  if (event === "model-ready")
-    return observe({ ...state, blocker: "none" }, facts);
-  if (event === "model-unavailable")
-    return result(
-      { ...state, blocker: "not-sent" },
-      ["report-not-sent"],
-      facts,
-    );
+
   return result(state, [], facts);
 }
 
@@ -708,15 +708,14 @@ function unconfirmedTransition(
       ["confirm-epic"],
       facts,
     );
-  if (REFRESH_EVENTS.has(event) && !facts.origin)
-    return withdraw(state, facts, false);
+  if (REFRESH_EVENTS.has(event) && !facts.origin) return withdraw(state, facts);
   if (
     event === "stage-lost" ||
     event === "task-interrupted" ||
     event === "epic-create-failed" ||
     event === "task-deleted"
   )
-    return withdraw(state, facts, false);
+    return withdraw(state, facts);
   if (
     REQUEST_EVENTS.has(event) ||
     event === "prepared" ||
@@ -733,9 +732,11 @@ function activeTransition(
   event: PendingSendEvent,
   facts: PendingSendFacts,
 ): PendingSendTransition {
-  if (WITHDRAW_EVENTS.has(event))
-    return withdraw(state, facts, event === "stop");
+  if (event === "stop") return requestStop(state, facts);
+  if (WITHDRAW_EVENTS.has(event)) return withdraw(state, facts);
   if (state.phase === "ended") return endedTransition(state, event, facts);
+  if (state.phase === "waiting" && state.blocker === "stop")
+    return stoppingTransition(state, event, facts);
   if (event === "terminal-row" || event === "access-lost")
     return terminalObservation(state, facts);
   if (state.phase === "unconfirmed")
@@ -751,6 +752,44 @@ function activeTransition(
   return taskEvent(state, event, facts);
 }
 
+/** The request holds its copy until the stop result or fresh row proves rest. */
+function requestStop(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  const permission = withdraw(state, facts);
+  if (permission.outcome !== "applied" || state.phase !== "waiting")
+    return permission;
+  if (facts.inFlight) return result(state, ["poll"], facts);
+  return result(
+    { ...state, blocker: "stop" },
+    ["hold-stop", "stop-host"],
+    facts,
+  );
+}
+
+/** Repair notifications cannot erase a stop intent persisted with the stage. */
+function stoppingTransition(
+  state: PendingSendState,
+  event: PendingSendEvent,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  if (event === "task-deleted") return taskEvent(state, event, facts);
+  if (event === "stage-lost") return withdraw(state, facts);
+  if (event === "retry") return result(state, [], facts);
+  if (event === "stop-failed") return result(state, ["poll"], facts);
+  if (
+    event === "stop-result" &&
+    (facts.host === "resting" || facts.host === "ended")
+  )
+    return withdraw(state, facts);
+  if (event === "terminal-row" || event === "access-lost")
+    return terminalObservation(state, facts);
+  if (STOP_OBSERVATIONS.has(event)) return observe(state, facts);
+  if (REQUEST_EVENTS.has(event)) return unreachable(state, facts);
+  return result(state, [], facts);
+}
+
 /** Task disappearance and terminal completion are independent of host readiness. */
 function taskEvent(
   state: PendingSendState,
@@ -764,7 +803,7 @@ function taskEvent(
       facts,
     );
   if (event === "stage-lost" && state.phase === "waiting")
-    return withdraw(state, facts, false);
+    return withdraw(state, facts);
   if (
     event === "terminal-opened" &&
     state.kind === "terminal" &&
@@ -846,7 +885,7 @@ export function transitionPendingSend(
   if (state.phase === "staged") return stagedTransition(state, event, facts);
   if (state.phase === "accepted")
     return WITHDRAW_EVENTS.has(event)
-      ? withdraw(state, facts, event === "stop")
+      ? withdraw(state, facts)
       : result(state, [], facts);
   if (
     facts.durableClaim &&

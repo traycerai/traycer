@@ -35,6 +35,7 @@ import type {
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
@@ -145,6 +146,13 @@ const mocks = vi.hoisted(() => ({
       (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
     >(),
   stopSandbox: vi.fn<(verb: string) => void>(),
+  /** The held answer of the next sandbox verb; `null` settles it at rest. */
+  verbAnswer: null as Promise<SandboxVerbOutcome> | null,
+  /** The verb mutation's reactive state, as `useMutation` reports it. */
+  verbState: { isPending: false, error: null } as {
+    isPending: boolean;
+    error: Error | null;
+  },
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   /** The account's sandbox rows the ready line is read from. */
@@ -163,10 +171,26 @@ const mocks = vi.hoisted(() => ({
   wire: [] as string[],
   /** Hosts whose client is not available here, as a host not dialled yet. */
   nullClientHosts: new Set<string>(),
-  /** The models each host lists for its agents, in its own order. */
+  /**
+   * What the backend answers to the NEXT model read, per host. A query keeps
+   * its first answer fixed (like the host catalog's, which never goes stale)
+   * until its returned `refetch` is called.
+   */
   modelsByHost: new Map<string, ReadonlyArray<{ readonly slug: string }>>(),
   /** Hosts whose model observer reports a failed refresh (cached data may remain). */
   modelReadErrorHosts: new Set<string>(),
+  /** The catalog each host's query holds: its last answer, kept until a refetch. */
+  modelCache: new Map<
+    string,
+    {
+      readonly data: ReadonlyArray<{ readonly slug: string }> | undefined;
+      readonly isError: boolean;
+    }
+  >(),
+  /** Hosts whose model query was refetched explicitly. */
+  modelRefetches: [] as string[],
+  /** Every readiness refetch of the harness catalog. */
+  harnessRefetches: 0,
   /** Every model read made, with the activity it asked for. */
   modelReads: [] as Array<{
     readonly hostId: string | null;
@@ -249,7 +273,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     return {
       data:
         answers === undefined ? undefined : { harnesses: answers.harnesses },
-      refetch: refetchNothing,
+      refetch: () => {
+        mocks.harnessRefetches += 1;
+        return Promise.resolve(undefined);
+      },
     };
   },
   // A cold read answers only while it is enabled AND subscribed, as the
@@ -266,13 +293,46 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    const models =
-      client !== null && activity.enabled && activity.subscribed
-        ? mocks.modelsByHost.get(client.hostId)
-        : undefined;
+    const hostId = client === null ? null : client.hostId;
+    // The backend's answer now; a failed refresh keeps the previous data.
+    const answer = (
+      previous: ReadonlyArray<{ readonly slug: string }> | undefined,
+    ) => ({
+      data:
+        hostId === null
+          ? undefined
+          : (mocks.modelsByHost.get(hostId) ?? previous),
+      isError: hostId !== null && mocks.modelReadErrorHosts.has(hostId),
+    });
+    if (
+      hostId !== null &&
+      activity.enabled &&
+      activity.subscribed &&
+      !mocks.modelCache.has(hostId)
+    )
+      mocks.modelCache.set(hostId, answer(undefined));
+    // An observer reads what the cache holds while it is subscribed, enabled or not.
+    const held =
+      hostId === null || !activity.subscribed
+        ? undefined
+        : mocks.modelCache.get(hostId);
     return {
-      data: models === undefined ? undefined : { models },
-      isError: client !== null && mocks.modelReadErrorHosts.has(client.hostId),
+      data: held?.data === undefined ? undefined : { models: held.data },
+      isError: held?.isError ?? false,
+      refetch: () => {
+        if (hostId === null) return Promise.resolve(undefined);
+        mocks.modelRefetches.push(hostId);
+        mocks.modelCache.set(
+          hostId,
+          answer(mocks.modelCache.get(hostId)?.data),
+        );
+        // A query tells its observers when the read lands, never inside the
+        // effect that asked for it.
+        return Promise.resolve().then(() => {
+          notifyAnswerListeners();
+          return undefined;
+        });
+      },
     };
   },
 }));
@@ -423,7 +483,40 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
-  useSandboxVerb: () => ({ mutate: mocks.stopSandbox }),
+  // A verb as the real mutation reports it: the call is recorded, the result
+  // is pending until it answers, and a failure stays readable as `error`.
+  useSandboxVerb: () => {
+    useAnswerVersion();
+    const run = (verb: string): Promise<SandboxVerbOutcome> => {
+      mocks.stopSandbox(verb);
+      mocks.verbState = { isPending: true, error: null };
+      notifyAnswerListeners();
+      const answer =
+        mocks.verbAnswer !== null
+          ? mocks.verbAnswer
+          : Promise.resolve<SandboxVerbOutcome>({
+              kind: "settled",
+              state: "stopped",
+            });
+      return answer.then(
+        (outcome) => {
+          mocks.verbState = { isPending: false, error: null };
+          notifyAnswerListeners();
+          return outcome;
+        },
+        (error: Error) => {
+          mocks.verbState = { isPending: false, error };
+          notifyAnswerListeners();
+          throw error;
+        },
+      );
+    };
+    return {
+      mutateAsync: run,
+      isPending: mocks.verbState.isPending,
+      error: mocks.verbState.error,
+    };
+  },
 }));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
@@ -743,6 +836,8 @@ beforeEach(() => {
   mocks.environments = [];
   mocks.createSandbox.mockReset();
   mocks.stopSandbox.mockReset();
+  mocks.verbAnswer = null;
+  mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
   mocks.findById.mockReset();
   mocks.findById.mockImplementation((hostId) => dialableHost(hostId));
@@ -763,6 +858,9 @@ beforeEach(() => {
   mocks.modelsByHost.clear();
   mocks.modelReadErrorHosts.clear();
   mocks.modelReads.length = 0;
+  mocks.modelCache.clear();
+  mocks.modelRefetches.length = 0;
+  mocks.harnessRefetches = 0;
   mocks.wake.mockReset();
   mocks.wake.mockResolvedValue({ kind: "awake" });
   resetNegotiatedManifests();
@@ -3095,12 +3193,14 @@ describe("a send that named no model, ready on its sandbox", () => {
     expect(call.input.initialMessage?.settings.model).toBe(
       "host-default-model",
     );
+    // Subscribed to the host's cache, but only the kernel's fetch starts a read.
     expect(
       mocks.modelReads.some(
         (read) =>
-          read.hostId === SANDBOX_HOST && read.enabled && read.subscribed,
+          read.hostId === SANDBOX_HOST && !read.enabled && read.subscribed,
       ),
     ).toBe(true);
+    expect(mocks.modelRefetches).toContain(SANDBOX_HOST);
   });
 
   it("reaches Not sent with Retry when the destination lists no model at all, instead of waiting forever, and sends with the default once one is listed", async () => {
@@ -3140,6 +3240,11 @@ describe("a send that named no model, ready on its sandbox", () => {
     });
     mocks.modelsByHost.set(SANDBOX_HOST, [{ slug: "cached-default-model" }]);
     mocks.modelReadErrorHosts.add(SANDBOX_HOST);
+    // The catalog was read before, and its latest refresh failed.
+    mocks.modelCache.set(SANDBOX_HOST, {
+      data: [{ slug: "cached-default-model" }],
+      isError: true,
+    });
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
 
@@ -3172,6 +3277,65 @@ describe("a send that named no model, ready on its sandbox", () => {
       }),
     ).toBeDefined();
   });
+
+  it("refetches the catalog on Retry after the first read failed, and sends with the default it then lists", async () => {
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, model: "" } },
+    });
+    mocks.modelReadErrorHosts.add(SANDBOX_HOST);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toEqual({ kind: "not-sent" });
+    });
+    expect(createChatCalls()).toEqual([]);
+    const retry = within(screen.getByTestId("sandbox-refusal-line")).getByRole(
+      "button",
+      { name: "Retry" },
+    );
+
+    mocks.modelReadErrorHosts.delete(SANDBOX_HOST);
+    mocks.modelsByHost.set(SANDBOX_HOST, [{ slug: "host-default-model" }]);
+    fireEvent.click(retry);
+
+    await waitForCreateChats(1);
+    expect(mocks.modelRefetches).toContain(SANDBOX_HOST);
+    expect(createChatCalls()[0]?.input.settings?.model).toBe(
+      "host-default-model",
+    );
+  });
+
+  it.each([
+    ["no-provider", CODEX_UNAVAILABLE, { kind: "no-provider" }],
+    ["agent-setup-failed", CODEX_SETUP_FAILED, { kind: "agent-setup-failed" }],
+  ] as const)(
+    "says the %s remedy and keeps polling the agent while the model read has failed",
+    async (_label, answers, failure) => {
+      seed({
+        ...SEEDED,
+        send: { settings: { ...PICKED_SETTINGS, model: "" } },
+      });
+      mocks.modelReadErrorHosts.add(SANDBOX_HOST);
+      // The model read failed before the agent was ready to be asked.
+      mocks.modelCache.set(SANDBOX_HOST, { data: undefined, isError: true });
+      answerHost(SANDBOX_HOST, answers);
+      mount();
+
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject(failure);
+      });
+      expect(createChatCalls()).toEqual([]);
+      const polled = mocks.harnessRefetches;
+      await waitFor(
+        () => {
+          expect(mocks.harnessRefetches).toBeGreaterThan(polled);
+        },
+        { timeout: 5_000 },
+      );
+    },
+  );
 
   it("reads no model and sends the saved one when the send named its model", async () => {
     seed(SEEDED);
@@ -4042,6 +4206,269 @@ describe("a task deleted while its message waits on a sandbox", () => {
       expect(createChatCalls()).toHaveLength(1);
     },
   );
+});
+
+describe("choosing Stop on an unclaimed send", () => {
+  const FRESH = Date.now() + 60_000;
+  let restoreLocks: () => void = () => undefined;
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(() => {
+    restoreLocks();
+  });
+
+  async function chooseStop(): Promise<void> {
+    seed({ ...SEEDED, elapsedSeconds: 120 });
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+    await screen.findByTestId("sandbox-setup-line");
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "settings", code: "SBX-0520" },
+      });
+    });
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
+  }
+
+  function expectSendKept(): void {
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(readStagedSandbox(SURFACE)).not.toBeNull();
+    expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+      "fix the login bug",
+    );
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(createChatCalls()).toEqual([]);
+  }
+
+  it("stops the sandbox exactly once, then returns the send once it is at rest", async () => {
+    await chooseStop();
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
+    expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(createChatCalls()).toEqual([]);
+  });
+
+  it("keeps the message, the stage and Stop, and says why, when the stop fails", async () => {
+    mocks.verbAnswer = Promise.reject(new Error("The sandbox would not stop."));
+    mocks.verbAnswer.catch(() => undefined);
+    await chooseStop();
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("sandbox-setup-line")).getByText(
+          /would not stop/,
+        ),
+      ).toBeDefined();
+    });
+    expectSendKept();
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeDefined();
+    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns nothing and sends nothing while the stop has not answered, then returns the send when it settles", async () => {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    await chooseStop();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expectSendKept();
+    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      answer.resolve({ kind: "settled", state: "stopped" });
+      await answer.promise;
+    });
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(createChatCalls()).toEqual([]);
+  });
+
+  it("dispatches nothing when the agent is repaired and the sandbox unfrozen while the stop is pending", async () => {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    await chooseStop();
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "awake",
+          frozen: true,
+        }),
+      ],
+      FRESH,
+    );
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "awake",
+        }),
+      ],
+      FRESH + 1,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expectSendKept();
+    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      answer.resolve({ kind: "settled", state: "stopped" });
+      await answer.promise;
+    });
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(createChatCalls()).toEqual([]);
+  });
+
+  it("keeps the stop latch across a reload, so a repaired agent still dispatches nothing", async () => {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    await chooseStop();
+    expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+      kind: "settings",
+      code: "pending-send-stop",
+    });
+
+    await reloadPendingSandboxStores();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await screen.findByTestId("sandbox-setup-line");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+      kind: "settings",
+      code: "pending-send-stop",
+    });
+    expect(createChatCalls()).toEqual([]);
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    answer.resolve({ kind: "settled", state: "stopped" });
+  });
+
+  it.each([null, "awake"] as const)(
+    "keeps the send when the stop settles with the sandbox %s, and returns it on the first fresh read at rest",
+    async (state) => {
+      mocks.verbAnswer = Promise.resolve<SandboxVerbOutcome>({
+        kind: "settled",
+        state,
+      });
+      await chooseStop();
+
+      await act(async () => {
+        await mocks.verbAnswer;
+      });
+      expectSendKept();
+
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "suspended",
+          }),
+        ],
+        FRESH,
+      );
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("sends no stop and no create, keeps the message, and raises nothing when the latch cannot be written", async () => {
+    seed({ ...SEEDED, elapsedSeconds: 120 });
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mount();
+    await screen.findByTestId("sandbox-setup-line");
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "settings", code: "SBX-0520" },
+      });
+    });
+    const stop = await screen.findByTestId("sandbox-setup-stop");
+
+    const stageKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.stagedSandboxSend),
+      SURFACE,
+    );
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    const failedWrite = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === stageKey) throw new Error("quota exceeded");
+        originalSetItem.call(this, key, value);
+      });
+    const raised: unknown[] = [];
+    const onRejection = (reason: unknown) => raised.push(reason);
+    const onError = (event: ErrorEvent) => {
+      event.preventDefault();
+      raised.push(event.error);
+    };
+    process.on("unhandledRejection", onRejection);
+    window.addEventListener("error", onError);
+    try {
+      fireEvent.click(stop);
+      await waitFor(() => {
+        expect(failedWrite).toHaveBeenCalledWith(stageKey, expect.any(String));
+      });
+      // One turn of the event loop, where an unhandled rejection surfaces.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(raised).toEqual([]);
+      expect(mocks.stopSandbox).not.toHaveBeenCalled();
+      expect(createChatCalls()).toEqual([]);
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+      expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+        "fix the login bug",
+      );
+    } finally {
+      process.off("unhandledRejection", onRejection);
+      window.removeEventListener("error", onError);
+      failedWrite.mockRestore();
+    }
+  });
+
+  it("keeps the send while the sandbox is still moving, and returns it on the first fresh read at rest", async () => {
+    mocks.verbAnswer = Promise.resolve<SandboxVerbOutcome>({ kind: "moving" });
+    await chooseStop();
+
+    await act(async () => {
+      await mocks.verbAnswer;
+    });
+    expectSendKept();
+
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "stopped",
+        }),
+      ],
+      FRESH,
+    );
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("the ready line above an agent whose first message waited", () => {
