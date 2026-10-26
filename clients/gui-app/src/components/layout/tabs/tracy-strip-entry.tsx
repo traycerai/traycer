@@ -42,13 +42,12 @@ export function TracyEntryHoverBody(props: {
   readonly signals: TracyEntrySignals;
 }): ReactNode {
   const { title, signals } = props;
-  const working = signals.workingSince !== null;
   return (
     <div data-testid="tracy-entry-hover-body" className="flex flex-col gap-1">
       <div className="text-ui-sm font-medium text-foreground">{title}</div>
-      {working || signals.idle ? (
+      {signals.working || signals.idle ? (
         <div className="text-muted-foreground">
-          {working ? (signals.step ?? "Replying…") : "Idle"}
+          {signals.working ? (signals.step ?? "Replying…") : "Idle"}
         </div>
       ) : null}
     </div>

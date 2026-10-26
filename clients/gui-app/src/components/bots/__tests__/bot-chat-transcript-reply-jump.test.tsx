@@ -476,7 +476,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByTestId("bot-message-reply-in-thread"));
+    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID);

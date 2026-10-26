@@ -578,6 +578,26 @@ describe("<BotChannelView /> channel", () => {
     expect(composer.getAttribute("data-announcement-id")).toBe("none");
   });
 
+  it("makes a member post's own thread wait for the host rather than offering the box that starts one", () => {
+    mocks.postIds = ["post-a"];
+    const { reopen } = mount({ openThreadPostId: null });
+
+    reopen({ anchorMessageId: "post-a", announcement: false });
+
+    const waiting = screen.getByTestId("bot-thread-panel");
+    expect(within(waiting).getByTestId("bot-thread-loading")).toBeTruthy();
+    expect(within(waiting).queryByTestId("bot-thread-unopened")).toBeNull();
+
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 0 })];
+    reopen({ anchorMessageId: "post-a", announcement: false });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
+    const composer = within(panel).getByTestId("stub-bot-thread-composer");
+    expect(composer.getAttribute("data-thread-id")).toBe("thread-a");
+    expect(composer.getAttribute("data-announcement-id")).toBe("none");
+  });
+
   it("shows the box that starts a question's thread when the view mounts again with it open, as after a switch between the tab's views", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];

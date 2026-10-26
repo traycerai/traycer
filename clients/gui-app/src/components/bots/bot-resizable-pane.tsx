@@ -108,6 +108,12 @@ export function BotResizablePane(props: {
       const drag = dragRef.current;
       dragRef.current = null;
       if (drag === null) return;
+      // A press that never moved is not a resize: under a cap the drawn
+      // width is below the stored one, and storing it would narrow the pane.
+      if (drag.latestWidth === drag.startWidth) {
+        drag.pane.style.setProperty("--bot-pane-width", drag.initialWidth);
+        return;
+      }
       setDrawnPx(drawnWidthOf(drag.pane));
       useBotPaneWidthsStore.getState().setWidthPx(pane, drag.latestWidth);
     },

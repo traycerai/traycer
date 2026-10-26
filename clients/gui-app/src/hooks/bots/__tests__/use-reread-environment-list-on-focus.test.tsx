@@ -32,7 +32,7 @@ function createDeferred(): Deferred {
 
 function createFixture() {
   const signals: AbortSignal[] = [];
-  let held: Deferred | null = null;
+  const reads: Deferred[] = [];
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
@@ -41,8 +41,9 @@ function createFixture() {
   }): Promise<number> => {
     signals.push(context.signal);
     if (signals.length === 1) return Promise.resolve(1);
-    held = createDeferred();
-    return held.promise;
+    const read = createDeferred();
+    reads.push(read);
+    return read.promise;
   };
   function Consumer(props: { readonly testId: string }): ReactNode {
     const query = useQuery(queryOptions({ queryKey, queryFn }));
@@ -58,8 +59,12 @@ function createFixture() {
   return {
     signals,
     tree,
+    queryClient,
     releaseHeld: (value: number): void => {
-      held?.resolve(value);
+      reads.at(-1)?.resolve(value);
+    },
+    releaseRead: (index: number, value: number): void => {
+      reads[index]?.resolve(value);
     },
   };
 }
@@ -92,5 +97,35 @@ describe("useRereadEnvironmentListOnFocus", () => {
       expect(screen.getByTestId("home").textContent).toBe("2");
     });
     expect(fixture.signals).toHaveLength(2);
+  });
+
+  it("replaces a read already running at focus with one fresh read", async () => {
+    const fixture = createFixture();
+    render(fixture.tree);
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar").textContent).toBe("1");
+    });
+    act(() => {
+      void fixture.queryClient.invalidateQueries({ queryKey });
+    });
+    expect(fixture.signals).toHaveLength(2);
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(fixture.signals).toHaveLength(3);
+    expect(fixture.signals[1]?.aborted).toBe(true);
+    expect(fixture.signals[2]?.aborted).toBe(false);
+
+    act(() => {
+      fixture.releaseRead(0, 2);
+      fixture.releaseRead(1, 3);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar").textContent).toBe("3");
+      expect(screen.getByTestId("home").textContent).toBe("3");
+    });
+    expect(fixture.signals).toHaveLength(3);
   });
 });

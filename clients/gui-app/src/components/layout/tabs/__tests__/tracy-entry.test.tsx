@@ -846,6 +846,27 @@ describe("the fixed Tracy entry - signals", () => {
     );
   });
 
+  it("still says what Tracy is doing when a replying session has no start time", async () => {
+    scripted.activity = {
+      trunk: {
+        state: "replying",
+        startedAt: null,
+        step: "bun test",
+        requestId: null,
+      },
+      threads: {},
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("bun test");
+    expect(body.textContent).not.toContain("Idle");
+  });
+
   it("shows no timer and an Idle hover while Tracy is not replying", async () => {
     scripted.activity = {
       trunk: { state: "idle", startedAt: null, step: null, requestId: null },

@@ -528,6 +528,10 @@ describe("<BotTabSurface /> while the team's onboarding locks its chat", () => {
 });
 
 describe("<BotTabSurface /> bot.open", () => {
+  afterEach(() => {
+    useBotPaneWidthsStore.getState().resetWidth("sidebar");
+  });
+
   it("opens the bot once on mount, for this bot", () => {
     render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
 
@@ -556,7 +560,6 @@ describe("<BotTabSurface /> bot.open", () => {
         .getByTestId("bot-channel-sidebar-pane-resize-handle")
         .getAttribute("aria-label"),
     ).toBe("Resize channels");
-    useBotPaneWidthsStore.getState().resetWidth("sidebar");
   });
 
   it("shows the full tab, with no banner, when this host serves the bot", () => {

@@ -11,9 +11,11 @@ const NO_CHAT_IDS: ReadonlyArray<string> = [];
 export interface TracyEntrySignals {
   /** The channel has a reply the person has not seen. */
   readonly unread: boolean;
+  /** The bot is replying, in its channel or in a thread. */
+  readonly working: boolean;
   /**
-   * When the bot's running turn began, in its channel or in a thread;
-   * `null` while it is not replying anywhere.
+   * When the bot's running turn began, for its timer; `null` while it is
+   * not replying anywhere, and while the host has not said when it began.
    */
   readonly workingSince: number | null;
   /** What the running turn is doing now, when it says. */
@@ -48,6 +50,7 @@ export function useTracyEntrySignals(botId: string): TracyEntrySignals {
   const replying = replyingSessionOf(activity);
   return {
     unread: state !== null && (state.unreadDone || state.unreadFailure),
+    working: replying !== null,
     workingSince: replying?.startedAt ?? null,
     step: replying?.step ?? null,
     idle: replying === null && activity?.trunk?.state === "idle",

@@ -702,7 +702,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       );
 
       expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-      await user.click(screen.getByTestId("bot-message-reply-in-thread"));
+      await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
       expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
       expect(openAnnouncementThread).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
@@ -789,7 +789,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       { ...CHANNEL, openThread, openAnnouncementThread },
     );
 
-    await user.click(screen.getByTestId("bot-message-reply-in-thread"));
+    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID);
@@ -809,7 +809,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       { ...CHANNEL, openThread, openAnnouncementThread },
     );
 
-    await user.click(screen.getByTestId("bot-message-reply-in-thread"));
+    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openThread).toHaveBeenCalledTimes(1);
     expect(openThread).toHaveBeenCalledWith(POST_ID);
@@ -927,7 +927,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByTestId("bot-message-reply-in-thread"));
+    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID);

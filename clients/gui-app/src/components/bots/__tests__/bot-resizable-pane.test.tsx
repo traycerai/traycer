@@ -250,6 +250,18 @@ describe("<BotResizablePane /> drawn narrower than its stored width", () => {
     expect(handle.getAttribute("aria-valuenow")).toBe(String(DRAWN_PX));
   });
 
+  it("keeps the stored width when the handle is pressed and released without moving", () => {
+    const { handle } = mountCapped("sidebar", "right");
+
+    pointer(handle, "pointerdown", 300);
+    pointer(handle, "pointerup", 300);
+
+    expect(useBotPaneWidthsStore.getState().widthPx.sidebar).toBe(STORED_PX);
+    expect(
+      screen.getByTestId("pane").style.getPropertyValue("--bot-pane-width"),
+    ).toBe(`${STORED_PX}px`);
+  });
+
   it.each([
     {
       pane: "sidebar" as const,
