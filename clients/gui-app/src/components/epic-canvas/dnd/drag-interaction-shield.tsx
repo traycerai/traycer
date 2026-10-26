@@ -19,6 +19,7 @@ export function EpicCanvasDragInteractionShield() {
     <div
       aria-hidden
       data-testid="epic-canvas-drag-interaction-shield"
+      data-history-gesture-owner=""
       className="absolute inset-0 z-10 cursor-grabbing select-none"
       onWheelCapture={preventWheel}
     />

@@ -214,6 +214,39 @@ export interface DesktopZoomBridge {
   onChange(handler: (percent: number) => void): { dispose: () => void };
 }
 
+/**
+ * The macOS trackpad scroll stream from the shell's NSEvent monitor: phase and
+ * deltas in one ordered sequence. Absent everywhere else (Windows, Linux,
+ * browser, mobile), which is how the history swipe knows it has no lift
+ * signal and stays off.
+ */
+export type DesktopTrackpadScrollKind =
+  | "began"
+  | "changed"
+  | "ended"
+  | "cancelled"
+  | "momentum-began"
+  | "momentum-changed"
+  | "momentum-ended"
+  | "momentum-cancelled";
+
+export interface DesktopTrackpadScrollEvent {
+  readonly kind: DesktopTrackpadScrollKind;
+  /** `NSEvent.scrollingDeltaX` in pixels: positive reveals content to the left. */
+  readonly scrollingDeltaX: number;
+  /** `NSEvent.scrollingDeltaY` in pixels: positive reveals content above. */
+  readonly scrollingDeltaY: number;
+  /** Seconds, exact to the input event. */
+  readonly timestamp: number;
+  readonly modified: boolean;
+}
+
+export interface DesktopTrackpadScrollPhaseBridge {
+  onEvent(
+    handler: (event: DesktopTrackpadScrollEvent) => void,
+  ): { dispose: () => void };
+}
+
 // Field-for-field match with main's `SupportLogTarget`
 // (`ipc-contracts/window-types.ts`). `browserTelemetry`/`browserTrace` name
 // the two browser diagnostic files - absence of the trace file is the

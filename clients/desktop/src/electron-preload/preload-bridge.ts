@@ -28,6 +28,7 @@ import {
   createNativeClipboardReadGate,
 } from "./file-drops-bridge";
 import { buildZoomBridge } from "./zoom-bridge";
+import { buildTrackpadScrollPhaseBridge } from "./trackpad-scroll-phase-bridge";
 import { buildBrowserViewBridge } from "./browser-view-bridge";
 import {
   buildSelectionAuthorityBridge,
@@ -90,6 +91,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   platform: buildPlatformBridge(),
   power: buildPowerBridge(),
   ...buildZoomBridge(),
+  ...buildTrackpadScrollPhaseBridge(process.platform),
   ...buildBrowserViewBridge(),
   sandboxArtifacts: buildSandboxArtifactBridge(),
   selectionAuthority: buildSelectionAuthorityBridge(),
