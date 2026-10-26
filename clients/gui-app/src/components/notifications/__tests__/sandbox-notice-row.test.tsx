@@ -63,6 +63,10 @@ vi.mock("@/lib/host", async (importActual) => ({
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-local",
 }));
+// A sandbox notice exists only with sandboxes on, which every case is about.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
 vi.mock("@/hooks/notifications/use-notification-host", () => ({
   useNotificationResolveHostId: () => "host-local",
   useNotificationResolveHost: () => ({

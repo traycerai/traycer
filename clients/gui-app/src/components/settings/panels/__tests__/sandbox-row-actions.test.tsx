@@ -68,6 +68,10 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
   useComposerSurfaceHostKey: () => SURFACE,
 }));
+// A sandbox row exists only with sandboxes on, which every case is about.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => mutation(),
 }));

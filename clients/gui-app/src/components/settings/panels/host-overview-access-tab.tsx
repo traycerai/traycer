@@ -108,28 +108,16 @@ function AccessTabBody(props: {
   readonly hostName: string;
 }): ReactNode {
   const status = useEnvironmentStatusRead(props.client, props.hostId, true);
-  const localHostId = useReactiveLocalHostId();
   // Unread takes this branch too: it drops sections, which the read restores.
   const environments = usePreviewFeature("environments");
   if (environments !== "on") {
     return (
-      <>
-        {status.data === null ? null : (
-          <RemoteAccessSection
-            client={props.client}
-            hostId={props.hostId}
-            status={status.data.remoteAccess}
-          />
-        )}
-        <TerminalAccountsSection
-          client={props.client}
-          sentence={terminalAccountSentenceWithoutEnvironments(
-            props.hostId !== null && props.hostId === localHostId
-              ? null
-              : props.hostName,
-          )}
-        />
-      </>
+      <AccessSectionsWithoutEnvironments
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+        remoteAccess={status.data === null ? null : status.data.remoteAccess}
+      />
     );
   }
   if (status.supported === false) {
@@ -172,6 +160,34 @@ function AccessTabBody(props: {
       <div inert className="flex flex-col gap-5 opacity-60">
         {sections}
       </div>
+    </>
+  );
+}
+
+function AccessSectionsWithoutEnvironments(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
+  readonly hostName: string;
+  readonly remoteAccess: EnvironmentStatusResponseV11["remoteAccess"] | null;
+}): ReactNode {
+  const localHostId = useReactiveLocalHostId();
+  return (
+    <>
+      {props.remoteAccess === null ? null : (
+        <RemoteAccessSection
+          client={props.client}
+          hostId={props.hostId}
+          status={props.remoteAccess}
+        />
+      )}
+      <TerminalAccountsSection
+        client={props.client}
+        sentence={terminalAccountSentenceWithoutEnvironments(
+          props.hostId !== null && props.hostId === localHostId
+            ? null
+            : props.hostName,
+        )}
+      />
     </>
   );
 }

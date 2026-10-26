@@ -110,6 +110,11 @@ const RECENT_FOLDER: PreparedWorkspaceFolder = {
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
+// The picker's sandbox groups are drawn only with sandboxes on, which the
+// chip's cases are about.
+vi.mock("@/hooks/auth/use-preview-feature", () => ({
+  usePreviewFeature: () => "on",
+}));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => FAKE_CLIENT,
 }));
