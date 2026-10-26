@@ -615,7 +615,7 @@ describe("<BotTabSurface /> paused", () => {
   }> = [
     {
       reason: "host-not-in-environment",
-      text: "Paused: the computer this bot runs on is away, and this one doesn't run Acme's bots. Messages you send are delivered when it's back.",
+      text: "Paused: the host this bot runs on is away, and this one doesn't run Acme's bots. Messages you send are delivered when it's back.",
       retry: false,
     },
     {
