@@ -9,12 +9,14 @@ import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/pl
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
+  confirmPendingSandboxSendEpic,
   endPendingSandboxSend,
   handPendingSandboxSend,
   pickedRunSettings,
   requestedAgentReadiness,
   returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -23,12 +25,15 @@ import {
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
+  type PendingSandboxSendDispatch,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { recordMapStorageKey } from "@/lib/persist/keys";
 import { runSilentCapableEpicTerminalCreate } from "@/lib/terminals/epic-terminal-silent-create";
 import {
   MESSAGE_CONTENT,
@@ -39,6 +44,26 @@ import {
 } from "./pending-send-fixtures";
 
 const SURFACE = "landing:window-1";
+
+const DISPATCH_INPUT: PendingSandboxSendDispatch["input"] = {
+  epicId: "epic-1",
+  hostId: "sandbox-host",
+  parentId: null,
+  title: "",
+  chatId: "chat-1",
+  settings: PICKED_SETTINGS,
+  workspaceMode: "folderless",
+  worktreeIntent: null,
+  initialMessage: {
+    messageId: "message-1",
+    clientActionId: "action-1",
+    content: MESSAGE_CONTENT,
+    sender: { type: "user", userId: "user-1" },
+    settings: PICKED_SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    sentFromHostId: null,
+  },
+};
 
 const NEW_TARGET: StagedSandboxTarget = {
   kind: "new",
@@ -60,6 +85,7 @@ beforeEach(() => {
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useAuthStore.getState().setSignedOut();
 });
 
@@ -209,6 +235,7 @@ describe("handPendingSandboxSend", () => {
       createdAt: 5_000,
       epicConfirmed: false,
       delivery: null,
+      dispatch: null,
     });
     expect(readStagedSandbox(SURFACE)).toBeNull();
     expect(readStagedSandbox(pendingSendSurfaceKey(id))).toMatchObject({
@@ -244,6 +271,24 @@ describe("returnPendingSandboxSend", () => {
       );
   }
 
+  function handUnconfirmedSend(): string {
+    useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    const id = handPendingSandboxSend({
+      fromSurfaceKey: SURFACE,
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+      content: MESSAGE_CONTENT,
+      text: "fix the login bug",
+      settings: PICKED_SETTINGS,
+      epicConfirmed: false,
+      now: 5_000,
+    });
+    if (id === null) {
+      throw new Error("expected the staged message to be handed");
+    }
+    return id;
+  }
+
   function contentWith(text: string) {
     return {
       type: "doc" as const,
@@ -256,97 +301,311 @@ describe("returnPendingSandboxSend", () => {
     };
   }
 
-  it("preserves an occupied task composer and puts a returned send in a fresh closed landing draft", () => {
-    signInAsPendingSendOwner();
-    const occupiedContent = {
-      type: "doc" as const,
-      content: [
-        {
-          type: "paragraph" as const,
-          content: [{ type: "text" as const, text: "keep my replacement" }],
+  it.each(["sending", "uncertain"] as const)(
+    "does not return a send with a %s create claim",
+    (status) => {
+      signInAsPendingSendOwner();
+      const dispatch = {
+        input: DISPATCH_INPUT,
+        delivery: {
+          chatId: "chat-1",
+          hostId: "sandbox-host",
+          sandboxId: "sandbox-1",
+          readySeconds: 0,
         },
-      ],
+        status,
+      };
+      const send = { ...pendingSend({ id: "send-1" }), dispatch };
+      usePendingSandboxSendStore.getState().add(send);
+
+      const returned = returnPendingSandboxSend(send.id);
+
+      expect(returned).toEqual({ kind: "dispatching" });
+      expect(
+        usePendingSandboxSendStore.getState().sends[send.id],
+      ).toBeDefined();
+    },
+  );
+
+  it("does not return a send when persisted storage has a claim newer than memory", () => {
+    signInAsPendingSendOwner();
+    const send = pendingSend({ id: "send-1" });
+    const dispatch = {
+      input: DISPATCH_INPUT,
+      delivery: {
+        chatId: "chat-1",
+        hostId: "sandbox-host",
+        sandboxId: "sandbox-1",
+        readySeconds: 0,
+      },
+      status: "sending" as const,
     };
-    useNewConversationModalStore
-      .getState()
-      .setContent("epic-1", occupiedContent);
-    useNewConversationModalStore.getState().setSettings("epic-1", {
-      ...PICKED_SETTINGS,
-      model: "a different model",
-    });
-    usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+    usePendingSandboxSendStore.getState().add(send);
+    localStorage.setItem(
+      recordMapStorageKey(persistKey(STORE_KEYS.pendingSandboxSend), send.id),
+      JSON.stringify({ ...send, dispatch }),
+    );
 
-    const returned = returnPendingSandboxSend("send-1");
+    const returned = returnPendingSandboxSend(send.id);
 
-    expect(returned.kind).toBe("landing-draft");
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({
-      content: occupiedContent,
-      settings: { model: "a different model" },
-    });
-    expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
-    ]);
-    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(returned).toEqual({ kind: "dispatching" });
+    expect(usePendingSandboxSendStore.getState().sends[send.id]).toBeDefined();
   });
 
-  it("keeps every orphaned return in its own closed landing draft", () => {
-    signInAsPendingSendOwner();
-    // An existing settings-only pick is an occupied modal, even without text.
-    useNewConversationModalStore
-      .getState()
-      .setSettings("epic-1", PICKED_SETTINGS);
-    usePendingSandboxSendStore.getState().add(
-      pendingSend({
-        id: "send-a",
-        content: contentWith("first returned message"),
-        text: "first returned message",
-      }),
-    );
-    usePendingSandboxSendStore.getState().add(
-      pendingSend({
-        id: "send-b",
-        content: contentWith("second returned message"),
-        text: "second returned message",
-      }),
-    );
+  it("returns a send handed here before confirmation without Web Locks", () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Reflect.deleteProperty(navigator, "locks");
+    try {
+      signInAsPendingSendOwner();
+      const id = handUnconfirmedSend();
 
-    const first = returnPendingSandboxSend("send-a");
-    const second = returnPendingSandboxSend("send-b");
+      const returned = returnPendingSandboxSend(id);
 
-    expect(first.kind).toBe("landing-draft");
-    expect(second.kind).toBe("landing-draft");
-    if (first.kind !== "landing-draft" || second.kind !== "landing-draft") {
-      throw new Error("expected landing drafts");
+      expect(returned.kind).toBe("landing-draft");
+      expect(usePendingSandboxSendStore.getState().sends[id]).toBeUndefined();
+      expect(useLandingDraftStore.getState().drafts).toMatchObject([
+        { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+      ]);
+    } finally {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
     }
-    expect(first.draftId).not.toBe(second.draftId);
-    const rows = listDraftInventory({
-      scope: { surface: "landing", activeDraftId: null },
-      filter: "current",
-      landing: useLandingDraftStore.getState().drafts,
-      composer: {},
-      newChat: {},
-      openChatIds: new Set(),
-      liveSessionHostIds: new Set(),
+  });
+
+  it("keeps an unconfirmed send that this no-lock window did not hand", () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Reflect.deleteProperty(navigator, "locks");
+    try {
+      signInAsPendingSendOwner();
+      const send = pendingSend({ id: "send-1", epicConfirmed: false });
+      usePendingSandboxSendStore.getState().add(send);
+
+      expect(returnPendingSandboxSend(send.id)).toEqual({ kind: "none" });
+      expect(
+        usePendingSandboxSendStore.getState().sends[send.id],
+      ).toBeDefined();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    } finally {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
+  });
+
+  it.each([
+    ["the owner stays signed in", false, true],
+    ["the account changes before the lock is granted", true, false],
+  ] as const)(
+    "waits for native ownership before confirming when %s",
+    async (_scenario, switchAccount, expectedConfirmed) => {
+      const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+      const grantNativeLock = Promise.withResolvers<void>();
+      const nativeLockReleased = Promise.withResolvers<void>();
+      Object.defineProperty(navigator, "locks", {
+        configurable: true,
+        value: {
+          request: (
+            _name: string,
+            _options: LockOptions,
+            callback: () => Promise<void>,
+          ) =>
+            grantNativeLock.promise
+              .then(callback)
+              .then(() => nativeLockReleased.resolve()),
+        },
+      });
+      try {
+        signInAsPendingSendOwner();
+        const id = handUnconfirmedSend();
+        const owner = holdPendingSandboxSendOwnership(id);
+        confirmPendingSandboxSendEpic(id);
+
+        expect(
+          usePendingSandboxSendStore.getState().sends[id]?.epicConfirmed,
+        ).toBe(false);
+        if (switchAccount) {
+          useAuthStore
+            .getState()
+            .setSignedIn(
+              { userId: "user-2", userName: "V", email: "v@example.com" },
+              { userId: "user-2", username: "V" },
+              [],
+            );
+        }
+        grantNativeLock.resolve();
+        await owner.ready;
+
+        expect(
+          usePendingSandboxSendStore.getState().sends[id]?.epicConfirmed,
+        ).toBe(expectedConfirmed);
+        signInAsPendingSendOwner();
+        endPendingSandboxSend(id);
+        owner.release();
+        await nativeLockReleased.promise;
+      } finally {
+        grantNativeLock.resolve();
+        usePendingSandboxSendStore.setState({ sends: {} });
+        useStagedSandboxStore.setState({ bySurface: {} });
+        if (originalLocks === undefined) {
+          Reflect.deleteProperty(navigator, "locks");
+        } else {
+          Object.defineProperty(navigator, "locks", originalLocks);
+        }
+      }
+    },
+  );
+
+  it("preserves an occupied task composer and puts an exclusively returned send in a fresh closed landing draft", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
     });
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: first.draftId,
-          kind: "landing",
-          preview: "first returned message",
-          open: false,
+    try {
+      signInAsPendingSendOwner();
+      const occupiedContent = {
+        type: "doc" as const,
+        content: [
+          {
+            type: "paragraph" as const,
+            content: [{ type: "text" as const, text: "keep my replacement" }],
+          },
+        ],
+      };
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", occupiedContent);
+      useNewConversationModalStore.getState().setSettings("epic-1", {
+        ...PICKED_SETTINGS,
+        model: "a different model",
+      });
+      usePendingSandboxSendStore.getState().add(pendingSend({ id: "send-1" }));
+      const owner = holdPendingSandboxSendOwnership("send-1");
+      expect(await owner.ready).toBe(true);
+
+      const returned = returnPendingSandboxSend("send-1");
+
+      expect(returned.kind).toBe("landing-draft");
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({
+        content: occupiedContent,
+        settings: { model: "a different model" },
+      });
+      expect(useLandingDraftStore.getState().drafts).toMatchObject([
+        { content: MESSAGE_CONTENT, settings: PICKED_SETTINGS, closed: true },
+      ]);
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      owner.release();
+    } finally {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
+  });
+
+  it("keeps every exclusively returned message in its own closed landing draft", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (
+          _name: string,
+          _options: LockOptions,
+          callback: () => Promise<void>,
+        ) => callback(),
+      },
+    });
+    try {
+      signInAsPendingSendOwner();
+      // An existing settings-only pick is an occupied modal, even without text.
+      useNewConversationModalStore
+        .getState()
+        .setSettings("epic-1", PICKED_SETTINGS);
+      usePendingSandboxSendStore.getState().add(
+        pendingSend({
+          id: "send-a",
+          content: contentWith("first returned message"),
+          text: "first returned message",
         }),
-        expect.objectContaining({
-          id: second.draftId,
-          kind: "landing",
-          preview: "second returned message",
-          open: false,
+      );
+      usePendingSandboxSendStore.getState().add(
+        pendingSend({
+          id: "send-b",
+          content: contentWith("second returned message"),
+          text: "second returned message",
         }),
-      ]),
-    );
-    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      );
+      const firstOwner = holdPendingSandboxSendOwnership("send-a");
+      const secondOwner = holdPendingSandboxSendOwnership("send-b");
+      expect(await firstOwner.ready).toBe(true);
+      expect(await secondOwner.ready).toBe(true);
+
+      const first = returnPendingSandboxSend("send-a");
+      const second = returnPendingSandboxSend("send-b");
+
+      expect(first.kind).toBe("landing-draft");
+      expect(second.kind).toBe("landing-draft");
+      if (first.kind !== "landing-draft" || second.kind !== "landing-draft") {
+        throw new Error("expected landing drafts");
+      }
+      expect(first.draftId).not.toBe(second.draftId);
+      const rows = listDraftInventory({
+        scope: { surface: "landing", activeDraftId: null },
+        filter: "current",
+        landing: useLandingDraftStore.getState().drafts,
+        composer: {},
+        newChat: {},
+        openChatIds: new Set(),
+        liveSessionHostIds: new Set(),
+      });
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: first.draftId,
+            kind: "landing",
+            preview: "first returned message",
+            open: false,
+          }),
+          expect.objectContaining({
+            id: second.draftId,
+            kind: "landing",
+            preview: "second returned message",
+            open: false,
+          }),
+        ]),
+      );
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      firstOwner.release();
+      secondOwner.release();
+    } finally {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
   });
 });
 

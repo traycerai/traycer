@@ -69,9 +69,9 @@ import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 /** What the line's buttons do, wired by the surface that owns the stage. */
 export interface SandboxSetupLineActions {
   readonly onKeepWaiting: () => void;
-  /** Cancel and keep the draft; Cancel the message. Withdraws nothing at the provider. */
-  readonly onCancel: () => void;
-  readonly onChooseAnotherHost: () => void;
+  /** Before dispatch: Cancel and keep the draft; never destroys the sandbox. */
+  readonly onCancel: (() => void) | null;
+  readonly onChooseAnotherHost: (() => void) | null;
   /** A new create with a new key, after a terminal failure. */
   readonly onRetryCreation: () => void;
   /** The same create or wake again, with the same key. */
@@ -79,10 +79,10 @@ export interface SandboxSetupLineActions {
   /** The send handed to the ready sandbox, made again from its draft. */
   readonly onSendAgain: () => void;
   /** The shape sheet: Change shape or region, Choose a smaller shape. */
-  readonly onChangeShape: () => void;
+  readonly onChangeShape: (() => void) | null;
   /** Repairs the settings on the new host, then waits again. */
   readonly onRetryApplying: () => void;
-  readonly onStop: () => void;
+  readonly onStop: (() => void) | null;
   /**
    * A folderless terminal on the new host: Open terminal on the Booting step
    * and the settings branch, Open terminal instead on the no-provider
@@ -118,8 +118,20 @@ export function SandboxSetupLine(props: {
   readonly name: string;
   readonly facts: SandboxSetupLineFacts;
   readonly actions: SandboxSetupLineActions;
+  /** Only an undispatched send with exclusive ownership can be withdrawn. */
+  readonly withdrawalAllowed?: boolean;
 }): ReactNode {
   const { stage } = props;
+  const actions =
+    props.withdrawalAllowed === false
+      ? {
+          ...props.actions,
+          onCancel: null,
+          onChooseAnotherHost: null,
+          onStop: null,
+          onChangeShape: null,
+        }
+      : props.actions;
   const failure = stage.failure;
   if (failure !== null && isRefusal(failure)) {
     return (
@@ -128,7 +140,7 @@ export function SandboxSetupLine(props: {
         name={props.name}
         failure={failure}
         facts={props.facts}
-        actions={props.actions}
+        actions={actions}
       />
     );
   }
@@ -139,7 +151,7 @@ export function SandboxSetupLine(props: {
       name={props.name}
       startedAt={stage.startedAt}
       facts={props.facts}
-      actions={props.actions}
+      actions={actions}
     />
   );
 }
@@ -778,8 +790,9 @@ function SetupSteps(props: {
 function LineButton(props: {
   readonly label: string;
   readonly testId: string;
-  readonly onClick: () => void;
+  readonly onClick: (() => void) | null;
 }): ReactNode {
+  if (props.onClick === null) return null;
   return (
     <Button
       type="button"

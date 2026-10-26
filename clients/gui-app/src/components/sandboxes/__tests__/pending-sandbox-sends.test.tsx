@@ -51,10 +51,13 @@ import {
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import {
+  endPendingSandboxSend,
   confirmPendingSandboxSendEpic,
   handPendingSandboxSend,
+  returnPendingSandboxSend,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { PERSONAL_CONFIGURATION_ID } from "@/lib/settings-environment-pages";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readStagedSandbox,
@@ -70,6 +73,7 @@ import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
   type PendingSandboxSend,
+  type PendingSandboxSendDispatch,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
@@ -138,6 +142,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
     >(),
+  stopSandbox: vi.fn<(verb: string) => void>(),
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   /** The account's sandbox rows the ready line is read from. */
@@ -276,6 +281,29 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
       });
     },
   }),
+  useEpicCreateChatForPendingSandbox: (
+    client: FakeClient | null,
+    _ownerUserId: string | null,
+  ) => ({
+    mutateAsync: (input: CreateChatMutationInput) => {
+      mocks.wire.push("epic.createChat");
+      mocks.createChatCalls.push({
+        clientHostId: client === null ? null : client.hostId,
+        input,
+      });
+      if (mocks.createChatError !== null) {
+        return Promise.reject(mocks.createChatError);
+      }
+      if (mocks.createChatDeferred !== null) return mocks.createChatDeferred;
+      return Promise.resolve({
+        chatId: input.chatId,
+        initialTurnStarted: true,
+        ...(mocks.createChatRefusal === null
+          ? {}
+          : { refusal: mocks.createChatRefusal }),
+      });
+    },
+  }),
 }));
 
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
@@ -359,7 +387,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
-  useSandboxVerb: () => ({ mutate: vi.fn() }),
+  useSandboxVerb: () => ({ mutate: mocks.stopSandbox }),
 }));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
@@ -567,15 +595,50 @@ function listAnswers(rows: SandboxSummary[]): SandboxListFetchResult {
   return { kind: "ok", response: { sandboxes: rows } };
 }
 
-function deferred<T>(): {
+interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
-} {
+}
+
+function deferred<T>(): Deferred<T> {
   let resolve: (value: T) => void = () => undefined;
   const promise = new Promise<T>((next) => {
     resolve = next;
   });
   return { promise, resolve };
+}
+
+async function resolvePendingCreate(
+  create: Deferred<CreateChatResponseV12>,
+): Promise<void> {
+  await act(async () => {
+    create.resolve({
+      chatId: createChatCalls()[0]?.input.chatId ?? "cleanup-chat",
+    });
+    await create.promise;
+  });
+}
+
+/** Grants a real per-send exclusive reservation for withdrawal-specific cases. */
+function installImmediateExclusiveLocks(): () => void {
+  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: {
+      request: (
+        _name: string,
+        _options: LockOptions,
+        callback: () => Promise<void>,
+      ) => callback(),
+    },
+  });
+  return () => {
+    if (originalLocks === undefined) {
+      Reflect.deleteProperty(navigator, "locks");
+    } else {
+      Object.defineProperty(navigator, "locks", originalLocks);
+    }
+  };
 }
 
 function userSignedIn(): void {
@@ -591,6 +654,7 @@ function userSignedIn(): void {
 beforeEach(() => {
   localStorage.clear();
   userSignedIn();
+  useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   mocks.hostAnswers.clear();
   mocks.createChatCalls.length = 0;
   mocks.createChatError = null;
@@ -600,6 +664,7 @@ beforeEach(() => {
   mocks.openEnvironmentPage.mockReset();
   mocks.environments = [];
   mocks.createSandbox.mockReset();
+  mocks.stopSandbox.mockReset();
   mocks.listSandboxes.mockReset();
   mocks.findById.mockReset();
   mocks.findById.mockImplementation((hostId) => dialableHost(hostId));
@@ -654,6 +719,61 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     });
     // The message left the strip with its delivery.
     expect(screen.queryByTestId("pending-sandbox-message")).toBeNull();
+  });
+
+  it("keeps the message and sends no create when its durable dispatch claim cannot be written", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Reflect.deleteProperty(navigator, "locks");
+    const sendRecordKey = recordMapStorageKey(
+      persistKey(STORE_KEYS.pendingSandboxSend),
+      SEND_ID,
+    );
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    try {
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+      mount();
+      await screen.findByTestId("sandbox-setup-line");
+
+      const failedWrite = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation(function (this: Storage, key, value) {
+          if (key === sendRecordKey) {
+            throw new Error("quota exceeded");
+          }
+          originalSetItem.call(this, key, value);
+        });
+      try {
+        answerHost(SANDBOX_HOST, CODEX_READY);
+
+        await waitFor(() => {
+          expect(failedWrite).toHaveBeenCalledWith(
+            sendRecordKey,
+            expect.any(String),
+          );
+        });
+        expect(createChatCalls()).toEqual([]);
+        expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+          "fix the login bug",
+        );
+        const sends = usePendingSandboxSendStore.getState().sends;
+        if (!Object.hasOwn(sends, SEND_ID)) {
+          throw new Error("expected the pending message to be retained");
+        }
+        expect(sends[SEND_ID]).toMatchObject({
+          text: "fix the login bug",
+          delivery: null,
+        });
+      } finally {
+        failedWrite.mockRestore();
+      }
+    } finally {
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
   });
 
   it("opens the agent in the pane its surface named, as an ordinary create does", async () => {
@@ -979,19 +1099,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
 describe("a send that survives a reload", () => {
   /** The two persisted stores as a reload finds them. */
   async function reload(): Promise<void> {
-    const staged = snapshotRecordMapStorage(
-      persistKey(STORE_KEYS.stagedSandboxSend),
-    );
-    const sends = snapshotRecordMapStorage(
-      persistKey(STORE_KEYS.pendingSandboxSend),
-    );
-    cleanup();
-    useStagedSandboxStore.setState({ bySurface: {} });
-    usePendingSandboxSendStore.setState({ sends: {} });
-    restoreRecordMapStorage(persistKey(STORE_KEYS.stagedSandboxSend), staged);
-    restoreRecordMapStorage(persistKey(STORE_KEYS.pendingSandboxSend), sends);
-    await useStagedSandboxStore.persist.rehydrate();
-    await usePendingSandboxSendStore.persist.rehydrate();
+    await reloadPendingSandboxStores();
   }
 
   it("takes up a create that was answered without making a second sandbox, shows the line again, and delivers once", async () => {
@@ -1097,6 +1205,143 @@ describe("a send that survives a reload", () => {
     expect(mocks.createSandbox.mock.calls[0][0].clientRequestId).toBe(
       clientRequestId,
     );
+  });
+
+  it("retries an uncertain chat create from its saved request after the stage is missing", async () => {
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("pending-sandbox-dispatch").textContent,
+      ).toContain("Couldn't confirm the agent was created.");
+    });
+    const firstCalls = createChatCalls();
+    if (!Object.hasOwn(firstCalls, 0)) {
+      throw new Error("expected a chat create");
+    }
+    const firstInput = firstCalls[0].input;
+
+    mocks.createChatError = null;
+    useStagedSandboxStore.getState().clear(SURFACE);
+    await reload();
+
+    const sends = usePendingSandboxSendStore.getState().sends;
+    if (!Object.hasOwn(sends, SEND_ID)) {
+      throw new Error("expected the pending send after reload");
+    }
+    const send = sends[SEND_ID];
+    usePendingSandboxSendStore.setState({
+      sends: {
+        ...sends,
+        [SEND_ID]: {
+          ...send,
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "changed content after Send" }],
+              },
+            ],
+          },
+          settings: { ...send.settings, model: "changed-model-default" },
+        },
+      },
+    });
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-current" },
+    });
+    mount();
+
+    const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
+    expect(dispatch.textContent).toContain(
+      "Couldn't confirm the agent was created.",
+    );
+    expect(createChatCalls()).toHaveLength(1);
+    expect(screen.getByTestId("pending-sandbox-message").textContent).toBe(
+      "fix the login bug",
+    );
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+
+    await waitForCreateChats(2);
+    expect(createChatCalls()[1]?.clientHostId).toBe(
+      createChatCalls()[0]?.clientHostId,
+    );
+    expect(createChatCalls()[1]?.input).toEqual(firstInput);
+  });
+
+  it("resumes a persisted sending claim without Web Locks or its stage", async () => {
+    const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+    Reflect.deleteProperty(navigator, "locks");
+    try {
+      const input: PendingSandboxSendDispatch["input"] = {
+        epicId: "epic-1",
+        hostId: SANDBOX_HOST,
+        parentId: null,
+        title: "",
+        chatId: "saved-chat-id",
+        workspaceMode: "folderless",
+        worktreeIntent: null,
+        settings: PICKED_SETTINGS,
+        initialMessage: {
+          messageId: "saved-message-id",
+          clientActionId: "saved-action-id",
+          content: MESSAGE_CONTENT,
+          sender: { type: "user", userId: "user-1" },
+          settings: PICKED_SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          sentFromHostId: null,
+        },
+      };
+      const dispatch = {
+        input,
+        delivery: {
+          chatId: input.chatId,
+          hostId: SANDBOX_HOST,
+          sandboxId: SANDBOX_ID,
+          readySeconds: 24,
+        },
+        status: "sending" as const,
+      };
+      usePendingSandboxSendStore
+        .getState()
+        .add(pendingSend({ id: SEND_ID, dispatch }));
+      await reloadPendingSandboxStores();
+
+      const create = deferred<CreateChatResponseV12>();
+      mocks.createChatDeferred = create.promise;
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+      try {
+        await waitForCreateChats(1);
+        expect(createChatCalls()[0]?.input).toEqual(input);
+        expect(readStagedSandbox(SURFACE)).toBeNull();
+
+        await act(async () => {
+          create.resolve({ chatId: input.chatId });
+          await create.promise;
+        });
+      } finally {
+        await resolvePendingCreate(create);
+      }
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+        ).toEqual(dispatch.delivery);
+      });
+      expect(createChatCalls()).toHaveLength(1);
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+    } finally {
+      if (originalLocks === undefined) {
+        Reflect.deleteProperty(navigator, "locks");
+      } else {
+        Object.defineProperty(navigator, "locks", originalLocks);
+      }
+    }
   });
 
   it("does not deliver a delivered send again", async () => {
@@ -1331,83 +1576,91 @@ describe("a send whose sandbox cannot take it", () => {
   });
 
   it("settles to the failure in place with Choose another host when the sandbox failed, and never delivers", async () => {
-    seed({ ...SEEDED, phase: "creating", created: true });
-    mocks.listSandboxes.mockResolvedValue(
-      listAnswers([
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "failed",
-          failureCode: "PROVIDER_CREATE_FAILED",
-        }),
-      ]),
-    );
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    const view = mount();
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({ ...SEEDED, phase: "creating", created: true });
+      mocks.listSandboxes.mockResolvedValue(
+        listAnswers([
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "failed",
+            failureCode: "PROVIDER_CREATE_FAILED",
+          }),
+        ]),
+      );
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      const view = mount();
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-        kind: "failed",
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+          kind: "failed",
+        });
       });
-    });
-    const line = screen.getByTestId("sandbox-setup-line");
-    expect(
-      within(line).getByRole("button", { name: "Choose another host" }),
-    ).toBeDefined();
-    expect(screen.getByTestId("pending-sandbox-message")).toBeDefined();
+      const line = screen.getByTestId("sandbox-setup-line");
+      expect(
+        within(line).getByRole("button", { name: "Choose another host" }),
+      ).toBeDefined();
+      expect(screen.getByTestId("pending-sandbox-message")).toBeDefined();
 
-    // Nothing resumes it into delivery, however often it is mounted again.
-    view.unmount();
-    mount();
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(createChatCalls()).toEqual([]);
-    expect(mocks.createSandbox).not.toHaveBeenCalled();
+      // Nothing resumes it into delivery, however often it is mounted again.
+      view.unmount();
+      mount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(createChatCalls()).toEqual([]);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+    } finally {
+      restoreLocks();
+    }
   });
 
   it("settles to the refusal in place when the create is refused, and Choose another host gives the whole message back to the composer, for the pane it named", async () => {
-    seed({
-      ...SEEDED,
-      send: { request: { kind: "chat", parentId: null, placement: PANE } },
-      phase: "creating",
-      created: false,
-    });
-    mocks.createSandbox.mockResolvedValue({
-      kind: "refused",
-      status: 402,
-      code: "insufficient_credit",
-      reason: null,
-      shortfallMc: 120,
-      newRateMcPerHour: null,
-      currentAwakeBurnMcPerHour: null,
-      message: "refused",
-    });
-    mount();
-
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-        kind: "credits",
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({
+        ...SEEDED,
+        send: { request: { kind: "chat", parentId: null, placement: PANE } },
+        phase: "creating",
+        created: false,
       });
-    });
-    expect(createChatCalls()).toEqual([]);
+      mocks.createSandbox.mockResolvedValue({
+        kind: "refused",
+        status: 402,
+        code: "insufficient_credit",
+        reason: null,
+        shortfallMc: 120,
+        newRateMcPerHour: null,
+        currentAwakeBurnMcPerHour: null,
+        message: "refused",
+      });
+      mount();
 
-    fireEvent.click(
-      within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
-        name: "Choose another host",
-      }),
-    );
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+          kind: "credits",
+        });
+      });
+      expect(createChatCalls()).toEqual([]);
 
-    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    expect(readStagedSandbox(SURFACE)).toBeNull();
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
-      epicId: "epic-1",
-      tabId: "tab-1",
-      placement: PANE,
-    });
+      fireEvent.click(
+        within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+          name: "Choose another host",
+        }),
+      );
+
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
+      expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
+        { epicId: "epic-1", tabId: "tab-1", placement: PANE },
+      );
+    } finally {
+      restoreLocks();
+    }
   });
 
   it("re-reads a sandbox gone while the record waited, follows the failure, and sends nothing into it", async () => {
@@ -1432,24 +1685,29 @@ describe("a send at its handoff whose sandbox is gone", () => {
   const FRESH = Date.now() + 60_000;
 
   it("settles to the failure in place with Choose another host when a fresh read lacks the sandbox, and sends nothing", async () => {
-    seed({ ...SEEDED, phase: "handoff", created: true });
-    mocks.listReadAt = FRESH;
-    mocks.sandboxes = [];
-    // The destroyed sandbox's host never answers.
-    mount();
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({ ...SEEDED, phase: "handoff", created: true });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [];
+      // The destroyed sandbox's host never answers.
+      mount();
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-        kind: "failed",
-        code: "gone",
-        step: "delivering",
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
+          kind: "failed",
+          code: "gone",
+          step: "delivering",
+        });
       });
-    });
-    const line = screen.getByTestId("sandbox-setup-line");
-    expect(
-      within(line).getByRole("button", { name: "Choose another host" }),
-    ).toBeDefined();
-    expect(createChatCalls()).toEqual([]);
+      const line = screen.getByTestId("sandbox-setup-line");
+      expect(
+        within(line).getByRole("button", { name: "Choose another host" }),
+      ).toBeDefined();
+      expect(createChatCalls()).toEqual([]);
+    } finally {
+      restoreLocks();
+    }
   });
 
   it.each(["failed", "destroying", "destroyed"] as const)(
@@ -1604,28 +1862,35 @@ describe("a send whose task may not exist yet", () => {
   });
 
   it("gives a confirmed send whose stage is gone back to its task's composer, and leaves another account's send alone", async () => {
-    usePendingSandboxSendStore
-      .getState()
-      .add(pendingSend({ id: SEND_ID, userId: "user-other" }));
-    mount();
-    await act(async () => {
-      await Promise.resolve();
-    });
-    // Another account's: this one's driver never takes it up.
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-    cleanup();
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      usePendingSandboxSendStore
+        .getState()
+        .add(pendingSend({ id: "foreign-send", userId: "user-other" }));
+      mount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // Another account's: this one's driver never takes it up.
+      expect(
+        usePendingSandboxSendStore.getState().sends["foreign-send"],
+      ).toBeDefined();
+      cleanup();
 
-    usePendingSandboxSendStore.setState({ sends: {} });
-    usePendingSandboxSendStore.getState().add(pendingSend({ id: SEND_ID }));
-    mount();
+      usePendingSandboxSendStore.setState({ sends: {} });
+      usePendingSandboxSendStore.getState().add(pendingSend({ id: SEND_ID }));
+      mount();
 
-    await waitFor(() => {
-      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
-    });
-    expect(
-      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
-    ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
-    expect(createChatCalls()).toEqual([]);
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
+      expect(createChatCalls()).toEqual([]);
+    } finally {
+      restoreLocks();
+    }
   });
 
   it("keeps a confirmed record from a reload and takes up its create", async () => {
@@ -1993,24 +2258,31 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
   });
 
   it("sends nothing and offers Retry when an image's bytes are nowhere on this device", async () => {
-    seed({
-      ...SEEDED,
-      send: { content: withImage("f".repeat(64)) },
-      phase: "handoff",
-      created: true,
-    });
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    mount();
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      seed({
+        ...SEEDED,
+        send: { content: withImage("f".repeat(64)) },
+        phase: "handoff",
+        created: true,
+      });
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
 
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure).toEqual({ kind: "not-sent" });
-    });
-    expect(createChatCalls()).toEqual([]);
-    const line = screen.getByTestId("sandbox-refusal-line");
-    expect(within(line).getByRole("button", { name: "Retry" })).toBeDefined();
-    expect(
-      within(line).getByRole("button", { name: "Choose another host" }),
-    ).toBeDefined();
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "not-sent",
+        });
+      });
+      expect(createChatCalls()).toEqual([]);
+      const line = screen.getByTestId("sandbox-refusal-line");
+      expect(within(line).getByRole("button", { name: "Retry" })).toBeDefined();
+      expect(
+        within(line).getByRole("button", { name: "Choose another host" }),
+      ).toBeDefined();
+    } finally {
+      restoreLocks();
+    }
   });
 });
 
@@ -2164,6 +2436,85 @@ describe("a fork waiting on its sandbox", () => {
       createChatCalls()[0]?.input.chatId,
     );
   });
+
+  it("replays an uncertain fork from its saved request after the stage is missing", async () => {
+    const request = {
+      kind: "fork" as const,
+      parentId: null,
+      title: "Sandbox fork",
+      forkSource: {
+        boundary: "assistantMessage" as const,
+        sourceChatId: "source-chat",
+        assistantMessageId: "assistant-message-1",
+        interviewBlockId: null,
+        carriedInterviews: "settled" as const,
+        sourceOwnerUserId: null,
+      },
+      tabId: "tab-1",
+    };
+    seed({ ...SEEDED, send: { request } });
+    const create = Promise.withResolvers<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    try {
+      await waitForCreateChats(1);
+      const firstCalls = createChatCalls();
+      if (!Object.hasOwn(firstCalls, 0)) {
+        throw new Error("expected a fork create");
+      }
+      const firstInput = firstCalls[0].input;
+      await act(async () => {
+        create.reject(new Error("The reply was lost."));
+        await create.promise.catch(() => undefined);
+      });
+
+      const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
+      expect(dispatch.textContent).toContain(
+        "Couldn't confirm the agent was created.",
+      );
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+      expect(createChatCalls()).toHaveLength(1);
+      expect(
+        screen.getByTestId("pending-sandbox-dispatch-retry"),
+      ).toBeDefined();
+
+      useStagedSandboxStore.getState().clear(SURFACE);
+      await reloadPendingSandboxStores();
+      mount();
+      const reloadedDispatch = await screen.findByTestId(
+        "pending-sandbox-dispatch",
+      );
+      expect(reloadedDispatch.textContent).toContain(
+        "Couldn't confirm the agent was created.",
+      );
+      expect(createChatCalls()).toHaveLength(1);
+
+      mocks.createChatDeferred = null;
+      mocks.createChatError = null;
+      fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+
+      await waitForCreateChats(2);
+      expect(createChatCalls()[1]?.clientHostId).toBe(
+        createChatCalls()[0]?.clientHostId,
+      );
+      expect(createChatCalls()[1]?.input).toEqual(firstInput);
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+        ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+      });
+    } finally {
+      await act(async () => {
+        create.resolve({
+          chatId: createChatCalls()[0]?.input.chatId ?? "cleanup-chat",
+        });
+        await create.promise.catch(() => undefined);
+      });
+    }
+  });
 });
 
 describe("a terminal request handed to a staged sandbox", () => {
@@ -2258,26 +2609,251 @@ describe("a pending chat create", () => {
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
 
-    await waitForCreateChats(1);
-    expect(
-      usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
-    ).toBeNull();
-    expect(readStagedSandbox(SURFACE)).toMatchObject({
-      phase: "handoff",
-      createdHostId: SANDBOX_HOST,
-      createdSandboxId: SANDBOX_ID,
-    });
-
-    await act(async () => {
-      create.resolve({ chatId: createChatCalls()[0].input.chatId });
-      await create.promise;
-    });
+    try {
+      await waitForCreateChats(1);
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+      ).toBeNull();
+      expect(readStagedSandbox(SURFACE)).toMatchObject({
+        phase: "handoff",
+        createdHostId: SANDBOX_HOST,
+        createdSandboxId: SANDBOX_ID,
+      });
+    } finally {
+      await resolvePendingCreate(create);
+    }
     await waitFor(() => {
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
       ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
     });
     expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("does not return a chat while its create is unresolved", async () => {
+    seed(SEEDED);
+    const create = deferred<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    try {
+      await waitForCreateChats(1);
+      expect(returnPendingSandboxSend(SEND_ID)).toEqual({
+        kind: "dispatching",
+      });
+      endPendingSandboxSend(SEND_ID);
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+    } finally {
+      await resolvePendingCreate(create);
+    }
+    await waitFor(() => {
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+      ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+    });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+    ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+  });
+
+  it.each(["absent", "rejected"] as const)(
+    "hides withdrawal and stop actions when native locks are %s",
+    async (lockState) => {
+      const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+      Reflect.deleteProperty(navigator, "locks");
+      if (lockState === "rejected") {
+        Object.defineProperty(navigator, "locks", {
+          configurable: true,
+          value: {
+            request: (
+              _name: string,
+              _options: LockOptions,
+              _callback: () => Promise<void>,
+            ) => Promise.reject(new Error("Lock service unavailable.")),
+          },
+        });
+      }
+      try {
+        seed({ ...SEEDED, elapsedSeconds: 120 });
+        answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+        mount();
+        await screen.findByTestId("sandbox-setup-line");
+
+        expect(screen.queryByTestId("sandbox-setup-cancel")).toBeNull();
+        expect(
+          screen.queryByTestId("sandbox-setup-choose-another-host"),
+        ).toBeNull();
+        expect(returnPendingSandboxSend(SEND_ID)).toEqual({ kind: "none" });
+        endPendingSandboxSend(SEND_ID);
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID],
+        ).toBeDefined();
+
+        act(() => {
+          useStagedSandboxStore.getState().report(SURFACE, {
+            failure: { kind: "settings", code: "SBX-0520" },
+          });
+        });
+        expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+        expect(
+          screen.queryByTestId("sandbox-setup-choose-another-host"),
+        ).toBeNull();
+        act(() => {
+          useStagedSandboxStore.getState().report(SURFACE, { failure: null });
+        });
+
+        const create = deferred<CreateChatResponseV12>();
+        mocks.createChatDeferred = create.promise;
+        try {
+          answerHost(SANDBOX_HOST, CODEX_READY);
+          await waitForCreateChats(1);
+          await waitFor(() => {
+            expect(
+              screen.getByTestId("pending-sandbox-dispatch").textContent,
+            ).toContain("Creating agent…");
+          });
+          expect(screen.queryByTestId("sandbox-setup-cancel")).toBeNull();
+          expect(
+            screen.queryByTestId("sandbox-setup-choose-another-host"),
+          ).toBeNull();
+          expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+          expect(returnPendingSandboxSend(SEND_ID)).toEqual({
+            kind: "dispatching",
+          });
+          endPendingSandboxSend(SEND_ID);
+          expect(
+            usePendingSandboxSendStore.getState().sends[SEND_ID],
+          ).toBeDefined();
+        } finally {
+          await resolvePendingCreate(create);
+        }
+        await waitFor(() => {
+          expect(
+            usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+          ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+        });
+        expect(mocks.stopSandbox).not.toHaveBeenCalled();
+      } finally {
+        if (originalLocks === undefined) {
+          Reflect.deleteProperty(navigator, "locks");
+        } else {
+          Object.defineProperty(navigator, "locks", originalLocks);
+        }
+      }
+    },
+  );
+
+  it("does not stop the sandbox or return its message while createChat is unresolved", async () => {
+    seed({ ...SEEDED, elapsedSeconds: 120 });
+    const create = deferred<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    try {
+      await waitForCreateChats(1);
+      expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+      expect(screen.queryByTestId("sandbox-setup-cancel")).toBeNull();
+      expect(
+        screen.queryByTestId("sandbox-setup-choose-another-host"),
+      ).toBeNull();
+      expect(returnPendingSandboxSend(SEND_ID)).toEqual({
+        kind: "dispatching",
+      });
+      endPendingSandboxSend(SEND_ID);
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+    } finally {
+      await resolvePendingCreate(create);
+    }
+    await waitFor(() => {
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+      ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+    });
+    expect(mocks.stopSandbox).not.toHaveBeenCalled();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("records an accepted create for its original account after signout without account B UI effects", async () => {
+    seed(SEEDED);
+    const create = deferred<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const view = mount();
+
+    try {
+      await waitForCreateChats(1);
+      act(() => {
+        useAuthStore.getState().setSignedOut();
+        useStagedSandboxStore.getState().clear(SURFACE);
+        useAuthStore
+          .getState()
+          .setSignedIn(
+            { userId: "user-2", userName: "V", email: "v@example.com" },
+            { userId: "user-2", username: "V" },
+            [],
+          );
+      });
+    } finally {
+      await resolvePendingCreate(create);
+    }
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toMatchObject({
+      userId: "user-1",
+      delivery: { hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID },
+    });
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(mocks.openTile).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("pending-sandbox-sends")).toBeNull();
+    view.unmount();
+  });
+
+  it("retains a fork after a create refusal for explicit Retry", async () => {
+    const request = {
+      kind: "fork" as const,
+      parentId: null,
+      title: "Sandbox fork",
+      forkSource: {
+        boundary: "assistantMessage" as const,
+        sourceChatId: "source-chat",
+        assistantMessageId: "assistant-message-1",
+        interviewBlockId: null,
+        carriedInterviews: "settled" as const,
+        sourceOwnerUserId: null,
+      },
+      tabId: "tab-1",
+    };
+    seed({ ...SEEDED, send: { request } });
+    mocks.createChatRefusal = {
+      kind: "local-store-unavailable",
+      message: "The local store is busy.",
+      remedy: "Try again after the other window closes.",
+    };
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toEqual({ kind: "not-sent" });
+    });
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toMatchObject({
+      request,
+      delivery: null,
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "handoff",
+      createdHostId: SANDBOX_HOST,
+      createdSandboxId: SANDBOX_ID,
+    });
+    expect(
+      within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
+        name: "Retry",
+      }),
+    ).toBeDefined();
   });
 
   it.each(["refusal", "rejection"] as const)(
@@ -2302,35 +2878,62 @@ describe("a pending chat create", () => {
       answerHost(SANDBOX_HOST, CODEX_READY);
       mount();
 
-      await waitFor(() => {
-        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
-          kind: "not-sent",
+      await waitForCreateChats(1);
+      if (outcome === "refusal") {
+        await waitFor(() => {
+          expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+            kind: "not-sent",
+          });
         });
-      });
-      const firstInput = createChatCalls()[0]?.input;
-      expect(firstInput).toBeDefined();
+      } else {
+        await waitFor(() => {
+          expect(
+            screen.getByTestId("pending-sandbox-dispatch").textContent,
+          ).toContain("Couldn't confirm the agent was created.");
+        });
+      }
+      const firstCalls = createChatCalls();
+      if (!Object.hasOwn(firstCalls, 0)) {
+        throw new Error("expected a chat create");
+      }
+      const firstInput = firstCalls[0].input;
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
       ).toBeNull();
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.request.kind,
       ).toBe("chat");
-      expect(
-        within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
-          name: "Retry",
-        }),
-      ).toBeDefined();
+      if (outcome === "refusal") {
+        expect(
+          within(screen.getByTestId("sandbox-refusal-line")).getByRole(
+            "button",
+            { name: "Retry" },
+          ),
+        ).toBeDefined();
+      } else {
+        expect(
+          screen.getByTestId("pending-sandbox-dispatch-retry"),
+        ).toBeDefined();
+      }
 
       mocks.createChatError = null;
       mocks.createChatRefusal = null;
-      fireEvent.click(
-        within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
-          name: "Retry",
-        }),
-      );
+      if (outcome === "refusal") {
+        fireEvent.click(
+          within(screen.getByTestId("sandbox-refusal-line")).getByRole(
+            "button",
+            { name: "Retry" },
+          ),
+        );
+      } else {
+        fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+      }
 
       await waitForCreateChats(2);
-      expect(createChatCalls()[1]?.input).toMatchObject({
+      const retryCalls = createChatCalls();
+      if (!Object.hasOwn(retryCalls, 1))
+        throw new Error("expected an explicit retry");
+      expect(retryCalls[1].input).toMatchObject({
         chatId: firstInput.chatId,
         initialMessage: {
           messageId: firstInput.initialMessage?.messageId,
@@ -2441,4 +3044,21 @@ function restoreRecordMapStorage(
   }
   for (const key of keys) localStorage.removeItem(key);
   for (const [key, value] of entries) localStorage.setItem(key, value);
+}
+
+/** Rehydrates the two pending-send stores the way a new window does. */
+async function reloadPendingSandboxStores(): Promise<void> {
+  const staged = snapshotRecordMapStorage(
+    persistKey(STORE_KEYS.stagedSandboxSend),
+  );
+  const sends = snapshotRecordMapStorage(
+    persistKey(STORE_KEYS.pendingSandboxSend),
+  );
+  cleanup();
+  useStagedSandboxStore.setState({ bySurface: {} });
+  usePendingSandboxSendStore.setState({ sends: {} });
+  restoreRecordMapStorage(persistKey(STORE_KEYS.stagedSandboxSend), staged);
+  restoreRecordMapStorage(persistKey(STORE_KEYS.pendingSandboxSend), sends);
+  await useStagedSandboxStore.persist.rehydrate();
+  await usePendingSandboxSendStore.persist.rehydrate();
 }

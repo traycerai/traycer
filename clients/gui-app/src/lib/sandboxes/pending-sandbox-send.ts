@@ -21,7 +21,9 @@ import {
 } from "@/stores/composer/staged-sandbox-store";
 import {
   pendingSendSurfaceKey,
+  pendingSandboxSendWithdrawalState,
   usePendingSandboxSendStore,
+  type PendingSandboxSend,
   type PendingSandboxSendRequest,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -35,7 +37,12 @@ import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
-import { reservePendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+import {
+  reservePendingSandboxSendOwnership,
+  ownsPendingSandboxSendExclusively,
+  ownsPendingSandboxSend,
+  holdPendingSandboxSendOwnership,
+} from "@/lib/sandboxes/pending-sandbox-send-ownership";
 
 /** Whether the agent the person asked for can take the message on the sandbox. */
 export type RequestedAgentReadiness =
@@ -145,14 +152,14 @@ export function handPendingSandboxSend(
     createdAt: input.now,
     epicConfirmed: input.epicConfirmed,
     delivery: null,
+    dispatch: null,
   });
   return id;
 }
 
 /**
- * The sends this window handed, whose task's create may still be on its way:
- * a send with no task yet waits for it here, and one rehydrated without it
- * lost that create.
+ * The sends this window handed, whose task's create may still be on its way.
+ * Only an exclusive successor can recover one this window did not hand.
  */
 const handedThisSession = new Set<string>();
 
@@ -161,20 +168,77 @@ export function pendingSandboxSendHandedHere(id: string): boolean {
   return handedThisSession.has(id);
 }
 
-/** The send's task was created: its sandbox may start. */
+/** Confirms the task only while owning its send, so withdrawal cannot race it. */
 export function confirmPendingSandboxSendEpic(id: string): void {
-  usePendingSandboxSendStore.getState().confirmEpic(id);
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return;
+  const { userId } = sends[id];
+  const ownership = holdPendingSandboxSendOwnership(id);
+  void ownership.ready
+    .then((granted) => {
+      if (
+        granted &&
+        (useAuthStore.getState().profile?.userId ?? null) === userId
+      ) {
+        usePendingSandboxSendStore.getState().confirmEpic(id);
+      }
+    })
+    .finally(() => ownership.release());
 }
 
-/** Ends a pending send: its stage and its record go; a sandbox it made stays. */
+/**
+ * Withdrawal is safe only before dispatch. Once its task exists, this window
+ * must hold the exclusive lock; a no-lock fallback can deliver using stable
+ * IDs, but cannot serialize cancellation against another window's dispatch.
+ */
+export function canWithdrawPendingSandboxSend(id: string): boolean {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return false;
+  const send = sends[id];
+  if (
+    send.delivery !== null ||
+    (send.dispatch ?? null) !== null ||
+    (useAuthStore.getState().profile?.userId ?? null) !== send.userId
+  )
+    return false;
+  const state = pendingSandboxSendWithdrawalState(id);
+  const exclusive = ownsPendingSandboxSendExclusively(id);
+  return (
+    (state === "unconfirmed" &&
+      (pendingSandboxSendHandedHere(id) || exclusive)) ||
+    (state === "confirmed" && exclusive)
+  );
+}
+
+/** Ends an undispatched send; a host request already sent remains accountable. */
 export function endPendingSandboxSend(id: string): void {
+  if (!canWithdrawPendingSandboxSend(id)) return;
+  removePendingSandboxSend(id);
+}
+
+/** A terminal opened with its stable identity completes even without Web Locks. */
+export function completePendingSandboxTerminal(id: string): void {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (
+    !Object.hasOwn(sends, id) ||
+    sends[id].request.kind !== "terminal" ||
+    !ownsPendingSandboxSend(id)
+  )
+    return;
+  removePendingSandboxSend(id);
+}
+
+function removePendingSandboxSend(id: string): void {
   usePendingSandboxSendStore.getState().remove(id);
+  if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id)) return;
   useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(id));
   handedThisSession.delete(id);
 }
 
 /** Where an undelivered send's message went back to. */
 export type ReturnedPendingSandboxSend =
+  /** A request may already be running; its only copy stays with that request. */
+  | { readonly kind: "dispatching" }
   /** Nothing to give back: a terminal ask, a fork (its chat is still there), or a send already gone. */
   | { readonly kind: "none" }
   /** A put-away start-task draft holds it, preserving any occupied task draft. */
@@ -188,14 +252,15 @@ export type ReturnedPendingSandboxSend =
     };
 
 /**
- * Ends a send that was not delivered and gives its whole message back, as
+ * Ends an undispatched send and gives its whole message back, as
  * the person wrote it: once handed, the send is the message's only copy, so
  * no exit drops it. Its text, mentions and images, and the agent, model and
  * mode it was sent with, go back to the task's empty new-agent composer when
  * available, and to a fresh start-task draft otherwise: put away,
  * at the top of the Drafts list, so a give-back on a reload or a sign-in
  * never takes over the composer; a caller with the person's attention opens
- * it.
+ * it. A dispatched or uncertain request stays with its original identity and
+ * cannot be returned as a second copy.
  */
 export function returnPendingSandboxSend(
   id: string,
@@ -209,9 +274,29 @@ export function returnPendingSandboxSend(
   ) {
     return { kind: "none" };
   }
+  if (
+    (send.dispatch ?? null) !== null ||
+    pendingSandboxSendWithdrawalState(id) === "claimed"
+  ) {
+    return { kind: "dispatching" };
+  }
+  if (!canWithdrawPendingSandboxSend(id)) return { kind: "none" };
   const { request } = send;
-  // Written back before the record goes, so the images stay rooted throughout.
-  let returned: ReturnedPendingSandboxSend = { kind: "none" };
+  const returned =
+    request.kind === "chat"
+      ? restorePendingMessage(send, request)
+      : { kind: "none" as const };
+  endPendingSandboxSend(id);
+  return returned;
+}
+
+/** Preserves an occupied task draft by putting this message in its own closed draft. */
+function restorePendingMessage(
+  send: PendingSandboxSend,
+  request: Extract<PendingSandboxSendRequest, { kind: "chat" }>,
+): ReturnedPendingSandboxSend {
+  // Write the replacement before removing the image roots in the pending record.
+  let returned: ReturnedPendingSandboxSend;
   const modal = useNewConversationModalStore.getState();
   const draft = modal.draftPatchesByEpicId[send.epicId];
   // Settings, workspace and selection can be a draft even before its first
@@ -223,7 +308,7 @@ export function returnPendingSandboxSend(
       draft.workspace !== null ||
       draft.composerMode !== null ||
       draft.selection !== null);
-  if (request.kind === "chat" && send.epicConfirmed && !occupied) {
+  if (send.epicConfirmed && !occupied) {
     modal.setContent(send.epicId, send.content);
     modal.setSettings(send.epicId, send.settings);
     modal.clearSelection(send.epicId);
@@ -233,7 +318,7 @@ export function returnPendingSandboxSend(
       parentId: request.parentId,
       placement: request.placement,
     };
-  } else if (request.kind === "chat") {
+  } else {
     // A fresh draft every time: never another draft's text written over.
     const draftId = mintDraftId();
     useLandingDraftStore.getState().installLandingDraft({
@@ -249,7 +334,6 @@ export function returnPendingSandboxSend(
     });
     returned = { kind: "landing-draft", draftId };
   }
-  endPendingSandboxSend(id);
   return returned;
 }
 

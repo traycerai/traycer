@@ -34,7 +34,7 @@ import { findDefaultModel } from "@/components/home/data/landing-options";
 import { chatForkTargetSupport } from "@/components/chat/chat-fork-target";
 import { resolveBase64ByHash } from "@/components/home/hooks/use-landing-composer-actions";
 import {
-  useEpicCreateChatForHostClient,
+  useEpicCreateChatForPendingSandbox,
   type CreateChatMutationInput,
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -67,7 +67,8 @@ import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
-  endPendingSandboxSend,
+  completePendingSandboxTerminal,
+  canWithdrawPendingSandboxSend,
   pendingSandboxSendHandedHere,
   returnPendingSandboxSend,
   requestedAgentReadiness,
@@ -94,14 +95,18 @@ import {
   type HandoffOwnerWatch,
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import {
   pendingSendSurfaceKey,
+  pendingSandboxDispatchCurrent,
   usePendingSandboxSendStore,
   type PendingSandboxSend,
+  type PendingSandboxSendDispatch,
   type PendingSandboxSendRequest,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 
@@ -176,18 +181,38 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
   );
   const surfaceKey = pendingSendSurfaceKey(props.id);
   const stage = useStagedSandbox(surfaceKey);
+  usePendingSendRecovery(props.id, send, stage);
+  usePendingStagedRun(send, stage, surfaceKey);
+  const dispatch = send?.dispatch ?? null;
+  if (send !== null && dispatch !== null) {
+    return <PendingDispatchDriver send={send} dispatch={dispatch} />;
+  }
+  // A terminal asked for in place of an agent waits on no agent: the task's
+  // strip opens it once the sandbox is up.
+  if (send === null || stage === null || send.request.kind === "terminal") {
+    return null;
+  }
+  return <PendingSendDelivery send={send} stage={stage} />;
+}
+
+/** Runs only an undispatched send; its captured intent survives older terminal records. */
+function usePendingStagedRun(
+  send: PendingSandboxSend | null,
+  stage: StagedSandbox | null,
+  surfaceKey: string,
+): void {
   const runner = useStagedSandboxRunner();
   const text = send?.text ?? "";
   const epicId = send?.epicId ?? null;
   const requestKind = send?.request.kind ?? null;
-  usePendingSendRecovery(props.id, send, stage);
+  const dispatch = send?.dispatch ?? null;
   // Creation and wake failures wait for a line action; agent readiness
   // continues to be observed by the delivery driver below.
   const phase = stage?.phase ?? null;
   const failed = stage !== null && stage.failure !== null;
   const epicConfirmed = send?.epicConfirmed;
   useEffect(() => {
-    if (epicId === null || !epicConfirmed) return;
+    if (dispatch !== null || epicId === null || !epicConfirmed) return;
     const current = readStagedSandbox(surfaceKey);
     if (current === null) return;
     // Older persisted terminal sends predate the stage's terminal intent.
@@ -211,6 +236,7 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
       runner(surfaceKey, false, { ...request, resume: true });
     }
   }, [
+    dispatch,
     epicConfirmed,
     epicId,
     failed,
@@ -220,12 +246,6 @@ function PendingSendDriver(props: { readonly id: string }): ReactNode {
     surfaceKey,
     text,
   ]);
-  // A terminal asked for in place of an agent waits on no agent: the task's
-  // strip opens it once the sandbox is up.
-  if (send === null || stage === null || send.request.kind === "terminal") {
-    return null;
-  }
-  return <PendingSendDelivery send={send} stage={stage} />;
 }
 
 /** Retains the send's stage ownership and recovers interrupted task creation. */
@@ -241,12 +261,14 @@ function usePendingSendRecovery(
   );
   // Only exclusive ownership proves an unconfirmed task was interrupted.
   // Without it another window can still be creating this send's task.
+  const dispatch = send?.dispatch ?? null;
   const lostTask =
+    dispatch === null &&
     send !== null &&
     !send.epicConfirmed &&
     !pendingSandboxSendHandedHere(id) &&
     ownsPendingSandboxSendExclusively(id);
-  const orphaned = send !== null && stage === null;
+  const orphaned = dispatch === null && send !== null && stage === null;
   useEffect(() => {
     // In either case this record holds the message's only copy. Return it
     // to its composer before ending a send that cannot deliver it.
@@ -300,9 +322,6 @@ function PendingSendDelivery(props: {
       fireOnShow: true,
     });
   }, [readinessKind, refetchAgent, refetchSandboxes]);
-  const createChat = useEpicCreateChatForHostClient(client);
-  const createChatAsync = createChat.mutateAsync;
-  const navigateNestedFocus = useEpicNestedFocusNavigation();
   const providerProfiles = agent.profiles;
   const failureDetail =
     agent.readiness?.kind === "setup-failed" ? agent.readiness.detail : null;
@@ -341,8 +360,6 @@ function PendingSendDelivery(props: {
         stage: current,
         hostId,
         settings,
-        createChat: createChatAsync,
-        navigateNestedFocus,
       });
       return;
     }
@@ -352,15 +369,12 @@ function PendingSendDelivery(props: {
       hostId,
       client,
       settings,
-      createChat: createChatAsync,
     });
   }, [
     client,
-    createChatAsync,
     defaultModel,
     failureDetail,
     hostId,
-    navigateNestedFocus,
     needsModel,
     providerProfiles,
     readinessKind,
@@ -538,7 +552,6 @@ function prepareAndDeliverSend(input: {
   readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry>;
   readonly settings: PendingSandboxSend["settings"];
-  readonly createChat: CreateChatAsync;
 }): void {
   const { send, hostId, settings } = input;
   const surfaceKey = pendingSendSurfaceKey(send.id);
@@ -546,6 +559,7 @@ function prepareAndDeliverSend(input: {
   deliveriesPreparing.add(send.id);
   void contentForHost(hostId, input.client, send.content)
     .then((prepared) => {
+      if (!preparingSendCurrent(send)) return;
       if (prepared === null) {
         reportableErrorToast(
           "Couldn't attach an image.",
@@ -582,14 +596,27 @@ function prepareAndDeliverSend(input: {
         settings,
         content: prepared.content,
         attachmentsByHash: prepared.attachmentsByHash,
-        createChat: input.createChat,
       });
     })
-    .catch(() => notSent(surfaceKey))
+    .catch(() => {
+      if (preparingSendCurrent(send)) notSent(surfaceKey);
+    })
     .finally(() => deliveriesPreparing.delete(send.id));
 }
 
-/** Sends preparing images or awaiting their create response. */
+/** Preparation may outlive its composer or account; only its own send can continue. */
+function preparingSendCurrent(send: PendingSandboxSend): boolean {
+  const { sends } = usePendingSandboxSendStore.getState();
+  return (
+    ownsPendingSandboxSend(send.id) &&
+    Object.hasOwn(sends, send.id) &&
+    sends[send.id].delivery === null &&
+    (sends[send.id].dispatch ?? null) === null &&
+    (useAuthStore.getState().profile?.userId ?? null) === send.userId
+  );
+}
+
+/** Sends preparing images before their durable dispatch claim. */
 const deliveriesPreparing = new Set<string>();
 
 /** The sandbox is up and the message did not reach it: Retry or another host. */
@@ -656,145 +683,59 @@ type CreateChatAsync = (
   input: CreateChatMutationInput,
 ) => Promise<CreateChatResponseV12>;
 
-/**
- * Keeps the message pending until the sandbox accepts its create. Stable
- * chat, message and action ids let a reload take up the same create safely;
- * a refusal or failure keeps the message and sandbox for an explicit Retry.
- */
-async function deliverPendingSend(input: {
+/** Records the exact chat payload durably before any host request can begin. */
+function deliverPendingSend(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly hostId: string;
   readonly settings: PendingSandboxSend["settings"];
-  /** The message as the sandbox reads it (`contentForHost`). */
   readonly content: JsonContent;
   readonly attachmentsByHash: boolean;
-  readonly createChat: CreateChatAsync;
-}): Promise<void> {
-  const { send, stage, hostId, settings } = input;
+}): void {
+  const { send, hostId, settings } = input;
   if (send.request.kind !== "chat") return;
-  const now = Date.now();
-  const userId = send.userId;
-  const epicId = send.epicId;
-  const chatId = uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL);
-  const messageId = uuidv5(
-    `pending-sandbox-send:${send.id}:message`,
-    uuidv5.URL,
-  );
-  const clientActionId = uuidv5(
-    `pending-sandbox-send:${send.id}:action`,
-    uuidv5.URL,
-  );
-  useInitialChatHandoffStore.getState().register({
+  claimPendingDispatch(send, input.stage, {
+    epicId: send.epicId,
     hostId,
-    userId,
-    epicId,
-    chatId,
-    content: send.content,
+    parentId: send.request.parentId,
+    title: "",
+    chatId: uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL),
     settings,
+    workspaceMode: "folderless",
     worktreeIntent: null,
-    // The pane the surface named for the agent's tile, as an ordinary create.
-    placement: send.request.placement,
-    messageId,
-    clientActionId,
-    createdAt: now,
+    initialMessage:
+      send.userId === null
+        ? null
+        : {
+            messageId: uuidv5(
+              `pending-sandbox-send:${send.id}:message`,
+              uuidv5.URL,
+            ),
+            clientActionId: uuidv5(
+              `pending-sandbox-send:${send.id}:action`,
+              uuidv5.URL,
+            ),
+            content: input.content,
+            sender: { type: "user", userId: send.userId },
+            settings,
+            accountContext: useAccountContextStore.getState().accountContext,
+            sentFromHostId: readLocalHostIdSnapshot(),
+            ...(input.attachmentsByHash
+              ? { attachmentsByHash: true as const }
+              : {}),
+          },
   });
-  useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
-  const surfaceKey = pendingSendSurfaceKey(send.id);
-  const isCurrent = (): boolean => {
-    const { sends } = usePendingSandboxSendStore.getState();
-    const currentStage = readStagedSandbox(surfaceKey);
-    return (
-      Object.hasOwn(sends, send.id) &&
-      sends[send.id].delivery === null &&
-      currentStage?.phase === "handoff" &&
-      currentStage.createdHostId === hostId &&
-      currentStage.clientRequestId === stage.clientRequestId &&
-      (useAuthStore.getState().profile?.userId ?? null) === userId
-    );
-  };
-  const scope = { hostId, userId, epicId };
-  const failed = (): void => {
-    if (!isCurrent()) return;
-    useEpicCanvasStore.getState().clearChatTitlePending(chatId);
-    useInitialChatHandoffStore
-      .getState()
-      .markFailedByAction(
-        scope,
-        chatId,
-        clientActionId,
-        "Couldn't create the agent.",
-      );
-    notSent(surfaceKey);
-  };
-  try {
-    const response = await input.createChat({
-      epicId,
-      hostId,
-      parentId: send.request.parentId,
-      title: "",
-      chatId,
-      settings,
-      // The sandbox starts empty: the agent's first turn fetches the code.
-      workspaceMode: "folderless",
-      worktreeIntent: null,
-      initialMessage:
-        userId === null
-          ? null
-          : {
-              messageId,
-              clientActionId,
-              content: input.content,
-              sender: { type: "user" as const, userId },
-              settings,
-              accountContext: useAccountContextStore.getState().accountContext,
-              sentFromHostId: readLocalHostIdSnapshot(),
-              ...(input.attachmentsByHash
-                ? { attachmentsByHash: true as const }
-                : {}),
-            },
-    });
-    if (!isCurrent()) return;
-    if (response.refusal !== undefined) {
-      failed();
-      return;
-    }
-    usePendingSandboxSendStore.getState().markDelivered(send.id, {
-      chatId,
-      hostId,
-      sandboxId: stage.createdSandboxId ?? "",
-      readySeconds: Math.max(
-        0,
-        Math.round((now - (stage.startedAt ?? now)) / 1000),
-      ),
-    });
-    useStagedSandboxStore.getState().clear(surfaceKey);
-    if (response.initialTurnStarted === true) {
-      useInitialChatHandoffStore
-        .getState()
-        .markInitialTurnStarted(scope, chatId);
-    }
-  } catch {
-    failed();
-  }
 }
 
-/**
- * Keeps the fork pending until its create settles. Its stable chat id makes
- * taking it up after a window closes safe; a checkpoint still publishing
- * stays on the same sandbox's pending line for retry.
- */
+/** Fork boundary and destination are fixed in the same durable dispatch claim. */
 function deliverPendingFork(input: {
   readonly send: PendingSandboxSend;
   readonly request: Extract<PendingSandboxSendRequest, { kind: "fork" }>;
   readonly stage: StagedSandbox;
   readonly hostId: string;
   readonly settings: PendingSandboxSend["settings"];
-  readonly createChat: CreateChatAsync;
-  readonly navigateNestedFocus: NavigateNestedFocus;
 }): void {
   const { send, request, stage, hostId, settings } = input;
-  if (deliveriesPreparing.has(send.id)) return;
   const support = chatForkTargetSupport(
     readNegotiatedMethodVersion(hostId, "epic.createChat"),
   );
@@ -812,86 +753,256 @@ function deliverPendingFork(input: {
     );
     return;
   }
-  deliveriesPreparing.add(send.id);
+  claimPendingDispatch(send, stage, {
+    epicId: send.epicId,
+    hostId,
+    parentId: request.parentId,
+    title: request.title,
+    chatId: uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL),
+    settings,
+    workspaceMode: "folderless",
+    worktreeIntent: null,
+    initialMessage: null,
+    forkSource: request.forkSource,
+  });
+}
+
+function claimPendingDispatch(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  input: PendingSandboxSendDispatch["input"],
+): void {
   const now = Date.now();
-  const chatId = uuidv5(`pending-sandbox-send:${send.id}:chat`, uuidv5.URL);
-  const ended = (): void => {
-    endPendingSandboxSend(send.id);
-  };
-  void input
-    .createChat({
-      epicId: send.epicId,
-      hostId,
-      parentId: request.parentId,
-      title: request.title,
-      chatId,
-      settings,
-      // The sandbox starts empty: a fork onto another host carries no folders.
-      workspaceMode: "folderless",
-      worktreeIntent: null,
-      initialMessage: null,
-      forkSource: request.forkSource,
-    })
-    .then((response) => {
-      if (response.refusal !== undefined) {
-        ended();
-        return;
+  const claimed = usePendingSandboxSendStore.getState().beginDispatch(send.id, {
+    input,
+    status: "sending",
+    delivery: {
+      chatId: input.chatId,
+      hostId: input.hostId,
+      sandboxId: stage.createdSandboxId ?? "",
+      readySeconds: Math.max(
+        0,
+        Math.round((now - (stage.startedAt ?? now)) / 1000),
+      ),
+    },
+  });
+  if (!claimed) {
+    void usePendingSandboxSendStore.persist.rehydrate();
+    notSent(pendingSendSurfaceKey(send.id));
+  }
+}
+
+/** Per-window requests still in flight; another window replays the same durable IDs. */
+const dispatchesInFlight = new Set<string>();
+
+function PendingDispatchDriver(props: {
+  readonly send: PendingSandboxSend;
+  readonly dispatch: PendingSandboxSendDispatch;
+}): ReactNode {
+  const { send, dispatch } = props;
+  const client = useHostClientForHostId(dispatch.input.hostId);
+  const createChat = useEpicCreateChatForPendingSandbox(client, send.userId);
+  const createChatAsync = createChat.mutateAsync;
+  const navigateNestedFocus = useEpicNestedFocusNavigation();
+  useEffect(() => {
+    if (client === null || dispatch.status !== "sending") return;
+    let disposed = false;
+    const ownership = holdPendingSandboxSendOwnership(send.id);
+    void ownership.ready.then((granted) => {
+      if (!disposed && granted) {
+        return runPendingDispatch(
+          send,
+          dispatch,
+          createChatAsync,
+          navigateNestedFocus,
+        );
       }
-      const { sends } = usePendingSandboxSendStore.getState();
-      const current = sends[send.id];
-      if (
-        !Object.hasOwn(sends, send.id) ||
-        current.delivery !== null ||
-        (useAuthStore.getState().profile?.userId ?? null) !== send.userId
-      ) {
-        return;
-      }
-      usePendingSandboxSendStore.getState().markDelivered(send.id, {
-        chatId,
-        hostId,
-        sandboxId: stage.createdSandboxId ?? "",
-        readySeconds: Math.max(
-          0,
-          Math.round((now - (stage.startedAt ?? now)) / 1000),
-        ),
-      });
-      useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
-      Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
-        source: "direct_ui",
-        include_history: true,
-      });
-      openCreatedChatWhenProjectedWithNavigation({
-        intent: {
+    });
+    return () => {
+      disposed = true;
+      ownership.release();
+    };
+  }, [client, createChatAsync, dispatch, navigateNestedFocus, send]);
+  return null;
+}
+
+/** A refusal is definite; every other failed response may have accepted the create. */
+async function runPendingDispatch(
+  send: PendingSandboxSend,
+  dispatch: PendingSandboxSendDispatch,
+  createChat: CreateChatAsync,
+  navigateNestedFocus: NavigateNestedFocus,
+): Promise<void> {
+  if (
+    dispatchesInFlight.has(send.id) ||
+    !ownsPendingSandboxSend(send.id) ||
+    (useAuthStore.getState().profile?.userId ?? null) !== send.userId ||
+    !pendingSandboxDispatchCurrent(send.id, dispatch)
+  )
+    return;
+  dispatchesInFlight.add(send.id);
+  try {
+    registerDispatchHandoff(send, dispatch);
+    const response = await createChat(dispatch.input);
+    if (response.refusal !== undefined) {
+      refusePendingDispatch(send, dispatch);
+      return;
+    }
+    const recorded = usePendingSandboxSendStore
+      .getState()
+      .markDelivered(send.id, dispatch.delivery);
+    if (
+      !recorded ||
+      (useAuthStore.getState().profile?.userId ?? null) !== send.userId
+    )
+      return;
+    useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
+    finishDispatchUi(send, dispatch, response, navigateNestedFocus);
+  } catch (error: unknown) {
+    if (
+      error instanceof HostRpcError &&
+      error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
+    ) {
+      refusePendingDispatch(send, dispatch);
+    } else {
+      usePendingSandboxSendStore.getState().markDispatchUncertain(send.id);
+    }
+  } finally {
+    dispatchesInFlight.delete(send.id);
+  }
+}
+
+function registerDispatchHandoff(
+  send: PendingSandboxSend,
+  dispatch: PendingSandboxSendDispatch,
+): void {
+  if (send.request.kind !== "chat") return;
+  const { initialMessage } = dispatch.input;
+  if (initialMessage === undefined || initialMessage === null) return;
+  useInitialChatHandoffStore.getState().register({
+    hostId: dispatch.input.hostId,
+    userId: send.userId,
+    epicId: send.epicId,
+    chatId: dispatch.input.chatId,
+    content: initialMessage.content,
+    settings: dispatch.input.settings,
+    worktreeIntent: null,
+    placement: send.request.placement,
+    messageId: initialMessage.messageId,
+    clientActionId: initialMessage.clientActionId,
+    createdAt: Date.now(),
+  });
+  useEpicCanvasStore.getState().markChatTitlePending(dispatch.input.chatId, "");
+}
+
+function refusePendingDispatch(
+  send: PendingSandboxSend,
+  dispatch: PendingSandboxSendDispatch,
+): void {
+  if (!pendingSandboxDispatchCurrent(send.id, dispatch)) return;
+  if ((useAuthStore.getState().profile?.userId ?? null) === send.userId) {
+    notSent(pendingSendSurfaceKey(send.id));
+    useEpicCanvasStore.getState().clearChatTitlePending(dispatch.input.chatId);
+    const message = dispatch.input.initialMessage;
+    if (
+      send.request.kind === "chat" &&
+      message !== undefined &&
+      message !== null
+    ) {
+      useInitialChatHandoffStore.getState().markFailedByAction(
+        {
+          hostId: dispatch.input.hostId,
+          userId: send.userId,
           epicId: send.epicId,
-          tabId: request.tabId,
-          chatId: response.chatId,
-          hostId,
-          placement: null,
-          source: "direct_ui",
         },
-        navigateNestedFocus: input.navigateNestedFocus,
-      });
-    })
-    .catch((error: unknown) => {
-      if (
-        error instanceof HostRpcError &&
-        error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
-      ) {
-        const { sends } = usePendingSandboxSendStore.getState();
-        const current = sends[send.id];
-        if (
-          !Object.hasOwn(sends, send.id) ||
-          current.delivery !== null ||
-          (useAuthStore.getState().profile?.userId ?? null) !== send.userId
-        ) {
-          return;
-        }
-        notSent(pendingSendSurfaceKey(send.id));
-        return;
-      }
-      ended();
-    })
-    .finally(() => deliveriesPreparing.delete(send.id));
+        dispatch.input.chatId,
+        message.clientActionId,
+        "Couldn't create the agent.",
+      );
+    }
+  }
+  usePendingSandboxSendStore.getState().refuseDispatch(send.id);
+}
+
+function finishDispatchUi(
+  send: PendingSandboxSend,
+  dispatch: PendingSandboxSendDispatch,
+  response: CreateChatResponseV12,
+  navigateNestedFocus: NavigateNestedFocus,
+): void {
+  if (send.request.kind === "chat") {
+    if (response.initialTurnStarted === true) {
+      useInitialChatHandoffStore.getState().markInitialTurnStarted(
+        {
+          hostId: dispatch.input.hostId,
+          userId: send.userId,
+          epicId: send.epicId,
+        },
+        dispatch.input.chatId,
+      );
+    }
+    return;
+  }
+  if (send.request.kind !== "fork") return;
+  Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
+    source: "direct_ui",
+    include_history: true,
+  });
+  openCreatedChatWhenProjectedWithNavigation({
+    intent: {
+      epicId: send.epicId,
+      tabId: send.request.tabId,
+      chatId: response.chatId,
+      hostId: dispatch.input.hostId,
+      placement: null,
+      source: "direct_ui",
+    },
+    navigateNestedFocus,
+  });
+}
+
+function PendingDispatchLine(props: {
+  readonly id: string;
+  readonly userId: string | null;
+  readonly dispatch: PendingSandboxSendDispatch;
+}): ReactNode {
+  const uncertain = props.dispatch.status === "uncertain";
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 text-ui-xs"
+      data-testid="pending-sandbox-dispatch"
+    >
+      {uncertain ? null : (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      )}
+      <span>
+        {uncertain
+          ? "Couldn't confirm the agent was created."
+          : "Creating agent…"}
+      </span>
+      {uncertain ? (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="pending-sandbox-dispatch-retry"
+          onClick={() => {
+            if (
+              (useAuthStore.getState().profile?.userId ?? null) !== props.userId
+            )
+              return;
+            usePendingSandboxSendStore.getState().retryDispatch(props.id);
+          }}
+        >
+          Retry
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -931,6 +1042,22 @@ export function PendingSandboxSendStrip(props: {
   );
 }
 
+function usePendingSendWithdrawal(id: string): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    const ownership = holdPendingSandboxSendOwnership(id);
+    void ownership.ready.then((granted) => {
+      if (!disposed) setReady(granted);
+    });
+    return () => {
+      disposed = true;
+      ownership.release();
+    };
+  }, [id]);
+  return ready && canWithdrawPendingSandboxSend(id);
+}
+
 function PendingSendItem(props: {
   readonly id: string;
   readonly tabId: string;
@@ -938,7 +1065,34 @@ function PendingSendItem(props: {
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
-  const surfaceKey = pendingSendSurfaceKey(props.id);
+  if (send === null) return null;
+  const dispatch = send.dispatch ?? null;
+  if (dispatch === null)
+    return <PendingStagedSendItem send={send} tabId={props.tabId} />;
+  return (
+    <div
+      className="flex w-full flex-col gap-2"
+      data-testid="pending-sandbox-send"
+    >
+      <PendingDispatchLine
+        id={send.id}
+        userId={send.userId}
+        dispatch={dispatch}
+      />
+      {send.request.kind === "chat" ? (
+        <PendingSandboxMessage text={send.text} />
+      ) : null}
+    </div>
+  );
+}
+
+function PendingStagedSendItem(props: {
+  readonly send: PendingSandboxSend;
+  readonly tabId: string;
+}): ReactNode {
+  const { send } = props;
+  const canWithdraw = usePendingSendWithdrawal(send.id);
+  const surfaceKey = pendingSendSurfaceKey(send.id);
   const stage = useStagedSandbox(surfaceKey);
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
@@ -947,8 +1101,8 @@ function PendingSendItem(props: {
   const providersOpener = useConfigurationProvidersOpener(
     stage?.target.configuration.kind === "team",
   );
-  const epicId = send?.epicId ?? "";
-  const text = send?.text ?? "";
+  const epicId = send.epicId;
+  const text = send.text;
   const run = useCallback(
     (fresh: boolean): void => {
       runner(surfaceKey, fresh, {
@@ -965,7 +1119,7 @@ function PendingSendItem(props: {
       open: (target: TerminalLaunchTarget) => {
         openTile(
           tileIntent(
-            mintPendingSandboxTerminalTile({ ...target, epicId }, props.id),
+            mintPendingSandboxTerminalTile({ ...target, epicId }, send.id),
             { tabId: props.tabId },
             "explicit",
             "direct_ui",
@@ -973,7 +1127,7 @@ function PendingSendItem(props: {
         );
       },
     }),
-    [epicId, openTile, props.id, props.tabId],
+    [epicId, openTile, send.id, props.tabId],
   );
   const newHost = useNewHostActions(
     surfaceKey,
@@ -982,7 +1136,11 @@ function PendingSendItem(props: {
     run,
   );
   useOpenTerminalWhenUp(send, stage, newHost.onOpenTerminal);
-  if (send === null || stage === null || facts === null) return null;
+  if (stage === null || facts === null) {
+    return send.request.kind === "chat" ? (
+      <PendingSandboxMessage text={send.text} />
+    ) : null;
+  }
   const backToComposer = (restage: boolean): void => {
     endSendBackToComposer({ send, stage, tabId: props.tabId, restage });
   };
@@ -996,6 +1154,7 @@ function PendingSendItem(props: {
       data-testid="pending-sandbox-send"
     >
       <SandboxSetupLine
+        withdrawalAllowed={canWithdraw}
         stage={stage}
         name={name}
         facts={facts}
@@ -1012,6 +1171,7 @@ function PendingSendItem(props: {
           onChangeShape: () => backToComposer(true),
           onRetryApplying: newHost.onRetryApplying,
           onStop: () => {
+            if (!canWithdrawPendingSandboxSend(send.id)) return;
             if (stage.createdSandboxId !== null) verb.mutate("stop");
             backToComposer(false);
           },
@@ -1105,7 +1265,7 @@ function useOpenTerminalWhenUp(
       return;
     }
     openTerminal();
-    endPendingSandboxSend(sendId);
+    completePendingSandboxTerminal(sendId);
   }, [hostId, openTerminal, sendId, surfaceKey, terminalReady]);
 }
 
@@ -1123,6 +1283,8 @@ function endSendBackToComposer(input: {
 }): void {
   const { send } = input;
   const returned = returnPendingSandboxSend(send.id);
+  if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
+    return;
   // A task that never came to be: its start-task draft holds the message.
   if (send.request.kind === "fork" || returned.kind === "landing-draft") {
     return;

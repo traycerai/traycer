@@ -123,9 +123,10 @@ export function EpicSessionLifecycleBridge(
       useStagedSandboxStore.getState().clearAll();
       // A message sent to a sandbox is the outgoing account's. Delivered, its
       // ready line goes. Undelivered, it is the message's only copy: it stays
-      // for its own account, whose driver alone takes it up, and its next
-      // sign-in gives the message back (its stage went above). Handed to a
-      // composer here, the next account's drafts would carry it.
+      // for its own account, whose driver alone takes it up. A dispatch keeps
+      // its exact request independently of the cleared stage and resumes only
+      // for that account; only an undispatched orphan can return to a draft.
+      // Handed to a composer here, the next account's drafts would carry it.
       usePendingSandboxSendStore.getState().clearDelivered();
       // So does a terminal a sandbox row asked the landing panel for: account
       // B's panel would otherwise open one on A's sandbox.
