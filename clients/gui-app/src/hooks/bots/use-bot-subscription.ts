@@ -37,12 +37,16 @@ import {
 export interface BotSubscriptionSnapshot {
   readonly bot: BotRecord;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
-  /** `null` when the serving host does not know the count. */
+  /**
+   * `null` when the serving host does not know the count: the bot's host has
+   * not read its conversations yet, or another host cannot read the room.
+   */
   readonly openRequestCount: number | null;
   /**
    * Moves when a row is written to the bot's channel or a thread on its
    * bound host; the bot's thread listing is read again when it does. `null`
-   * when the serving host is not the bound one.
+   * while the serving host cannot read the environment room the bot's host
+   * writes it to.
    */
   readonly conversationsRevision: number | null;
   readonly boundHost: {
@@ -53,7 +57,8 @@ export interface BotSubscriptionSnapshot {
   };
   /**
    * What the bot's running chats are doing, kept live from the stream's
-   * `activity` frames. `null` when the serving host is not the bound one.
+   * `activity` frames, from any host (T65). `null` while the serving host
+   * cannot read the environment room the bot's host writes it to.
    */
   readonly activity: BotActivity | null;
 }
@@ -96,8 +101,8 @@ interface ActiveSubscriptionArgs {
 /**
  * Module-level ref-counted sessions, keyed by the owning client instance +
  * host + bot: Home's row and an open bot tab on the same host share one
- * session, while the same bot subscribed through two hosts (a tab on its
- * bound host, Home on the app-wide one) keeps two.
+ * session, while the same bot subscribed through two hosts (a tab moved to
+ * its bound host, Home on the app-wide one) keeps two.
  */
 const subscriptions: SharedStreamSubscriptionRegistry<BotStreamEvent> =
   new Map();

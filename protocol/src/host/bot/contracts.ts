@@ -27,6 +27,10 @@ import {
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
   botUpdateReplyModeRequestSchema,
+  botNotificationLevelReadRequestSchema,
+  botNotificationLevelReadResponseSchema,
+  botNotificationLevelSetRequestSchema,
+  botNotificationLevelSetResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -125,6 +129,25 @@ export const botUpdateReplyModeV10 = defineRpcContract({
   responseSchema: botUpdateResponseSchema,
 });
 
+/**
+ * `bot.notificationLevel.read@1.0` / `.set@1.0`: the caller's notification
+ * level per conversation of a bot, kept in the cloud and proxied by any
+ * host, like the rest of the namespace's cloud reads.
+ */
+export const botNotificationLevelReadV10 = defineRpcContract({
+  method: "bot.notificationLevel.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationLevelReadRequestSchema,
+  responseSchema: botNotificationLevelReadResponseSchema,
+});
+
+export const botNotificationLevelSetV10 = defineRpcContract({
+  method: "bot.notificationLevel.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationLevelSetRequestSchema,
+  responseSchema: botNotificationLevelSetResponseSchema,
+});
+
 export const botDeleteV10 = defineRpcContract({
   method: "bot.delete",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -175,8 +198,9 @@ export const botConversationSendV10 = defineRpcContract({
 /**
  * `bot.thread.list@1.0` (T41): the threads of a bot's channel, each with its
  * anchor post, reply count, last reply, open requests and cost. Answered by
- * the bot's bound host from its own store (the thread records live there);
- * any other host refuses it. Same optional posture as the namespace.
+ * the bot's bound host from its own store (the thread records live there),
+ * and by any other host from the summaries the bound host keeps in the
+ * bot's environment room (T65). Same optional posture as the namespace.
  */
 export const botThreadListV10 = defineRpcContract({
   method: "bot.thread.list",

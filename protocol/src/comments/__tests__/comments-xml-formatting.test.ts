@@ -119,6 +119,58 @@ fixed
     expect(xml).not.toContain("total_threads");
   });
 
+  it("renders a canvas-point thread's page and rounded coordinates, with no quoted section", () => {
+    const response: CommentsListThreadsResponse = {
+      artifacts: [
+        {
+          artifactPath: "/tmp/canvas-a/canvas.json",
+          kind: "canvas",
+          title: "Canvas A",
+          warning: null,
+          threads: [
+            {
+              thread: {
+                threadId: "thread-point",
+                resolved: false,
+                createdAt: Date.parse("2026-06-17T10:15:00.000Z"),
+                data: {
+                  createdByUserId: "user-1",
+                  createdByHandle: "alice",
+                  quotedText: "",
+                  anchorKind: "canvas-point",
+                  page: "p1",
+                  x: 123.4,
+                  y: 567.8,
+                },
+                comments: [
+                  {
+                    commentId: "comment-1",
+                    content: textContent("look here"),
+                    createdAt: Date.parse("2026-06-17T10:16:00.000Z"),
+                    updatedAt: null,
+                    author: { userId: "user-1", fallbackHandle: "alice" },
+                  },
+                ],
+              },
+              anchorStatus: "present",
+              anchorOrder: null,
+              anchorWarning: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    const xml = formatCommentsListThreadsXml({
+      response,
+      platform: "POSIX",
+      query: { artifactPaths: null, status: "all" },
+    });
+
+    expect(xml).toContain('<canvas_point page="p1" x="123" y="568"/>');
+    expect(xml).not.toContain("quoted_section");
+  });
+
   it("formats zero matching list responses as plain text", () => {
     expect(
       formatCommentsListThreadsXml({

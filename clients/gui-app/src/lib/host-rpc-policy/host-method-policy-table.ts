@@ -1631,6 +1631,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "bot.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.list": { ...LATEST_SCHEDULING, poll: null },
   "bot.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.updateRunSettings": {
     mode: "fifo",

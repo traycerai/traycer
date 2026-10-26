@@ -132,6 +132,14 @@ vi.mock(
 // What the bot is doing reaches the view through one hook; these cases pin
 // the thread lines and the boxes with the bot idle
 // (`bot-channel-typing.test.tsx` drives it).
+// The thread panel reads its post's text from the channel's session; none is
+// loaded here, so the anchor shows without text.
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
+  useChatSessionHandleForContainer: () => null,
+}));
 vi.mock("@/hooks/bots/use-bot-activity", () => ({
   useBotActivity: () => null,
 }));
@@ -231,6 +239,13 @@ function PostStub(props: {
             : String(line.lastReplyAt)
         }
         data-unread={line === null ? "" : String(line.unread)}
+        data-participants={
+          line === null
+            ? ""
+            : line.participants
+                .map((entry) => (entry.kind === "bot" ? "bot" : entry.name))
+                .join(",")
+        }
       />
       {openThread === null ? null : (
         <button
@@ -276,7 +291,6 @@ function thread(
       messageId: postId,
       requestId: `req-${threadId}`,
       senderUserId: "user-teammate",
-      text: `Post ${postId}`,
       sentAt: 1_000,
       resolvedAt: null,
     },
@@ -296,7 +310,6 @@ function indicator(
 }
 
 interface MountOptions {
-  readonly paused: boolean;
   /** A member's post whose thread is open; `null` for none. */
   readonly openThreadPostId: string | null;
 }
@@ -313,8 +326,6 @@ function mount(options: MountOptions): {
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
-  /** Renders the view again with the channel paused or resumed. */
-  readonly setPaused: (paused: boolean) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
@@ -329,7 +340,6 @@ function mount(options: MountOptions): {
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
-            paused={currentPaused}
             resolveMember={resolveMember}
             openThread={openThread}
             onOpenThread={onOpenThread}
@@ -339,7 +349,6 @@ function mount(options: MountOptions): {
       </TooltipProvider>
     </QueryClientProvider>
   );
-  let currentPaused = options.paused;
   let current: BotOpenThread | null =
     options.openThreadPostId === null
       ? null
@@ -351,10 +360,6 @@ function mount(options: MountOptions): {
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
-      result.rerender(tree(current));
-    },
-    setPaused: (paused) => {
-      currentPaused = paused;
       result.rerender(tree(current));
     },
   };
@@ -394,7 +399,7 @@ afterEach(() => {
 
 describe("<BotChannelView /> channel", () => {
   it("posts at the channel's top level on the conversation the bot record names", () => {
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     const composer = screen.getByTestId("stub-bot-channel-composer");
     expect(composer.getAttribute("data-conversation-id")).toBe(
@@ -419,7 +424,7 @@ describe("<BotChannelView /> channel", () => {
       { conversationId: "conversation-backdated", createdAt: 1 },
       { conversationId: "conversation-channel", createdAt: 1_000 },
     ];
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(
       screen
@@ -437,7 +442,7 @@ describe("<BotChannelView /> channel", () => {
     mocks.state.conversations = [
       { conversationId: "conversation-other", createdAt: 1 },
     ];
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(screen.getByTestId("bot-channel-empty")).toBeTruthy();
     expect(screen.queryByTestId("stub-bot-channel-composer")).toBeNull();
@@ -445,7 +450,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("falls back to the earliest conversation only when the host names none", () => {
     mocks.state.appConversationChatId = null;
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(
       screen
@@ -454,17 +459,13 @@ describe("<BotChannelView /> channel", () => {
     ).toBe("conversation-channel");
   });
 
-  it("reads the thread list, and not at all while paused or unsupported", () => {
-    mount({ paused: false, openThreadPostId: null });
+  it("reads the thread list, and not at all while unsupported", () => {
+    mount({ openThreadPostId: null });
     expect(lastThreadListCall()).toEqual({ botId: BOT_ID, enabled: true });
     cleanup();
 
-    mount({ paused: true, openThreadPostId: null });
-    expect(lastThreadListCall().enabled).toBe(false);
-    cleanup();
-
     mocks.state.threadListSupported = false;
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(lastThreadListCall().enabled).toBe(false);
   });
 
@@ -481,7 +482,7 @@ describe("<BotChannelView /> channel", () => {
       "thread-c": indicator(false, true),
     };
     mocks.postIds = ["post-a", "post-b", "post-c", "post-d", "post-new"];
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     const line = (postId: string): HTMLElement =>
       screen.getByTestId(`stub-line-${postId}`);
@@ -498,11 +499,27 @@ describe("<BotChannelView /> channel", () => {
     expect(line("post-new").getAttribute("data-has-line")).toBe("false");
   });
 
+  it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 0 }),
+      thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 8_000 }),
+    ];
+    mocks.postIds = ["post-a", "post-b"];
+    mount({ openThreadPostId: null });
+
+    const participants = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-participants");
+    expect(participants("post-a")).toBe("Tess Teammate");
+    expect(participants("post-b")).toBe("Tess Teammate,bot");
+  });
+
   it("asks the host to open a post's thread when its line is clicked", async () => {
     const user = userEvent.setup();
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
     mocks.postIds = ["post-a"];
-    const { onOpenThread } = mount({ paused: false, openThreadPostId: null });
+    const { onOpenThread } = mount({ openThreadPostId: null });
 
     await user.click(screen.getByTestId("stub-open-post-a"));
 
@@ -517,7 +534,6 @@ describe("<BotChannelView /> channel", () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];
     const { onOpenThread, reopen } = mount({
-      paused: false,
       openThreadPostId: null,
     });
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
@@ -543,7 +559,7 @@ describe("<BotChannelView /> channel", () => {
   it("shows the question's thread, not the box that starts one, once the thread is listed", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];
-    const { reopen } = mount({ paused: false, openThreadPostId: null });
+    const { reopen } = mount({ openThreadPostId: null });
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
     reopen(QUESTION_1);
     expect(screen.getByTestId("bot-thread-unopened")).toBeTruthy();
@@ -564,14 +580,14 @@ describe("<BotChannelView /> channel", () => {
   it("shows the box that starts a question's thread when the view mounts again with it open, as after a switch between the tab's views", async () => {
     const user = userEvent.setup();
     mocks.postIds = ["question-1"];
-    const first = mount({ paused: false, openThreadPostId: null });
+    const first = mount({ openThreadPostId: null });
     await user.click(screen.getByTestId("stub-open-announcement-question-1"));
     const opened = first.onOpenThread.mock.calls.at(-1)?.[0] ?? null;
     // The tab holds what was opened; the view itself is unmounted and mounted
     // fresh, so nothing it remembered survives.
     cleanup();
 
-    const again = mount({ paused: false, openThreadPostId: null });
+    const again = mount({ openThreadPostId: null });
     again.reopen(opened);
 
     const panel = screen.getByTestId("bot-thread-panel");
@@ -586,7 +602,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("posts a direct reply's chosen option as a new top-level post in the channel", async () => {
     const user = userEvent.setup();
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.send).not.toHaveBeenCalled();
 
     await user.click(screen.getByTestId("stub-choose"));
@@ -603,7 +619,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("offers no option to pick while an earlier pick is still being sent", () => {
     mocks.state.sending = true;
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
 
     expect(screen.getByTestId("stub-choose-unavailable")).toBeTruthy();
     expect(screen.queryByTestId("stub-choose")).toBeNull();
@@ -611,7 +627,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("says in the channel's box when a pick could not be sent, and raises no toast", async () => {
     const user = userEvent.setup();
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     await user.click(screen.getByTestId("stub-choose"));
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     const failure = new HostRpcError({
@@ -636,7 +652,7 @@ describe("<BotChannelView /> channel", () => {
 describe("<BotChannelView /> channel read mark", () => {
   it("marks the channel read when it is shown unread, and leaves a read one alone", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
     expect(mocks.markRead).toHaveBeenCalledWith({
       epicId: BOT_ID,
@@ -646,20 +662,20 @@ describe("<BotChannelView /> channel read mark", () => {
     mocks.markRead.mockClear();
 
     mocks.state.chats = { "conversation-channel": indicator(false, false) };
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
 
   it("marks the channel read for a failure as well as a done mark", () => {
     mocks.state.chats = { "conversation-channel": indicator(false, true) };
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the channel unread while its tab is not on screen, and reads it when the person comes back", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
     mocks.state.paneVisible = false;
-    const { rerender } = mount({ paused: false, openThreadPostId: null });
+    const { rerender } = mount({ openThreadPostId: null });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
@@ -674,7 +690,7 @@ describe("<BotChannelView /> channel read mark", () => {
   it("leaves the channel unread while the window is in the background, and reads it when the window returns", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    mount({ paused: false, openThreadPostId: null });
+    mount({ openThreadPostId: null });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     hasFocus.mockReturnValue(true);
@@ -682,23 +698,6 @@ describe("<BotChannelView /> channel read mark", () => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the channel unread while it is paused behind its placeholder, and reads it once it resumes", () => {
-    mocks.state.chats = { "conversation-channel": indicator(true, false) };
-    const { setPaused } = mount({ paused: true, openThreadPostId: null });
-    expect(screen.getByTestId("bot-transcript-paused")).toBeTruthy();
-    expect(screen.queryByTestId("stub-transcript-channel")).toBeNull();
-    expect(mocks.markRead).not.toHaveBeenCalled();
-
-    setPaused(false);
-    expect(screen.queryByTestId("bot-transcript-paused")).toBeNull();
-    expect(screen.getByTestId("stub-transcript-channel")).toBeTruthy();
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
-      epicId: BOT_ID,
-      chatId: "conversation-channel",
-    });
   });
 });
 
@@ -758,7 +757,7 @@ describe("<BotChannelView /> channel read mark beside an open thread", () => {
 
   it("leaves the channel unread while it is hidden beside the thread, and reads it when the pane is wide enough to show it", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     // Not measured yet: the channel is taken as hidden.
     expect(mocks.markRead).not.toHaveBeenCalled();
@@ -778,7 +777,7 @@ describe("<BotChannelView /> channel read mark beside an open thread", () => {
 
   it("leaves the channel unread beside an open thread where nothing can measure it", () => {
     vi.stubGlobal("ResizeObserver", undefined);
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
@@ -800,7 +799,7 @@ describe("<BotChannelView /> open thread", () => {
   });
 
   it("reads the thread's chat in the panel and replies into that thread", () => {
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(panel.getAttribute("data-thread-id")).toBe("thread-a");
@@ -815,10 +814,10 @@ describe("<BotChannelView /> open thread", () => {
       "conversation-channel",
     );
     expect(composer.getAttribute("data-placeholder")).toBe("Reply…");
-    // The anchor post is drawn above the replies, under the member's name.
+    // The anchor post is drawn above the replies, under the member's name;
+    // its text comes from the channel's row (`bot-thread-panel.test.tsx`).
     const anchor = within(panel).getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Tess Teammate")).toBeTruthy();
-    expect(within(anchor).getByText("Post post-a")).toBeTruthy();
     // The channel's own box keeps posting at the top level beside it.
     expect(
       screen
@@ -828,11 +827,11 @@ describe("<BotChannelView /> open thread", () => {
   });
 
   it("shows the thread's cost in the header only when the host can say", () => {
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-cost").textContent).toBe("$0.42");
     cleanup();
 
-    mount({ paused: false, openThreadPostId: "post-b" });
+    mount({ openThreadPostId: "post-b" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-cost")).toBeNull();
   });
@@ -840,7 +839,6 @@ describe("<BotChannelView /> open thread", () => {
   it("opens the thread's session under the hood", async () => {
     const user = userEvent.setup();
     const { onOpenUnderTheHood } = mount({
-      paused: false,
       openThreadPostId: "post-a",
     });
 
@@ -853,7 +851,6 @@ describe("<BotChannelView /> open thread", () => {
   it("closes the thread from its header", async () => {
     const user = userEvent.setup();
     const { onOpenThread } = mount({
-      paused: false,
       openThreadPostId: "post-a",
     });
 
@@ -864,7 +861,7 @@ describe("<BotChannelView /> open thread", () => {
 
   it("marks an unread thread read when it is opened, and leaves a read one alone", () => {
     mocks.state.chats = { "thread-a": indicator(true, false) };
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
     expect(mocks.markRead).toHaveBeenCalledWith({
       epicId: BOT_ID,
@@ -874,14 +871,14 @@ describe("<BotChannelView /> open thread", () => {
     mocks.markRead.mockClear();
 
     mocks.state.chats = { "thread-b": indicator(false, false) };
-    mount({ paused: false, openThreadPostId: "post-b" });
+    mount({ openThreadPostId: "post-b" });
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
 
   it("leaves a verdict unread while the tab is not on screen, and reads it when the person comes back", () => {
     mocks.state.chats = { "thread-a": indicator(true, false) };
     mocks.state.paneVisible = false;
-    const { rerender } = mount({ paused: false, openThreadPostId: "post-a" });
+    const { rerender } = mount({ openThreadPostId: "post-a" });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
@@ -896,7 +893,7 @@ describe("<BotChannelView /> open thread", () => {
   it("leaves a verdict unread while the window is in the background, and reads it when the window returns", () => {
     mocks.state.chats = { "thread-a": indicator(true, false) };
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
     expect(mocks.markRead).not.toHaveBeenCalled();
 
     hasFocus.mockReturnValue(true);
@@ -905,13 +902,6 @@ describe("<BotChannelView /> open thread", () => {
     });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
   });
-
-  it("does not read a cached thread's verdict while the channel is paused", () => {
-    mocks.state.chats = { "thread-a": indicator(true, false) };
-    mount({ paused: true, openThreadPostId: "post-a" });
-    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    expect(mocks.markRead).not.toHaveBeenCalled();
-  });
 });
 
 describe("<BotChannelView /> thread list unavailable", () => {
@@ -919,7 +909,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
     mocks.state.threadListSupported = false;
     mocks.state.threadListAnswered = false;
     mocks.postIds = ["post-a"];
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
 
     expect(screen.queryByTestId("stub-open-post-a")).toBeNull();
     expect(screen.queryByTestId("stub-open-announcement-post-a")).toBeNull();
@@ -931,7 +921,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
     const user = userEvent.setup();
     mocks.state.threadListAnswered = false;
     mocks.state.threadListError = true;
-    mount({ paused: false, openThreadPostId: "post-a" });
+    mount({ openThreadPostId: "post-a" });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
@@ -942,7 +932,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
 
   it("waits for a just-posted thread the list has not answered yet", () => {
     mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
-    mount({ paused: false, openThreadPostId: "post-new" });
+    mount({ openThreadPostId: "post-new" });
 
     const panel = screen.getByTestId("bot-thread-panel");
     expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();

@@ -1,7 +1,6 @@
 import type { KeyboardEvent, ReactNode } from "react";
-import { Bot } from "lucide-react";
 import type { TracyStripEntry } from "../tab-strip-controller";
-import { TracyEntryHoverBody } from "../tracy-strip-entry";
+import { TracyEntryAvatar, TracyEntryHoverBody } from "../tracy-strip-entry";
 import { useTracyEntrySignals } from "../use-tracy-entry-signals";
 import {
   SideTabRow,
@@ -51,8 +50,19 @@ export function SideTracyRow(props: {
       tint={null}
       inBlock={false}
       // Its label stands where Home's does, after a 16px icon and space.
-      titleIcon={<Bot className="size-4 me-4" />}
-      tile={{ kind: "icon", icon: <Bot className="size-4" /> }}
+      titleIcon={
+        <TracyEntryAvatar botId={tab.id} title={tab.name} className="me-4" />
+      }
+      tile={{
+        kind: "icon",
+        icon: (
+          <TracyEntryAvatar
+            botId={tab.id}
+            title={tab.name}
+            className={undefined}
+          />
+        ),
+      }}
       badge={signals.unread ? "unread" : null}
       agents={NO_LIVE_AGENTS}
       status={

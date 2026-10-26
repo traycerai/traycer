@@ -1,12 +1,9 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import {
   readCanvasLayout,
   setBoardFrame,
-  setBoardMetadata,
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
 import { boardFrame } from "./canvas-model";
 import { CanvasStyleInput } from "./canvas-style-input";
@@ -22,7 +19,6 @@ export function CanvasBoardPanel({
   readonly contentHeight: number | null;
 }) {
   const { layout } = useCanvasLayoutState(store);
-  const id = useId();
   const [message, setMessage] = useState<string | null>(null);
   if (!Object.hasOwn(layout.boards, boardPath)) return null;
   const board = layout.boards[boardPath];
@@ -84,22 +80,6 @@ export function CanvasBoardPanel({
       >
         Fit to content
       </Button>
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={id}>Interactive</Label>
-        <Switch
-          id={id}
-          checked={board.is_interactive === true}
-          onCheckedChange={(interactive) =>
-            store.transact((handle) =>
-              setBoardMetadata(handle, boardPath, {
-                title: undefined,
-                is_interactive: interactive,
-                radius: undefined,
-              }),
-            )
-          }
-        />
-      </div>
       {message === null ? null : (
         <p role="status" className="text-ui-sm text-destructive">
           {message}

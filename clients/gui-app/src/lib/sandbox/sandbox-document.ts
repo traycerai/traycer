@@ -29,6 +29,7 @@ export interface LoaderTheme {
 export type ArtifactPageRole = "found" | "missing" | null;
 
 export interface LoaderResource {
+  readonly canvas?: boolean;
   /** Trusted served-document extension; the standalone loader supplies none. */
   readonly extraScript?: string;
   readonly html: string;
@@ -41,6 +42,7 @@ export interface LoaderResource {
 }
 
 interface BootstrapConfig {
+  readonly canvas: boolean;
   readonly nonce: string;
   readonly shortcuts: readonly LoaderShortcut[];
   readonly paintBackground: boolean;
@@ -346,7 +348,7 @@ function bootstrapMain(config: BootstrapConfig): void {
       // reader's moves between the folder's pages.
       notify(
         "traycer/notifications/document-ready",
-        config.artifactPage === null
+        config.artifactPage === null && !config.canvas
           ? { nonce: config.nonce, height: lastHeight }
           : { nonce: config.nonce, height: lastHeight, url: location.href },
       );
@@ -406,6 +408,7 @@ export const buildDocument = (resource: LoaderResource): string => {
       ? ""
       : `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(resource.csp)}">`;
   const config: BootstrapConfig = {
+    canvas: resource.canvas === true,
     nonce: resource.nonce,
     shortcuts: resource.shortcuts,
     paintBackground:

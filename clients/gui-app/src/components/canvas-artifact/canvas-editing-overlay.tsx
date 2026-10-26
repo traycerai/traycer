@@ -117,6 +117,16 @@ function EditingControls(props: {
     </div>
   );
 }
+function boardSelection(
+  state: { selection: CanvasSelection | null },
+  artifactId: string,
+  boardPath: string,
+): CanvasSelection | null {
+  return state.selection?.artifactId === artifactId &&
+    state.selection.boardPath === boardPath
+    ? state.selection
+    : null;
+}
 export function CanvasEditingOverlay(props: {
   readonly scope: CanvasAnnotationScope;
   readonly tileId: string;
@@ -131,10 +141,7 @@ export function CanvasEditingOverlay(props: {
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
   const selection = useCanvasSelectionStore((state) =>
-    state.selection?.artifactId === props.scope.artifactId &&
-    state.selection.boardPath === props.boardPath
-      ? state.selection
-      : null,
+    boardSelection(state, props.scope.artifactId, props.boardPath),
   );
   const generation = useCanvasSelectionStore((state) => state.generation);
   const additional = useCanvasSelectionStore(
@@ -149,6 +156,15 @@ export function CanvasEditingOverlay(props: {
   const [dismissed, setDismissed] = useState<string | null>(null);
   const entry = props.registry.get(props.boardPath);
   const request = currentRetype(selection, entry, generation, dismissed);
+  const boardDocument = document.data ?? null;
+  // Comment mode comes from the registry this component already subscribes
+  // to, not a prop: a memoized board node can render before the editor's
+  // effect publishes the new view, and a prop captured then would stay stale.
+  const commenting = props.registry.view?.commenting === true;
+  if (commenting)
+    return (
+      <CanvasSelectionOverlay {...props} commenting hideAction hideHandles />
+    );
   const controls =
     selection === null ? null : (
       <EditingControls
@@ -175,7 +191,7 @@ export function CanvasEditingOverlay(props: {
             <CanvasStructureOverlay
               selection={selection}
               registry={props.registry}
-              document={document.data ?? null}
+              document={boardDocument}
             />
           ) : null}
         </>
@@ -195,7 +211,7 @@ export function CanvasEditingOverlay(props: {
           <CanvasSelectionMenu
             selection={selection}
             registry={props.registry}
-            document={document.data ?? null}
+            document={boardDocument}
           />
         ) : null
       }

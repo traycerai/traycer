@@ -1,3 +1,4 @@
+import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 /**
  * This is the main orchestrator that composes extracted sub-components:
@@ -688,7 +689,7 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const hasActiveCommentableArtifact =
     activeArtifact !== null &&
     "kind" in activeArtifact &&
-    isMarkdownArtifactKind(activeArtifact.kind);
+    isCommentArtifactKind(activeArtifact.kind);
   // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(

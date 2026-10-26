@@ -283,7 +283,6 @@ function threadSummary(): BotThreadSummary {
       messageId: POST_ID,
       requestId: "request-1",
       senderUserId: USER_ID,
-      text: "Is CI green?",
       sentAt: 1_000,
       resolvedAt: null,
     },
@@ -454,7 +453,6 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       botTitle="Tracy"
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
-      paused={false}
       resolveMember={resolveMember}
       openThread={openThread}
       onOpenThread={(open) =>

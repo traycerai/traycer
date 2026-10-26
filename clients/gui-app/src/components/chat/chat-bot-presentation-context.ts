@@ -1,12 +1,15 @@
 import { createContext } from "react";
+import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import type { ChatBotRepliedPost } from "@/lib/bots/reply-row";
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
  * shows it: how many replies, when the last one landed, whether it has a
- * reply the viewer has not read, and whether the bot is answering in it now.
+ * reply the viewer has not read, whether the bot is answering in it now, and
+ * who is in it: the post's writer, and the bot once it has a reply.
  */
 export interface ChatBotThreadLine {
+  readonly participants: ReadonlyArray<StackedIdentity>;
   readonly replyCount: number;
   readonly lastReplyAt: number | null;
   readonly unread: boolean;

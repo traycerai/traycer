@@ -86,7 +86,7 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
     // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
-      ["epic.state.subscribe", 4],
+      ["epic.state.subscribe", 5],
       ["epic.status.subscribe", 1],
       ["artifact.subscribe", 1],
     ] as const) {
@@ -1900,10 +1900,10 @@ describe("epic.state.subscribe@1.4: comment thread records carry anchor fields; 
     ).toBe(true);
   });
 
-  it("is the registered top of the line, with @1.3 still installed", () => {
+  it("stays installed at minor 4, below the @1.5 head, with @1.3 still installed", () => {
     expect(epicStateSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
     const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
-    expect(line.latestMinor).toBe(4);
+    expect(line.latestMinor).toBe(5);
     expect(line.versions[4].contract).toBe(epicStateSubscribeV14);
     expect(line.versions[3].contract.serverFrameSchema).toBe(
       epicStateSubscribeServerFrameSchemaV13,

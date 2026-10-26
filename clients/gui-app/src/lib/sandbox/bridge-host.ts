@@ -1,4 +1,10 @@
 import {
+  parseCanvasPanGesture,
+  parseCanvasZoomGesture,
+  type CanvasPanGesture,
+  type CanvasZoomGesture,
+} from "./canvas-bridge";
+import {
   parseCanvasSiblingLayout,
   type CanvasSiblingLayout,
 } from "./canvas-layout-bridge";
@@ -37,10 +43,10 @@ import { parseArtifactAddress } from "./artifact-serving/artifact-address";
  * Trust is `event.source` alone - an opaque frame's `event.origin` is always
  * "null" - plus a nonce that proves the composed document. Loader mode allows
  * two loads (the loader and its rewrite); served mode allows only one and
- * needs no resource handshake, unless it serves a folder of pages, where each
- * further load is the reader moving to another page and must prove itself
- * again. An extra load, an unexpected proxy-ready, or a wrong or repeated
- * nonce disposes the bridge. Loads
+ * needs no resource handshake. A folder page navigation or an explicitly
+ * authorized canvas query reload must prove the new document again. An extra
+ * load, an unexpected proxy-ready, or an unapproved repeated ready disposes
+ * the bridge. Loads
  * are COUNTED rather than ordered because the frame's messages and its
  * `load` events reach the app on different paths and can arrive in either
  * order. A page that rewrites itself trips the count too, which fails safe.
@@ -103,6 +109,9 @@ const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
+  readonly onCanvasZoom?: (gesture: CanvasZoomGesture) => void;
+  /** A playing board's wheel gesture it had no room to scroll by. */
+  readonly onCanvasPan?: (gesture: CanvasPanGesture) => void;
   readonly onHtmlZoom?: (scale: number) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
@@ -416,6 +425,11 @@ export class SandboxBridgeHost {
   private readies = 0;
   /** Documents begun so far; also tells one page's ping from the next's. */
   private documents = 1;
+  private canvasDocumentUrl: string | null = null;
+  private canvasReload: {
+    readonly url: string;
+    readonly document: number;
+  } | null = null;
   private earlyError = false;
   private initialized = false;
   private crashed = false;
@@ -517,12 +531,57 @@ export class SandboxBridgeHost {
     );
   }
 
+  /** Writes a source-inserted tid onto the live element, avoiding a reload. */
+  stampTid(params: {
+    readonly marker: number;
+    readonly tagName: string;
+    readonly tid: string;
+  }): Promise<boolean> {
+    return this.canvasRequest("stamp-tid", params).then(
+      (result) => result?.stamped === true,
+    );
+  }
+
+  /** Moves live source markers past an adopted splice by its length delta. */
+  shiftMarkers(params: {
+    readonly at: number;
+    readonly delta: number;
+  }): Promise<boolean> {
+    return this.canvasRequest("shift-markers", params).then(
+      (result) => result?.shifted === true,
+    );
+  }
+
   siblingLayout(
     locator: CanvasElementLocator,
   ): Promise<CanvasSiblingLayout | null> {
     return this.canvasRequest("sibling-layout", locator).then((result) =>
       parseCanvasSiblingLayout(result?.layout),
     );
+  }
+
+  navigateCanvas(destination: {
+    readonly search: string;
+    readonly hash: string;
+  }): Promise<boolean> {
+    if (this.canvasReload !== null) return Promise.resolve(false);
+    let reload: { readonly url: string; readonly document: number } | null =
+      null;
+    if (this.canvasDocumentUrl !== null) {
+      if (!URL.canParse(this.canvasDocumentUrl)) return Promise.resolve(false);
+      const url = new URL(this.canvasDocumentUrl);
+      if (url.search !== destination.search) {
+        url.search = destination.search;
+        url.hash = destination.hash;
+        reload = { url: url.href, document: this.documents + 1 };
+        this.canvasReload = reload;
+      }
+    }
+    return this.canvasRequest("navigate", destination).then((result) => {
+      if (result === null && this.canvasReload === reload)
+        this.canvasReload = null;
+      return result !== null;
+    });
   }
 
   setMode(mode: CanvasMode): Promise<boolean> {
@@ -591,6 +650,21 @@ export class SandboxBridgeHost {
     if (selection !== null) this.options.events.onTextSelection?.(selection);
   }
 
+  private receiveCanvasZoom(params: unknown): void {
+    const gesture = parseCanvasZoomGesture(params);
+    if (gesture !== null) this.options.events.onCanvasZoom?.(gesture);
+  }
+
+  private receiveCanvasPan(params: unknown): void {
+    const gesture = parseCanvasPanGesture(params);
+    if (gesture !== null) this.options.events.onCanvasPan?.(gesture);
+  }
+
+  private receiveCanvasDoubleClick(value: unknown): void {
+    const element = parseCanvasElement(value);
+    if (element !== null) this.options.events.onDoubleClick?.(element);
+  }
+
   private receiveCanvasNotification(method: string, params: unknown): void {
     if (
       !this.canvasDocumentProven() ||
@@ -607,10 +681,13 @@ export class SandboxBridgeHost {
     }
     if (!this.canvasEnabled()) return;
     if (method === "traycer/canvas/double-click") {
-      const element = parseCanvasElement(params.element);
-      if (element !== null) this.options.events.onDoubleClick?.(element);
+      this.receiveCanvasDoubleClick(params.element);
     } else if (method === "traycer/canvas/text-selection") {
       this.receiveCanvasTextSelection(params);
+    } else if (method === "traycer/canvas/zoom") {
+      this.receiveCanvasZoom(params);
+    } else if (method === "traycer/canvas/pan") {
+      this.receiveCanvasPan(params);
     } else if (method === "traycer/canvas/relative-link") {
       const href = parseCanvasRelativeLink(params);
       if (href !== null) this.options.events.onRelativeLink?.(href);
@@ -760,6 +837,20 @@ export class SandboxBridgeHost {
   frameLoaded(): void {
     if (this.phase === "disposed") return;
     this.loads += 1;
+    if (
+      this.options.document.kind === "served" &&
+      this.options.document.canvas === true &&
+      this.servedPages() === null
+    ) {
+      // Query navigation authorizes exactly one reload of this board. Its
+      // ready must still prove both the nonce and the requested URL.
+      if (this.loads > (this.canvasReload?.document ?? this.documents)) {
+        this.rejectDocument();
+        return;
+      }
+      if (this.loads > this.documents) this.beginPage();
+      return;
+    }
     if (this.servedPages() === null) {
       const allowedLoads = this.options.document.kind === "loader" ? 2 : 1;
       if (this.loads > allowedLoads) this.rejectDocument();
@@ -1083,22 +1174,52 @@ export class SandboxBridgeHost {
     };
   }
 
+  private acceptCanvasDocument(params: Record<string, unknown>): boolean {
+    if (
+      this.readies > this.loads ||
+      (this.readies > 0 &&
+        (this.canvasReload === null || params.url !== this.canvasReload.url))
+    ) {
+      this.rejectDocument();
+      return false;
+    }
+    this.readies += 1;
+    if (this.readies > this.documents) this.beginPage();
+    this.canvasReload = null;
+    this.canvasDocumentUrl = typeof params.url === "string" ? params.url : null;
+    return true;
+  }
+
+  private acceptServedDocument(
+    params: Record<string, unknown>,
+    pages: SandboxServedPages | null,
+  ): boolean {
+    if (
+      this.options.document.kind === "served" &&
+      this.options.document.canvas === true &&
+      pages === null
+    ) {
+      return this.acceptCanvasDocument(params);
+    } else if (pages !== null) {
+      // At most one ready may run ahead of its load.
+      if (this.readies > this.loads) {
+        this.rejectDocument();
+        return false;
+      }
+      this.readies += 1;
+      if (this.readies > this.documents) this.beginPage();
+      this.clearTimer(this.pageHandshakeTimer);
+    }
+    return true;
+  }
+
   private onDocumentReady(params: unknown): void {
     if (!isRecord(params) || params.nonce !== this.options.document.nonce) {
       this.rejectDocument();
       return;
     }
     const pages = this.servedPages();
-    if (pages !== null) {
-      // At most one ready may run ahead of its load.
-      if (this.readies > this.loads) {
-        this.rejectDocument();
-        return;
-      }
-      this.readies += 1;
-      if (this.readies > this.documents) this.beginPage();
-      this.clearTimer(this.pageHandshakeTimer);
-    }
+    if (!this.acceptServedDocument(params, pages)) return;
     if (this.phase !== "delivered") {
       this.rejectDocument();
       return;

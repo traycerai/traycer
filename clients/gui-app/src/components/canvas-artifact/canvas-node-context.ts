@@ -18,13 +18,31 @@ export type CanvasFlowNode = Node<CanvasNodeData>;
 export interface CanvasNodeActions {
   readonly viewOnly: boolean;
   readonly selectionEnabled: boolean;
+  /** The armed comment tool wins over play: a playing board gets the edit
+   * shield so clicks pick elements instead of reaching the page. */
+  readonly commentMode: boolean;
   /** Hand tool or Space held: boards pass drags to the canvas so it pans. */
   readonly panMode: boolean;
   readonly onAddError: (path: string, error: CanvasPageError) => void;
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly frameEvents: CanvasFrameEvents | null;
   readonly renameBoard: (path: string, title: string) => void;
-  readonly toggleInteractive: (path: string) => void;
+  readonly startPlay: (path: string) => void;
+  readonly stopPlay: () => void;
+  /** The one board playing in place; play is per board, never canvas-wide. */
+  readonly playingBoard: string | null;
+  readonly fullscreenPath: string | null;
+  readonly navigation: Readonly<
+    Record<
+      string,
+      | {
+          readonly search: string;
+          readonly hash: string;
+          readonly visit: number;
+        }
+      | undefined
+    >
+  >;
   readonly resize: (
     id: string,
     frame: { x: number; y: number; width: number; height: number },

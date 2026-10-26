@@ -11,10 +11,30 @@
  * refusal shown in place, under the control that made it.
  */
 import { StrictMode, useState } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import {
+  BotIdentityContext,
+  type BotIdentity,
+  type BotOwner,
+} from "@/components/bots/bot-identity-context";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -34,6 +54,16 @@ const mocks = vi.hoisted(() => ({
   deleteBot: vi.fn<(variables: object) => void>(),
   setMainBot: vi.fn<(variables: object) => void>(),
   updateReplyMode: vi.fn<(variables: object) => void>(),
+  setNotificationLevel: vi.fn<(variables: object) => void>(),
+  // The levels `bot.notificationLevel.read` answers; `undefined` = unread.
+  notificationLevels: {} as Record<string, string> | undefined,
+  // What it answers for the notification-level methods.
+  notificationSupport: true as boolean | null,
+  // What the levels read and the level write report as their error.
+  notificationReadError: null as string | null,
+  notificationWriteError: null as string | null,
+  // Whether the level write is in flight.
+  notificationPending: false,
   // What `useHostMethodSupport` answers for `environment.setMainBot`.
   setMainBotSupport: true as boolean | null,
   // What it answers for `bot.updateReplyMode`.
@@ -64,6 +94,9 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
+    if (method.startsWith("bot.notificationLevel.")) {
+      return mocks.notificationSupport;
+    }
     return method === "bot.updateReplyMode"
       ? mocks.replyModeSupport
       : mocks.setMainBotSupport;
@@ -102,6 +135,24 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     isPending: mocks.replyModePending,
     error: refusalOf(mocks.refusal.replyMode),
     mutate: mocks.updateReplyMode,
+  }),
+}));
+vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
+  useBotNotificationLevelsQuery: (
+    _client: unknown,
+    _botId: string,
+    enabled: boolean,
+  ) => ({
+    data:
+      enabled && mocks.notificationLevels !== undefined
+        ? { levels: mocks.notificationLevels }
+        : undefined,
+    error: refusalOf(mocks.notificationReadError),
+  }),
+  useBotNotificationLevelSetMutation: () => ({
+    isPending: mocks.notificationPending,
+    error: refusalOf(mocks.notificationWriteError),
+    mutate: mocks.setNotificationLevel,
   }),
 }));
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
@@ -145,7 +196,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   };
 });
 
-import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const BOT: BotRecord = {
@@ -167,6 +218,10 @@ const BOT: BotRecord = {
   appConversationChatId: null,
 };
 
+/**
+ * The channel settings panel (T63), its Advanced group opened: the model and
+ * the main bot live there, collapsed until the person opens it.
+ */
 function mountPanel(
   bot: BotRecord,
   isMain: boolean | null,
@@ -174,9 +229,17 @@ function mountPanel(
 ): void {
   render(
     <StrictMode>
-      <BotSettingsPanel bot={bot} isMain={isMain} personal={personal} />
+      <BotChannelSettingsPanel
+        bot={bot}
+        isMain={isMain}
+        personal={personal}
+        channelId={null}
+        environmentBots={null}
+        onClose={vi.fn()}
+      />
     </StrictMode>,
   );
+  fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
 }
 
 function applyButton(): HTMLButtonElement {
@@ -207,13 +270,18 @@ beforeEach(() => {
   mocks.replyModeSupport = true;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
+  mocks.notificationLevels = {};
+  mocks.notificationSupport = true;
+  mocks.notificationReadError = null;
+  mocks.notificationWriteError = null;
+  mocks.notificationPending = false;
 });
 
 afterEach(() => {
   cleanup();
 });
 
-describe("<BotSettingsPanel /> model", () => {
+describe("<BotChannelSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
     mountPanel(BOT, null, false);
 
@@ -288,7 +356,7 @@ describe("<BotSettingsPanel /> model", () => {
   });
 });
 
-describe("<BotSettingsPanel /> controls", () => {
+describe("<BotChannelSettingsPanel /> controls", () => {
   it("renames through the tab host with the trimmed name", async () => {
     const user = userEvent.setup();
     mountPanel(BOT, null, false);
@@ -306,7 +374,7 @@ describe("<BotSettingsPanel /> controls", () => {
   });
 });
 
-describe("<BotSettingsPanel /> refusals", () => {
+describe("<BotChannelSettingsPanel /> refusals", () => {
   it("shows no refusal line while every write is accepted", () => {
     mountPanel(BOT, null, false);
 
@@ -371,7 +439,7 @@ describe("<BotSettingsPanel /> refusals", () => {
   });
 });
 
-describe("<BotSettingsPanel /> main bot", () => {
+describe("<BotChannelSettingsPanel /> main bot", () => {
   it("offers Make main on a bot that is not main, asking the tab's host whether it can write it", () => {
     mountPanel(BOT, false, false);
 
@@ -436,7 +504,7 @@ describe("<BotSettingsPanel /> main bot", () => {
   });
 });
 
-describe("<BotSettingsPanel /> reply mode", () => {
+describe("<BotChannelSettingsPanel /> reply mode", () => {
   function radio(name: string): HTMLElement {
     return screen.getByRole("radio", { name });
   }
@@ -527,7 +595,7 @@ describe("<BotSettingsPanel /> reply mode", () => {
 // The bot's next turn runs its stored harness/model/effort/profile with NO
 // service tier (`serviceTier: null`), so the pre-send Max Mode label must be
 // keyed on that exact tuple: the bot's effort, Fast off.
-describe("<BotSettingsPanel /> Max Mode label", () => {
+describe("<BotChannelSettingsPanel /> Max Mode label", () => {
   const CURSOR_BOT: BotRecord = {
     ...BOT,
     harness: "cursor",
@@ -633,4 +701,228 @@ describe("<BotSettingsPanel /> Max Mode label", () => {
 
     expect(mocks.pickerContexts.length).toBe(settled);
   });
+});
+
+describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
+  const CHANNEL = "conversation-app";
+  const TEAM_OWNER: BotOwner = {
+    kind: "team",
+    environmentId: "env-team",
+    name: "Acme",
+    members: [
+      { userId: "user-1", displayName: "Ada", avatarUrl: null },
+      { userId: "user-2", displayName: null, avatarUrl: null },
+    ],
+  };
+  const OTHER_BOT: BotRecord = {
+    ...BOT,
+    botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    title: "Triage Bot",
+  };
+
+  function mountChannelPanel(input: {
+    readonly personal: boolean;
+    readonly owner: BotOwner | null;
+    readonly environmentBots: ReadonlyArray<BotRecord> | null;
+  }): Mock<() => void> {
+    const onClose = vi.fn<() => void>();
+    const identity: BotIdentity = {
+      botId: BOT.botId,
+      title: BOT.title,
+      owner: input.owner,
+      openActivity: null,
+    };
+    render(
+      <BotIdentityContext value={identity}>
+        <BotChannelSettingsPanel
+          bot={BOT}
+          isMain={false}
+          personal={input.personal}
+          channelId={CHANNEL}
+          environmentBots={input.environmentBots}
+          onClose={onClose}
+        />
+      </BotIdentityContext>,
+    );
+    return onClose;
+  }
+
+  function groupTitles(): ReadonlyArray<string | null> {
+    return within(screen.getByTestId("bot-channel-settings"))
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent);
+  }
+
+  it("groups a team bot's channel: details with its members, notifications, its bots, Advanced collapsed and delete", () => {
+    mountChannelPanel({
+      personal: false,
+      owner: TEAM_OWNER,
+      environmentBots: [
+        BOT,
+        OTHER_BOT,
+        { ...OTHER_BOT, botId: "b3", archivedAt: 5 },
+      ],
+    });
+
+    expect(groupTitles()).toEqual([
+      "Details",
+      "Notifications",
+      "Bots in this channel",
+    ]);
+    const owner = screen.getByTestId("bot-settings-owner");
+    expect(owner.textContent).toBe(
+      "Managed byAcmeWho can message itMembers of Acme",
+    );
+    const members = screen.getByTestId("bot-settings-members");
+    expect(members.textContent).toContain("2 members");
+    expect(
+      within(members)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Ada", "user-2"]);
+    const bots = screen.getByTestId("bot-settings-bots");
+    expect(
+      within(bots)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["RBRelease Bot", "TBTriage Bot"]);
+    // A team bot always answers in threads: no reply mode here.
+    expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
+    // Advanced is collapsed until opened: no model picker, no main bot.
+    expect(screen.queryByTestId("bot-settings-model")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-main")).toBeNull();
+    expect(screen.getByTestId("bot-settings-delete")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
+    expect(screen.getByTestId("bot-settings-model")).toBeTruthy();
+    expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
+  });
+
+  it("groups a personal bot's channel with its reply mode, and no members or bots", () => {
+    mountChannelPanel({
+      personal: true,
+      owner: {
+        kind: "person",
+        userId: "user-1",
+        name: "Olive Owner",
+        avatarUrl: null,
+      },
+      environmentBots: [BOT],
+    });
+
+    expect(groupTitles()).toEqual(["Details", "Notifications"]);
+    expect(screen.getByTestId("bot-settings-owner").textContent).toBe(
+      "Managed byOlive OwnerWho can message itOnly you",
+    );
+    expect(screen.getByTestId("bot-settings-reply-mode")).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-members")).toBeNull();
+  });
+
+  it("closes on Escape from inside it, and not on the Escape that closes its delete confirmation", async () => {
+    const user = userEvent.setup();
+    const onClose = mountChannelPanel({
+      personal: true,
+      owner: null,
+      environmentBots: null,
+    });
+
+    const panel = screen.getByTestId("bot-channel-settings");
+    expect(panel.contains(document.activeElement)).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Delete bot" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    within(panel).getByTestId("bot-settings-advanced-toggle").focus();
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a channel with no level set as mentions and answers, and sets Off for this channel", async () => {
+    const user = userEvent.setup();
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    const group = screen.getByRole("radiogroup", { name: "Notifications" });
+    const mentions = within(group).getByRole("radio", {
+      name: "Mentions and answers to me",
+    });
+    const off = within(group).getByRole("radio", { name: "Off" });
+    expect(mentions.getAttribute("aria-checked")).toBe("true");
+    expect(off.getAttribute("aria-checked")).toBe("false");
+
+    await user.click(off);
+    expect(mocks.setNotificationLevel).toHaveBeenCalledTimes(1);
+    expect(mocks.setNotificationLevel.mock.calls[0][0]).toEqual({
+      botId: BOT.botId,
+      conversationId: CHANNEL,
+      level: "off",
+    });
+  });
+
+  it("checks Off for a channel set off, whatever another conversation is set to", () => {
+    mocks.notificationLevels = { [CHANNEL]: "off", "other-channel": "all" };
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    expect(
+      screen.getByRole("radio", { name: "Off" }).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("locks the choice until the levels are read", () => {
+    mocks.notificationLevels = undefined;
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    for (const radio of screen.getAllByRole("radio", {
+      name: /Mentions and answers to me|Off/,
+    })) {
+      expect(radio.getAttribute("aria-checked")).toBe("false");
+      expect(radio.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("keeps the choice locked while a level is being written", () => {
+    mocks.notificationPending = true;
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+    const off = screen.getByRole("radio", { name: "Off" });
+    expect(off.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen
+        .getByRole("radio", { name: "Mentions and answers to me" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("says in the group when the levels cannot be read, and the write's own refusal when it is refused", () => {
+    mocks.notificationReadError = "host unreachable";
+    mocks.notificationLevels = undefined;
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    const group = screen.getByTestId("bot-settings-notifications");
+    expect(within(group).getByRole("alert").textContent).toBe(
+      "Couldn't read this channel's notifications.",
+    );
+
+    cleanup();
+    mocks.notificationReadError = null;
+    mocks.notificationLevels = {};
+    mocks.notificationWriteError = "The bot was not found.";
+    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    expect(
+      within(screen.getByTestId("bot-settings-notifications")).getByRole(
+        "alert",
+      ).textContent,
+    ).toBe("The bot was not found.");
+  });
+
+  it.each([false, null])(
+    "draws no notifications for a host whose support for the level is %s",
+    (support) => {
+      mocks.notificationSupport = support;
+      mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+
+      expect(screen.queryByTestId("bot-settings-notifications")).toBeNull();
+    },
+  );
 });

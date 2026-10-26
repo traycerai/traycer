@@ -1,5 +1,9 @@
-import type { ReactNode } from "react";
-import { Bot } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
+import { BotAvatar } from "@/components/bots/bot-avatars";
+import {
+  BotIdentityContext,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { HoverCard } from "@/components/ui/hover-card";
 import { cn } from "@/lib/utils";
@@ -13,7 +17,30 @@ import {
   type TracyEntrySignals,
 } from "./use-tracy-entry-signals";
 
-/** The hover card's body: the bot, and what it is doing while it works. */
+/** The bot's picture on the entry, in every strip placement. */
+export function TracyEntryAvatar(props: {
+  readonly botId: string;
+  readonly title: string;
+  readonly className: string | undefined;
+}): ReactNode {
+  const { botId, title, className } = props;
+  const identity = useMemo(
+    (): BotIdentity => ({ botId, title, owner: null, openActivity: null }),
+    [botId, title],
+  );
+  return (
+    <BotIdentityContext value={identity}>
+      <span className={className}>
+        <BotAvatar size="xs" />
+      </span>
+    </BotIdentityContext>
+  );
+}
+
+/**
+ * The hover card's body: the bot, and what it is doing while it works, or
+ * "Idle" when it is known to be; nothing when its state is not known.
+ */
 export function TracyEntryHoverBody(props: {
   readonly title: string;
   readonly signals: TracyEntrySignals;
@@ -23,9 +50,11 @@ export function TracyEntryHoverBody(props: {
   return (
     <div data-testid="tracy-entry-hover-body" className="flex flex-col gap-1">
       <div className="text-ui-sm font-medium text-foreground">{title}</div>
-      <div className="text-muted-foreground">
-        {working ? (signals.step ?? "Replying…") : "Idle"}
-      </div>
+      {working || signals.idle ? (
+        <div className="text-muted-foreground">
+          {working ? (signals.step ?? "Replying…") : "Idle"}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -70,7 +99,11 @@ export function TracyStripSlot(props: {
             color={null}
             session={false}
           />
-          <Bot className="relative z-20 size-4 shrink-0" aria-hidden />
+          <TracyEntryAvatar
+            botId={tab.id}
+            title={tab.name}
+            className="relative z-20 shrink-0"
+          />
           <span
             className={cn(
               "relative z-20 min-w-0 truncate",

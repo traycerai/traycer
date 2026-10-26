@@ -28,6 +28,7 @@ import {
   type TeamHostNotificationKind,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
+import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
 import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -286,7 +287,10 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         aria-hidden
         className="flex size-6 shrink-0 items-center justify-center"
       >
-        <Icon className={cn("size-4", glyph.colorClassName)} />
+        <NotificationRowBotAvatar
+          payload={row.payload}
+          fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
+        />
       </span>
       <NotificationRowWithSecrets row={row}>
         <NotificationRowMain

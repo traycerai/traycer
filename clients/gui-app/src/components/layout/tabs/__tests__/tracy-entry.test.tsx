@@ -8,6 +8,7 @@
  * connectable hosts, the notification indicators and the bot's activity (the
  * real protocol schemas do not load in this suite's jsdom).
  */
+import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -459,6 +460,10 @@ describe("the fixed Tracy entry - top strip", () => {
     const scroller = screen.getByTestId("header-tab-strip-scroll");
 
     expect(entry.textContent).toContain("Tracy");
+    // The bot's picture is a squircle, as a bot's is everywhere (T62).
+    expect(avatarShape(within(entry).getByTestId("bot-avatar"))).toBe(
+      "squircle",
+    );
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -813,6 +818,27 @@ describe("the fixed Tracy entry - signals", () => {
     expect(body.textContent).toContain("Idle");
   });
 
+  it.each([
+    { label: "no activity at all", activity: null },
+    {
+      label: "activity whose trunk no host has written",
+      activity: { trunk: null, threads: {} },
+    },
+  ])(
+    "says nothing of Tracy's state, not Idle, for $label",
+    async ({ activity }) => {
+      scripted.activity = activity;
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      await userEvent.hover(entry);
+
+      const body = await screen.findByTestId("tracy-entry-hover-body");
+      expect(body.textContent).toBe("Tracy");
+      expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+    },
+  );
+
   it.each([["unreadDone"], ["unreadFailure"]] as const)(
     "marks the entry and bolds its title with %s",
     async (flag) => {
@@ -920,6 +946,9 @@ describe("the fixed Tracy entry - vertical strip", () => {
     const topBlock = screen.getByTestId("side-strip-top-block");
 
     expect(topBlock.contains(entry)).toBe(true);
+    for (const avatar of within(entry).getAllByTestId("bot-avatar")) {
+      expect(avatarShape(avatar)).toBe("squircle");
+    }
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

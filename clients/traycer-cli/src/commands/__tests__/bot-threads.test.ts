@@ -62,8 +62,7 @@ const THREADS = [
       messageId: "msg-2",
       requestId: "req-2",
       senderUserId: "user-1",
-      text: "Ship the release\nwith the notes",
-      sentAt: 3_000,
+      sentAt: Date.UTC(2026, 9, 23, 13, 58, 0),
       resolvedAt: null,
     },
     replyCount: 3,
@@ -119,7 +118,7 @@ function threadListCalls(): unknown[] {
 describe("bot threads", () => {
   const tracy = botRecord({ botId: BOT_ID_A, title: "Tracy" });
 
-  it("lists each thread with its post, replies, open requests and cost, in the host's order", async () => {
+  it("lists each thread with when its post was sent, replies, open requests and cost, in the host's order", async () => {
     stage({
       bot: tracy,
       threads: () => ({ threads: THREADS, trunkCostUsd: null }),
@@ -131,7 +130,7 @@ describe("bot threads", () => {
     expect(result.human).toBe(
       [
         "Tracy",
-        '  thread-2  "Ship the release"  3 replies, last 2026-10-23T14:02:11Z  2 open requests  $0.42',
+        "  thread-2  post 2026-10-23T13:58:00Z  3 replies, last 2026-10-23T14:02:11Z  2 open requests  $0.42",
         "  thread-1  (post removed)  no replies  1 open request  cost unknown",
       ].join("\n"),
     );
@@ -162,20 +161,16 @@ describe("bot threads", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_INCOMPATIBLE);
   });
 
-  it("refuses a bot bound to another host before asking for its threads", async () => {
+  it("lists the threads of a bot bound to another host, which this host serves from the environment room", async () => {
     stage({
       bot: botRecord({ botId: BOT_ID_A, boundHostId: OTHER_HOST_ID }),
       threads: () => ({ threads: THREADS, trunkCostUsd: null }),
     });
 
-    const error = await rejection(threads(BOT_ID_A));
+    const result = await threads(BOT_ID_A);
 
-    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
-    expect(error.exitCode).toBe(1);
-    expect(error.message).toBe(
-      "traycer: Tracy runs on another of your hosts; its threads are listed only there.",
-    );
-    expect(threadListCalls()).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(threadListCalls()).toEqual([{ botId: BOT_ID_A }]);
   });
 
   it("refuses a bot no host runs", async () => {

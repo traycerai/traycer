@@ -17,6 +17,7 @@ import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { repliedPostOf, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
+  botUserSenderId,
   botUserSenderLabel,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
@@ -380,6 +381,7 @@ function BotChatTranscriptBody(props: {
         botUserSenderLabel(sender, displayContext, resolveMember),
       resolveUserSenderAvatarUrl: (sender) =>
         botUserSenderAvatarUrl(sender, resolveMember),
+      resolveUserSenderId: botUserSenderId,
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>

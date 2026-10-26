@@ -7,6 +7,9 @@ import type {
 
 export const CANVAS_LOCAL_ORIGIN = Symbol("canvas-local");
 export const LIVE_BOARD_LIMIT = 8;
+/** The selection/board inspector is parked, not removed: the panels stay in
+ * the tree behind this flag until the inspector earns its place in the UI. */
+export const CANVAS_INSPECTOR_ENABLED: boolean = false;
 export const BOARD_HEADER_HEIGHT = 36;
 export type CanvasTool =
   | "select"

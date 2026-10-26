@@ -63,7 +63,8 @@ const RESPONSE_GROWTH_METHODS = [
 const NEW_KINDS = ["html", "canvas", "file"] as const;
 
 // Comment anchors took a second minor (1.2) on the methods whose request
-// carries one or whose response lists threads.
+// carries one or whose response lists threads, and the canvas-point anchor
+// a third (1.3).
 const ANCHOR_MINOR_METHODS: readonly string[] = [
   "epic.createCommentThread",
   "epic.listCommentThreads",
@@ -76,7 +77,7 @@ describe("artifact-kind unary minors: registry shape", () => {
     (method) => {
       const line = hostRpcRegistry[method][1];
       expect(line.latestMinor).toBe(
-        ANCHOR_MINOR_METHODS.includes(method) ? 2 : 1,
+        ANCHOR_MINOR_METHODS.includes(method) ? 3 : 1,
       );
       expect(line.versions[0].contract.schemaVersion).toEqual({
         major: 1,
@@ -298,7 +299,7 @@ describe("epic.createCommentThread@1.2", () => {
 
   it("takes 1.2 above 1.1 in the registry", () => {
     const line = hostRpcRegistry["epic.createCommentThread"][1];
-    expect(line.latestMinor).toBe(2);
+    expect(line.latestMinor).toBe(3);
     expect(line.versions[2].contract.schemaVersion).toEqual({
       major: 1,
       minor: 2,

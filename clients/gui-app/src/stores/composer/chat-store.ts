@@ -775,6 +775,12 @@ export interface ChatMessage {
    * row, and on a member with no picture.
    */
   senderAvatarUrl?: string;
+  /**
+   * The member who wrote this user row, in a bot conversation: what the
+   * row's picture is hashed from when it has none, as everywhere else the
+   * member is drawn. Absent on every other row.
+   */
+  senderUserId?: string;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
