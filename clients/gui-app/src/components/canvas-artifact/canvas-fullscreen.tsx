@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
 import type { CanvasFrameEvents } from "./canvas-frame";
 import { CanvasErrorPill } from "./canvas-error-pill";
@@ -50,11 +51,31 @@ export function CanvasFullscreen({
   readonly onClose: () => void;
   readonly container: HTMLElement | null;
 }) {
+  const previousButton = useRef<HTMLButtonElement>(null);
+  const nextButton = useRef<HTMLButtonElement>(null);
+  // The step that reaches an end disables the button just pressed, which
+  // would drop focus to the body and take the arrow keys away from the
+  // surface. The other stepper takes the focus instead, once the new board
+  // has rendered and that button is enabled.
+  const handoff = useRef<-1 | 1 | null>(null);
+  useLayoutEffect(() => {
+    const direction = handoff.current;
+    handoff.current = null;
+    if (direction !== null)
+      (direction === -1 ? nextButton : previousButton).current?.focus();
+  }, [path]);
   if (path === null) return null;
   const board = snapshot.boards[path];
   const error = errors[path] ?? null;
   const previous = adjacentFullscreenBoard(snapshot, path, -1);
   const next = adjacentFullscreenBoard(snapshot, path, 1);
+  const step = (direction: -1 | 1): void => {
+    const target = direction === -1 ? previous : next;
+    if (target === null) return;
+    if (adjacentFullscreenBoard(snapshot, target, direction) === null)
+      handoff.current = direction;
+    onSelect(target);
+  };
   return (
     <div
       className={cn(
@@ -71,24 +92,22 @@ export function CanvasFullscreen({
           the title changes width from board to board. */}
       <div className="flex shrink-0 items-center">
         <Button
+          ref={previousButton}
           variant="ghost"
           size="icon-sm"
           aria-label="Previous board"
           disabled={previous === null}
-          onClick={() => {
-            if (previous !== null) onSelect(previous);
-          }}
+          onClick={() => step(-1)}
         >
           <ChevronLeft />
         </Button>
         <Button
+          ref={nextButton}
           variant="ghost"
           size="icon-sm"
           aria-label="Next board"
           disabled={next === null}
-          onClick={() => {
-            if (next !== null) onSelect(next);
-          }}
+          onClick={() => step(1)}
         >
           <ChevronRight />
         </Button>
