@@ -4534,11 +4534,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         ref={containerRef}
         className="relative h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden"
         data-testid="comm-graph-office-canvas"
+        // The wheel (pan/zoom) listener is on this container, and overlay
+        // controls are its children: a wheel over any of them is a wheel over
+        // the floor, never a history swipe.
+        data-history-gesture-owner=""
         onPointerMove={trackHoverPointer}
       >
         <canvas
           ref={canvasRef}
-          data-history-gesture-owner=""
           className="absolute inset-0 h-full w-full touch-none"
           // The camera gestures live on the CANVAS, never on the wrapper. The
           // wrapper is also the parent of every overlay control, and a

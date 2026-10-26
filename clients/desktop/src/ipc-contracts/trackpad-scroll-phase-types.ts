@@ -22,10 +22,14 @@ export type TrackpadScrollKind = (typeof TRACKPAD_SCROLL_KINDS)[number];
 
 export interface TrackpadScrollEvent {
   readonly kind: TrackpadScrollKind;
-  /** AppKit sign: positive means the fingers moved right. Pixels. */
-  readonly fingerDeltaX: number;
-  /** AppKit sign: positive means the fingers moved down. Pixels. */
-  readonly fingerDeltaY: number;
+  /**
+   * `NSEvent.scrollingDeltaX` in pixels. Its sign follows the user's
+   * scroll-direction setting: positive reveals content to the left, which is
+   * the "back" motion. Back follows that setting, as it does in Safari.
+   */
+  readonly scrollingDeltaX: number;
+  /** `NSEvent.scrollingDeltaY` in pixels; positive reveals content above. */
+  readonly scrollingDeltaY: number;
   /** `NSEvent.timestamp`: seconds since boot, exact to the input event. */
   readonly timestamp: number;
   /** Command, Option, Control or Shift was held. */

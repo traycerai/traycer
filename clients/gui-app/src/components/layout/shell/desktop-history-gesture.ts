@@ -56,10 +56,6 @@ export const DESKTOP_HISTORY_GESTURE = {
   flickWindowMs: 100,
   settleMs: 220,
   tailMs: 300,
-  // Safety net only, never the mechanism: a sequence whose lift never arrives
-  // is let go after this much silence, and a live pull is cancelled, never
-  // committed.
-  idleCancelMs: 800,
 } as const;
 
 interface PendingSequence {
@@ -144,12 +140,10 @@ export function installDesktopHistoryGesture(
   let domTickAlreadyCanceled = false;
   let domArmed = false;
   let tailTimer: number | undefined;
-  let idleTimer: number | undefined;
 
   /** Only ever reached after `cancel()`, so no live pull is dropped unseen. */
   const reset = (): void => {
     window.clearTimeout(tailTimer);
-    window.clearTimeout(idleTimer);
     domArmed = false;
     sequence = null;
   };
@@ -162,7 +156,6 @@ export function installDesktopHistoryGesture(
   };
   const settle = (commit: boolean): void => {
     if (sequence?.stage !== "navigation") return;
-    window.clearTimeout(idleTimer);
     const { direction, travel } = sequence;
     sequence = { stage: "draining", consume: true };
     domArmed = false;
@@ -182,10 +175,6 @@ export function installDesktopHistoryGesture(
     if (sequence === null) return;
     if (sequence.stage === "navigation") settle(false);
     else if (sequence.stage !== "draining") reset();
-  };
-  const armIdle = (): void => {
-    window.clearTimeout(idleTimer);
-    idleTimer = window.setTimeout(cancel, DESKTOP_HISTORY_GESTURE.idleCancelMs);
   };
   const updateView = (): void => {
     if (sequence?.stage !== "navigation") return;
@@ -212,14 +201,13 @@ export function installDesktopHistoryGesture(
       origin: options.currentEntry(),
       domTicksAtBegan: domTicks,
     };
-    armIdle();
   };
   const pull = (
     live: NavigationSequence,
     event: DesktopTrackpadScrollEvent,
   ): void => {
     const inward =
-      live.direction === "back" ? event.fingerDeltaX : -event.fingerDeltaX;
+      live.direction === "back" ? event.scrollingDeltaX : -event.scrollingDeltaX;
     live.travel = Math.max(
       0,
       Math.min(DESKTOP_HISTORY_GESTURE.maxTravelPx, live.travel + inward),
@@ -236,8 +224,8 @@ export function installDesktopHistoryGesture(
     pending: PendingSequence,
     event: DesktopTrackpadScrollEvent,
   ): Sequence => {
-    pending.x += event.fingerDeltaX;
-    pending.y += Math.abs(event.fingerDeltaY);
+    pending.x += event.scrollingDeltaX;
+    pending.y += Math.abs(event.scrollingDeltaY);
     const x = Math.abs(pending.x);
     if (pending.y >= DESKTOP_HISTORY_GESTURE.intentPx && pending.y >= x)
       return { stage: "content" };
@@ -250,7 +238,7 @@ export function installDesktopHistoryGesture(
     // receives DOM wheel ticks for it. Until one arrives this window cannot
     // name the element being scrolled, and may not be the one scrolled at all.
     if (domTicks === pending.domTicksAtBegan) return pending;
-    // Fingers moving right reveal what is to the left: back.
+    // Revealing what is to the left is back.
     const direction: DesktopHistoryDirection =
       pending.x > 0 ? "back" : "forward";
     const destination = options.destination(direction);
@@ -273,7 +261,6 @@ export function installDesktopHistoryGesture(
   const advance = (event: DesktopTrackpadScrollEvent): void => {
     if (sequence === null) return;
     if (sequence.stage === "content" || sequence.stage === "draining") return;
-    armIdle();
     if (
       event.modified ||
       sequence.origin !== options.currentEntry() ||
@@ -307,7 +294,6 @@ export function installDesktopHistoryGesture(
     }
     // A content scroll or an undecided start: its momentum must scroll, and
     // must not open a gesture of its own.
-    window.clearTimeout(idleTimer);
     sequence = { stage: "draining", consume: false };
     armTail();
   };

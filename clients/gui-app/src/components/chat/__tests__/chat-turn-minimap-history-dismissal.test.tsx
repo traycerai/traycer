@@ -109,6 +109,7 @@ function renderMinimap() {
   render(
     <RouterContextProvider router={router}>
       <ChatTurnMinimap
+        shown
         bottomInset={0}
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 1050, scrollLength: 160 })}

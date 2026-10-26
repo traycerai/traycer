@@ -21,8 +21,8 @@
 
 typedef struct {
   const char *kind;
-  double fingerDeltaX;
-  double fingerDeltaY;
+  double scrollingDeltaX;
+  double scrollingDeltaY;
   double timestamp;
   bool precise;
   bool modified;
@@ -69,8 +69,8 @@ static void DeliverEvent(napi_env env, napi_value callback, void *context,
     napi_create_object(env, &object);
     napi_create_string_utf8(env, event->kind, NAPI_AUTO_LENGTH, &kind);
     napi_set_named_property(env, object, "kind", kind);
-    SetNumber(env, object, "fingerDeltaX", event->fingerDeltaX);
-    SetNumber(env, object, "fingerDeltaY", event->fingerDeltaY);
+    SetNumber(env, object, "scrollingDeltaX", event->scrollingDeltaX);
+    SetNumber(env, object, "scrollingDeltaY", event->scrollingDeltaY);
     SetNumber(env, object, "timestamp", event->timestamp);
     SetBool(env, object, "precise", event->precise);
     SetBool(env, object, "modified", event->modified);
@@ -116,10 +116,13 @@ static napi_value Start(napi_env env, napi_callback_info info) {
                                            (TrackpadScrollEvent *)malloc(
                                                sizeof(TrackpadScrollEvent));
                                        copy->kind = kind;
-                                       // AppKit sign: positive X means the
-                                       // fingers moved right.
-                                       copy->fingerDeltaX = event.scrollingDeltaX;
-                                       copy->fingerDeltaY = event.scrollingDeltaY;
+                                       // AppKit sign, which follows the
+                                       // user's scroll-direction setting:
+                                       // positive X reveals content to the
+                                       // left. Back follows that setting too,
+                                       // as it does in Safari.
+                                       copy->scrollingDeltaX = event.scrollingDeltaX;
+                                       copy->scrollingDeltaY = event.scrollingDeltaY;
                                        copy->timestamp = event.timestamp;
                                        copy->precise =
                                            event.hasPreciseScrollingDeltas;

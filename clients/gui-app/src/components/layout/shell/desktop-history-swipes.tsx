@@ -53,6 +53,7 @@ export function DesktopHistorySwipes(): ReactNode {
     let nextId = 0;
     let live: GestureIndicator | null = null;
     let stopRetraction: (() => void) | null = null;
+    const exitTimers = new Set<number>();
     const remove = (id: number): void =>
       setIndicators((current) => current.filter((item) => item.id !== id));
     const replace = (item: GestureIndicator): void =>
@@ -86,18 +87,24 @@ export function DesktopHistorySwipes(): ReactNode {
         else goForward(router);
       },
       render: (next) => {
+        // Progress rides the motion value; React re-renders only when an
+        // indicator appears, changes phase or leaves.
         if (live === null) {
+          const id = nextId;
+          nextId = id + 1;
           live = {
-            id: nextId++,
+            id,
             direction: next.direction,
             phase: next.phase,
             progress: motionValue(0),
           };
+          replace(live);
         } else if (
           live.direction !== next.direction ||
           live.phase !== next.phase
         ) {
           live = { ...live, direction: next.direction, phase: next.phase };
+          replace(live);
         }
         stopRetraction?.();
         stopRetraction = null;
@@ -110,20 +117,24 @@ export function DesktopHistorySwipes(): ReactNode {
         } else {
           live.progress.set(next.phase === "canceling" ? 0 : next.progress);
         }
-        replace(live);
         // A commit or cancel is final for this gesture. Its exit runs on its
         // own clock so that fingers landing again before it has finished
         // start a fresh indicator instead of cutting this one short.
         if (next.phase === "committed" || next.phase === "canceling") {
           const { id } = live;
           live = null;
-          window.setTimeout(() => remove(id), DESKTOP_HISTORY_GESTURE.settleMs);
+          const timer = window.setTimeout(() => {
+            exitTimers.delete(timer);
+            remove(id);
+          }, DESKTOP_HISTORY_GESTURE.settleMs);
+          exitTimers.add(timer);
         }
       },
     });
     return () => {
       uninstall();
       stopRetraction?.();
+      for (const timer of exitTimers) window.clearTimeout(timer);
       setIndicators([]);
     };
   }, [router, trackpad]);

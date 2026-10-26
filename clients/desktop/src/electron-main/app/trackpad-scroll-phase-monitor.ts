@@ -9,8 +9,8 @@ import { log } from "./logger";
 
 interface AddonScrollEvent {
   readonly kind: unknown;
-  readonly fingerDeltaX: unknown;
-  readonly fingerDeltaY: unknown;
+  readonly scrollingDeltaX: unknown;
+  readonly scrollingDeltaY: unknown;
   readonly timestamp: unknown;
   readonly precise: unknown;
   readonly modified: unknown;
@@ -58,15 +58,15 @@ export function installTrackpadScrollPhaseMonitor(
     // read as a huge pull.
     if (event.precise !== true) return;
     if (
-      typeof event.fingerDeltaX !== "number" ||
-      typeof event.fingerDeltaY !== "number" ||
+      typeof event.scrollingDeltaX !== "number" ||
+      typeof event.scrollingDeltaY !== "number" ||
       typeof event.timestamp !== "number"
     )
       return;
     emit({
       kind: event.kind,
-      fingerDeltaX: event.fingerDeltaX,
-      fingerDeltaY: event.fingerDeltaY,
+      scrollingDeltaX: event.scrollingDeltaX,
+      scrollingDeltaY: event.scrollingDeltaY,
       timestamp: event.timestamp,
       modified: event.modified === true,
     });

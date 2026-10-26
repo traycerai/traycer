@@ -232,10 +232,10 @@ export type DesktopTrackpadScrollKind =
 
 export interface DesktopTrackpadScrollEvent {
   readonly kind: DesktopTrackpadScrollKind;
-  /** AppKit sign: positive means the fingers moved right. Pixels. */
-  readonly fingerDeltaX: number;
-  /** AppKit sign: positive means the fingers moved down. Pixels. */
-  readonly fingerDeltaY: number;
+  /** `NSEvent.scrollingDeltaX` in pixels: positive reveals content to the left. */
+  readonly scrollingDeltaX: number;
+  /** `NSEvent.scrollingDeltaY` in pixels: positive reveals content above. */
+  readonly scrollingDeltaY: number;
   /** Seconds, exact to the input event. */
   readonly timestamp: number;
   readonly modified: boolean;

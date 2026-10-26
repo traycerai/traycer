@@ -91,7 +91,7 @@ function deltaXToward(
 }
 
 /** Trackpad sign: fingers moving right (positive) reveal "back". */
-function fingerDeltaXToward(
+function scrollingDeltaXToward(
   direction: DesktopHistoryDirection,
   magnitudePx: number,
 ): number {
@@ -132,8 +132,8 @@ function trackpadTick(
   trackpadClockSeconds = timestamp;
   return {
     kind,
-    fingerDeltaX: fields.x ?? 0,
-    fingerDeltaY: fields.y ?? 0,
+    scrollingDeltaX: fields.x ?? 0,
+    scrollingDeltaY: fields.y ?? 0,
     timestamp,
     modified: fields.modified ?? false,
   };
@@ -277,13 +277,13 @@ function pullTo(
   );
   mounted.send("changed", {
     ...PLAIN_TICK,
-    x: fingerDeltaXToward(direction, ACTIVATION_PX),
+    x: scrollingDeltaXToward(direction, ACTIVATION_PX),
   });
   const remaining = travelPx - ACTIVATION_PX;
   if (remaining !== 0)
     mounted.send("changed", {
       ...PLAIN_TICK,
-      x: fingerDeltaXToward(direction, remaining),
+      x: scrollingDeltaXToward(direction, remaining),
       t: trackpadClockSeconds + SLOW_STEP_SECONDS,
     });
   return opening;
@@ -324,9 +324,10 @@ describe("committing on finger lift", () => {
     pullTo(mounted, direction, DESKTOP_HISTORY_GESTURE.commitPx, document.body);
     expect(hasPhase(mounted, "ready")).toBe(true);
 
-    // There is no pause-based commit: resting fingers - ticks stopped, no
-    // lift yet - must hold the preview no matter how long they rest.
-    vi.advanceTimersByTime(500);
+    // There is no pause-based commit and no pause-based cancel: resting
+    // fingers - ticks stopped, no lift yet - hold the preview however long
+    // they rest.
+    vi.advanceTimersByTime(5_000);
     expect(mounted.probe.navigations).toEqual([]);
     expect(mounted.probe.views.at(-1)?.phase).toBe("ready");
 
@@ -370,7 +371,7 @@ describe("committing on finger lift", () => {
 
     mounted.send("changed", {
       ...PLAIN_TICK,
-      x: fingerDeltaXToward("back", -100),
+      x: scrollingDeltaXToward("back", -100),
       t: trackpadClockSeconds + SLOW_STEP_SECONDS,
     });
     mounted.signal("ended");
@@ -1245,41 +1246,6 @@ describe("rapid repeat and fresh fingers", () => {
     pullTo(mounted, "back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
     mounted.signal("ended");
     expect(mounted.probe.navigations).toEqual(["back"]);
-  });
-});
-
-describe("idle safety net when no lift ever arrives", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  it("cancels a live navigation pull after idleCancelMs of silence, and never commits", () => {
-    const mounted = mountGesture(DEFAULT_MOUNT);
-    pullTo(mounted, "back", DESKTOP_HISTORY_GESTURE.commitPx, document.body);
-    expect(hasPhase(mounted, "ready")).toBe(true);
-
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.idleCancelMs);
-
-    expect(mounted.probe.navigations).toEqual([]);
-    expect(mounted.probe.views.at(-1)?.phase).toBe("canceling");
-
-    // A lift that arrives after the safety net already settled does nothing.
-    mounted.signal("ended");
-    expect(mounted.probe.navigations).toEqual([]);
-  });
-
-  it("drops a pending sequence after idleCancelMs of silence with no lift", () => {
-    const mounted = mountGesture(DEFAULT_MOUNT);
-    mounted.signal("began");
-    horizontalWheel(-5, document.body, true);
-    mounted.send("changed", { ...PLAIN_TICK, x: 5 }); // under the intent threshold: pending
-
-    vi.advanceTimersByTime(DESKTOP_HISTORY_GESTURE.idleCancelMs);
-    // A still-pending sequence would activate on this.
-    mounted.send("changed", { ...PLAIN_TICK, x: 200 });
-
-    expect(mounted.probe.navigations).toEqual([]);
-    expect(hasRenderedView(mounted)).toBe(false);
   });
 });
 
