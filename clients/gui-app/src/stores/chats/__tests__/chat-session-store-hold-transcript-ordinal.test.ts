@@ -158,7 +158,9 @@ function primeWindowAtTail(
 
 function oversizedUserMessage(messageId: string, timestamp: number): Message {
   return {
-    ...userMessage(messageId, timestamp),
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: OWNER_ID },
     message: {
       kind: "user",
       content: {
@@ -177,6 +179,8 @@ function oversizedUserMessage(messageId: string, timestamp: number): Message {
       },
       browserAnnotations: [],
     },
+    timestamp,
+    sessionAnchor: null,
   };
 }
 
