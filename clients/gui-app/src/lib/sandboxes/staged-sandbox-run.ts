@@ -15,10 +15,17 @@ import {
   type SandboxSummary,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
-import { pendingSandboxStageRunAllowed } from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  pendingSandboxStageRunAllowed,
+  holdPendingSandboxStageObservation,
+  pendingSandboxStageObservation,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
-import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  sandboxListQueryOptions,
+  sandboxListReadSentAt,
+} from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
 import type { AuthService } from "@/lib/auth/auth-service";
 import type { HostDirectoryService } from "@/lib/host";
@@ -253,12 +260,23 @@ async function wakeCurrentStage(
   if (stage === null || !stillCurrent(surfaceKey, clientRequestId))
     return false;
   report(surfaceKey, "booting", deps.now());
-  const awake = await deps.wake(hostId, stagedWakeGesture(stage));
+  const boundary = holdPendingSandboxStageObservation(surfaceKey);
+  if (boundary === null) return false;
+  const answered = await deps.wake(hostId, stagedWakeGesture(stage));
   if (!stillCurrent(surfaceKey, clientRequestId)) return false;
-  if (!awake) {
+  const observed = pendingSandboxStageObservation(
+    surfaceKey,
+    answered ? "awake" : "waking",
+    {
+      kind: "wake-result",
+      requestedAt: boundary,
+    },
+  );
+  // A newer request owns settlement. Supersession is not a failed wake.
+  if (observed === "unknown") return false;
+  if (!answered)
     fail(surfaceKey, { kind: "failed", code: "wake", step: "booting" });
-  }
-  return awake;
+  return answered;
 }
 
 /** Whether the run is still the one the stage holds (not cancelled or retried). */
@@ -380,6 +398,7 @@ async function startTarget(
     createdByTaskId: taskId,
     clientRequestId,
   };
+  if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
   const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   if (result.kind !== "ok") {
@@ -535,7 +554,7 @@ async function settle(
   const deadline = budgetFrom + STAGED_CREATE_BUDGET_MS;
   while (deps.now() < deadline) {
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
-    const row = await readRow(deps, started.sandboxId);
+    const row = await readRow(deps, started.sandboxId, surfaceKey);
     if (!stillCurrent(surfaceKey, clientRequestId)) return;
     if ((await settleRow(input, row)) === "finished") return;
     await deps.sleep(POLL_INTERVAL_MS);
@@ -587,6 +606,7 @@ async function settleRow(
 async function readRow(
   deps: StagedSandboxRunDeps,
   sandboxId: string,
+  surfaceKey: string,
 ): Promise<SandboxSummary | null | undefined> {
   // The list query every surface reads, read fresh: the Sandboxes page and
   // the pickers see the new row as the wait does.
@@ -597,7 +617,25 @@ async function readRow(
     })
     .catch(() => undefined);
   if (response === undefined || response === null) return undefined;
-  return response.sandboxes.find((row) => row.id === sandboxId) ?? null;
+  const row = response.sandboxes.find((item) => item.id === sandboxId) ?? null;
+  let host: "awake" | "ended" | "resting" | "waking" = "waking";
+  if (
+    row === null ||
+    row.state === "failed" ||
+    row.state === "destroying" ||
+    row.state === "destroyed"
+  )
+    host = "ended";
+  else if (row.state === "awake") host = "awake";
+  else if (row.state === "stopped" || row.state === "suspended")
+    host = "resting";
+  return pendingSandboxStageObservation(surfaceKey, host, {
+    kind: "list",
+    sentAt: sandboxListReadSentAt(response),
+    mountedAt: 0,
+  }) === "unknown"
+    ? undefined
+    : row;
 }
 
 type SettleVerdict =

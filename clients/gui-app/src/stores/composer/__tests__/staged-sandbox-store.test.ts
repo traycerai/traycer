@@ -371,6 +371,7 @@ describe("a retry request written by a window that does not own the send", () =>
       userId: "user-1",
       clientRequestId,
       sendId: "mailbox-send",
+      action: "send-again",
     });
     expect(requestId).not.toBeNull();
     expect(readStagedSandbox(surface)?.retryRequest).toBeUndefined();

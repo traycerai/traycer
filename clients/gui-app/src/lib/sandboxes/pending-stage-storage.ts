@@ -7,10 +7,20 @@ import {
 } from "@/lib/persist/keys";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
+import type { PendingStageRetryAction } from "./pending-sandbox-send-transition";
+
 export interface PendingStageRetryRequest {
+  readonly action?: PendingStageRetryAction;
   readonly id: string;
   readonly userId: string | null;
   readonly clientRequestId: string | null;
+}
+
+export interface PendingDispatchRetryRequest {
+  readonly id: string;
+  readonly userId: string | null;
+  readonly chatId: string;
+  readonly hostId: string;
 }
 
 const RETRY_REGISTER_PREFIX = "retry-request:";
@@ -33,29 +43,32 @@ function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
  * Hydration presents it as part of that stage; an acknowledgement belongs to
  * the owning stage and cannot erase a later mailbox request.
  */
-export function createPendingStageStorage(): StateStorage<void> {
-  const storage = createRecordMapStorage("bySurface");
+function createPendingRetryStorage(
+  field: "bySurface" | "sends",
+  matches: (item: Record<string, unknown>, retry: unknown) => boolean,
+): StateStorage<void> {
+  const storage = createRecordMapStorage(field);
   return {
     getItem: (name) => {
       const snapshot: unknown = parse(storage.getItem(name));
       if (
         !record(snapshot) ||
         !record(snapshot.state) ||
-        !record(snapshot.state.bySurface)
+        !record(snapshot.state[field])
       )
         return null;
       const stages: Record<string, unknown> = {};
-      const records = snapshot.state.bySurface;
+      const records = snapshot.state[field];
       for (const [key, stage] of Object.entries(records)) {
         if (key.startsWith(RETRY_REGISTER_PREFIX) || !record(stage)) continue;
         const retry = records[`${RETRY_REGISTER_PREFIX}${key}`];
-        stages[key] = retryFor(stage, retry)
+        stages[key] = matches(stage, retry)
           ? { ...stage, retryRequest: retry }
           : stage;
       }
       return JSON.stringify({
         ...snapshot,
-        state: { ...snapshot.state, bySurface: stages },
+        state: { ...snapshot.state, [field]: stages },
       });
     },
     setItem: (name, value) => {
@@ -63,11 +76,11 @@ export function createPendingStageStorage(): StateStorage<void> {
       if (
         !record(snapshot) ||
         !record(snapshot.state) ||
-        !record(snapshot.state.bySurface)
+        !record(snapshot.state[field])
       )
         return;
       const records: Record<string, unknown> = {};
-      for (const [key, stage] of Object.entries(snapshot.state.bySurface)) {
+      for (const [key, stage] of Object.entries(snapshot.state[field])) {
         if (!record(stage)) continue;
         const { retryRequest: _request, ...progress } = stage;
         records[key] = progress;
@@ -75,18 +88,72 @@ export function createPendingStageStorage(): StateStorage<void> {
         const retry: unknown = parse(
           localStorage.getItem(recordMapStorageKey(name, registerId)),
         );
-        if (retryFor(stage, retry)) records[registerId] = retry;
+        if (matches(stage, retry)) records[registerId] = retry;
       }
       storage.setItem(
         name,
         JSON.stringify({
           ...snapshot,
-          state: { ...snapshot.state, bySurface: records },
+          state: { ...snapshot.state, [field]: records },
         }),
       );
     },
     removeItem: (name) => storage.removeItem(name),
   };
+}
+
+export function createPendingStageStorage(): StateStorage<void> {
+  return createPendingRetryStorage("bySurface", retryFor);
+}
+
+/** Pending claims keep their mailbox separate from receipt/progress writes too. */
+export function createPendingSendStorage(): StateStorage<void> {
+  return createPendingRetryStorage("sends", dispatchRetryFor);
+}
+
+function dispatchRetryFor(
+  send: Record<string, unknown>,
+  value: unknown,
+): boolean {
+  const dispatch = send.dispatch;
+  return (
+    record(value) &&
+    send.userId === value.userId &&
+    send.delivery === null &&
+    send.ended !== true &&
+    record(dispatch) &&
+    record(dispatch.input) &&
+    dispatch.input.chatId === value.chatId &&
+    dispatch.input.hostId === value.hostId
+  );
+}
+
+/** No writer of a Retry request can replace an immutable claim or resurrect a receipt. */
+export function requestPendingDispatchRetry(input: {
+  readonly id: string;
+  readonly userId: string | null;
+  readonly chatId: string;
+  readonly hostId: string;
+}): string | null {
+  const name = persistKey(STORE_KEYS.pendingSandboxSend);
+  const recordKey = recordMapStorageKey(name, input.id);
+  const request: PendingDispatchRetryRequest = { ...input, id: uuidv4() };
+  const key = recordMapStorageKey(name, `${RETRY_REGISTER_PREFIX}${input.id}`);
+  try {
+    const before: unknown = parse(localStorage.getItem(recordKey));
+    if (!record(before) || !dispatchRetryFor(before, request)) return null;
+    localStorage.setItem(key, JSON.stringify(request));
+    const saved: unknown = parse(localStorage.getItem(key));
+    const after: unknown = parse(localStorage.getItem(recordKey));
+    return record(saved) &&
+      saved.id === request.id &&
+      record(after) &&
+      dispatchRetryFor(after, request)
+      ? request.id
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** A same-account UI request writes no stage progress and performs no host work. */
@@ -96,6 +163,7 @@ export function requestPendingStageRetry(input: {
   readonly userId: string | null;
   readonly clientRequestId: string | null;
   readonly sendId: string;
+  readonly action: PendingStageRetryAction;
 }): string | null {
   const { name, surfaceKey, userId, clientRequestId, sendId } = input;
   try {
@@ -120,6 +188,7 @@ export function requestPendingStageRetry(input: {
       return null;
     const request: PendingStageRetryRequest = {
       id: uuidv4(),
+      action: input.action,
       userId,
       clientRequestId,
     };

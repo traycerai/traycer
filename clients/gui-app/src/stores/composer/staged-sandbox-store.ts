@@ -1,3 +1,4 @@
+import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
@@ -249,6 +250,7 @@ interface StagedSandboxStoreState {
   readonly requestRetry: (
     surfaceKey: string,
     userId: string | null,
+    action: PendingStageRetryAction,
   ) => Promise<string | null>;
   /** Drops every stage: the account changed. */
   readonly clearAll: () => void;
@@ -384,7 +386,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             };
           }),
         })),
-      requestRetry: async (surfaceKey, userId) => {
+      requestRetry: async (surfaceKey, userId, action) => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== userId)
           return null;
         const stage = get().bySurface[surfaceKey];
@@ -399,6 +401,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
           userId,
           clientRequestId: stage.clientRequestId,
           sendId: surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
+          action,
         });
         if (id !== null) await useStagedSandboxStore.persist.rehydrate();
         return id;

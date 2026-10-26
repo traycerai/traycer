@@ -51,7 +51,14 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
-import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  useSandboxList,
+  sandboxListReadSentAt,
+} from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  decodePendingSandboxObservation,
+  type PendingSandboxObservation,
+} from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   useSandboxVerb,
   type SandboxVerbOutcome,
@@ -129,6 +136,9 @@ import {
   pendingSendState,
   transitionPendingSend,
   UNKNOWN_PENDING_SEND_FACTS,
+  PENDING_STAGE_RETRY_EVENTS,
+  type PendingStageRetryAction,
+  type PendingSendObservation,
   type PendingSendFacts,
   type PendingSendBlocker,
   type PendingSendEvent,
@@ -347,53 +357,19 @@ function PendingSendDelivery(props: {
     });
   }, [polling, refetchAgent, refetchSandboxes]);
   useEffect(() => {
-    const current = readStagedSandbox(surfaceKey);
-    const currentFacts = pendingSandboxSendFacts(send.id, {
-      ...environment,
-      stageCurrent:
-        current?.clientRequestId === stage.clientRequestId &&
-        current.createdHostId === stage.createdHostId &&
-        current.phase === "handoff",
-    });
-    const retry = current?.retryRequest;
-    const retryRequested =
-      retry !== undefined &&
-      retry.userId === send.userId &&
-      retry.id !== current?.retryHandledId;
-    const decision = transitionPendingSend(
-      pendingSendState(send, stageBlocker(current)),
-      retryRequested ? "retry" : event,
-      currentFacts,
-    );
-    if (current === null) return;
-    if (decision.effects.includes("retry") && retry !== undefined) {
-      if (decision.effects.includes("fetch-model")) refetchModel();
-      useStagedSandboxStore
-        .getState()
-        .report(surfaceKey, { failure: null, retryHandledId: retry.id });
-    }
-    if (decision.effects.includes("run-stage")) {
-      executePendingStageRun(send, current, runner);
+    const resolved = pendingStageObservation(send.id, stage, environment);
+    if (resolved === null || executePendingStageDecision(resolved, runner))
       return;
-    }
-    if (
-      decision.effects.includes("return-message") ||
-      decision.effects.includes("remove")
-    ) {
-      returnPendingSandboxSend(send.id);
-      return;
-    }
     executePendingReadiness({
-      decision,
-      send,
-      stage: current,
+      decision: resolved.decision,
+      send: resolved.send,
+      stage: resolved.stage,
       client,
       requested: {
         readiness: requested.readiness,
         profiles: requested.profiles,
       },
       model: { model: model.model, refetch: refetchModel },
-      retryRequested,
     });
   }, [
     client,
@@ -405,13 +381,111 @@ function PendingSendDelivery(props: {
     requested.profiles,
     requested.readiness,
     send,
-    stage.clientRequestId,
-    stage.createdHostId,
-    stage.retryRequest,
-    stage.retryHandledId,
+    stage,
     surfaceKey,
   ]);
   return null;
+}
+
+interface PendingStageObservation {
+  readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+  readonly action: PendingStageRetryAction;
+  readonly manualRetry: boolean;
+  readonly decision: PendingSendTransition;
+}
+
+/** Resolve and acknowledge the current mailbox before executing any accepted intent. */
+function pendingStageObservation(
+  id: string,
+  captured: StagedSandbox,
+  environment: PendingSendFacts,
+): PendingStageObservation | null {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return null;
+  const send = sends[id];
+  const surfaceKey = pendingSendSurfaceKey(id);
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage === null) return null;
+  const retry = stage.retryRequest;
+  const requestedRetry =
+    retry !== undefined &&
+    retry.userId === send.userId &&
+    retry.clientRequestId === stage.clientRequestId &&
+    retry.id !== stage.retryHandledId;
+  const action = retry?.action ?? "send-again";
+  const event = sandboxObservation(stageBlocker(stage), environment);
+  const decision = transitionPendingSend(
+    pendingSendState(send, stageBlocker(stage)),
+    requestedRetry ? "consume-retry" : event,
+    pendingSandboxSendFacts(id, {
+      ...environment,
+      stageStatus: stage.phase,
+      stageCurrent:
+        stage.clientRequestId === captured.clientRequestId &&
+        stage.createdHostId === captured.createdHostId &&
+        stage.phase === "handoff",
+      retryAction: action,
+      retryObservation: event,
+    }),
+  );
+  if (!acknowledgePendingStageRetry(surfaceKey, retry?.id, decision))
+    return null;
+  return { send, stage, action, manualRetry: requestedRetry, decision };
+}
+
+/** A failed acknowledgement may hold an accepted action, never a refused observation. */
+function acknowledgePendingStageRetry(
+  surfaceKey: string,
+  requestId: string | undefined,
+  decision: PendingSendTransition,
+): boolean {
+  if (
+    !decision.effects.includes("acknowledge-retry") ||
+    requestId === undefined
+  )
+    return true;
+  try {
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { retryHandledId: requestId });
+    return true;
+  } catch {
+    return !decision.effects.includes("retry");
+  }
+}
+
+/** Stage work needs the captured failure; readiness retries may clear only its projection. */
+function executePendingStageDecision(
+  plan: PendingStageObservation,
+  runner: StagedSandboxRunner,
+): boolean {
+  const { send, stage, action, manualRetry, decision } = plan;
+  if (
+    decision.effects.includes("retry") &&
+    usePendingSandboxSendStore.getState().holdObservation(send.id, decision) ===
+      null
+  )
+    return true;
+  const running = decision.effects.includes("run-stage");
+  if (decision.effects.includes("retry") && !running)
+    useStagedSandboxStore
+      .getState()
+      .report(pendingSendSurfaceKey(send.id), { failure: null });
+  if (running) {
+    if (manualRetry && decision.effects.includes("retry"))
+      executePendingStageRetry(send, stage, action, runner);
+    else executePendingStageRun(send, stage, runner);
+    return true;
+  }
+  if (
+    decision.effects.includes("return-message") ||
+    decision.effects.includes("remove")
+  ) {
+    returnPendingSandboxSend(send.id);
+    return true;
+  }
+  return false;
 }
 
 /** Executes the query and preparation effects after the owner checked identity and mailbox. */
@@ -422,17 +496,8 @@ function executePendingReadiness(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly requested: Pick<PendingAgentReadiness, "readiness" | "profiles">;
   readonly model: Pick<PendingDefaultModel, "model" | "refetch">;
-  readonly retryRequested: boolean;
 }): void {
-  const {
-    decision,
-    send,
-    stage: current,
-    client,
-    requested,
-    model,
-    retryRequested,
-  } = input;
+  const { decision, send, stage: current, client, requested, model } = input;
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const refetchModel = model.refetch;
   if (
@@ -448,8 +513,7 @@ function executePendingReadiness(input: {
         : null,
     );
   }
-  if (!retryRequested && decision.effects.includes("fetch-model"))
-    refetchModel();
+  if (decision.effects.includes("fetch-model")) refetchModel();
   if (decision.effects.includes("report-not-sent")) notSent(surfaceKey);
   if (!decision.effects.includes("prepare")) return;
   if (current.failure !== null)
@@ -644,12 +708,13 @@ function useDefaultModelOnHost(
 /**
  * The sandbox's own row, read again from here on: a send taken up after a
  * gap may wait on a sandbox destroyed meanwhile, whose host never answers.
- * Only a read made since this mounted counts, so a list cached before the
- * sandbox existed never reads as it being gone. A row that failed is said
+ * Only a read sent after the pending request counts, so an older list
+ * never reads as its sandbox being gone. A row that failed is said
  * on the line; `failed` is whether it did.
  */
 interface PendingSandboxRowFacts {
   readonly row: SandboxSummary | null;
+  readonly observation: PendingSandboxObservation;
   readonly known: boolean;
   readonly ready: boolean;
   readonly failure: StagedSandboxFailure | null;
@@ -680,8 +745,6 @@ function authoritativeSandboxRows(input: {
   readonly currentUserId: string | null;
   readonly failed: boolean;
   readonly rows: readonly SandboxSummary[] | null;
-  readonly readAt: number;
-  readonly mountedAt: number;
 }): readonly SandboxSummary[] | null {
   if (
     input.owner !== input.currentUserId ||
@@ -689,8 +752,15 @@ function authoritativeSandboxRows(input: {
     input.sandboxId === ""
   )
     return null;
-  if (input.failed || input.readAt < input.mountedAt) return null;
+  if (input.failed) return null;
   return input.rows;
+}
+
+function pendingRowHost(row: SandboxSummary | null): PendingSendFacts["host"] {
+  if (row === null || TERMINAL_SANDBOX_STATES.has(row.state)) return "ended";
+  if (row.state === "awake") return "awake";
+  if (row.state === "suspended" || row.state === "stopped") return "resting";
+  return "waking";
 }
 
 /** Only a successful fresh read made for this account can settle its sandbox. */
@@ -698,32 +768,60 @@ function usePendingSandboxRowFacts(
   sandboxId: string | null,
   userId: string | null,
   hostId: string | null,
+  sendId: string | null,
 ): PendingSandboxRowFacts {
   const [mountedAt] = useState(() => Date.now());
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
   const sandboxList = useSandboxList();
+  const refetchQuery = sandboxList.refetch;
+  const refetch = useCallback(
+    () => refetchQuery({ cancelRefetch: false }),
+    [refetchQuery],
+  );
+  useEffect(() => {
+    if (sendId !== null)
+      usePendingSandboxSendStore.getState().ensureObservationBoundary(sendId);
+  }, [sendId, sandboxList.data]);
+  const send = usePendingSandboxSendStore((state) =>
+    sendId === null ? null : (state.sends[sendId] ?? null),
+  );
+  const observation: PendingSandboxObservation = {
+    kind: "list",
+    sentAt: sandboxListReadSentAt(sandboxList.data),
+    mountedAt,
+  };
   const rows = authoritativeSandboxRows({
     sandboxId,
     owner: userId,
     currentUserId,
     failed: sandboxList.isError,
     rows: sandboxList.data?.sandboxes ?? null,
-    readAt: sandboxList.dataUpdatedAt,
-    mountedAt,
   });
   const row =
     rows === null ? null : (rows.find((item) => item.id === sandboxId) ?? null);
-  const matching = rows !== null && (row === null || row.hostId === hostId);
+  const identityMatches =
+    rows !== null && (row === null || row.hostId === hostId);
+  const host = identityMatches ? pendingRowHost(row) : "unknown";
+  const observedHost =
+    send === null
+      ? decodePendingSandboxObservation(null, host, observation)
+      : pendingSandboxSendFacts(send.id, {
+          ...UNKNOWN_PENDING_SEND_FACTS,
+          host,
+          observation,
+        }).host;
+  const matching = identityMatches && observedHost !== "unknown";
   const verdict = matching ? settleVerdict(row) : null;
   const terminal =
     matching && (row === null || TERMINAL_SANDBOX_STATES.has(row.state));
   return {
     row: matching ? row : null,
+    observation,
     known: matching,
     ready: verdict?.kind === "awake",
     failure: matching ? pendingSandboxFailure(row) : null,
     terminal,
-    refetch: sandboxList.refetch,
+    refetch,
   };
 }
 
@@ -761,6 +859,7 @@ function useWatchedSandboxRow(
     sandboxId,
     send?.userId ?? null,
     stage?.createdHostId ?? null,
+    send === null ? null : send.id,
   );
   const environment = sandboxEnvironment(row, {
     ...UNKNOWN_PENDING_SEND_FACTS,
@@ -789,7 +888,7 @@ function useWatchedSandboxRow(
       if (
         usePendingSandboxSendStore
           .getState()
-          .endDispatch(send.id, null, "terminal-row")
+          .endDispatch(send.id, null, "terminal-row", environment)
       ) {
         if (send.stopRequested === true) returnStoppedPendingSend(send.id);
         else returnPendingSandboxSend(send.id);
@@ -804,7 +903,15 @@ function useWatchedSandboxRow(
       if (send.stopRequested === true) returnStoppedPendingSend(send.id);
       else returnPendingSandboxSend(send.id);
     }
-  }, [decision, row.failure, send, stage?.failure, surfaceKey, wake]);
+  }, [
+    decision,
+    environment,
+    row.failure,
+    send,
+    stage?.failure,
+    surfaceKey,
+    wake,
+  ]);
   return {
     failed: row.failure !== null,
     ready: row.ready,
@@ -1197,6 +1304,7 @@ function sandboxEnvironment(
   }
   return {
     ...environment,
+    observation: row.observation,
     host,
     frozen: row.row?.frozen ?? false,
     settingsReady: row.row?.guestConfigured !== false,
@@ -1206,7 +1314,7 @@ function sandboxEnvironment(
 function sandboxObservation(
   blocker: PendingSendBlocker,
   environment: PendingSendFacts,
-): PendingSendEvent {
+): PendingSendObservation {
   if (environment.host === "ended") return "terminal-row";
   if (
     blocker === "credits" &&
@@ -1239,6 +1347,7 @@ function usePendingDispatchLifecycle(
     dispatch.delivery.sandboxId,
     send.userId,
     dispatch.input.hostId,
+    send.id,
   );
   const binding = useHostBinding();
   const queryClient = useQueryClient();
@@ -1285,10 +1394,19 @@ function usePendingDispatchLifecycle(
     if (!owned) return;
     const decision = usePendingSandboxSendStore
       .getState()
-      .dispatchEvent(send.id, event, {
-        ...environment,
-        wakeInFlight: wakeRequested.current,
-      });
+      .dispatchEvent(
+        send.id,
+        send.retryRequest !== undefined &&
+          send.retryRequest.id !== send.retryHandledId
+          ? "consume-retry"
+          : event,
+        {
+          ...environment,
+          retryAction: "send-again",
+          retryObservation: event,
+          wakeInFlight: wakeRequested.current,
+        },
+      );
     if (decision === null) return;
     if (decision.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
@@ -1296,7 +1414,7 @@ function usePendingDispatchLifecycle(
       if (
         usePendingSandboxSendStore
           .getState()
-          .endDispatch(send.id, dispatch, "terminal-row")
+          .endDispatch(send.id, dispatch, "terminal-row", environment)
       )
         returnPendingSandboxSend(send.id);
     }
@@ -1308,6 +1426,10 @@ function usePendingDispatchLifecycle(
     if (decision.state.blocker === "wake" || environment.host !== "resting")
       wakeRequested.current = false;
     if (!decision.effects.includes("wake") || wakeRequested.current) return;
+    const wakeBoundary = usePendingSandboxSendStore
+      .getState()
+      .holdObservation(send.id, decision);
+    if (wakeBoundary === null) return;
     wakeRequested.current = true;
     void startSandboxWake(
       queryClient,
@@ -1320,7 +1442,11 @@ function usePendingDispatchLifecycle(
         .dispatchEvent(
           send.id,
           outcome?.kind === "awake" ? "observe" : "wake-failed",
-          { ...environment, wakeInFlight: true },
+          {
+            ...environment,
+            wakeInFlight: true,
+            observation: { kind: "wake-result", requestedAt: wakeBoundary },
+          },
         );
       if (settled?.effects.includes("poll")) void refetch();
     });
@@ -1333,6 +1459,8 @@ function usePendingDispatchLifecycle(
     queryClient,
     refetch,
     send.id,
+    send.retryRequest,
+    send.retryHandledId,
   ]);
   return { dispatchAllowed: plan.effects.includes("dispatch"), environment };
 }
@@ -1357,6 +1485,11 @@ async function runPendingDispatch(
     }),
   );
   if (!plan.effects.includes("dispatch")) return;
+  if (
+    usePendingSandboxSendStore.getState().holdObservation(send.id, plan) ===
+    null
+  )
+    return;
   dispatchesInFlight.add(send.id);
   try {
     registerDispatchHandoff(send, dispatch);
@@ -1374,7 +1507,15 @@ async function runPendingDispatch(
       { ...plan.state, phase: "accepted" },
       "receipt-saved",
       {
-        ...pendingSandboxSendFacts(send.id, environment),
+        ...pendingSandboxSendFacts(send.id, {
+          ...environment,
+          host: "awake",
+          observation: {
+            kind: "dispatch-result",
+            chatId: dispatch.input.chatId,
+            hostId: dispatch.input.hostId,
+          },
+        }),
         owns: receiptOwnership,
       },
     );
@@ -1498,6 +1639,7 @@ function PendingDispatchLine(props: {
     props.dispatch.delivery.sandboxId,
     props.userId,
     props.dispatch.input.hostId,
+    props.id,
   );
   const client = useHostClientForHostId(props.dispatch.input.hostId);
   const send = usePendingSandboxSendStore(
@@ -1561,7 +1703,7 @@ function PendingDispatchLine(props: {
           onClick={() => {
             usePendingSandboxSendStore
               .getState()
-              .retryDispatch(props.id, environment);
+              .requestDispatchRetry(props.id);
           }}
         >
           Retry
@@ -1686,21 +1828,64 @@ function PendingSendItem(props: {
   );
 }
 
-/** Any same-account strip can request Retry; only the owner executes its effects. */
-function usePendingStagedSendRetry(send: PendingSandboxSend): () => void {
-  return useCallback(() => {
-    const surfaceKey = pendingSendSurfaceKey(send.id);
-    const current = readStagedSandbox(surfaceKey);
-    const plan = transitionPendingSend(
-      pendingSendState(send, stageBlocker(current)),
-      "request-retry",
-      pendingSandboxSendFacts(send.id, UNKNOWN_PENDING_SEND_FACTS),
-    );
-    if (plan.effects.includes("request-retry"))
-      void useStagedSandboxStore
-        .getState()
-        .requestRetry(surfaceKey, send.userId);
-  }, [send]);
+/** Manual stage retries preserve the captured failure until the runner has read it. */
+function executePendingStageRetry(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  action: PendingStageRetryAction,
+  runner: StagedSandboxRunner,
+): void {
+  let fresh = false;
+  if (action === "retry-creation") fresh = true;
+  else if (action === "retry-stage") fresh = stagedCreateNeedsFreshKey(stage);
+  runner(pendingSendSurfaceKey(send.id), fresh, {
+    fallbackName: stagedSandboxFallbackName(send.text),
+    taskId: send.epicId,
+    resume: false,
+  });
+}
+
+/** A queued strip publishes intent; only the owning window runs stage or host effects. */
+function usePendingStagedSendRetry(
+  send: PendingSandboxSend,
+  runner: StagedSandboxRunner,
+): (action: PendingStageRetryAction) => void {
+  return useCallback(
+    (action: PendingStageRetryAction) => {
+      const surfaceKey = pendingSendSurfaceKey(send.id);
+      const current = readStagedSandbox(surfaceKey);
+      const { sends } = usePendingSandboxSendStore.getState();
+      if (current === null || !Object.hasOwn(sends, send.id)) return;
+      const publish =
+        action === "send-again" || !ownsPendingSandboxSend(send.id);
+      const plan = transitionPendingSend(
+        pendingSendState(sends[send.id], stageBlocker(current)),
+        publish ? "request-retry" : PENDING_STAGE_RETRY_EVENTS[action],
+        pendingSandboxSendFacts(send.id, {
+          ...UNKNOWN_PENDING_SEND_FACTS,
+          retryAction: action,
+          settingsReady: true,
+          stageStatus: current.phase,
+          wakeInFlight: stagedRunActive(surfaceKey),
+        }),
+      );
+      if (plan.effects.includes("request-retry"))
+        void useStagedSandboxStore
+          .getState()
+          .requestRetry(surfaceKey, send.userId, action);
+      executePendingStageDecision(
+        {
+          send: sends[send.id],
+          stage: current,
+          action,
+          manualRetry: true,
+          decision: plan,
+        },
+        runner,
+      );
+    },
+    [send, runner],
+  );
 }
 
 /** Stop holds the unsent copy until the mutation or a fresh row proves rest. */
@@ -1708,8 +1893,9 @@ async function stopPendingSend(
   id: string,
   stop: () => Promise<SandboxVerbOutcome>,
   requested: () => void,
+  refresh: () => Promise<unknown>,
 ): Promise<void> {
-  const plan = pendingStopDecision(id, "stop", "unknown");
+  const plan = pendingStopDecision(id, "stop", "unknown", null);
   if (plan?.effects.includes("hold-stop")) {
     if (!usePendingSandboxSendStore.getState().holdStop(id)) return;
     try {
@@ -1728,26 +1914,36 @@ async function stopPendingSend(
     }
     return;
   }
+  const boundary =
+    usePendingSandboxSendStore.getState().sends[id]?.stopRequestedAt ?? null;
   requested();
+  void refresh();
   stopsInFlight.add(id);
   try {
     const outcome = await stop();
-    let host: PendingSendFacts["host"] = "unknown";
-    if (outcome.kind === "gone") host = "ended";
-    else if (
-      outcome.kind === "settled" &&
-      (outcome.state === "stopped" || outcome.state === "suspended")
-    )
-      host = "resting";
-    const settled = pendingStopDecision(id, "stop-result", host);
+    const host = stoppedHostObservation(outcome);
+    const settled = pendingStopDecision(id, "stop-result", host, boundary);
     if (settled?.effects.includes("remove")) returnStoppedPendingSend(id);
   } catch {
     // The mutation owns the line's error. Its existing persisted latch holds
     // the only message copy, and the row watcher keeps polling for rest.
-    pendingStopDecision(id, "stop-failed", "unknown");
+    pendingStopDecision(id, "stop-failed", "unknown", boundary);
   } finally {
     stopsInFlight.delete(id);
   }
+}
+
+/** A moving or non-resting verb answer proves no completed Stop. */
+function stoppedHostObservation(
+  outcome: SandboxVerbOutcome,
+): PendingSendFacts["host"] {
+  if (outcome.kind === "gone") return "ended";
+  if (
+    outcome.kind === "settled" &&
+    (outcome.state === "stopped" || outcome.state === "suspended")
+  )
+    return "resting";
+  return "unknown";
 }
 
 /** Every completion rechecks the current record and the original account. */
@@ -1755,6 +1951,7 @@ function pendingStopDecision(
   id: string,
   event: PendingSendEvent,
   host: PendingSendFacts["host"],
+  boundary: number | null,
 ): PendingSendTransition | null {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return null;
@@ -1769,6 +1966,7 @@ function pendingStopDecision(
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
       host,
+      observation: { kind: "stop-result", requestedAt: boundary },
       sandboxKnown: (stage?.createdSandboxId ?? null) !== null,
       inFlight: stopsInFlight.has(id),
     }),
@@ -1832,7 +2030,6 @@ function PendingStagedSendItem(props: {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const observedStage = useStagedSandbox(surfaceKey);
   const stage = observedStage ?? send.stopStage ?? null;
-  const retrySend = usePendingStagedSendRetry(send);
   const attention = useRef<{
     readonly userId: string | null;
     readonly giveBack: () => void;
@@ -1846,7 +2043,9 @@ function PendingStagedSendItem(props: {
   );
   const facts = useSetupLineFacts(stage);
   const runner = useStagedSandboxRunner();
+  const retrySend = usePendingStagedSendRetry(send, runner);
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
+  const sandboxList = useSandboxList();
   const { openTile } = useEpicTileNavigation();
   const providersOpener = useConfigurationProvidersOpener(
     stage?.target.configuration.kind === "team",
@@ -1929,6 +2128,7 @@ function PendingStagedSendItem(props: {
         };
         stopAttention.set(send.id, attention.current);
       },
+      () => sandboxList.refetch({ cancelRefetch: false }),
     );
   };
   const name =
@@ -1956,12 +2156,12 @@ function PendingStagedSendItem(props: {
           name={name}
           facts={facts}
           actions={{
-            onKeepWaiting: () => run(false),
+            onKeepWaiting: () => retrySend("keep-waiting"),
             onCancel: () => backToComposer(false),
             onChooseAnotherHost: () => backToComposer(false),
-            onRetryCreation: () => run(true),
-            onRetry: () => run(stagedCreateNeedsFreshKey(stage)),
-            onSendAgain: retrySend,
+            onRetryCreation: () => retrySend("retry-creation"),
+            onRetry: () => retrySend("retry-stage"),
+            onSendAgain: () => retrySend("send-again"),
             onChangeShape: () => backToComposer(true),
             onRetryApplying: newHost.onRetryApplying,
             onStop: stop,

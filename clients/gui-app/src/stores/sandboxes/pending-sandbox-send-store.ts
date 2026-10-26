@@ -1,3 +1,7 @@
+import {
+  decodePendingSandboxObservation,
+  type PendingSandboxObservation,
+} from "@/lib/sandboxes/pending-sandbox-observation";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -22,7 +26,11 @@ import {
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 import { recordMapStorageKey } from "@/lib/persist/keys";
-import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
+import {
+  createPendingSendStorage,
+  requestPendingDispatchRetry,
+  type PendingDispatchRetryRequest,
+} from "@/lib/sandboxes/pending-stage-storage";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   ownsPendingSandboxSend,
@@ -123,8 +131,12 @@ export interface PendingSandboxSend {
   readonly ended?: boolean;
   /** Only the lifecycle's hold-stop effect writes this durable intent. */
   readonly stopRequested?: boolean;
+  readonly stopRequestedAt?: number;
+  readonly observationRequestedAt?: number;
   /** Original-account observation survives auth clearing the transient stage. */
   readonly stopStage?: StagedSandbox;
+  readonly retryRequest?: PendingDispatchRetryRequest;
+  readonly retryHandledId?: string;
 }
 
 /** Delivered sends kept for their ready line; the oldest are dropped first. */
@@ -134,18 +146,24 @@ interface PendingSandboxSendStoreState {
   readonly sends: Readonly<Record<string, PendingSandboxSend>>;
   readonly add: (send: PendingSandboxSend) => void;
   readonly holdStop: (id: string) => boolean;
+  readonly holdObservation: (
+    id: string,
+    plan: PendingSendTransition,
+  ) => number | null;
+  readonly ensureObservationBoundary: (id: string) => void;
   readonly confirmEpic: (id: string) => void;
   readonly beginDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
   ) => boolean;
   readonly markDispatchUncertain: (id: string) => void;
-  readonly retryDispatch: (id: string, facts: PendingSendFacts) => void;
+  readonly requestDispatchRetry: (id: string) => string | null;
   readonly refuseDispatch: (id: string) => void;
   readonly endDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch | null,
     event: "terminal-row" | "task-deleted",
+    environment: PendingSendFacts,
   ) => boolean;
   readonly dispatchEvent: (
     id: string,
@@ -173,17 +191,28 @@ export function pendingSandboxSendFacts(
   const send = sends[id];
   const stored = storedSend(id);
   const dispatch = send.dispatch ?? null;
+  const observedHost = decodePendingSandboxObservation(
+    {
+      ...send,
+      observationRequestedAt:
+        typeof stored?.observationRequestedAt === "number"
+          ? stored.observationRequestedAt
+          : undefined,
+      stopRequestedAt:
+        typeof stored?.stopRequestedAt === "number"
+          ? stored.stopRequestedAt
+          : undefined,
+    },
+    environment.host,
+    environment.observation,
+  );
   return {
     ...environment,
+    host: observedHost,
     current:
-      stored !== null &&
-      (stored.ended === true) === (send.ended === true) &&
-      (stored.stopRequested === true) === (send.stopRequested === true) &&
-      (stored.delivery === null
-        ? send.delivery === null &&
-          (dispatch === null || pendingSandboxDispatchCurrent(id, dispatch))
-        : send.delivery !== null &&
-          JSON.stringify(stored.delivery) === JSON.stringify(send.delivery)),
+      durableSendMatches(send, stored, dispatch) &&
+      (environment.observation.kind !== "dispatch-result" ||
+        observedHost !== "unknown"),
     terminalDisposition: stored?.ended === true,
     stopRequested: stored?.stopRequested === true,
     accountActive:
@@ -195,6 +224,39 @@ export function pendingSandboxSendFacts(
       dispatch !== null
         ? pendingSandboxDispatchCurrent(id, dispatch)
         : pendingSandboxSendWithdrawalState(id) === "claimed",
+  };
+}
+
+/** Progress may be stale, but no changed claim, receipt or Stop identity can be acted on. */
+function durableSendMatches(
+  send: PendingSandboxSend,
+  stored: Record<string, unknown> | null,
+  dispatch: PendingSandboxSendDispatch | null,
+): boolean {
+  if (
+    stored === null ||
+    (stored.ended === true) !== (send.ended === true) ||
+    (stored.stopRequested === true) !== (send.stopRequested === true)
+  )
+    return false;
+  return stored.delivery === null
+    ? send.delivery === null &&
+        (dispatch === null || pendingSandboxDispatchCurrent(send.id, dispatch))
+    : send.delivery !== null &&
+        JSON.stringify(stored.delivery) === JSON.stringify(send.delivery);
+}
+
+/** Legacy held requests acquire provenance before any observation can settle them. */
+function legacyObservationBoundary(
+  send: PendingSandboxSend,
+  boundary: number,
+): PendingSandboxSend {
+  if (send.stopRequested !== true)
+    return { ...send, observationRequestedAt: boundary };
+  return {
+    ...send,
+    observationRequestedAt: boundary,
+    stopRequestedAt: send.stopRequestedAt ?? boundary,
   };
 }
 
@@ -214,11 +276,54 @@ export function pendingSandboxStageRunAllowed(
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
       host,
+      observation: { kind: "intent" },
       clientReady: true,
       stageStatus: stage?.phase ?? "missing",
     }),
   );
   return plan.effects.includes("run-stage") || plan.effects.includes("wake");
+}
+
+/** Core runner rows/results use the same provenance decoder as visible observers. */
+export function pendingSandboxStageObservation(
+  surfaceKey: string,
+  host: PendingSendFacts["host"],
+  observation: PendingSandboxObservation,
+): PendingSendFacts["host"] {
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX))
+    return decodePendingSandboxObservation(
+      observation.kind === "list"
+        ? null
+        : { createdAt: 0, observationRequestedAt: 0 },
+      host,
+      observation,
+    );
+  return pendingSandboxSendFacts(
+    surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length),
+    { ...UNKNOWN_PENDING_SEND_FACTS, host, observation },
+  ).host;
+}
+
+/** The low-level create/wake runner shares the pending record's verified boundary. */
+export function holdPendingSandboxStageObservation(
+  surfaceKey: string,
+): number | null {
+  if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return 0;
+  const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id)) return null;
+  const stage = readStagedSandbox(surfaceKey);
+  const plan = transitionPendingSend(
+    pendingSendState(sends[id], "none"),
+    "observe",
+    pendingSandboxSendFacts(id, {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      host: stage?.phase === "handoff" ? "resting" : "unknown",
+      observation: { kind: "intent" },
+      stageStatus: stage?.phase ?? "missing",
+    }),
+  );
+  return usePendingSandboxSendStore.getState().holdObservation(id, plan);
 }
 
 function pendingDecision(
@@ -308,6 +413,24 @@ function withDispatch(
   return { ...sends, [id]: { ...send, dispatch: update(dispatch) } };
 }
 
+/** A projection changes status/blocker, never the immutable replay request. */
+function projectDispatchTransition(
+  dispatch: PendingSandboxSendDispatch | null,
+  plan: PendingSendTransition,
+): PendingSandboxSendDispatch | null {
+  if (
+    dispatch === null ||
+    (plan.state.phase !== "sending" && plan.state.phase !== "uncertain")
+  )
+    return dispatch;
+  if (
+    dispatch.status === plan.state.phase &&
+    (dispatch.blocker ?? "none") === plan.state.blocker
+  )
+    return dispatch;
+  return { ...dispatch, status: plan.state.phase, blocker: plan.state.blocker };
+}
+
 export const usePendingSandboxSendStore =
   create<PendingSandboxSendStoreState>()(
     persist(
@@ -329,15 +452,22 @@ export const usePendingSandboxSendStore =
             }).effects.includes("hold-stop")
           )
             return false;
+          const boundary = Date.now();
           try {
             set({
               sends: {
                 ...sends,
-                [id]: { ...send, stopRequested: true, stopStage: stage },
+                [id]: {
+                  ...send,
+                  stopRequested: true,
+                  stopRequestedAt: boundary,
+                  observationRequestedAt: boundary,
+                  stopStage: stage,
+                },
               },
             });
           } catch {
-            if (storedSend(id)?.stopRequested === true) return true;
+            if (storedSend(id)?.stopRequestedAt === boundary) return true;
             try {
               set({ sends });
             } catch {
@@ -345,7 +475,75 @@ export const usePendingSandboxSendStore =
             }
             return false;
           }
-          return storedSend(id)?.stopRequested === true;
+          return storedSend(id)?.stopRequestedAt === boundary;
+        },
+        ensureObservationBoundary: (id) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return;
+          const send = sends[id];
+          const facts = pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS);
+          if (!facts.current || !facts.owns || !facts.accountActive) return;
+          if ((send.dispatch ?? null) === null && send.stopRequested !== true)
+            return;
+          if (
+            send.observationRequestedAt !== undefined &&
+            (send.stopRequested !== true || send.stopRequestedAt !== undefined)
+          )
+            return;
+          const boundary = Date.now();
+          try {
+            set({
+              sends: {
+                ...sends,
+                [id]: legacyObservationBoundary(send, boundary),
+              },
+            });
+          } catch {
+            /* Readback, rather than memory, grants observation authority. */
+          }
+          if (storedSend(id)?.observationRequestedAt !== boundary) {
+            try {
+              set({ sends });
+            } catch {
+              /* Keep missing provenance unknown. */
+            }
+          }
+        },
+        holdObservation: (id, plan) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return null;
+          const facts = pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS);
+          if (!facts.current || !facts.accountActive || !facts.owns)
+            return null;
+          if (
+            !plan.effects.some(
+              (effect) =>
+                effect === "wake" ||
+                effect === "run-stage" ||
+                effect === "dispatch" ||
+                effect === "retry",
+            )
+          )
+            return null;
+          const boundary = Date.now();
+          try {
+            set({
+              sends: {
+                ...sends,
+                [id]: { ...sends[id], observationRequestedAt: boundary },
+              },
+            });
+          } catch {
+            /* Readback decides whether the request may leave this window. */
+          }
+          if (storedSend(id)?.observationRequestedAt === boundary)
+            return boundary;
+          try {
+            set({ sends });
+          } catch {
+            /* Keep the prior accountable request. */
+          }
+          return null;
         },
         confirmEpic: (id) =>
           set((state) => {
@@ -379,12 +577,26 @@ export const usePendingSandboxSendStore =
             }).effects.includes("persist-claim")
           )
             return false;
+          const boundary = Date.now();
           try {
             const captured = structuredClone(dispatch);
-            set({ sends: { ...sends, [id]: { ...send, dispatch: captured } } });
+            set({
+              sends: {
+                ...sends,
+                [id]: {
+                  ...send,
+                  dispatch: captured,
+                  observationRequestedAt: boundary,
+                },
+              },
+            });
           } catch {
             // A record can be durable even if updating the map header failed.
-            if (pendingSandboxDispatchCurrent(id, dispatch)) return true;
+            if (
+              pendingSandboxDispatchCurrent(id, dispatch) &&
+              storedSend(id)?.observationRequestedAt === boundary
+            )
+              return true;
             // set updates memory before persistence; undo the unpersisted claim.
             try {
               set({ sends });
@@ -393,7 +605,10 @@ export const usePendingSandboxSendStore =
             }
             return false;
           }
-          return pendingSandboxDispatchCurrent(id, dispatch);
+          return (
+            pendingSandboxDispatchCurrent(id, dispatch) &&
+            storedSend(id)?.observationRequestedAt === boundary
+          );
         },
         markDispatchUncertain: (id) => {
           try {
@@ -413,19 +628,30 @@ export const usePendingSandboxSendStore =
             // request. A storage outage never authorizes another identity.
           }
         },
-        retryDispatch: (id, facts) =>
-          set((state) => ({
-            sends: withDispatch(state.sends, id, (dispatch) => {
-              const plan = pendingDecision(state.sends[id], "retry", facts);
-              return plan.effects.includes("retry")
-                ? {
-                    ...dispatch,
-                    status: "sending",
-                    blocker: plan.state.blocker,
-                  }
-                : dispatch;
-            }),
-          })),
+        requestDispatchRetry: (id) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return null;
+          const send = sends[id];
+          const dispatch = send.dispatch ?? null;
+          if (
+            dispatch === null ||
+            !pendingDecision(
+              send,
+              "request-dispatch-retry",
+              UNKNOWN_PENDING_SEND_FACTS,
+            ).effects.includes("request-dispatch-retry")
+          )
+            return null;
+          const request = requestPendingDispatchRetry({
+            id,
+            userId: send.userId,
+            chatId: dispatch.input.chatId,
+            hostId: dispatch.input.hostId,
+          });
+          if (request !== null)
+            void usePendingSandboxSendStore.persist.rehydrate();
+          return request;
+        },
         refuseDispatch: (id) =>
           set((state) => ({
             sends: withDispatch(state.sends, id, (dispatch) =>
@@ -438,7 +664,7 @@ export const usePendingSandboxSendStore =
                 : dispatch,
             ),
           })),
-        endDispatch: (id, dispatch, event) => {
+        endDispatch: (id, dispatch, event, environment) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return false;
           const send = sends[id];
@@ -446,7 +672,7 @@ export const usePendingSandboxSendStore =
             return false;
           if (
             !pendingDecision(send, event, {
-              ...UNKNOWN_PENDING_SEND_FACTS,
+              ...environment,
               host: event === "terminal-row" ? "ended" : "unknown",
             }).effects.includes("end-host")
           )
@@ -481,11 +707,15 @@ export const usePendingSandboxSendStore =
           if (!Object.hasOwn(sends, id)) return false;
           const send = sends[id];
           if (
-            !pendingDecision(
-              send,
-              "host-accept",
-              UNKNOWN_PENDING_SEND_FACTS,
-            ).effects.includes("record-receipt")
+            !pendingDecision(send, "host-accept", {
+              ...UNKNOWN_PENDING_SEND_FACTS,
+              host: "awake",
+              observation: {
+                kind: "dispatch-result",
+                chatId: delivery.chatId,
+                hostId: delivery.hostId,
+              },
+            }).effects.includes("record-receipt")
           )
             return false;
           try {
@@ -574,31 +804,43 @@ export const usePendingSandboxSendStore =
           if (!Object.hasOwn(sends, id)) return null;
           const send = sends[id];
           const plan = pendingDecision(send, event, environment);
-          const dispatch = send.dispatch ?? null;
+          const dispatch = projectDispatchTransition(
+            send.dispatch ?? null,
+            plan,
+          );
+          const ack = plan.effects.includes("acknowledge-retry")
+            ? send.retryRequest?.id
+            : undefined;
           if (
-            dispatch !== null &&
-            (plan.state.phase === "sending" ||
-              plan.state.phase === "uncertain") &&
-            (dispatch.status !== plan.state.phase ||
-              (dispatch.blocker ?? "none") !== plan.state.blocker)
-          ) {
-            try {
-              set({
-                sends: {
-                  ...sends,
-                  [id]: {
-                    ...send,
-                    dispatch: {
-                      ...dispatch,
-                      status: plan.state.phase,
-                      blocker: plan.state.blocker,
-                    },
-                  },
+            dispatch === send.dispatch &&
+            (ack === undefined || ack === send.retryHandledId)
+          )
+            return plan;
+          try {
+            set({
+              sends: {
+                ...sends,
+                [id]: {
+                  ...send,
+                  dispatch,
+                  retryHandledId: ack ?? send.retryHandledId,
+                  observationRequestedAt: plan.effects.includes("retry")
+                    ? Date.now()
+                    : send.observationRequestedAt,
                 },
-              });
+              },
+            });
+          } catch {
+            // A partial write is usable only if its acknowledgement is durable.
+            if (ack === undefined) return plan;
+          }
+          if (ack !== undefined && storedSend(id)?.retryHandledId !== ack) {
+            try {
+              set({ sends });
             } catch {
-              /* Storage failure retains the original immutable dispatch identity. */
+              /* Restore the original claim in memory too. */
             }
+            return null;
           }
           return plan;
         },
@@ -620,7 +862,7 @@ export const usePendingSandboxSendStore =
       }),
       {
         ...basePersistOptions(persistKey(STORE_KEYS.pendingSandboxSend)),
-        storage: createJSONStorage(() => createRecordMapStorage("sends")),
+        storage: createJSONStorage(createPendingSendStorage),
         // Source content roots images by hash. A claimed request keeps its
         // prepared content, including inline bytes required by older hosts.
         partialize: (state) => ({

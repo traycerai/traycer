@@ -1,3 +1,5 @@
+import type { PendingSandboxObservation } from "./pending-sandbox-observation";
+
 /** Durable intent and its current blocker are separate: repair never changes identity. */
 export type PendingSendPhase =
   | "staged"
@@ -26,6 +28,19 @@ export interface PendingSendState {
   readonly phase: PendingSendPhase;
   readonly blocker: PendingSendBlocker;
 }
+export type PendingStageRetryAction =
+  | "send-again"
+  | "retry-stage"
+  | "retry-creation"
+  | "keep-waiting";
+
+export type PendingSendObservation =
+  | "observe"
+  | "terminal-row"
+  | "unfrozen"
+  | "settings-repaired"
+  | "client-restored";
+
 export type PendingSendEvent =
   | "observe"
   | "confirm"
@@ -46,6 +61,11 @@ export type PendingSendEvent =
   | "return"
   | "retry"
   | "request-retry"
+  | "request-dispatch-retry"
+  | "consume-retry"
+  | "retry-stage"
+  | "retry-creation"
+  | "keep-waiting"
   | "rest"
   | "terminal-row"
   | "awake"
@@ -81,7 +101,19 @@ export type PendingSendEvent =
   | "attach-ok"
   | "attach-failed"
   | "attach-unsupported";
+export const PENDING_STAGE_RETRY_EVENTS: Readonly<
+  Record<PendingStageRetryAction, PendingSendEvent>
+> = {
+  "send-again": "retry",
+  "retry-stage": "retry-stage",
+  "retry-creation": "retry-creation",
+  "keep-waiting": "keep-waiting",
+};
+
 export interface PendingSendFacts {
+  readonly observation: PendingSandboxObservation;
+  readonly retryAction: PendingStageRetryAction;
+  readonly retryObservation: PendingSendObservation;
   readonly current: boolean;
   readonly accountActive: boolean;
   readonly owns: boolean;
@@ -107,6 +139,9 @@ export interface PendingSendFacts {
 }
 /** Missing observations grant no authority and authorize no network operation. */
 export const UNKNOWN_PENDING_SEND_FACTS: PendingSendFacts = {
+  observation: { kind: "none" },
+  retryAction: "send-again",
+  retryObservation: "observe",
   current: false,
   accountActive: false,
   owns: false,
@@ -139,6 +174,8 @@ export type PendingSendEffect =
   | "finish-ui"
   | "retry"
   | "request-retry"
+  | "request-dispatch-retry"
+  | "acknowledge-retry"
   | "known-refusal"
   | "uncertain"
   | "wake"
@@ -790,6 +827,8 @@ function activeTransition(
   )
     return observe(state, facts);
   if (event === "retry") return retry(state, facts);
+  const action = stageRetryAction(event);
+  if (action !== null) return retryStage(state, action, facts);
   return taskEvent(state, event, facts);
 }
 
@@ -913,6 +952,31 @@ function ownershipOutcome(
   };
 }
 
+/** The same eligibility gates publication and execution of a strip's intent. */
+function stageRetryAllowed(
+  state: PendingSendState,
+  action: PendingStageRetryAction,
+  facts: PendingSendFacts,
+): boolean {
+  if (
+    state.phase !== "waiting" ||
+    state.blocker === "stop" ||
+    facts.durableClaim
+  )
+    return false;
+  if (action === "send-again") return LATCHED_BLOCKERS.has(state.blocker);
+  const notSent = state.blocker === "not-sent";
+  const wake = state.blocker === "wake";
+  if (action === "retry-stage") return notSent || wake;
+  const creating =
+    facts.stageStatus === "staged" || facts.stageStatus === "creating";
+  if (action === "retry-creation") return creating && notSent;
+  return (
+    creating &&
+    (notSent || wake || state.blocker === "none" || state.blocker === "host")
+  );
+}
+
 /** A Retry request may cross windows; its execution still requires ownership. */
 function retryRequest(
   state: PendingSendState,
@@ -920,12 +984,96 @@ function retryRequest(
 ): PendingSendTransition {
   if (!facts.accountActive)
     return { ...result(state, [], facts), outcome: "denied-ownership" };
+  return result(
+    state,
+    stageRetryAllowed(state, facts.retryAction, facts) ? ["request-retry"] : [],
+    facts,
+  );
+}
+
+function stageRetryAction(
+  event: PendingSendEvent,
+): PendingStageRetryAction | null {
+  switch (event) {
+    case "retry-stage":
+    case "retry-creation":
+    case "keep-waiting":
+      return event;
+    default:
+      return null;
+  }
+}
+
+/** Preserve the failed stage for the runner: it decides whether an existing create needs waking. */
+function retryStage(
+  state: PendingSendState,
+  action: PendingStageRetryAction,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  if (!stageRetryAllowed(state, action, facts) || facts.inFlight)
+    return result(state, [], facts);
+  if (facts.host === "ended") return terminalObservation(state, facts);
+  if (facts.frozen || !facts.settingsReady) return observe(state, facts);
+  if (facts.stageStatus === "handoff") return retry(state, facts);
+  if (facts.stageStatus === "missing") return result(state, [], facts);
+  return result(
+    { ...state, blocker: "none" },
+    facts.wakeInFlight ? ["retry", "poll"] : ["retry", "run-stage", "poll"],
+    facts,
+  );
+}
+
+/** A refused mailbox intent is acknowledged and cannot replace the real observation. */
+function consumeRetry(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  const event = PENDING_STAGE_RETRY_EVENTS[facts.retryAction];
+  const requested = activeTransition(state, event, facts);
+  const decision = requested.effects.includes("retry")
+    ? requested
+    : activeTransition(state, facts.retryObservation, facts);
+  return result(
+    decision.state,
+    ["acknowledge-retry", ...decision.effects],
+    facts,
+  );
+}
+
+/** Publication is metadata only; even a queued window may ask its claim's owner. */
+function dispatchRetryRequest(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  if (!facts.accountActive)
+    return { ...result(state, [], facts), outcome: "denied-ownership" };
   const allowed =
-    state.phase === "waiting" &&
-    state.blocker !== "stop" &&
-    LATCHED_BLOCKERS.has(state.blocker) &&
-    !facts.durableClaim;
-  return result(state, allowed ? ["request-retry"] : [], facts);
+    facts.durableClaim &&
+    (state.phase === "uncertain" ||
+      (state.phase === "sending" && LATCHED_BLOCKERS.has(state.blocker)));
+  return result(state, allowed ? ["request-dispatch-retry"] : [], facts);
+}
+
+/** Once ownership is established, claims and receipts still bound every operation. */
+function ownedTransition(
+  state: PendingSendState,
+  event: PendingSendEvent,
+  facts: PendingSendFacts,
+): PendingSendTransition {
+  if (state.phase === "staged") return stagedTransition(state, event, facts);
+  if (state.phase === "accepted")
+    return WITHDRAW_EVENTS.has(event)
+      ? withdraw(state, facts)
+      : result(state, [], facts);
+  if (
+    facts.durableClaim &&
+    !claimed(state) &&
+    event !== "claim-saved" &&
+    state.phase !== "ended"
+  )
+    return { ...result(state, ["rehydrate"], facts), outcome: "denied-claim" };
+  if (event === "consume-retry") return consumeRetry(state, facts);
+  return activeTransition(state, event, facts);
 }
 
 /** The single lifecycle policy. Adapters supply facts and execute these named effects. */
@@ -942,19 +1090,9 @@ export function transitionPendingSend(
   if (bookkeeping !== null) return bookkeeping;
   if (event === "account-away") return result(state, [], facts);
   if (event === "request-retry") return retryRequest(state, facts);
+  if (event === "request-dispatch-retry")
+    return dispatchRetryRequest(state, facts);
   const ownership = ownershipOutcome(state, event, facts);
   if (ownership !== null) return ownership;
-  if (state.phase === "staged") return stagedTransition(state, event, facts);
-  if (state.phase === "accepted")
-    return WITHDRAW_EVENTS.has(event)
-      ? withdraw(state, facts)
-      : result(state, [], facts);
-  if (
-    facts.durableClaim &&
-    !claimed(state) &&
-    event !== "claim-saved" &&
-    state.phase !== "ended"
-  )
-    return { ...result(state, ["rehydrate"], facts), outcome: "denied-claim" };
-  return activeTransition(state, event, facts);
+  return ownedTransition(state, event, facts);
 }

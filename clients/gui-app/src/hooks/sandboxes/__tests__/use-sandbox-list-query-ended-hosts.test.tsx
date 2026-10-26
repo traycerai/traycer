@@ -23,7 +23,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
 
-import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  sandboxListReadSentAt,
+  useSandboxList,
+} from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   endedSandboxHost,
@@ -87,5 +90,53 @@ describe("the sandbox list query", () => {
       });
     });
     expect(endedSandboxHost("host-fine")).toBeNull();
+  });
+
+  it("stamps each answer with the time its own request was sent, not when it arrived, even for an identical list", async () => {
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_000);
+    const list = { sandboxes: [sandboxSummaryFixture({ id: "sbx-1" })] };
+    let answer: (value: { kind: "ok"; response: typeof list }) => void = () =>
+      undefined;
+    state.binding?.auth.listSandboxes.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useSandboxList(), { wrapper });
+    await waitFor(() => {
+      expect(state.binding?.auth.listSandboxes).toHaveBeenCalledTimes(1);
+    });
+
+    // The request is on its way; the answer arrives later.
+    clock.mockReturnValue(5_000);
+    act(() => {
+      answer({ kind: "ok", response: list });
+    });
+    await waitFor(() => {
+      expect(result.current.data).toBeDefined();
+    });
+    expect(sandboxListReadSentAt(result.current.data)).toBe(1_000);
+
+    // An identical answer keeps its own send time.
+    clock.mockReturnValue(9_000);
+    state.binding?.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: list.sandboxes },
+    });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    await waitFor(() => {
+      expect(sandboxListReadSentAt(result.current.data)).toBe(9_000);
+    });
+    clock.mockRestore();
   });
 });

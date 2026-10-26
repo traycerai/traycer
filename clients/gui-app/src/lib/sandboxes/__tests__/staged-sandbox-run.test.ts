@@ -987,6 +987,44 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     expect(stageOf().phase).toBe("handoff");
   });
 
+  it.each([true, false])(
+    "ignores a wake answered %s whose boundary was superseded: no handoff, and no synthetic wake failure",
+    async (answered) => {
+      await pendingOwnerWith(false);
+      const store = useStagedSandboxStore.getState();
+      store.stage(surfaceKey, RESTING);
+      store.begin(surfaceKey, false, 1_000_000, false);
+      store.report(surfaceKey, {
+        phase: "handoff",
+        createdSandboxId: "sbx_resting",
+        createdHostId: "host-resting",
+      });
+      const { wake, deps } = harness(
+        { entries: [{ ...DIALABLE, hostId: "host-resting" }] },
+        true,
+      );
+      // A newer observation boundary lands while the old wake is still answering.
+      wake.mockImplementation(() => {
+        usePendingSandboxSendStore.setState((state) => ({
+          sends: {
+            ...state.sends,
+            [SEND]: {
+              ...state.sends[SEND],
+              observationRequestedAt: Date.now() + 60_000,
+            },
+          },
+        }));
+        return Promise.resolve(answered);
+      });
+
+      await rewakeStagedSandbox(surfaceKey, deps);
+
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(stageOf().phase).not.toBe("handoff");
+      expect(stageOf().failure).toBeNull();
+    },
+  );
+
   it("does not start a run, wake or create for a stage whose pending send holds a Stop", async () => {
     await pendingOwnerWith(true);
     useStagedSandboxStore.getState().stage(surfaceKey, RESTING);

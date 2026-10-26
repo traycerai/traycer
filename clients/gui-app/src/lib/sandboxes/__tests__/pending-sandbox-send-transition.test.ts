@@ -14,6 +14,10 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  decodePendingSandboxObservation,
+  type PendingSandboxObservation,
+} from "../pending-sandbox-observation";
+import {
   pendingSendState,
   transitionPendingSend,
   type PendingSendBlocker,
@@ -75,6 +79,9 @@ const EVENTS: ReadonlyArray<string> = [
   "stop",
   "return",
   "retry",
+  "retry-stage",
+  "retry-creation",
+  "keep-waiting",
   "handoff",
   "stage-change",
   "dialog-close",
@@ -184,6 +191,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["P", "", "u"],
     return: ["P", "", "u"],
     retry: ["P", "", "u"],
+    "retry-stage": ["P", "", "u"],
+    "retry-creation": ["P", "", "u"],
+    "keep-waiting": ["P", "", "u"],
     handoff: ["W.host", "handoff", "a"],
     "stage-change": ["P", "", "i"],
     "dialog-close": ["P", "", "i"],
@@ -233,6 +243,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["RC", "ret+remove", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["U", "", "i"],
+    "retry-stage": ["U", "", "i"],
+    "retry-creation": ["U", "", "i"],
+    "keep-waiting": ["U", "", "i"],
     handoff: ["U", "", "i"],
     "stage-change": ["U", "", "i"],
     "dialog-close": ["U", "", "i"],
@@ -282,6 +295,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.host", "", "i"],
+    "retry-stage": ["W.host", "", "i"],
+    "retry-creation": ["W.host", "", "i"],
+    "keep-waiting": ["W.host", "", "i"],
     handoff: ["W.host", "", "i"],
     "stage-change": ["W.host", "", "i"],
     "dialog-close": ["W.host", "", "i"],
@@ -331,6 +347,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.model", "", "i"],
+    "retry-stage": ["W.model", "", "i"],
+    "retry-creation": ["W.model", "", "i"],
+    "keep-waiting": ["W.model", "", "i"],
     handoff: ["W.model", "", "i"],
     "stage-change": ["W.model", "", "i"],
     "dialog-close": ["W.model", "", "i"],
@@ -380,6 +399,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.provider", "", "i"],
+    "retry-stage": ["W.provider", "", "i"],
+    "retry-creation": ["W.provider", "", "i"],
+    "keep-waiting": ["W.provider", "", "i"],
     handoff: ["W.provider", "", "i"],
     "stage-change": ["W.provider", "", "i"],
     "dialog-close": ["W.provider", "", "i"],
@@ -429,6 +451,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.credits", "retry+poll", "a"],
+    "retry-stage": ["W.credits", "", "i"],
+    "retry-creation": ["W.credits", "", "i"],
+    "keep-waiting": ["W.credits", "", "i"],
     handoff: ["W.credits", "", "i"],
     "stage-change": ["W.credits", "", "i"],
     "dialog-close": ["W.credits", "", "i"],
@@ -478,6 +503,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.settings", "retry+poll", "a"],
+    "retry-stage": ["W.settings", "", "i"],
+    "retry-creation": ["W.settings", "", "i"],
+    "keep-waiting": ["W.settings", "", "i"],
     handoff: ["W.settings", "", "i"],
     "stage-change": ["W.settings", "", "i"],
     "dialog-close": ["W.settings", "", "i"],
@@ -527,6 +555,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.host", "retry+poll", "a"],
+    "retry-stage": ["W.host", "poll+retry", "a"],
+    "retry-creation": ["W.notsent", "", "i"],
+    "keep-waiting": ["W.notsent", "", "i"],
     handoff: ["W.notsent", "", "i"],
     "stage-change": ["W.notsent", "", "i"],
     "dialog-close": ["W.notsent", "", "i"],
@@ -576,6 +607,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.host", "retry+poll", "a"],
+    "retry-stage": ["W.host", "poll+retry", "a"],
+    "retry-creation": ["W.wake", "", "i"],
+    "keep-waiting": ["W.wake", "", "i"],
     handoff: ["W.wake", "", "i"],
     "stage-change": ["W.wake", "", "i"],
     "dialog-close": ["W.wake", "", "i"],
@@ -625,6 +659,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.none", "", "i"],
+    "retry-stage": ["W.none", "", "i"],
+    "retry-creation": ["W.none", "", "i"],
+    "keep-waiting": ["W.none", "", "i"],
     handoff: ["W.none", "", "i"],
     "stage-change": ["W.none", "", "i"],
     "dialog-close": ["W.none", "", "i"],
@@ -674,6 +711,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["W.stop", "hold-stop+stop-host", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["W.stop", "", "i"],
+    "retry-stage": ["W.stop", "", "i"],
+    "retry-creation": ["W.stop", "", "i"],
+    "keep-waiting": ["W.stop", "", "i"],
     handoff: ["W.stop", "", "i"],
     "stage-change": ["W.stop", "", "i"],
     "dialog-close": ["W.stop", "", "i"],
@@ -723,6 +763,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["S.none", "", "d"],
     return: ["S.none", "", "d"],
     retry: ["S.none", "retry+poll+dispatch", "a"],
+    "retry-stage": ["S.none", "", "i"],
+    "retry-creation": ["S.none", "", "i"],
+    "keep-waiting": ["S.none", "", "i"],
     handoff: ["S.none", "", "i"],
     "stage-change": ["S.none", "", "i"],
     "dialog-close": ["S.none", "", "i"],
@@ -772,6 +815,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["S.host", "", "d"],
     return: ["S.host", "", "d"],
     retry: ["S.none", "retry+poll+dispatch", "a"],
+    "retry-stage": ["S.host", "", "i"],
+    "retry-creation": ["S.host", "", "i"],
+    "keep-waiting": ["S.host", "", "i"],
     handoff: ["S.host", "", "i"],
     "stage-change": ["S.host", "", "i"],
     "dialog-close": ["S.host", "", "i"],
@@ -821,6 +867,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["S.credits", "", "d"],
     return: ["S.credits", "", "d"],
     retry: ["S.credits", "retry+poll", "a"],
+    "retry-stage": ["S.credits", "", "i"],
+    "retry-creation": ["S.credits", "", "i"],
+    "keep-waiting": ["S.credits", "", "i"],
     handoff: ["S.credits", "", "i"],
     "stage-change": ["S.credits", "", "i"],
     "dialog-close": ["S.credits", "", "i"],
@@ -870,6 +919,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["S.settings", "", "d"],
     return: ["S.settings", "", "d"],
     retry: ["S.settings", "retry+poll", "a"],
+    "retry-stage": ["S.settings", "", "i"],
+    "retry-creation": ["S.settings", "", "i"],
+    "keep-waiting": ["S.settings", "", "i"],
     handoff: ["S.settings", "", "i"],
     "stage-change": ["S.settings", "", "i"],
     "dialog-close": ["S.settings", "", "i"],
@@ -919,6 +971,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["S.wake", "", "d"],
     return: ["S.wake", "", "d"],
     retry: ["S.none", "retry+poll+dispatch", "a"],
+    "retry-stage": ["S.wake", "", "i"],
+    "retry-creation": ["S.wake", "", "i"],
+    "keep-waiting": ["S.wake", "", "i"],
     handoff: ["S.wake", "", "i"],
     "stage-change": ["S.wake", "", "i"],
     "dialog-close": ["S.wake", "", "i"],
@@ -968,6 +1023,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["Q.none", "", "d"],
     return: ["Q.none", "", "d"],
     retry: ["S.none", "retry+poll+dispatch", "a"],
+    "retry-stage": ["Q.none", "", "i"],
+    "retry-creation": ["Q.none", "", "i"],
+    "keep-waiting": ["Q.none", "", "i"],
     handoff: ["Q.none", "", "i"],
     "stage-change": ["Q.none", "", "i"],
     "dialog-close": ["Q.none", "", "i"],
@@ -1017,6 +1075,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["Q.host", "", "d"],
     return: ["Q.host", "", "d"],
     retry: ["S.none", "retry+poll+dispatch", "a"],
+    "retry-stage": ["Q.host", "", "i"],
+    "retry-creation": ["Q.host", "", "i"],
+    "keep-waiting": ["Q.host", "", "i"],
     handoff: ["Q.host", "", "i"],
     "stage-change": ["Q.host", "", "i"],
     "dialog-close": ["Q.host", "", "i"],
@@ -1066,6 +1127,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["Q.credits", "", "d"],
     return: ["Q.credits", "", "d"],
     retry: ["S.credits", "retry+poll", "a"],
+    "retry-stage": ["Q.credits", "", "i"],
+    "retry-creation": ["Q.credits", "", "i"],
+    "keep-waiting": ["Q.credits", "", "i"],
     handoff: ["Q.credits", "", "i"],
     "stage-change": ["Q.credits", "", "i"],
     "dialog-close": ["Q.credits", "", "i"],
@@ -1115,6 +1179,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["Q.settings", "", "d"],
     return: ["Q.settings", "", "d"],
     retry: ["S.settings", "retry+poll", "a"],
+    "retry-stage": ["Q.settings", "", "i"],
+    "retry-creation": ["Q.settings", "", "i"],
+    "keep-waiting": ["Q.settings", "", "i"],
     handoff: ["Q.settings", "", "i"],
     "stage-change": ["Q.settings", "", "i"],
     "dialog-close": ["Q.settings", "", "i"],
@@ -1164,6 +1231,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["Q.client", "", "d"],
     return: ["Q.client", "", "d"],
     retry: ["Q.client", "retry+uncertain+poll", "a"],
+    "retry-stage": ["Q.client", "", "i"],
+    "retry-creation": ["Q.client", "", "i"],
+    "keep-waiting": ["Q.client", "", "i"],
     handoff: ["Q.client", "", "i"],
     "stage-change": ["Q.client", "", "i"],
     "dialog-close": ["Q.client", "", "i"],
@@ -1213,6 +1283,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["Q.wake", "", "d"],
     return: ["Q.wake", "", "d"],
     retry: ["S.none", "retry+poll+dispatch", "a"],
+    "retry-stage": ["Q.wake", "", "i"],
+    "retry-creation": ["Q.wake", "", "i"],
+    "keep-waiting": ["Q.wake", "", "i"],
     handoff: ["Q.wake", "", "i"],
     "stage-change": ["Q.wake", "", "i"],
     "dialog-close": ["Q.wake", "", "i"],
@@ -1262,6 +1335,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["A", "", "d"],
     return: ["A", "", "d"],
     retry: ["A", "", "i"],
+    "retry-stage": ["A", "", "i"],
+    "retry-creation": ["A", "", "i"],
+    "keep-waiting": ["A", "", "i"],
     handoff: ["A", "", "i"],
     "stage-change": ["A", "", "i"],
     "dialog-close": ["A", "", "i"],
@@ -1311,6 +1387,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["RC", "ret+remove", "a"],
     return: ["RC", "ret+remove", "a"],
     retry: ["RC", "ret+remove", "a"],
+    "retry-stage": ["E", "", "i"],
+    "retry-creation": ["E", "", "i"],
+    "keep-waiting": ["E", "", "i"],
     handoff: ["E", "", "i"],
     "stage-change": ["E", "", "i"],
     "dialog-close": ["E", "", "i"],
@@ -1360,6 +1439,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["D", "", "i"],
     return: ["D", "", "i"],
     retry: ["D", "", "i"],
+    "retry-stage": ["D", "", "i"],
+    "retry-creation": ["D", "", "i"],
+    "keep-waiting": ["D", "", "i"],
     handoff: ["D", "", "i"],
     "stage-change": ["D", "", "i"],
     "dialog-close": ["D", "", "i"],
@@ -1409,6 +1491,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["C", "", "i"],
     return: ["C", "", "i"],
     retry: ["C", "", "i"],
+    "retry-stage": ["C", "", "i"],
+    "retry-creation": ["C", "", "i"],
+    "keep-waiting": ["C", "", "i"],
     handoff: ["C", "", "i"],
     "stage-change": ["C", "", "i"],
     "dialog-close": ["C", "", "i"],
@@ -1458,6 +1543,9 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     stop: ["R", "", "i"],
     return: ["R", "", "i"],
     retry: ["R", "", "i"],
+    "retry-stage": ["R", "", "i"],
+    "retry-creation": ["R", "", "i"],
+    "keep-waiting": ["R", "", "i"],
     handoff: ["R", "", "i"],
     "stage-change": ["R", "", "i"],
     "dialog-close": ["R", "", "i"],
@@ -1552,6 +1640,9 @@ function defaultFacts(rowId: string): PendingSendFacts {
     terminalDisposition: false,
     stopRequested: false,
     sandboxKnown: true,
+    retryAction: "send-again",
+    retryObservation: "observe",
+    observation: { kind: "none" },
   };
 }
 
@@ -2764,4 +2855,437 @@ describe("guard: a stored Stop outranks the stage, and a stale local record rehy
       expect(transition.effects).toEqual([]);
     },
   );
+});
+
+describe("guard: a stage retry runs only where its action is eligible", () => {
+  const STAGE_ACTIONS = [
+    "retry-stage",
+    "retry-creation",
+    "keep-waiting",
+  ] as const;
+  const ELIGIBLE: Readonly<Record<(typeof STAGE_ACTIONS)[number], string[]>> = {
+    "retry-stage": ["W.notsent", "W.wake"],
+    "retry-creation": ["W.notsent"],
+    "keep-waiting": ["W.host", "W.none", "W.notsent", "W.wake"],
+  };
+  const WAITING = ROWS.filter((row) => row.phase === "waiting").map(
+    (row) => row.id,
+  );
+  const stageRun = (
+    rowId: string,
+    event: string,
+    overlay: Partial<PendingSendFacts>,
+  ) =>
+    run(stateOf("chat", rowId), event, {
+      ...defaultFacts(rowId),
+      stageStatus: "creating",
+      ...overlay,
+    });
+
+  it.each(
+    STAGE_ACTIONS.flatMap((action) =>
+      ["staged", "creating"].flatMap((stageStatus) =>
+        WAITING.map((rowId) => [action, stageStatus, rowId] as const),
+      ),
+    ),
+  )("%s on a %s stage from PS.%s", (action, stageStatus, rowId) => {
+    const transition = stageRun(rowId, action, {
+      stageStatus: stageStatus as PendingSendFacts["stageStatus"],
+    });
+    const eligible = ELIGIBLE[action].includes(rowId);
+    expect(sortedEffects(transition)).toEqual(
+      eligible ? ["poll", "retry", "run-stage"] : [],
+    );
+    expect(outcomeOf(transition)).toBe(eligible ? "applied" : "ignored");
+  });
+
+  it.each(STAGE_ACTIONS)(
+    "%s while a wake is in flight polls and starts no second run",
+    (action) => {
+      const rowId = ELIGIBLE[action][0];
+      const transition = stageRun(rowId, action, { wakeInFlight: true });
+      expect(sortedEffects(transition)).toEqual(["poll", "retry"]);
+    },
+  );
+
+  it.each(STAGE_ACTIONS)("%s from a held Stop does nothing", (action) => {
+    expect(stageRun("W.stop", action, {}).effects).toEqual([]);
+  });
+
+  it.each(STAGE_ACTIONS)(
+    "%s refuses an in-flight dispatch and a durable claim",
+    (action) => {
+      const rowId = ELIGIBLE[action][0];
+      expect(stageRun(rowId, action, { inFlight: true }).effects).toEqual([]);
+      // A claim the record does not hold is the stale-record guard's to rehydrate.
+      expect(stageRun(rowId, action, { durableClaim: true }).effects).toEqual([
+        "rehydrate",
+      ]);
+    },
+  );
+
+  it("retry-stage with no stage ignores the request and runs nothing", () => {
+    const transition = stageRun("W.wake", "retry-stage", {
+      stageStatus: "missing",
+    });
+    expect(transition.effects).toEqual([]);
+    expect(outcomeOf(transition)).toBe("ignored");
+  });
+
+  it("retry-stage on a handoff stage uses the readiness plan and never runs a stage", () => {
+    const transition = stageRun("W.wake", "retry-stage", {
+      stageStatus: "handoff",
+    });
+    expect(sortedEffects(transition)).toContain("retry");
+    expect(sortedEffects(transition)).not.toContain("run-stage");
+  });
+});
+
+describe("guard: a stage retry request is published only where its action is eligible", () => {
+  const CASES = [
+    ["send-again", "W.notsent", "handoff", true],
+    ["send-again", "W.host", "handoff", false],
+    ["retry-stage", "W.wake", "handoff", true],
+    ["retry-stage", "W.credits", "handoff", false],
+    ["retry-creation", "W.notsent", "creating", true],
+    ["retry-creation", "W.wake", "creating", false],
+    ["retry-creation", "W.notsent", "handoff", false],
+    ["keep-waiting", "W.none", "creating", true],
+    ["keep-waiting", "W.host", "staged", true],
+    ["keep-waiting", "W.model", "creating", false],
+    ["keep-waiting", "W.none", "handoff", false],
+  ] as const;
+
+  it.each(CASES)(
+    "%s from PS.%s on a %s stage publishes: %s",
+    (action, rowId, stageStatus, published) => {
+      const transition = run(stateOf("chat", rowId), "request-retry", {
+        ...defaultFacts(rowId),
+        owns: false,
+        exclusive: false,
+        origin: false,
+        retryAction: action,
+        stageStatus,
+      });
+      expect(sortedEffects(transition)).toEqual(
+        published ? ["request-retry"] : [],
+      );
+    },
+  );
+
+  it.each(["retry-stage", "retry-creation", "keep-waiting"] as const)(
+    "%s is not published from a held Stop or over a durable claim",
+    (action) => {
+      const stop = run(stateOf("chat", "W.stop"), "request-retry", {
+        ...defaultFacts("W.stop"),
+        retryAction: action,
+        stageStatus: "creating",
+      });
+      const claimed = run(stateOf("chat", "W.notsent"), "request-retry", {
+        ...defaultFacts("W.notsent"),
+        durableClaim: true,
+        retryAction: action,
+        stageStatus: "creating",
+      });
+      expect(stop.effects).toEqual([]);
+      expect(claimed.effects).toEqual([]);
+    },
+  );
+});
+
+describe("guard: a consumed retry request is always acknowledged and never masks the observation", () => {
+  const consume = (rowId: string, overlay: Partial<PendingSendFacts>) =>
+    run(stateOf("chat", rowId), "consume-retry", {
+      ...defaultFacts(rowId),
+      ...overlay,
+    });
+
+  it("runs an eligible action and acknowledges it first", () => {
+    const transition = consume("W.wake", {
+      retryAction: "retry-stage",
+      stageStatus: "creating",
+    });
+    expect(sortedEffects(transition)).toEqual([
+      "acknowledge-retry",
+      "poll",
+      "retry",
+      "run-stage",
+    ]);
+  });
+
+  it("acknowledges a refused action and runs the real observation in the same pass", () => {
+    const transition = consume("W.host", {
+      retryAction: "retry-creation",
+      retryObservation: "terminal-row",
+      host: "ended",
+    });
+    expect(sortedEffects(transition)).toEqual([
+      "acknowledge-retry",
+      "end-host",
+    ]);
+    expect(transition.state.phase).toBe("ended");
+  });
+
+  it("acknowledges a request over a held Stop and keeps the Stop's progress", () => {
+    const transition = consume("W.stop", {
+      retryAction: "send-again",
+      retryObservation: "observe",
+      host: "resting",
+    });
+    expect(transition.effects).toContain("acknowledge-retry");
+    expect(transition.effects).not.toContain("retry");
+    expect(transition.effects).toContain("remove");
+  });
+
+  it.each(["W.notsent", "W.wake"])(
+    "a refused send-again from PS.%s changes no failure and starts no run",
+    (rowId) => {
+      const transition = consume(rowId, {
+        retryAction: "send-again",
+        inFlight: true,
+      });
+      expect(transition.effects).toContain("acknowledge-retry");
+      expect(transition.effects).not.toContain("run-stage");
+      expect(transition.effects).not.toContain("retry");
+    },
+  );
+
+  it.each(["A", "D", "C", "R", "E"])(
+    "PS.%s is a closed state: a consumed request runs nothing",
+    (rowId) => {
+      const transition = consume(rowId, {
+        retryAction: "retry-stage",
+        stageStatus: "creating",
+      });
+      expect(transition.effects).not.toContain("run-stage");
+      expect(transition.effects).not.toContain("retry");
+    },
+  );
+
+  it("denies a consumed request under another account", () => {
+    const transition = consume("W.wake", {
+      accountActive: false,
+      retryAction: "retry-stage",
+      stageStatus: "creating",
+    });
+    expect(transition.effects).not.toContain("run-stage");
+    expect(outcomeOf(transition)).not.toBe("applied");
+  });
+});
+
+describe("guard: a Retry on a claimed send is published, not executed, by any window", () => {
+  const request = (rowId: string, overlay: Partial<PendingSendFacts>) =>
+    run(stateOf("chat", rowId), "request-dispatch-retry", {
+      ...defaultFacts(rowId),
+      ...overlay,
+    });
+  const PUBLISHES = [
+    "Q.none",
+    "Q.host",
+    "Q.credits",
+    "Q.settings",
+    "Q.client",
+    "Q.wake",
+    "S.credits",
+    "S.settings",
+    "S.wake",
+  ];
+  const REFUSES = ROWS.map((row) => row.id).filter(
+    (id) => !PUBLISHES.includes(id),
+  );
+
+  it.each(PUBLISHES)(
+    "PS.%s asks its owner for one Retry, from the owner and from a window that does not own it, changing nothing",
+    (rowId) => {
+      const start = stateOf("chat", rowId);
+      for (const facts of [
+        { owns: true },
+        { owns: false, exclusive: false, origin: false },
+      ]) {
+        const transition = request(rowId, facts);
+        expect(transition.state).toEqual(start);
+        expect(sortedEffects(transition)).toEqual(["request-dispatch-retry"]);
+        expect(outcomeOf(transition)).toBe("applied");
+      }
+    },
+  );
+
+  it.each(PUBLISHES)(
+    "PS.%s refuses the request under another account",
+    (rowId) => {
+      const transition = request(rowId, { accountActive: false, owns: false });
+      expect(transition.effects).toEqual([]);
+      expect(outcomeOf(transition)).toBe("denied-ownership");
+    },
+  );
+
+  it.each(REFUSES)(
+    "PS.%s publishes no claimed Retry: it has no live latched claim to replay",
+    (rowId) => {
+      const transition = request(rowId, { owns: false });
+      expect(sortedEffects(transition)).not.toContain("request-dispatch-retry");
+    },
+  );
+
+  it("does not publish over a record that holds no durable claim", () => {
+    expect(request("Q.none", { durableClaim: false }).effects).toEqual([]);
+  });
+});
+
+describe("guard: only evidence tied to its own request settles a held send", () => {
+  const held = { createdAt: 100 };
+  const stopped = { createdAt: 100, stopRequested: true, stopRequestedAt: 300 };
+  type Request = Parameters<typeof decodePendingSandboxObservation>[0];
+  const decode = (
+    request: Request,
+    observation: PendingSandboxObservation,
+    host: "awake" | "resting" | "ended",
+  ) => decodePendingSandboxObservation(request, host, observation);
+  const decodeAtRest = (
+    request: Request,
+    observation: PendingSandboxObservation,
+  ) => decode(request, observation, "resting");
+
+  it.each([
+    ["sent after the mount", 51, "resting"],
+    ["sent at the mount", 50, "unknown"],
+    ["sent before the mount", 49, "unknown"],
+    ["with no send time", null, "unknown"],
+  ] as const)("an unheld list read %s", (_label, sentAt, expected) => {
+    expect(decodeAtRest(null, { kind: "list", sentAt, mountedAt: 50 })).toBe(
+      expected,
+    );
+  });
+
+  it.each([
+    [held, 101, "resting"],
+    [held, 100, "unknown"],
+    [{ ...held, observationRequestedAt: 200 }, 201, "resting"],
+    [{ ...held, observationRequestedAt: 200 }, 200, "unknown"],
+    [stopped, 301, "resting"],
+    [stopped, 300, "unknown"],
+    [{ ...stopped, observationRequestedAt: 400 }, 400, "unknown"],
+    [{ ...stopped, observationRequestedAt: 400 }, 401, "resting"],
+    // A Stop written before its boundary existed settles on nothing until migrated.
+    [{ createdAt: 100, stopRequested: true }, 10_000, "unknown"],
+  ] as const)(
+    "a held list read of request %j sent at %s settles to %s",
+    (request, sentAt, expected) => {
+      expect(
+        decodeAtRest(request, { kind: "list", sentAt, mountedAt: 0 }),
+      ).toBe(expected);
+    },
+  );
+
+  it("a list read with no send time never settles a held request", () => {
+    expect(
+      decodeAtRest(held, { kind: "list", sentAt: null, mountedAt: 0 }),
+    ).toBe("unknown");
+  });
+
+  it.each([
+    [stopped, 300, "resting"],
+    [stopped, 299, "unknown"],
+    [stopped, null, "unknown"],
+    [held, 300, "unknown"],
+    [null, 300, "unknown"],
+  ] as const)(
+    "a stop result of request %j captured at %s settles to %s",
+    (request, requestedAt, expected) => {
+      expect(decodeAtRest(request, { kind: "stop-result", requestedAt })).toBe(
+        expected,
+      );
+    },
+  );
+
+  it.each([
+    [{ ...held, observationRequestedAt: 200 }, 200, "awake"],
+    [{ ...held, observationRequestedAt: 200 }, 199, "unknown"],
+    [{ ...held, observationRequestedAt: 200 }, null, "unknown"],
+    [held, 200, "unknown"],
+    [{ ...stopped, observationRequestedAt: 200 }, 200, "unknown"],
+    [null, 200, "unknown"],
+  ] as const)(
+    "a wake result of request %j captured at %s settles to %s",
+    (request, requestedAt, expected) => {
+      expect(
+        decode(request, { kind: "wake-result", requestedAt }, "awake"),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["chat-1", "host-1", "awake"],
+    ["chat-2", "host-1", "unknown"],
+    ["chat-1", "host-2", "unknown"],
+  ] as const)(
+    "a dispatch result for %s on %s settles to %s",
+    (chatId, hostId, expected) => {
+      const request = {
+        ...held,
+        dispatch: { input: { chatId: "chat-1", hostId: "host-1" } },
+      };
+      expect(
+        decode(request, { kind: "dispatch-result", chatId, hostId }, "awake"),
+      ).toBe(expected);
+      expect(
+        decode(held, { kind: "dispatch-result", chatId, hostId }, "awake"),
+      ).toBe("unknown");
+    },
+  );
+
+  it("a legacy claimed record without an observation boundary settles on no list read until its owner migrates it", () => {
+    const claimed = {
+      ...held,
+      dispatch: { input: { chatId: "chat-1", hostId: "host-1" } },
+    };
+    expect(
+      decodeAtRest(claimed, { kind: "list", sentAt: 10_000, mountedAt: 0 }),
+    ).toBe("unknown");
+    expect(
+      decodeAtRest(
+        { ...claimed, observationRequestedAt: 200 },
+        { kind: "list", sentAt: 201, mountedAt: 0 },
+      ),
+    ).toBe("resting");
+  });
+
+  it("a dispatch result matches the accepted receipt's identity as well as the saved input", () => {
+    const accepted = {
+      ...held,
+      delivery: { chatId: "chat-1", hostId: "host-1" },
+    };
+    expect(
+      decode(
+        accepted,
+        { kind: "dispatch-result", chatId: "chat-1", hostId: "host-1" },
+        "awake",
+      ),
+    ).toBe("awake");
+    expect(
+      decode(
+        accepted,
+        { kind: "dispatch-result", chatId: "chat-2", hostId: "host-1" },
+        "awake",
+      ),
+    ).toBe("unknown");
+  });
+
+  it.each([
+    [held, "resting", "resting"],
+    [held, "awake", "unknown"],
+    [held, "ended", "unknown"],
+    [stopped, "resting", "unknown"],
+    [null, "resting", "unknown"],
+  ] as const)(
+    "an intent against request %j on a %s host settles to %s",
+    (request, host, expected) => {
+      expect(decode(request, { kind: "intent" }, host)).toBe(expected);
+    },
+  );
+
+  it("no observation settles anything", () => {
+    expect(decodeAtRest(held, { kind: "none" })).toBe("unknown");
+    expect(decodeAtRest(null, { kind: "none" })).toBe("unknown");
+  });
 });

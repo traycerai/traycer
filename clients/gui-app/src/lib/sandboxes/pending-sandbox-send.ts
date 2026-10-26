@@ -222,7 +222,12 @@ async function recoverTaskLostSend(id: string): Promise<void> {
     plan.effects.includes("end-host") &&
     !usePendingSandboxSendStore
       .getState()
-      .endDispatch(id, send.dispatch ?? null, "task-deleted")
+      .endDispatch(
+        id,
+        send.dispatch ?? null,
+        "task-deleted",
+        UNKNOWN_PENDING_SEND_FACTS,
+      )
   )
     return;
   if (plan.effects.includes("end-host") || plan.effects.includes("remove"))
