@@ -64,8 +64,8 @@ describe("desktop winget manifest", () => {
       "Desktop",
       VERSION,
     );
-    const read = (name) =>
-      parseYaml(readFileSync(path.join(dir, name), "utf8"));
+    const readText = (name) => readFileSync(path.join(dir, name), "utf8");
+    const read = (name) => parseYaml(readText(name));
 
     const version = read("Traycer.Desktop.yaml");
     const installer = read("Traycer.Desktop.installer.yaml");
@@ -75,8 +75,20 @@ describe("desktop winget manifest", () => {
       expect(manifest).toMatchObject({
         PackageIdentifier: "Traycer.Desktop",
         PackageVersion: VERSION,
-        ManifestVersion: "1.10.0",
+        ManifestVersion: "1.12.0",
       });
+    }
+    // winget's validator rejects a file without a schema header comment, and
+    // the header's type and version must match the file's ManifestType and
+    // ManifestVersion. The YAML parse drops comments, so read the raw text.
+    for (const [name, type] of [
+      ["Traycer.Desktop.yaml", "version"],
+      ["Traycer.Desktop.installer.yaml", "installer"],
+      ["Traycer.Desktop.locale.en-US.yaml", "defaultLocale"],
+    ]) {
+      expect(readText(name).split("\n")[0]).toBe(
+        `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.1.12.0.schema.json`,
+      );
     }
     expect(version.DefaultLocale).toBe("en-US");
     expect(installer).toMatchObject({
