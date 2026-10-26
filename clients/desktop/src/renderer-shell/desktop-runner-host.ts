@@ -655,9 +655,9 @@ export interface DesktopPowerBridge {
 }
 
 export interface DesktopTrackpadScrollPhaseBridge {
-  onEvent(
-    handler: (event: TrackpadScrollEvent) => void,
-  ): { dispose: () => void };
+  onEvent(handler: (event: TrackpadScrollEvent) => void): {
+    dispose: () => void;
+  };
 }
 
 export interface DesktopZoomBridge {

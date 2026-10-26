@@ -167,6 +167,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/layout-editor/layout-editor.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
+  // Escape cancels a two-finger history swipe preview in flight: a named key,
+  // not a registered chord.
+  "gui-app/src/components/layout/shell/desktop-history-gesture.ts": 1,
   // Every group surface (the chip, the side-strip header, the Activity view's
   // label and rail column) opens the group editor through this one anchor: F2,
   // ContextMenu and Shift+F10, plus Enter and Space on a surface that opts in

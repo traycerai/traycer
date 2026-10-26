@@ -8,6 +8,7 @@
 @import "./styles/theme-fallback.css";
 @import "./styles/theme-surfaces.css";
 @import "./styles/window-chrome.css";
+@import "./components/layout/shell/desktop-history-swipes.css";
 
 /* `theme-base-dark` (theme-fallback.css) re-declares the dark palette on a
    subtree, so the variant has to follow it there too. */

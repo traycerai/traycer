@@ -207,7 +207,9 @@ export function installDesktopHistoryGesture(
     event: DesktopTrackpadScrollEvent,
   ): void => {
     const inward =
-      live.direction === "back" ? event.scrollingDeltaX : -event.scrollingDeltaX;
+      live.direction === "back"
+        ? event.scrollingDeltaX
+        : -event.scrollingDeltaX;
     live.travel = Math.max(
       0,
       Math.min(DESKTOP_HISTORY_GESTURE.maxTravelPx, live.travel + inward),
