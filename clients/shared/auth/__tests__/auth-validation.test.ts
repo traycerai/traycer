@@ -666,7 +666,11 @@ describe("negotiated user record route, and frozen-route recovery", () => {
   );
 
   it("1a2: a served 3.1 body keeps a supported previewFeatures verdict", async () => {
-    const previewFeatures = { environments: true, sandboxes: false, bots: true };
+    const previewFeatures = {
+      environments: true,
+      sandboxes: false,
+      bots: true,
+    };
     installUrlKeyedMockFetch(
       new Map([
         [
