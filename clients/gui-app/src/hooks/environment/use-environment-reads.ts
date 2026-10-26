@@ -1,3 +1,7 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -86,7 +90,15 @@ function useRereadOnRevision(
     for (const method of DELTA_FED_READS) {
       void queryClient
         .invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(hostId, method),
+          queryKey: hostQueryKeys.methodScope(
+            hostRpcServingTierHostId(
+              method,
+              hostId,
+              readProcessHostRpcTierPlan(),
+              null,
+            ),
+            method,
+          ),
         })
         .catch(ignoreError);
     }

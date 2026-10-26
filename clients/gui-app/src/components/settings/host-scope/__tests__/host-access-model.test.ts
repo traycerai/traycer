@@ -377,12 +377,12 @@ describe("localOverrideLabel and sameOverrideTarget", () => {
           key: "ANTHROPIC_API_KEY",
         }),
       ),
-    ).toBe("Claude Code: ANTHROPIC_API_KEY");
+    ).toBe("ANTHROPIC_API_KEY (Claude Code)");
     expect(
       localOverrideLabel(
         override({ kind: "env_override", providerId: "codex", key: "K" }),
       ),
-    ).toBe("Codex: K");
+    ).toBe("K (Codex)");
   });
 
   const variableA: LocalOverrideTarget = { kind: "variable", key: "A" };

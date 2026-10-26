@@ -32,6 +32,23 @@ describe("InviteDialog", () => {
     );
   });
 
+  it("says what happens next once sent: the email and the role they join as", async () => {
+    await sendInvite({ outcome: "sent", seatDelta: null });
+    const body = await screen.findByTestId("members-invite-description");
+    expect(body.textContent).toBe(
+      "We emailed new@acme.test. They join Acme as an editor when they accept.",
+    );
+  });
+
+  it("does not call a refused invitation sent", async () => {
+    await sendInvite({ outcome: "seat_limit" });
+    await screen.findByTestId("members-invite-refusal");
+    expect(screen.queryByText("Invitation sent")).toBeNull();
+    expect(screen.getByTestId("members-invite-description").textContent).toBe(
+      "",
+    );
+  });
+
   it("describes the picked role under the picker, which the picker names as its description", async () => {
     const user = userEvent.setup();
     render(

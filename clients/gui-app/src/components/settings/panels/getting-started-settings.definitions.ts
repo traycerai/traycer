@@ -51,7 +51,7 @@ export const GETTING_STARTED = defineSettingsSection("getting-started", {
     group: null,
     search: { anchor: "getting-started-install" },
     label: "Install Traycer on another computer",
-    description: "The download page.",
+    description: "So your settings follow you to it.",
     availableWhen: alwaysAvailable,
     keywords: ["download", "install", "another computer", "desktop"],
   },

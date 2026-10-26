@@ -2,6 +2,15 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import { removalLabel } from "@/components/settings/details/details-copy";
 import type { HostRpcRegistry } from "@/lib/host";
 import type {
+  EnvironmentSecretRemoval,
+  EnvironmentSecretRemovalV12,
+} from "@traycer/protocol/host/environment-schemas";
+import {
+  failedHostsText,
+  removalWithFailures,
+} from "@/components/settings/secrets/secret-removal-lines";
+import type {
+  DetailsHostStatus,
   DetailsItemStatus,
   DetailsProviderContext,
   DetailsStatus,
@@ -13,9 +22,59 @@ type SecretsList = ResponseOfMethod<
   "environment.secrets.list"
 >;
 
+const FAILED_STATES = new Set(["failed", "not_applied"]);
+
+/**
+ * The page's "Now": where the configuration's secrets stand on the hosts
+ * running it. "Applied on 2 hosts" when every host applied them, "Not
+ * applied on dev-box" when a host could not, "Applying on dev-box…" while a
+ * host has not reported the latest change.
+ */
+export function secretsHostSummary(
+  hosts: readonly DetailsHostStatus[],
+): string {
+  if (hosts.length === 0) return "No hosts yet";
+  const failing = hosts.filter((host) => FAILED_STATES.has(host.state));
+  if (failing.length === 1) return `Not applied on ${failing[0].name}`;
+  if (failing.length > 1) return `Not applied on ${failing.length} hosts`;
+  const waiting = hosts.filter((host) => host.state !== "applied");
+  if (waiting.length === 1) return `Applying on ${waiting[0].name}…`;
+  if (waiting.length > 1) return `Applying on ${waiting.length} hosts…`;
+  return hosts.length === 1
+    ? "Applied on 1 host"
+    : `Applied on ${hosts.length} hosts`;
+}
+
+/**
+ * A removal still under way: its outcome, then a host that couldn't delete
+ * its copy ("Cleanup requested · dev-box couldn't delete its copy"), else
+ * which hosts still hold one ("Cleanup requested · waiting for dev-box"). A
+ * host the removal names by id only takes its name from the page's host rows.
+ */
+export function pendingRemovalSummary(
+  removal: EnvironmentSecretRemovalV12,
+  hosts: readonly DetailsHostStatus[],
+): string {
+  const nameOf = (target: EnvironmentSecretRemovalV12["targets"][number]) =>
+    target.hostName ??
+    hosts.find((host) => host.hostId === target.hostId)?.name ??
+    "a host";
+  const label = removalLabel(removal.outcome);
+  const failed = failedHostsText(removal, nameOf);
+  if (failed !== null) return `${label} · ${failed}`;
+  const waiting = removal.targets.filter(
+    (target) => target.target === "host" && target.state === "requested",
+  );
+  if (waiting.length > 1)
+    return `${label} · waiting for ${waiting.length} hosts`;
+  if (waiting.length === 0) return label;
+  return `${label} · waiting for ${nameOf(waiting[0])}`;
+}
+
 function secretInventory(
   subject: DetailsSubject,
   list: SecretsList,
+  hosts: readonly DetailsHostStatus[],
 ): readonly DetailsItemStatus[] {
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1_000;
   return [
@@ -33,6 +92,7 @@ function secretInventory(
         title: secret.name,
         summary: "Set",
         at: secret.updatedAt,
+        retryable: false,
       })),
     ...list.removed
       .filter(
@@ -47,10 +107,41 @@ function secretInventory(
           key: removed.id,
         },
         title: removed.name,
-        summary: removalLabel(removed.removal.outcome),
-        at: removed.removal.destroyedAt ?? removed.removal.revokedAt,
+        ...(removed.removal.outcome === "destroyed"
+          ? {
+              summary: removalLabel(removed.removal.outcome),
+              at: removed.removal.destroyedAt ?? removed.removal.revokedAt,
+              retryable: false,
+            }
+          : {
+              summary: pendingRemovalSummary(removed.removal, hosts),
+              at: null,
+              retryable: true,
+            }),
       })),
   ];
+}
+
+/**
+ * The versions read's removal when there is one (the newer fact, which
+ * follows a Retry), else the list's; with the list's failures either way.
+ */
+function newestRemoval(
+  read: EnvironmentSecretRemoval | null,
+  listed: EnvironmentSecretRemovalV12 | null,
+): EnvironmentSecretRemovalV12 | null {
+  const newest = read ?? listed;
+  return newest === null ? null : removalWithFailures(newest, listed);
+}
+
+/** One secret's "Now": Set, or how far its removal reached. */
+function singleSecretSummary(
+  removal: EnvironmentSecretRemovalV12 | null,
+  hosts: readonly DetailsHostStatus[],
+): string {
+  if (removal === null) return "Set";
+  if (removal.outcome === "destroyed") return removalLabel(removal.outcome);
+  return pendingRemovalSummary(removal, hosts);
 }
 
 async function singleSecretDetails(
@@ -77,12 +168,16 @@ async function singleSecretDetails(
           },
         );
   const current = versions?.versions.find((version) => version.current);
-  const removal = versions?.removal ?? removed?.removal ?? null;
+  const removal = newestRemoval(
+    versions?.removal ?? null,
+    removed?.removal ?? null,
+  );
   return {
     title,
     status: {
       ...status,
-      summary: removal === null ? "Set" : removalLabel(removal.outcome),
+      summary: singleSecretSummary(removal, status.hosts),
+      retryable: removal !== null && removal.outcome !== "destroyed",
       currentVersion: current === undefined ? null : String(current.ordinal),
       reason:
         removal === null
@@ -109,8 +204,8 @@ export async function loadSecretDetails(
     title: "Secrets",
     status: {
       ...status,
-      summary: "Secrets and recent removals",
-      items: secretInventory(subject, list),
+      summary: secretsHostSummary(status.hosts),
+      items: secretInventory(subject, list, status.hosts),
     },
   };
 }

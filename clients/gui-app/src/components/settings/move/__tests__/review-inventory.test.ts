@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import {
   appliedOnHostNames,
   roomSharedLine,
@@ -30,8 +30,8 @@ function item(
 function host(
   hostId: string,
   hostLabel: string | null,
-  applied: EnvironmentHostRecordV11["applied"],
-): EnvironmentHostRecordV11 {
+  applied: EnvironmentHostRecordV12["applied"],
+): EnvironmentHostRecordV12 {
   return {
     hostId,
     hostLabel,
@@ -41,6 +41,7 @@ function host(
     boundAt: 1,
     reachable: true,
     lastReportedAt: 1,
+    hasLocalRow: false,
     applied,
   };
 }

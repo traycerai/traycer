@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import { TeamModelRouting } from "@/components/settings/environment/team-model-routing";
 import {
   configurationItem,
@@ -73,7 +73,7 @@ const routing = (enabled: boolean, revision: number) =>
     revision,
   });
 
-const host: EnvironmentHostRecordV11 = {
+const host: EnvironmentHostRecordV12 = {
   hostId: "host-a",
   hostLabel: "Mac mini",
   hostPlatform: "darwin",
@@ -82,6 +82,7 @@ const host: EnvironmentHostRecordV11 = {
   boundAt: 1,
   reachable: true,
   lastReportedAt: 1,
+  hasLocalRow: false,
   applied: [],
 };
 
@@ -333,7 +334,7 @@ describe("TeamModelRouting", () => {
     const line = await screen.findByText(/Model tiers need a host running/);
     await waitFor(() => {
       expect(line.closest("p")?.textContent).toBe(
-        "Model tiers need a host running Acme. Pick one.",
+        "Model tiers need a host running Acme.Start an Acme sandbox to see them.",
       );
     });
     expect(screen.queryByRole("switch")).toBeNull();
@@ -345,7 +346,7 @@ describe("TeamModelRouting", () => {
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(0);
     expect(
-      within(document.body).getByRole("button", { name: "Pick one." }),
-    ).toBeTruthy();
+      within(document.body).queryByRole("button", { name: "Pick one." }),
+    ).toBeNull();
   });
 });

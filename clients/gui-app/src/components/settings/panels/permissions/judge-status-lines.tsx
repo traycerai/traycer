@@ -134,8 +134,8 @@ export function AutomaticStatus(props: {
           Now:{" "}
           <span className="font-medium text-foreground">
             each conversation&apos;s own model
-          </span>{" "}
-          · on your account there
+          </span>
+          , on your account
         </StatusLine>
         {copilotLine}
       </>

@@ -1651,7 +1651,15 @@ export function ProviderRateLimitBody(
       </div>
     );
   }
-  if (state.kind === "empty") return null;
+  // The card's heading stays, so an empty card says so rather than ending at
+  // the host's name.
+  if (state.kind === "empty") {
+    return (
+      <p className="text-ui-xs text-muted-foreground">
+        No rate limits reported.
+      </p>
+    );
+  }
   const data = state.data;
   if (!data.available) {
     return (

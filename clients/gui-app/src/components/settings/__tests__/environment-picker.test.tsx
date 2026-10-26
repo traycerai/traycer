@@ -10,6 +10,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
+import type {
+  HostsRunningConfiguration,
+  RunningHost,
+} from "@/components/settings/environment/hosts-running-configuration-model";
 import {
   hostScopeFixture,
   hostScopeOptionFixture,
@@ -23,15 +27,60 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 
 // The two per-host reads the picker draws from are queries and a manifest
 // registry; they are the boundary, so the suite answers them directly.
-const reads = vi.hoisted(() => ({
-  statuses: new Map<string, unknown>(),
-  versions: new Map<string, unknown>(),
-}));
+const reads = vi.hoisted(
+  (): {
+    readonly statuses: Map<string, unknown>;
+    readonly versions: Map<string, unknown>;
+    running: HostsRunningConfiguration | null;
+    invitations: Array<{
+      environmentId: string;
+      teamName: string;
+      role: "admin" | "editor" | "viewer";
+      paidPlan: boolean;
+    }>;
+    acceptOutcome: "accepted" | "not_found";
+    accepted: string[];
+  } => ({
+    statuses: new Map<string, unknown>(),
+    versions: new Map<string, unknown>(),
+    running: null,
+    invitations: [],
+    acceptOutcome: "accepted",
+    accepted: [],
+  }),
+);
+// The hosts running Personal come from one hook (its list is tested on its
+// own); the picker draws whatever it answers.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => reads.running,
+  }),
+);
 vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
   useRegisteredHostEnvironmentStatuses: () => reads.statuses,
 }));
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersions: () => reads.versions,
+}));
+// The invited rows and the Accept behind Review are the host's; this suite
+// answers them directly.
+vi.mock("@/hooks/environment/use-environment-invitations", () => ({
+  useEnvironmentInvitationsQuery: () => ({
+    data: { invitations: reads.invitations },
+  }),
+  useEnvironmentInvitationAcceptMutation: () => ({
+    isPending: false,
+    mutate: (
+      variables: { environmentId: string },
+      options: {
+        onSuccess: (response: { outcome: "accepted" | "not_found" }) => void;
+      },
+    ) => {
+      reads.accepted.push(variables.environmentId);
+      options.onSuccess({ outcome: reads.acceptOutcome });
+    },
+  }),
 }));
 // The team rows read the account's configuration list; this suite has none.
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
@@ -101,6 +150,32 @@ function renderPicker(windowHostId: string): void {
   );
 }
 
+function runningHost(name: string, isThisComputer: boolean): RunningHost {
+  return {
+    hostId: name,
+    hostName: name,
+    name,
+    kind: "personal",
+    isThisComputer,
+    lastReportedAt: 1,
+    applied: [],
+  };
+}
+
+function runningOn(
+  names: readonly string[],
+  overrides: Partial<HostsRunningConfiguration>,
+): void {
+  reads.running = {
+    hosts: names.map((name) => runningHost(name, false)),
+    state: "ready",
+    collisions: [],
+    retry: () => undefined,
+    reread: () => undefined,
+    ...overrides,
+  };
+}
+
 function openMenu(): void {
   fireEvent.pointerDown(screen.getByTestId("environment-picker-trigger"), {
     button: 0,
@@ -112,6 +187,10 @@ function openMenu(): void {
 beforeEach(() => {
   reads.statuses.clear();
   reads.versions.clear();
+  reads.invitations = [];
+  reads.acceptOutcome = "accepted";
+  reads.accepted = [];
+  runningOn([], {});
   navigation.navigate.mockClear();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
@@ -130,6 +209,7 @@ describe("<EnvironmentPicker />", () => {
     answer("mac", running, V11);
     answer("dev", running, V11);
     answer("old", awaiting, V11);
+    runningOn(["MacBook Pro", "dev-box"], {});
     renderPicker("mac");
     openMenu();
 
@@ -310,52 +390,68 @@ describe("<EnvironmentPicker />", () => {
     });
   });
 
-  it("names this window's own computer under Personal once it runs Personal, listed or not", () => {
-    const hosts = [
-      hostScopeOptionFixture({
-        hostId: "mac",
-        name: "MacBook Pro",
-        isLocalMachine: true,
-        registered: false,
-        item: null,
-      }),
+  it("names the hosts the hook reports under Personal, and claims none while the list is unread", () => {
+    const cases: readonly [
+      readonly string[],
+      Partial<HostsRunningConfiguration>,
+      string,
+    ][] = [
+      [
+        ["MacBook Pro", "dev-box", "ci-box"],
+        {},
+        "Personalyour settings · on MacBook Pro, dev-box and 1 more",
+      ],
+      [[], {}, "Personalyour settings · not on any computer or sandbox"],
+      [["MacBook Pro"], { state: "loading" }, "Personalyour settings"],
+      [[], { state: "failed" }, "Personalyour settings"],
     ];
-    answer("mac", running, V11);
-    render(
-      <EnvironmentPicker
-        scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "mac" })}
-        activeSection="mcp-servers"
-      />,
-    );
-    openMenu();
-
-    expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
-      "Personalyour settings · on MacBook Pro",
-    );
+    for (const [names, overrides, text] of cases) {
+      runningOn(names, overrides);
+      renderPicker("mac");
+      openMenu();
+      expect(
+        screen.getByTestId("environment-picker-personal").textContent,
+      ).toBe(text);
+      cleanup();
+    }
   });
 
-  it("says Personal is not on any computer or sandbox while none runs it", () => {
-    const hosts = [
-      hostScopeOptionFixture({
-        hostId: "old",
-        name: "Old laptop",
-        isLocalMachine: true,
-        registered: false,
-        item: null,
-      }),
-    ];
-    answer("old", awaiting, V11);
-    render(
-      <EnvironmentPicker
-        scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "old" })}
-        activeSection="mcp-servers"
-      />,
-    );
+  it("offers Rename for two computers sharing a name, on this computer's Overview when it is one of them", () => {
+    reads.running = {
+      hosts: [runningHost("other", false), runningHost("mac", true)],
+      state: "ready",
+      collisions: [
+        { hostName: "windows-test-machine", hostIds: ["other", "mac"] },
+      ],
+      retry: () => undefined,
+      reread: () => undefined,
+    };
+    renderPicker("mac");
     openMenu();
 
-    expect(screen.getByTestId("environment-picker-personal").textContent).toBe(
-      "Personalyour settings · not on any computer or sandbox",
+    const line = screen.getByTestId("environment-picker-name-collision");
+    expect(line.textContent).toBe(
+      "Two computers are named windows-test-machine · Rename",
     );
+    fireEvent.click(line);
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("mac");
+    expect(navigation.navigate).toHaveBeenCalledWith("host");
+    cleanup();
+
+    useSettingsHostScopeStore.setState({ scopedHostId: null });
+    reads.running = {
+      hosts: [runningHost("other", false), runningHost("third", false)],
+      state: "ready",
+      collisions: [
+        { hostName: "windows-test-machine", hostIds: ["other", "third"] },
+      ],
+      retry: () => undefined,
+      reread: () => undefined,
+    };
+    renderPicker("mac");
+    openMenu();
+    fireEvent.click(screen.getByTestId("environment-picker-name-collision"));
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("other");
   });
 
   it("picking a row that hides the open page leaves it for Providers", () => {
@@ -372,5 +468,64 @@ describe("<EnvironmentPicker />", () => {
       hostName: "Old laptop",
     });
     expect(navigation.navigate).toHaveBeenCalledWith("providers");
+  });
+
+  describe("an invited team", () => {
+    function inviteTo(environmentId: string, teamName: string): void {
+      reads.invitations = [
+        { environmentId, teamName, role: "editor", paidPlan: true },
+      ];
+      answer("mac", running, V11);
+      renderPicker("mac");
+      openMenu();
+    }
+
+    it("is drawn as an invited row that cannot be picked, with Review", () => {
+      inviteTo("env-beta", "Beta");
+
+      const row = screen.getByTestId("environment-invitation-env-beta");
+      expect(row.textContent).toContain("Beta");
+      expect(row.textContent).toContain("invited");
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(
+        screen.getByTestId("environment-invitation-review-env-beta"),
+      ).toBeTruthy();
+    });
+
+    it("opens the grant from Review, and picks the team once Accept joins it", async () => {
+      inviteTo("env-beta", "Beta");
+
+      fireEvent.click(
+        screen.getByTestId("environment-invitation-review-env-beta"),
+      );
+      expect(
+        await screen.findByRole("heading", { name: "You're invited to Beta" }),
+      ).toBeTruthy();
+      expect(reads.accepted).toEqual([]);
+
+      fireEvent.click(screen.getByTestId("invite-accept"));
+
+      expect(reads.accepted).toEqual(["env-beta"]);
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-beta",
+      });
+      expect(screen.queryByTestId("invite-accept-dialog")).toBeNull();
+    });
+
+    it("says the invitation is gone, and keeps the pick, when it was withdrawn", async () => {
+      reads.acceptOutcome = "not_found";
+      inviteTo("env-beta", "Beta");
+
+      fireEvent.click(
+        screen.getByTestId("environment-invitation-review-env-beta"),
+      );
+      fireEvent.click(await screen.findByTestId("invite-accept"));
+
+      expect(
+        (await screen.findByTestId("invite-accept-gone")).textContent,
+      ).toBe("This invitation is no longer open.");
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+    });
   });
 });

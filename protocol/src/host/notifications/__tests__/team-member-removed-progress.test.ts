@@ -16,7 +16,10 @@ type Fact = (typeof FACTS)[number];
 
 type FactState = "pending" | "done";
 
-function removalBody(hosts: ReadonlyArray<Record<Fact, FactState>>): string {
+function removalPresentation(
+  hosts: ReadonlyArray<Record<Fact, FactState>>,
+  toRemovedMember: boolean | undefined,
+) {
   const entry = hostNotificationEntrySchemaV23.parse({
     id: "entry-1",
     updatedAt: 1_700_000_000_000,
@@ -37,9 +40,14 @@ function removalBody(hosts: ReadonlyArray<Record<Fact, FactState>>): string {
         hostName: `Host ${index}`,
         ...facts,
       })),
+      toRemovedMember,
     },
   });
-  return formatHostNotificationPresentation(entry).body;
+  return formatHostNotificationPresentation(entry);
+}
+
+function removalBody(hosts: ReadonlyArray<Record<Fact, FactState>>): string {
+  return removalPresentation(hosts, undefined).body;
 }
 
 const ALL_DONE: Record<Fact, FactState> = {
@@ -70,6 +78,21 @@ describe("a removal's per-host progress", () => {
   it("counts a host once all three facts have arrived", () => {
     expect(removalBody([ALL_DONE, ALL_DONE])).toBe(
       "Sam • Acme • 2 of 2 hosts done",
+    );
+  });
+});
+
+describe("the notice told to the person removed", () => {
+  it("says they are no longer a member, not a host-progress line", () => {
+    expect(removalPresentation([ALL_DONE], true)).toEqual({
+      title: "No longer a member",
+      body: "You are no longer a member of Acme.",
+    });
+  });
+
+  it("keeps the admins' progress line when the row is not the removed member's", () => {
+    expect(removalPresentation([ALL_DONE], false).body).toBe(
+      "Sam • Acme • 1 of 1 hosts done",
     );
   });
 });

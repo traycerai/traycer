@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -12,7 +13,7 @@ import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 
 /** Every save addresses the row revision the editor read, including creates. */
 export function useConfigurationItemMutations() {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
   const reread = (
     environmentId: string,

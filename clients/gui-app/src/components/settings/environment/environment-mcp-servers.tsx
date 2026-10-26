@@ -32,6 +32,7 @@ import {
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
 import { McpServerDialog } from "./mcp-server-dialog";
+import { OnHostOnlyServersLine } from "./on-host-only-entries";
 import {
   mcpItemValue,
   providersUsing,
@@ -110,12 +111,20 @@ function McpServerList(): ReactNode {
     <section className="flex flex-col gap-3" aria-label="Servers">
       <ConfigurationWriteFeedback issue={issue} />
       {query.data.length === 0 ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-ui-sm text-muted-foreground">
-            MCP servers give agents tools.
-          </p>
-          {add}
-        </div>
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-ui-sm text-muted-foreground">
+              MCP servers give agents tools.
+            </p>
+            {add}
+          </div>
+          <TeamViewingHostBinding unavailable={null}>
+            <OnHostOnlyServersLine
+              providers={providers}
+              environmentNames={[]}
+            />
+          </TeamViewingHostBinding>
+        </>
       ) : (
         <>
           <div className="flex items-center justify-between gap-3">

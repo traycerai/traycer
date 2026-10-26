@@ -9,37 +9,27 @@ import {
   detailsTime,
 } from "@/components/settings/details/details-copy";
 
+const STATE_LABELS: Readonly<Record<string, string>> = {
+  applied: "Applied",
+  received: "Received",
+  pending: "Applying",
+  applying: "Applying",
+  saved: "Saved",
+  waiting_resume: "applies when it resumes",
+  unsupported: "Update needed",
+  requested: "Cleanup requested",
+  cleanup_requested: "Cleanup requested",
+  confirmed: "Destroyed",
+  destroyed: "Destroyed",
+  failed: "Not applied",
+  not_applied: "Not applied",
+  offline: "Waiting for a connection",
+  unconfirmed: "Hasn't confirmed",
+  revoked: "Access revoked",
+};
+
 function stateLabel(state: string): string {
-  switch (state) {
-    case "applied":
-      return "Applied";
-    case "received":
-      return "Received";
-    case "pending":
-    case "applying":
-      return "Applying";
-    case "saved":
-      return "Saved";
-    case "waiting_resume":
-      return "applies when it resumes";
-    case "unsupported":
-      return "Update needed";
-    case "requested":
-    case "cleanup_requested":
-      return "Cleanup requested";
-    case "confirmed":
-    case "destroyed":
-      return "Destroyed";
-    case "failed":
-    case "not_applied":
-      return "Not applied";
-    case "offline":
-      return "Waiting for a connection";
-    case "revoked":
-      return "Access revoked";
-    default:
-      return "Status unknown";
-  }
+  return STATE_LABELS[state] ?? "Status unknown";
 }
 
 /** These rows consume only authorized metadata supplied by their provider. */
@@ -61,12 +51,15 @@ export function DetailsHostRows(props: {
               {host.item === null ? null : ` · ${host.item}`}
             </p>
             <p className="text-ui-xs text-muted-foreground">
-              {stateLabel(host.state)} · {detailsTime(host.at)}
+              {stateLabel(host.state)}
+              {host.at === null ? null : ` · ${detailsTime(host.at)}`}
               {host.reason === null ? null : ` · ${host.reason}`}
             </p>
-            <p className="text-ui-xs text-muted-foreground">
-              Last reported {detailsTime(host.lastReportedAt)}
-            </p>
+            {host.lastReportedAt === null ? null : (
+              <p className="text-ui-xs text-muted-foreground">
+                Last reported {detailsTime(host.lastReportedAt)}
+              </p>
+            )}
           </div>
           {host.recovery === null ? null : (
             <Button

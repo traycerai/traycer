@@ -1,4 +1,4 @@
-import { formatEvidenceDate } from "@/components/settings/move/format-evidence-date";
+import { onSettingsDate } from "@/lib/settings/settings-date";
 import { NO_MOVE_SHEET_ACCEPTANCE } from "@/components/settings/move/overview-dated-lines";
 
 export { NO_MOVE_SHEET_ACCEPTANCE };
@@ -68,10 +68,10 @@ export interface ReviewEvidence {
 export function retrospectiveEvidenceLine(evidence: ReviewEvidence): string {
   const { version, at } = evidence;
   if (version !== null && at !== null) {
-    return `Traycer ${version} shared this computer's settings into Personal on ${formatEvidenceDate(at)} without asking.`;
+    return `Traycer ${version} shared this computer's settings into Personal ${onSettingsDate(at)} without asking.`;
   }
   if (at !== null) {
-    return `An earlier version of Traycer shared this computer's settings into Personal on ${formatEvidenceDate(at)} without asking.`;
+    return `An earlier version of Traycer shared this computer's settings into Personal ${onSettingsDate(at)} without asking.`;
   }
   if (version !== null) {
     return `Traycer ${version} shared this computer's settings into Personal without asking; the date wasn't recorded.`;

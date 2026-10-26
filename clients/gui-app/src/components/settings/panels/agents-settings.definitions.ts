@@ -5,7 +5,8 @@ export const AGENT_SELECTION = defineSettingsSection("agents", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Agents",
-    description: "How agents are picked, and the agents a harness can start.",
+    description:
+      "How agents are picked, and the agents each coding agent can start.",
     keywords: [
       "agents",
       "guide",

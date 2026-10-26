@@ -53,4 +53,40 @@ describe("environmentNotificationDetail", () => {
       }),
     ).toBeNull();
   });
+
+  describe("team.member.joined", () => {
+    const JOINED = {
+      kind: "team_member_joined",
+      environmentId: "env-1",
+      teamName: "Acme",
+      memberName: "Sam",
+    };
+
+    it("gives the newcomer's own row a welcome naming the role they were granted", () => {
+      expect(
+        environmentNotificationDetail("team.member.joined", {
+          ...JOINED,
+          toNewcomer: true,
+          role: "editor",
+        }),
+      ).toEqual({
+        kind: "team_member_welcome",
+        environmentId: "env-1",
+        teamName: "Acme",
+        role: "editor",
+      });
+    });
+
+    it.each([
+      ["an admin's row", { toNewcomer: false, role: "editor" }],
+      ["a newcomer's row written before the role", { toNewcomer: true }],
+    ])("gives %s no welcome", (_label, extra) => {
+      expect(
+        environmentNotificationDetail("team.member.joined", {
+          ...JOINED,
+          ...extra,
+        }),
+      ).toBeNull();
+    });
+  });
 });

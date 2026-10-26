@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -19,7 +20,7 @@ export function useEnvironmentSecretsQuery(
   );
   return useHostQuery({
     cacheKeyIdentity: environmentId === null ? undefined : [viewerId],
-    client,
+    client: usePoolTierHostClient(client),
     method: "environment.secrets.list",
     params: { environmentId },
     preflight:

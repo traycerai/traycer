@@ -1,3 +1,8 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -13,7 +18,7 @@ import { ConfigurationReadFailed } from "./team-read-failed";
 import { TeamSecretNames } from "./team-secret-names";
 
 export function TeamProviderKeys(): ReactNode {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
   const query = useEnvironmentSecretsQuery(client);
   const canEdit = useCanEditConfiguration();
@@ -24,7 +29,12 @@ export function TeamProviderKeys(): ReactNode {
   const reread = (): void => {
     void queries.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(
-        client.getActiveHostId(),
+        hostRpcServingTierHostId(
+          "environment.secrets.list",
+          client.getActiveHostId(),
+          readProcessHostRpcTierPlan(),
+          null,
+        ),
         "environment.secrets.list",
       ),
     });

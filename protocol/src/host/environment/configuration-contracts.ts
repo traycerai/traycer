@@ -784,6 +784,48 @@ export const environmentConfigurationGuideGetV10 = defineRpcContract({
   responseSchema: environmentConfigurationGuideGetResponseSchema,
 });
 
+/**
+ * `environment.configuration.guide.get@1.1`: `unset` when the configuration's
+ * room holds no guide yet. Agents get the generated default until a host
+ * writes it or someone saves one; `revision` is the empty text's, so a `set`
+ * quoting it writes the first guide. A `@1.0` caller is answered
+ * `not_served` instead, so it asks a host as before (the minor is
+ * projection-gated in the registry).
+ */
+export const environmentConfigurationGuideGetResponseSchemaV11 = lazySchema(
+  () =>
+    z.discriminatedUnion("outcome", [
+      z.object({
+        outcome: z.literal("ok"),
+        text: z.string(),
+        revision: z.string().min(1),
+      }),
+      z.object({ outcome: z.literal("not_served") }),
+      z.object({ outcome: z.literal("unset"), revision: z.string().min(1) }),
+    ]),
+);
+export type EnvironmentConfigurationGuideGetResponseV11 = z.infer<
+  typeof environmentConfigurationGuideGetResponseSchemaV11
+>;
+
+export const environmentConfigurationGuideGetV11 = defineRpcContract({
+  method: "environment.configuration.guide.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentConfigurationGuideGetRequestSchema,
+  responseSchema: environmentConfigurationGuideGetResponseSchemaV11,
+});
+
+export const environmentConfigurationGuideGetUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof environmentConfigurationGuideGetV10,
+    typeof environmentConfigurationGuideGetV11
+  >({
+    from: environmentConfigurationGuideGetV10.schemaVersion,
+    to: environmentConfigurationGuideGetV11.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
 /** `set` against the revision read; `conflict` when the text moved since. */
 export const environmentConfigurationGuideSetRequestSchema = lazySchema(() =>
   z.object({

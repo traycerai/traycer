@@ -113,6 +113,7 @@ describe("The MCP servers page, viewing another host", () => {
             boundAt: 1,
             reachable: true,
             lastReportedAt: 1,
+            hasLocalRow: false,
             applied: [],
           },
         ],

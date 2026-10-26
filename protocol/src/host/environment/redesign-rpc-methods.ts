@@ -1,6 +1,8 @@
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
+  environmentConfigurationGuideGetUpgradeV10ToV11,
   environmentConfigurationGuideGetV10,
+  environmentConfigurationGuideGetV11,
   environmentConfigurationGuideResetV10,
   environmentConfigurationGuideSetV10,
   environmentConfigurationItemsDeleteV10,
@@ -29,6 +31,8 @@ import {
   environmentReviewRecordResponseSchema,
 } from "@traycer/protocol/host/environment-schemas";
 import {
+  environmentInvitationsAcceptV10,
+  environmentInvitationsListV10,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
   environmentMembersRemovePreviewV10,
@@ -39,8 +43,10 @@ import {
 import {
   environmentMoveAcceptV10,
   environmentMovePlanUpgradeV10ToV11,
+  environmentMovePlanUpgradeV11ToV12,
   environmentMovePlanV10,
   environmentMovePlanV11,
+  environmentMovePlanV12,
   environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
@@ -84,7 +90,7 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.plan": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentMovePlanV10,
@@ -93,6 +99,10 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
         1: {
           contract: environmentMovePlanV11,
           upgradeFromPreviousVersion: environmentMovePlanUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentMovePlanV12,
+          upgradeFromPreviousVersion: environmentMovePlanUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -380,6 +390,32 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       downgradePathsFromLatest: {},
     },
   },
+  "environment.invitations.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentInvitationsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.invitations.accept": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentInvitationsAcceptV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.members.noticeSeen": {
     degrade: { kind: "unsupported" },
     1: {
@@ -461,11 +497,18 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.configuration.guide.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentConfigurationGuideGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        // `unset` is new: a `@1.0` caller is answered `not_served` instead.
+        1: {
+          contract: environmentConfigurationGuideGetV11,
+          upgradeFromPreviousVersion:
+            environmentConfigurationGuideGetUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

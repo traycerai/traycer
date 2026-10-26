@@ -30,9 +30,27 @@ export function toolCountPhrase(count: number): string {
   return count === 1 ? "1 tool" : `${count} tools`;
 }
 
-/** A skill's source: Traycer's own, or one written or added in Settings. */
-export function skillSourcePhrase(origin: "bundled" | "room"): string {
-  return origin === "bundled" ? "Built-in" : "written in Settings";
+/**
+ * A skill's row on its configuration's Skills page: "Built-in" before the
+ * providers for Traycer's own; the configuration's own carry no source word,
+ * since the page already says whose skills these are.
+ */
+export function skillPageLine(
+  origin: "bundled" | "room",
+  providers: string,
+): string {
+  return origin === "bundled" ? `Built-in · ${providers}` : providers;
+}
+
+/**
+ * A skill's source beside a provider's switch, where sources mix: "Built-in"
+ * for Traycer's own, else the configuration's name (`name`).
+ */
+export function skillSourcePhrase(
+  origin: "bundled" | "room",
+  name: string,
+): string {
+  return origin === "bundled" ? "Built-in" : name;
 }
 
 export function serverSwitchLabel(enabled: boolean): string {
@@ -95,9 +113,13 @@ export function custodySentence(personal: boolean, name: string): string {
     : `Stored encrypted in Traycer's cloud. ${name}'s sandboxes and connected services use it without seeing it; no computer receives the value.`;
 }
 
-/** A command server asked for a secret: the broker cannot bind one. */
-export function stdioSecretRefusal(field: string): string {
-  return `A server that runs as a command can't use a secret for ${field}. Add the server without it, or choose Remote if the server has a web address.`;
+/**
+ * A command server asked for a secret: the broker cannot bind one. `variable`
+ * is the variable name typed, or `null` before one is.
+ */
+export function stdioSecretRefusal(variable: string | null): string {
+  const secret = variable === null ? "a secret" : `a secret for ${variable}`;
+  return `A server that runs as a command can't use ${secret}. Add the server without it, or choose Remote if the server has a web address.`;
 }
 
 export function serversCardHeading(name: string, provider: string): string {
@@ -110,6 +132,19 @@ export function skillsCardHeading(name: string, provider: string): string {
 
 export function onHostOnlyHeading(host: string): string {
   return `On ${host} only · not shared`;
+}
+
+/** Under an empty MCP servers page: the servers a provider kept on this computer. */
+export function onHostOnlyServersLine(count: number, name: string): string {
+  return count === 1
+    ? `1 server on this computer only, not in ${name}`
+    : `${count} servers on this computer only, not in ${name}`;
+}
+
+export function onHostOnlyServersLink(count: number, provider: string): string {
+  return count === 1
+    ? `See it on ${provider} ▸ MCP`
+    : `See them on ${provider} ▸ MCP`;
 }
 
 /**
@@ -204,7 +239,7 @@ export function serverRefusal(
 ): string {
   if (reason === "name_taken")
     return `${context.configuration} already has a server named ${context.server}. Pick another name.`;
-  if (reason === "stdio_credential") return stdioSecretRefusal("this server");
+  if (reason === "stdio_credential") return stdioSecretRefusal(null);
   if (
     (reason === "secret_not_bindable" ||
       reason === "secret_destination_mismatch") &&

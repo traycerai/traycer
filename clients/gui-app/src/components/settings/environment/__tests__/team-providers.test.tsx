@@ -41,6 +41,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : requireTeamHostClient(),
 }));
+vi.mock("@/components/settings/secrets/secret-row", () => ({
+  SecretRow: () => null,
+}));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => () => Promise.resolve(),
 }));
@@ -116,16 +119,52 @@ function handlers(items: () => EnvironmentConfigurationItem[]) {
 }
 
 describe("TeamProviders items", () => {
-  it("counts this provider's profiles in the rail and says No profiles for the rest", async () => {
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers(() => [profile(true, 4)]),
-    );
+  it("words each rail row from the team's plans and keys: plan, key, no plan", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [profile(true, 4)]),
+      "environment.plans.list": () => ({
+        plans: [
+          {
+            profileId: "plan-codex",
+            harness: "codex",
+            status: "linked" as const,
+            linkedBy: { name: "Ada", you: false },
+          },
+        ],
+      }),
+      "environment.secrets.list": () => ({
+        secrets: [
+          {
+            secretId: "secret-cursor",
+            name: "CURSOR_API_KEY",
+            kind: "provider",
+            protocol: null,
+            destinations: [],
+            mode: "brokered",
+            state: "live",
+            currentVersionId: "v1",
+            revoked: false,
+            updatedAt: 1,
+            variables: [],
+            providerVariables: [],
+          },
+        ],
+        removed: [],
+      }),
+    });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", { name: "Providers" });
-    expect(within(rail).getByText("1 profile")).toBeTruthy();
-    expect(within(rail).getAllByText("No profiles").length).toBeGreaterThan(0);
+    const wordOf = (name: string): string => {
+      const row = within(rail).getByRole("button", { name: new RegExp(name) });
+      return row.textContent.replace(name, "");
+    };
+    await waitFor(() => {
+      expect(wordOf("Codex")).toBe("plan");
+    });
+    expect(wordOf("Cursor")).toBe("key");
+    expect(within(rail).getAllByText("no plan").length).toBeGreaterThan(0);
+    expect(within(rail).queryByText("No profiles")).toBeNull();
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: "env-a",
     });
@@ -199,9 +238,7 @@ describe("TeamProviders items", () => {
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(
-      await screen.findByRole("tab", { name: "Variables" }),
-    );
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
     const field = await screen.findByLabelText(
       "claude:ANTHROPIC_BASE_URL value",
     );
@@ -222,6 +259,22 @@ describe("TeamProviders items", () => {
         revision: 7,
       },
     ]);
+  });
+
+  it("says on its Env tab that the team's variables reach every host running the team", async () => {
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers(() => [envOverride("https://old.example", 7)]),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
+
+    const subtitle = await screen.findByTestId("team-provider-env-subtitle");
+    expect(subtitle.textContent).toMatch(
+      /^Set for .+ each time it starts, on every host running Acme\. Unset removes a variable .+ would otherwise get from the shell\.$/,
+    );
+    expect(subtitle.textContent).not.toContain("Personal");
   });
 
   it("edits a pack policy against its revision for an editor and shows a viewer the text", async () => {

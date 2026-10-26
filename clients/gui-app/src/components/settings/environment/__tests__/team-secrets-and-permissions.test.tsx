@@ -7,7 +7,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamProviderKeys } from "@/components/settings/environment/team-provider-keys";
@@ -23,16 +23,20 @@ import {
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "./team-configuration-test-support";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
 // The computers holding a copy are covered by `secret-remove-preview-computers`.
-vi.mock("@/components/settings/personal/use-personal-computers", () => ({
-  usePersonalComputers: () => ({
-    computers: [],
-    statuses: new Map(),
-    versions: new Map(),
-    participants: [],
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
   }),
-}));
+);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -56,7 +60,7 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-function secret(name: string, revoked: boolean): EnvironmentSecret {
+function secret(name: string, revoked: boolean): EnvironmentSecretV12 {
   return {
     secretId: `sec-${name}`,
     name,
@@ -68,6 +72,8 @@ function secret(name: string, revoked: boolean): EnvironmentSecret {
     currentVersionId: "ver-1",
     revoked,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
@@ -93,6 +99,7 @@ function renderSecrets(harness: TeamPageHarness): void {
     <SecretsPage
       client={client}
       hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
       hostName={(hostId) => hostId}
     />,
     { wrapper: harness.Wrapper },

@@ -29,7 +29,7 @@ describe("<AgentsSettingsPanel />", () => {
     expect(screen.getByRole("heading", { name: "Agents" })).toBeTruthy();
     expect(
       screen.getByText(
-        "How agents are picked, and the agents a harness can start.",
+        "How agents are picked, and the agents each coding agent can start.",
       ),
     ).toBeTruthy();
     expect(screen.getByTestId("agents-tab-guide").textContent).toBe(
@@ -42,13 +42,11 @@ describe("<AgentsSettingsPanel />", () => {
     expect(screen.queryByTestId("definitions-body")).toBeNull();
   });
 
-  // The guide reaches only the agents Traycer creates; a coding agent's own
-  // native subagents never read it (traycerai/traycer#1090).
-  it("says on the Selection guide tab that native subagents keep their provider's settings", async () => {
+  it("captions the Selection guide tab with what agents read, only there", async () => {
     render(<AgentsSettingsPanel />);
 
     expect(screen.getByTestId("agents-guide-caption").textContent).toBe(
-      "The guide agents read when they pick a coding agent, model and effort for work they hand off. Native subagents keep their provider's settings.",
+      "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
     );
 
     await userEvent.click(screen.getByTestId("agents-tab-definitions"));

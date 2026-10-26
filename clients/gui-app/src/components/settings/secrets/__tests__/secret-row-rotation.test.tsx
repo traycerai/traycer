@@ -20,14 +20,17 @@ vi.mock("@/lib/links/open-link", () => ({
 
 // The computers holding a copy are covered by `secret-remove-preview-computers`;
 // here Remove's preview is read with none.
-vi.mock("@/components/settings/personal/use-personal-computers", () => ({
-  usePersonalComputers: () => ({
-    computers: [],
-    statuses: new Map(),
-    versions: new Map(),
-    participants: [],
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
   }),
-}));
+);
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -41,7 +44,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsDestroyRequest,
   EnvironmentSecretsDestroyResponse,
   EnvironmentSecretsReplaceValueRequest,
@@ -60,6 +63,7 @@ import {
   SECRET_RECOVERY_STEPS,
   SECRET_RESTART_LINE,
   SECRET_SAVED_OFFLINE,
+  SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -70,7 +74,7 @@ const PERSONAL_ENV = "env-personal";
 
 /** The day and month a version is dated by, as the page formats them. */
 function dayMonth(at: number): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
   }).format(at);
@@ -81,7 +85,7 @@ type Rotation = EnvironmentSecretsRotationResponse["rotation"];
 type LiveRotation = NonNullable<Rotation>;
 
 interface RotationHostState {
-  secrets: EnvironmentSecret[];
+  secrets: EnvironmentSecretV12[];
   rotation: Rotation;
   versions: SecretVersion[];
   replaceAnswer: EnvironmentSecretsReplaceValueResponse;
@@ -99,8 +103,8 @@ interface RotationHost {
 }
 
 function secretFixture(
-  overrides: Partial<EnvironmentSecret>,
-): EnvironmentSecret {
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -112,6 +116,8 @@ function secretFixture(
     currentVersionId: "ver-3",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
@@ -294,6 +300,7 @@ function renderPage(host: RotationHost): QueryClient {
         <SecretsPage
           client={host.client}
           hostId={HOST_ID}
+          emptyText={SECRETS_EMPTY_TEXT}
           hostName={(hostId) => (hostId === "host-2" ? "dev-box" : hostId)}
         />
       </RunnerHostContext.Provider>
@@ -303,12 +310,15 @@ function renderPage(host: RotationHost): QueryClient {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   openLinkMock.mockResolvedValue(undefined);
   useAuthStore.setState({ status: "signed-in" });
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   hostBoundary.client = null;
   useAuthStore.setState({ status: "signed-out" });

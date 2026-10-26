@@ -18,6 +18,8 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 const PERSONAL: EnvironmentDescriptor = {
@@ -39,6 +41,7 @@ const TEAM: EnvironmentDescriptor = {
 const mocks = vi.hoisted(() => ({
   state: {
     binding: null as EnvironmentHostBinding | null,
+    status: null as EnvironmentStatusResponseV11 | null,
   },
 }));
 
@@ -51,6 +54,13 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
     isError: false,
     data: mocks.state.binding ?? undefined,
   }),
+}));
+vi.mock("@/hooks/environment/use-environment-reads", () => ({
+  useEnvironmentStatusRead: () => ({ data: mocks.state.status }),
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersions: (hostIds: readonly string[]) =>
+    new Map(hostIds.map((hostId) => [hostId, { major: 1, minor: 1 }])),
 }));
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 
@@ -107,6 +117,9 @@ function teamBinding(canUnbind: boolean): EnvironmentHostBinding {
 }
 
 beforeEach(() => {
+  mocks.state.status = environmentStatusFixture({
+    principal: { kind: "personal" },
+  });
   mocks.state.binding = {
     hostId: "host-a",
     environment: PERSONAL,
@@ -139,6 +152,27 @@ describe("HostEnvironmentSection", () => {
 
     expect(screen.getByTestId("host-environment-section").textContent).toBe(
       "Runs Acme",
+    );
+  });
+
+  it("says a computer with a Local row runs its own settings, and a moved one keeps Runs Personal", () => {
+    mocks.state.status = environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+    });
+    renderSection("personal");
+    expect(screen.getByTestId("host-environment-section").textContent).toBe(
+      "Runs its own settings, not in Personal yet",
+    );
+    cleanup();
+
+    mocks.state.status = environmentStatusFixture({
+      principal: { kind: "personal" },
+    });
+    renderSection("personal");
+    expect(screen.getByTestId("host-environment-section").textContent).toBe(
+      "Runs Personal",
     );
   });
 

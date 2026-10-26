@@ -43,6 +43,7 @@ function exportStatus(status: DetailsStatus): DetailsStatus {
       title: item.title,
       summary: item.summary,
       at: item.at,
+      retryable: item.retryable,
     })),
   };
 }

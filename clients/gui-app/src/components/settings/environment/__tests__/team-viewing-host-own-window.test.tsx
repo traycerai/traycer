@@ -12,7 +12,7 @@ import {
   mockLocalHostEntry,
   mockRemoteHostEntry,
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import { TeamViewingHostPicker } from "@/components/settings/environment/team-viewing-host-picker";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -70,11 +70,11 @@ afterEach(() => {
 });
 
 /** A host whose cloud `reachable` flag has lapsed. */
-function lapsed(hostId: string, hostLabel: string): EnvironmentHostRecordV11 {
+function lapsed(hostId: string, hostLabel: string): EnvironmentHostRecordV12 {
   return { ...reachableHost, hostId, hostLabel, reachable: false };
 }
 
-function mountTeamHarness(hosts: readonly EnvironmentHostRecordV11[]) {
+function mountTeamHarness(hosts: readonly EnvironmentHostRecordV12[]) {
   useSelectionAuthorityStore.setState({
     effectiveHostId: mockLocalHostEntry.hostId,
   });
@@ -85,7 +85,7 @@ function mountTeamHarness(hosts: readonly EnvironmentHostRecordV11[]) {
   return harness;
 }
 
-function mountHook(hosts: readonly EnvironmentHostRecordV11[]) {
+function mountHook(hosts: readonly EnvironmentHostRecordV12[]) {
   return renderHook(() => useTeamViewingHost(), {
     wrapper: mountTeamHarness(hosts).Wrapper,
   });

@@ -130,8 +130,8 @@ export function envOverrideProviderName(key: string): string | null {
 
 /**
  * A move or stop row's name: its page's name for a kind a configuration
- * holds one of, `<Provider>: <variable>` for an env override, else the row's
- * own label (a variable's or a server's name).
+ * holds one of, `<variable> (<Provider>)` for an env override, else the
+ * row's own label (a variable's or a server's name).
  */
 export function moveRowLabel(row: {
   readonly kind: string;
@@ -143,7 +143,7 @@ export function moveRowLabel(row: {
   if (row.kind !== "env_override") return row.label;
   const provider = envOverrideProviderName(row.key);
   const variable = itemLabel(row);
-  return provider === null ? variable : `${provider}: ${variable}`;
+  return provider === null ? variable : `${variable} (${provider})`;
 }
 
 /** The name a person knows an item by: a variable's own name, else the page's. */

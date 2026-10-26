@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsCreateRequest,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsVerifyRequest,
@@ -28,6 +28,7 @@ import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mo
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
 // The writes name their environment through the surface's client.
 const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
@@ -74,7 +75,7 @@ interface SecretsHost {
   readonly createRequests: EnvironmentSecretsCreateRequest[];
 }
 
-function createdSecret(): EnvironmentSecret {
+function createdSecret(): EnvironmentSecretV12 {
   return {
     secretId: "sec-new",
     name: "STRIPE_KEY",
@@ -86,6 +87,8 @@ function createdSecret(): EnvironmentSecret {
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
@@ -126,6 +129,7 @@ function renderPage(host: SecretsHost): QueryClient {
         <SecretsPage
           client={host.client}
           hostId={HOST_ID}
+          emptyText={SECRETS_EMPTY_TEXT}
           hostName={() => "dev-box"}
         />
       </RunnerHostContext.Provider>

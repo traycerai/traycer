@@ -35,7 +35,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import type {
@@ -71,7 +71,7 @@ afterEach(() => {
 
 interface HostFacts {
   readonly providers: ProviderCliState[];
-  readonly secrets: EnvironmentSecret[];
+  readonly secrets: EnvironmentSecretV12[];
   readonly status: EnvironmentStatusResponseV11;
   /** The methods the host advertises. */
   readonly methods: readonly string[];
@@ -90,7 +90,9 @@ const NOTHING: HostFacts = {
   methods: ALL_METHODS,
 };
 
-function secret(overrides: Partial<EnvironmentSecret>): EnvironmentSecret {
+function secret(
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId: "secret-1",
     name: "DEPLOY_KEY",
@@ -102,6 +104,8 @@ function secret(overrides: Partial<EnvironmentSecret>): EnvironmentSecret {
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
@@ -348,7 +352,7 @@ describe("<SetUpPersonalGroup />", () => {
     try {
       const facts: {
         providers: ProviderCliState[];
-        secrets: EnvironmentSecret[];
+        secrets: EnvironmentSecretV12[];
         status: EnvironmentStatusResponseV11;
         methods: readonly string[];
       } = {

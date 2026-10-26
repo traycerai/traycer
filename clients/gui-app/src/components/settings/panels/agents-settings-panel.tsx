@@ -21,7 +21,7 @@ const AGENTS_TAB_LABELS: Readonly<Record<AgentsTab, string>> = {
 // The guide reaches only the agents Traycer creates; a coding agent's own
 // native subagents never read it (traycerai/traycer#1090).
 const AGENTS_GUIDE_CAPTION =
-  "The guide agents read when they pick a coding agent, model and effort for work they hand off. Native subagents keep their provider's settings.";
+  "The guide agents read when they pick a coding agent, model and effort for work they hand off.";
 
 function isAgentsTab(value: string): value is AgentsTab {
   return AGENTS_TABS.some((tab) => tab === value);

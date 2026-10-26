@@ -14,10 +14,10 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { resetSandboxesPage } from "@/stores/sandboxes/sandboxes-page-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
+import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
 import {
   useAuthIdentityTransition,
@@ -128,12 +128,6 @@ export function EpicSessionLifecycleBridge(
       // otherwise see A's sandbox id in the drawer and A's team on the page.
       closeSandboxDetails();
       resetSandboxesPage();
-      // The Sync profiles dialog is mounted at the app root and survives a
-      // switch, so its module-level store is on this boundary too: left
-      // standing, account B would see A's open dialog - A's profile names and
-      // A's captured source host id, which it would then dial under B's
-      // session.
-      useProfileSyncModalStore.getState().close();
       // The provider Link dialog's target names one of the outgoing account's
       // profiles; left set, account B's Providers would mount A's dialog and
       // send A's profile id through B's host.
@@ -145,6 +139,9 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
+      // The move reminder survives navigation, but its host belongs to the
+      // outgoing identity. Retire the toast and any retained action callback.
+      retireOnboardingReminder();
       // Chat/artifact blob-cache keys omit the account. Drop in-memory
       // maps so remount grace cannot join the outgoing fetch, then drop
       // the outgoing IndexedDB partition.

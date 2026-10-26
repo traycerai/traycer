@@ -1,12 +1,15 @@
 // The computers holding a copy are covered by `secret-remove-preview-computers`.
-vi.mock("@/components/settings/personal/use-personal-computers", () => ({
-  usePersonalComputers: () => ({
-    computers: [],
-    statuses: new Map(),
-    versions: new Map(),
-    participants: [],
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
   }),
-}));
+);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -21,7 +24,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -35,6 +38,7 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 
 // A Personal pick on a computer whose own settings have not moved: the host
 // keeps no environment of its own to answer for, so a secrets call that does
@@ -50,7 +54,7 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-function secret(): EnvironmentSecret {
+function secret(): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -62,6 +66,8 @@ function secret(): EnvironmentSecret {
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
@@ -121,6 +127,7 @@ function renderSecrets(harness: TeamPageHarness): void {
     <SecretsPage
       client={client}
       hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
       hostName={(hostId) => hostId}
     />,
     { wrapper: harness.Wrapper },

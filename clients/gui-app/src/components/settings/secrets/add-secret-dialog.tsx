@@ -283,6 +283,9 @@ export function AddSecretDialog(props: {
   const busy = verifyCandidate.isPending || create.isPending;
   const [verifyNote, setVerifyNote] = useState<SecretVerifyLine | null>(null);
   const [saveNote, setSaveNote] = useState<SecretVerifyLine | null>(null);
+  // The form's problem shows once Continue was pressed, never before the
+  // person has typed anything.
+  const [continuePressed, setContinuePressed] = useState(false);
   // Which open of the dialog a check or save belongs to. A close ends the
   // open, so a request that settles after it (the person closed and opened
   // the dialog again) neither closes nor writes into the form now showing.
@@ -295,13 +298,23 @@ export function AddSecretDialog(props: {
     setStep(initialStep);
     setVerifyNote(null);
     setSaveNote(null);
+    setContinuePressed(false);
     verifyCandidate.reset();
     create.reset();
     props.onOpenChange(false);
   };
 
   const pick = (kind: DesktopSecretKind): void => {
+    setContinuePressed(false);
     setStep({ kind: "form", form: prefilledForm(kind, prefill) });
+  };
+
+  const continueToConfirm = (form: SecretFormState): void => {
+    if (secretFormProblem(form) !== null) {
+      setContinuePressed(true);
+      return;
+    }
+    setStep({ kind: "confirm", form });
   };
 
   const changeForm = (form: SecretFormState): void => {
@@ -380,7 +393,7 @@ export function AddSecretDialog(props: {
               <SecretIntakeFields state={step.form} onChange={changeForm} />
               <Custody />
               <Note note={verifyNote} testId="secret-form-verify-line" />
-              <FormProblem form={step.form} />
+              {continuePressed ? <FormProblem form={step.form} /> : null}
             </>
           ) : null}
           {step.kind === "confirm" ? (
@@ -418,8 +431,8 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy || secretFormProblem(step.form) !== null}
-              onClick={() => setStep({ kind: "confirm", form: step.form })}
+              disabled={busy}
+              onClick={() => continueToConfirm(step.form)}
               data-testid="secret-form-continue"
             >
               Continue
@@ -478,6 +491,7 @@ function FormProblem(props: { readonly form: SecretFormState }): ReactNode {
   if (problem === null) return null;
   return (
     <p
+      role="alert"
       className="text-ui-xs text-muted-foreground"
       data-testid="secret-form-problem"
     >

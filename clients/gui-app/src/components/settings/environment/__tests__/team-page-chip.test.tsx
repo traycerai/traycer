@@ -10,7 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentHostItemApply,
-  EnvironmentHostRecordV11,
+  EnvironmentHostRecordV12,
 } from "@traycer/protocol/host/environment/contracts";
 import { PageChip } from "@/components/settings/personal/page-chip";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
@@ -22,6 +22,14 @@ import {
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
 
+// A team page reads its hosts from the host list; this window's own host
+// scope has no hosts here.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const scope = hostScopeFixture({ host: null });
+  return { useHostScope: () => scope };
+});
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -47,7 +55,7 @@ const PICK = { kind: "team", environmentId: "env-a" } as const;
 
 function hostReporting(
   state: EnvironmentHostItemApply["state"],
-): EnvironmentHostRecordV11 {
+): EnvironmentHostRecordV12 {
   return {
     hostId: "host-a",
     hostLabel: "Mac mini",
@@ -65,6 +73,7 @@ function hostReporting(
         at: 1,
       },
     ],
+    hasLocalRow: false,
   };
 }
 
