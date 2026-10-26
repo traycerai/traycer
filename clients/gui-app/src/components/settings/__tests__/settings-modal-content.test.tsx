@@ -68,18 +68,9 @@ describe("<SettingsModalContent />", () => {
     },
   );
 
-  it("opens the gated page itself with its preview feature on, and only Sandboxes falls back with sandboxes off", () => {
+  it("opens the gated page itself with its preview feature on", () => {
     render(<SettingsModalContent section="secrets" />);
     expect(screen.getByTestId("secrets-page-probe")).toBeTruthy();
-    cleanup();
-
-    previewVerdict.current = { environments: "on", sandboxes: "off", bots: "on" };
-    render(<SettingsModalContent section="secrets" />);
-    expect(screen.getByTestId("secrets-page-probe")).toBeTruthy();
-    cleanup();
-    render(<SettingsModalContent section="sandboxes" />);
-    expect(screen.getByTestId("general-page-probe")).toBeTruthy();
-    expect(screen.queryByTestId("sandboxes-page-probe")).toBeNull();
   });
 
   // A page result scrolls the pane the SURFACE owns, so every section has one

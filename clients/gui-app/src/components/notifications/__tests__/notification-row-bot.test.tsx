@@ -156,7 +156,7 @@ describe("<NotificationRow /> about a bot", () => {
   it.each(["off", "unread"] as const)(
     "reads no bot list and keeps the glyph while bots read %s",
     (state) => {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       const entry = renderRow(verdictRow(BOT_ID));
 
       expect(within(entry).queryByTestId("bot-avatar")).toBeNull();

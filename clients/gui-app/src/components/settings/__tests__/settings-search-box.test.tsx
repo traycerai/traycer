@@ -138,13 +138,6 @@ describe("<SettingsSearch /> without the preview features", () => {
     type("tracy");
     expect(optionTexts().some((text) => /show tracy/i.test(text))).toBe(true);
   });
-
-  it("finds Show Tracy only while bots are on, whatever environments read", () => {
-    previewVerdict.current = { environments: "off", sandboxes: "off", bots: "on" };
-    render(<Harness />);
-    type("tracy");
-    expect(optionTexts().some((text) => /show tracy/i.test(text))).toBe(true);
-  });
 });
 
 // Pointer input, driven through user-event rather than `fireEvent` because

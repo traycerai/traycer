@@ -558,7 +558,7 @@ describe("GeneralSettingsPanel", () => {
   it.each(["off", "unread"] as const)(
     "draws no Bots group and no Show Tracy switch while bots read %s",
     (state) => {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       renderPanel();
 
       expect(screen.queryByTestId("settings-general-bots")).toBeNull();

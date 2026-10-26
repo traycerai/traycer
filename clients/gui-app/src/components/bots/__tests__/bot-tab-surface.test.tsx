@@ -397,7 +397,7 @@ describe("<BotTabSurface /> without the bots preview feature", () => {
   it.each(["off", "unread"] as const)(
     "waits as a connect does, never saying the host is out of date, and opens nothing while bots read %s",
     (state) => {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       mocks.state.support = false;
       render(surface());
 

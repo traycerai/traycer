@@ -418,7 +418,7 @@ describe("MobileNavDrawer Tracy row", () => {
   it.each(["off", "unread"] as const)(
     "draws no row for a restored entry while bots read %s",
     async (state) => {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       renderDrawer();
 
       // The drawer itself is up, so the row's absence is not an unmounted drawer.

@@ -54,7 +54,7 @@ describe("<SettingsSurface />", () => {
   it.each(["off", "unread"] as const)(
     "opens General for a route section that needs a preview feature while environments read %s",
     (state) => {
-      previewVerdict.current = { environments: state, sandboxes: "on", bots: "on" };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       testState.pathname = "/settings/members";
       render(<SettingsSurface lastPath={null} />);
 

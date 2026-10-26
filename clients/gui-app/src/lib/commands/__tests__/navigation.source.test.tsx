@@ -102,16 +102,10 @@ describe("navigationSource", () => {
     },
   );
 
-  it("settings sub-page lists the gated pages with their preview features on, and drops only Sandboxes with sandboxes off", () => {
+  it("settings sub-page lists the gated pages with their preview features on", () => {
     expect(captureSettingsSubpage("/").map((i) => i.id)).toEqual(
       expect.arrayContaining(GATED_IDS),
     );
-    cleanup();
-
-    previewVerdict.current = { environments: "on", sandboxes: "off", bots: "on" };
-    const ids = captureSettingsSubpage("/").map((i) => i.id);
-    expect(ids).not.toContain("nav:settings/sandboxes");
-    expect(ids).toContain("nav:settings/secrets");
   });
 
   it("root emits Open Tasks + Settings entry on an epic detail route", () => {

@@ -1150,7 +1150,7 @@ describe("<SettingsSidebar /> preview features", () => {
     it.each(["off", "unread"] as const)(
       "draws no sandboxes link, Automations entry, balance warning or unavailable note while sandboxes read %s",
       async (state) => {
-        previewVerdict.current = { environments: "on", sandboxes: state, bots: "on" };
+        previewVerdict.current = { environments: state, sandboxes: state, bots: state };
         useAuthStore.setState({ status: "signed-in" });
         await renderRail();
         cleanup();

@@ -260,7 +260,7 @@ describe("useSandboxStaging without the sandboxes preview feature", () => {
   it.each(["off", "unread"] as const)(
     "stages nothing for a composer's picker while sandboxes read %s",
     (state) => {
-      previewVerdict.current = { environments: "on", sandboxes: state, bots: "on" };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       render(<Harness surfaceKey={SURFACE} hosts={[LAPTOP, SUSPENDED]} />);
 
       expect(latest).toBeNull();

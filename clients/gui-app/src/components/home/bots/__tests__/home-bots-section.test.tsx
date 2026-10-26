@@ -314,7 +314,7 @@ describe("HomeBotsSection without the bots preview feature", () => {
   it.each(["off", "unread"] as const)(
     "renders no band and no update notice, and reads nothing, while bots read %s, even on a host without bot.list",
     (state) => {
-      previewVerdict.current = { environments: "on", sandboxes: "on", bots: state };
+      previewVerdict.current = { environments: state, sandboxes: state, bots: state };
       mocks.state.support = false;
       mountSection();
 

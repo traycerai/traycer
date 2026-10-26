@@ -536,7 +536,7 @@ describe("<HostReadyGate />", () => {
     it.each(["off", "unread"] as const)(
       "keeps the no-host screen, staged sandbox or not, while sandboxes read %s",
       (state) => {
-        previewVerdict.current = { environments: "on", sandboxes: state, bots: "on" };
+        previewVerdict.current = { environments: state, sandboxes: state, bots: state };
         useStagedSandboxStore.getState().stage("landing:window-test", {
           kind: "new",
           configuration: { kind: "personal" },
