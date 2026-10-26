@@ -3808,8 +3808,10 @@ function registerAgentCommands(
 }
 
 function registerBotCommands(program: Command): void {
+  // Hidden from help: the CLI holds no preview-features verdict, so it offers
+  // the group to no one and a host without bots refuses each call.
   const bot = program
-    .command("bot")
+    .command("bot", { hidden: true })
     .description(
       "List your bots, post to them, follow their threads, and see what they follow",
     );

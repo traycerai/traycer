@@ -10,6 +10,27 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostMock.binding };
 });
 
+// The preview-features verdict is read through the real `usePreviewFeature`
+// from what the user record returns; the file's own cases run with it on.
+const RECORD_WITH_ENVIRONMENTS = {
+  userId: "user-me",
+  previewFeatures: { environments: true, sandboxes: false, bots: true },
+};
+const authUser = vi.hoisted(
+  (): { current: { readonly data: unknown } } => ({
+    current: { data: undefined },
+  }),
+);
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({
+    data: authUser.current.data,
+    isPending: authUser.current.data === undefined,
+    isError: false,
+    isFetching: false,
+    refetch: () => Promise.resolve({}),
+  }),
+}));
+
 // Where the Review button asks Settings to go.
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/settings-navigation", () => ({
@@ -27,7 +48,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   recordNegotiatedHostMethods,
@@ -56,7 +77,12 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
+beforeEach(() => {
+  authUser.current = { data: RECORD_WITH_ENVIRONMENTS };
+});
+
 afterEach(() => {
+  authUser.current = { data: RECORD_WITH_ENVIRONMENTS };
   cleanup();
   resetNegotiatedManifests();
   hostMock.binding = null;
@@ -807,5 +833,80 @@ describe("<HostOverviewAccessTab /> the moved-to-Personal notice", () => {
 
     expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+  });
+});
+
+describe("<HostOverviewAccessTab /> without environments", () => {
+  const OFF_READINGS = [
+    { reading: "an unread user record", user: undefined },
+    {
+      reading: "a record without a verdict",
+      user: { userId: "user-me" },
+    },
+    {
+      reading: "a record with environments off",
+      user: {
+        userId: "user-me",
+        previewFeatures: { environments: false, sandboxes: false, bots: false },
+      },
+    },
+  ] as const;
+  const WITHOUT_ENVIRONMENTS_SENTENCE =
+    "This computer's own sign-in, which stays on this computer.";
+
+  describe.each(OFF_READINGS)("with $reading", ({ user }) => {
+    function expectTerminalAccountsOnly(): void {
+      expect(screen.queryByTestId("access-tab-update-host")).toBeNull();
+      expect(screen.queryByTestId("host-setup-section")).toBeNull();
+      expect(screen.queryByTestId("moved-to-personal-notice")).toBeNull();
+      expect(screen.queryByTestId("local-value-row")).toBeNull();
+      expect(screen.getByText(WITHOUT_ENVIRONMENTS_SENTENCE)).toBeTruthy();
+      expect(screen.queryByText(/Sign in on Providers/)).toBeNull();
+    }
+
+    it("lists terminal accounts, with no update notice and no remote access, on a host without environment.status", async () => {
+      authUser.current = { data: user };
+      const host = hostWith({}, { providers: [claudeAmbient(true)] });
+      renderTab(host, {
+        ...READY,
+        methods: ["host.status", "providers.list", "providers.setProfileEnabled"],
+      });
+
+      expect(await screen.findAllByTestId("terminal-account-row")).toHaveLength(1);
+      expectTerminalAccountsOnly();
+      expect(screen.queryByTestId("remote-access-section")).toBeNull();
+      expect(host.reads.status).toBe(0);
+    });
+
+    it("adds only remote access on a host that answers environment.status, not setup, the moved notice or local values", async () => {
+      authUser.current = { data: user };
+      const host = hostWith(
+        { setup: { stage: "done", state: "done" } },
+        {
+          providers: [claudeAmbient(true)],
+          notices: [noticeFixture({ source: "migration" })],
+          overrides: [variableOverride("LOG_LEVEL", "debug")],
+        },
+      );
+      renderTab(host, READY);
+
+      expect(await screen.findByTestId("remote-access-section")).toBeTruthy();
+      expect(await screen.findAllByTestId("terminal-account-row")).toHaveLength(1);
+      await settle();
+      expectTerminalAccountsOnly();
+    });
+
+    it("shows no setup steps while setup runs on a host that answers environment.status", async () => {
+      authUser.current = { data: user };
+      const host = hostWith(
+        { setup: { stage: "moving_settings", state: "running" } },
+        { providers: [claudeAmbient(true)] },
+      );
+      renderTab(host, READY);
+
+      expect(await screen.findByTestId("remote-access-section")).toBeTruthy();
+      await settle();
+      expectTerminalAccountsOnly();
+    });
   });
 });

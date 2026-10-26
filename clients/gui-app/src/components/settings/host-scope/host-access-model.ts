@@ -161,6 +161,10 @@ export const LOCAL_VALUES_RESTART_NOTE =
 export const TERMINAL_ACCOUNT_SENTENCE =
   "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.";
 
+/** The same line without environments, where no sign-in reaches another computer. */
+export const TERMINAL_ACCOUNT_SENTENCE_WITHOUT_ENVIRONMENTS =
+  "This computer's own sign-in, which stays on this computer.";
+
 /** A team host's Terminal account line: only an admin links a team's plan. */
 export function teamTerminalAccountSentence(teamName: string): string {
   return `This host's own sign-in, which stays on this host. An admin can link a plan on ${teamName}'s Providers to use one everywhere.`;
