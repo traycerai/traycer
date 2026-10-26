@@ -806,10 +806,16 @@ describe("the fullscreen board", () => {
     expect(shownBoard()).toBe("Home");
     expect(previous).toHaveProperty("disabled", true);
 
+    next.focus();
     fireEvent.click(next);
     expect(shownBoard()).toBe("Checkout");
     expect(next).toHaveProperty("disabled", true);
     expect(isFullscreen()).toBe(true);
+    // Stepping does not hand focus back to the exit button: a reader on the
+    // header buttons would otherwise leave fullscreen with their next Enter.
+    expect(document.activeElement).not.toBe(
+      within(header).getByRole("button", { name: "Back to canvas" }),
+    );
 
     fireEvent.keyDown(canvasSurface(), { code: "ArrowLeft" });
     expect(shownBoard()).toBe("Home");

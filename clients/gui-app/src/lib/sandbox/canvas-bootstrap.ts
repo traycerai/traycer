@@ -671,8 +671,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   window.addEventListener("submit", blockEdit, true);
   const bare = (event: KeyboardEvent): boolean =>
     !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
-  const forwardShortcut = (event: KeyboardEvent): void => {
-    event.preventDefault();
+  const forwardShortcut = (event: KeyboardEvent): void =>
     notify("traycer/notifications/shortcut", {
       key: event.key,
       code: event.code,
@@ -681,21 +680,24 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       alt: false,
       shift: false,
     });
-  };
   // A bare Escape is the app's in both modes: it steps selection out while
   // editing and leaves Play, so the page never keeps it.
   window.addEventListener(
     "keydown",
     (event) => {
       if (event.code !== "Escape" || !bare(event)) return;
+      event.preventDefault();
       event.stopImmediatePropagation();
       forwardShortcut(event);
     },
     true,
   );
   // Bare left and right arrows step a fullscreen board through the canvas,
-  // but the playing page is asked first: a handler that cancelled the key, or
-  // a control that reads arrows itself, keeps it. Hence the bubbling listener.
+  // but the playing page is asked first: a control that reads arrows itself
+  // keeps them, and so does any handler that cancels the key, including a
+  // window listener the page added after this prelude ran. The verdict is
+  // read in a task, once the whole dispatch is over, so the key is never
+  // cancelled here: a page that scrolls on arrows keeps scrolling.
   const ARROW_OWNERS =
     "input,textarea,select,[contenteditable]:not([contenteditable=false]),[role=textbox],[role=combobox],[role=slider],[role=spinbutton],[role=listbox],[role=option],[role=menu],[role=menubar],[role=menuitem],[role=radiogroup],[role=radio],[role=tablist],[role=tab],[role=grid],[role=tree]";
   window.addEventListener("keydown", (event) => {
@@ -703,12 +705,13 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       mode !== "play" ||
       (event.code !== "ArrowLeft" && event.code !== "ArrowRight") ||
       !bare(event) ||
-      event.defaultPrevented ||
       (event.target instanceof Element &&
         event.target.closest(ARROW_OWNERS) !== null)
     )
       return;
-    forwardShortcut(event);
+    setTimeout(() => {
+      if (!event.defaultPrevented) forwardShortcut(event);
+    }, 0);
   });
   // Pinch/modified-wheel belongs to the canvas; ordinary wheel scrolling
   // remains inside the prototype. Coordinates are local CSS pixels.

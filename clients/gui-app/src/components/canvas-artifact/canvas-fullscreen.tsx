@@ -20,7 +20,10 @@ import {
   WINDOW_TRAILING_INSET_CLASS,
 } from "@/components/layout/header/title-bar-drag";
 import { cn } from "@/lib/utils";
-import { adjacentFullscreenBoard, fullscreenBoardSequence } from "./canvas-model";
+import {
+  adjacentFullscreenBoard,
+  fullscreenBoardSequence,
+} from "./canvas-model";
 
 export type CanvasFullscreenSizing = "fit" | "fill";
 
