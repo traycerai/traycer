@@ -18,13 +18,18 @@ export function useRereadEnvironmentListOnFocus(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return undefined;
     const listener = (): void => {
-      void queryClient.invalidateQueries({
-        predicate: (query) =>
-          hostQueryKeys.matchesMethodOnAnyHost(
-            query.queryKey,
-            ENVIRONMENT_LIST_METHOD,
-          ),
-      });
+      // Both surfaces can be mounted, so one focus reaches several listeners:
+      // a later one joins the re-read already running instead of restarting it.
+      void queryClient.invalidateQueries(
+        {
+          predicate: (query) =>
+            hostQueryKeys.matchesMethodOnAnyHost(
+              query.queryKey,
+              ENVIRONMENT_LIST_METHOD,
+            ),
+        },
+        { cancelRefetch: false },
+      );
     };
     window.addEventListener("focus", listener);
     return () => {
