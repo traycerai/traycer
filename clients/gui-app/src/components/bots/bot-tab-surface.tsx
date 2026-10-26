@@ -385,7 +385,6 @@ function BotTabContent(props: {
     if (environment.ownerKind === "organization") {
       return {
         kind: "team",
-        environmentId: environment.environmentId,
         name: environment.label,
         members: directory.members,
       };

@@ -100,7 +100,6 @@ function member(index: number): EnvironmentMember {
 
 const TEAM: BotOwner = {
   kind: "team",
-  environmentId: "env-team",
   name: "Acme",
   members: [1, 2, 3, 4, 5, 6].map(member),
 };

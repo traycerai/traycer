@@ -2301,7 +2301,6 @@ describe("the carried skeleton through a void", () => {
     const completeRows = transcriptListRows({ window: complete, rendered: [] });
     expect(keys(completeRows)).toEqual(["new", "a", "b", "c", "d"]);
     expectUniqueKeys(shiftedRows);
-    expectUniqueKeys(completeRows);
   });
 
   it("drops a carried row the complete replacement never names", () => {

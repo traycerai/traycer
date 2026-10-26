@@ -50,7 +50,9 @@ export function repliedPostOf(
       message.role === "user" && message.persistentMessageId === messageId,
   );
   if (post === undefined) return null;
-  const text = rowText(post);
+  const text = post.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
   const firstLine =
     text
       .split("\n")
@@ -83,11 +85,5 @@ export function postTextOf(
   }
   return post.blocks
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
-    .join("\n");
-}
-
-function rowText(message: ChatMessage): string {
-  return message.segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
     .join("\n");
 }

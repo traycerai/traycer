@@ -24,10 +24,7 @@ export function isTracyEntryRef(ref: TabRef): boolean {
 }
 
 /** Whether a strip item is the entry's own (ungrouped) tab. */
-export function isTracyEntryItem(
-  item: StripItem,
-  fixedBotId: string | null,
-): boolean {
+function isTracyEntryItem(item: StripItem, fixedBotId: string | null): boolean {
   return (
     fixedBotId !== null &&
     item.kind === "tab" &&

@@ -143,7 +143,7 @@ function MentionSuggestionListContent({
     reposition();
     const cleanup = autoUpdate(virtualReference, floating, reposition);
     return cleanup;
-    // `paneContainer` dep: the portal remounts into the live node once the host
+    // `portalContainer` dep: the portal remounts into the live node once the host
     // ref settles, so re-bind `autoUpdate` to it rather than the first node.
   }, [getReferenceClientRect, items.length, portalContainer]);
 

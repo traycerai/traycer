@@ -161,7 +161,6 @@ export function useCanvasPresentation({
     rememberBoard,
     liveBoards,
     renderedBoards,
-    fullscreenHeight,
     shownViewport,
   };
 }

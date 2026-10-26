@@ -15,13 +15,7 @@ import {
   type SharedCommentComposerDraft,
   type CanvasCommentDraftStore,
 } from "./canvas-comment-drafts";
-import {
-  MoreHorizontal,
-  CheckCircle2,
-  RotateCcw,
-  Trash2,
-  X,
-} from "lucide-react";
+import { MoreHorizontal, CheckCircle2, RotateCcw, Trash2 } from "lucide-react";
 import { type JsonContent } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -50,7 +44,7 @@ import {
 } from "./comment-composer";
 import { CommentContent } from "./comment-content-renderer";
 import { deriveInitials } from "./mention-utils";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import "@/lib/composer/tiptap-json-content";
 
 function sharedComposerDraft(
   store: CanvasCommentDraftStore | null,
@@ -128,11 +122,6 @@ export interface CommentThreadCardProps {
   readonly hasAnchor: boolean;
   readonly onExpandedChange: (next: boolean) => void;
   readonly onActivateAnchor: () => void;
-  readonly framePresentation?: {
-    readonly number: number;
-    readonly label: string;
-    readonly onClose: () => void;
-  };
 }
 
 /** What the card quotes: canvas-wide anchors carry a label, not page text. */
@@ -148,7 +137,7 @@ function threadQuotedText(
 }
 
 /**
- * Thread body and actions shared by the sidebar and frame popovers.
+ * Thread body and actions for the comments sidebar.
  *
  * Layout:
  *   - quoted snapshot (italic, line-clamped) - frozen at thread creation
@@ -296,55 +285,42 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
         isExpanded ? "ring-1 ring-ring/40" : "hover:bg-foreground/5",
       )}
     >
-      {props.framePresentation === undefined ? (
-        <button
-          type="button"
-          // The card's expand/collapse control. Named as a slot because it is not
-          // a `ui/button` and the coarse-pointer hit-slop rules address controls
-          // by slot; its own box is a single line of meta text on a thread with no
-          // quoted snapshot, well under the 44px touch target.
-          data-slot="comment-thread-toggle"
-          onClick={handleHeaderClick}
-          aria-expanded={isExpanded}
-          aria-controls={`comment-thread-body-${thread.threadId}`}
-          className="flex w-full items-start gap-2 text-left"
-        >
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            {quotedText.length > 0 ? (
-              <span className="line-clamp-3 border-l-2 border-muted-foreground/40 pl-2 text-ui-xs text-muted-foreground italic">
-                {quotedText}
-              </span>
+      <button
+        type="button"
+        // The card's expand/collapse control. Named as a slot because it is not
+        // a `ui/button` and the coarse-pointer hit-slop rules address controls
+        // by slot; its own box is a single line of meta text on a thread with no
+        // quoted snapshot, well under the 44px touch target.
+        data-slot="comment-thread-toggle"
+        onClick={handleHeaderClick}
+        aria-expanded={isExpanded}
+        aria-controls={`comment-thread-body-${thread.threadId}`}
+        className="flex w-full items-start gap-2 text-left"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          {quotedText.length > 0 ? (
+            <span className="line-clamp-3 border-l-2 border-muted-foreground/40 pl-2 text-ui-xs text-muted-foreground italic">
+              {quotedText}
+            </span>
+          ) : null}
+          <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+            <span>
+              {thread.comments.length} comment
+              {thread.comments.length === 1 ? "" : "s"}
+            </span>
+            {thread.resolved ? (
+              <Badge variant="secondary" className="h-4" size="sm">
+                Resolved
+              </Badge>
             ) : null}
-            <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-              <span>
-                {thread.comments.length} comment
-                {thread.comments.length === 1 ? "" : "s"}
-              </span>
-              {thread.resolved ? (
-                <Badge variant="secondary" className="h-4" size="sm">
-                  Resolved
-                </Badge>
-              ) : null}
-              {hasAnchor ? null : (
-                <Badge variant="outline" className="h-4" size="sm">
-                  Anchor missing
-                </Badge>
-              )}
-            </div>
+            {hasAnchor ? null : (
+              <Badge variant="outline" className="h-4" size="sm">
+                Anchor missing
+              </Badge>
+            )}
           </div>
-        </button>
-      ) : (
-        <FrameThreadHeader
-          presentation={props.framePresentation}
-          hasAnchor={hasAnchor}
-          canManage={canManageThread}
-          resolved={thread.resolved}
-          resolving={setResolvedMutation.isPending}
-          deleting={deleteThreadMutation.isPending}
-          onResolve={handleToggleResolved}
-          onDelete={handleDeleteThread}
-        />
-      )}
+        </div>
+      </button>
 
       {isExpanded ? (
         <div
@@ -451,16 +427,14 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
             className={undefined}
           />
 
-          {props.framePresentation === undefined ? (
-            <CommentThreadFooter
-              canManage={canManageThread}
-              resolved={thread.resolved}
-              resolving={setResolvedMutation.isPending}
-              deleting={deleteThreadMutation.isPending}
-              onResolve={handleToggleResolved}
-              onDelete={handleDeleteThread}
-            />
-          ) : null}
+          <CommentThreadFooter
+            canManage={canManageThread}
+            resolved={thread.resolved}
+            resolving={setResolvedMutation.isPending}
+            deleting={deleteThreadMutation.isPending}
+            onResolve={handleToggleResolved}
+            onDelete={handleDeleteThread}
+          />
         </div>
       ) : null}
     </article>
@@ -511,133 +485,6 @@ function CommentThreadFooter(props: ThreadActionsProps) {
         </>
       ) : null}
     </footer>
-  );
-}
-
-function FrameThreadHeader(
-  props: {
-    readonly presentation: NonNullable<
-      CommentThreadCardProps["framePresentation"]
-    >;
-    readonly hasAnchor: boolean;
-  } & ThreadActionsProps,
-) {
-  const fullscreenContainer = useContext(FrameFullscreenContext);
-  return (
-    <>
-      <header className="flex items-center gap-2">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-ui-xs font-medium text-primary-foreground">
-          {props.presentation.number}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-          {props.presentation.label}
-        </span>
-        {props.canManage ? (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={props.resolved ? "Reopen thread" : "Resolve thread"}
-              disabled={props.resolving}
-              onClick={props.onResolve}
-            >
-              {props.resolved ? <RotateCcw /> : <CheckCircle2 />}
-            </Button>
-            <DropdownMenu modal={fullscreenContainer === null}>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Thread actions"
-                >
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" container={fullscreenContainer}>
-                <DropdownMenuItem
-                  variant="destructive"
-                  disabled={props.deleting}
-                  onSelect={props.onDelete}
-                >
-                  <Trash2 />
-                  Delete thread
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Close thread"
-          onClick={props.presentation.onClose}
-        >
-          <X />
-        </Button>
-      </header>
-      {props.hasAnchor ? null : (
-        <Badge variant="outline" size="sm">
-          Anchor missing
-        </Badge>
-      )}
-    </>
-  );
-}
-
-export function FrameCommentSummary(props: {
-  readonly thread: CommentThreadWire;
-  readonly number: number;
-  readonly label: string;
-  readonly hasAnchor: boolean;
-  readonly onActivate: () => void;
-}) {
-  const first = props.thread.comments.at(0);
-  const author =
-    first?.author.fallbackHandle ?? first?.author.userId ?? "Unknown author";
-  const replies = Math.max(0, props.thread.comments.length - 1);
-  const createdAt = first?.createdAt ?? props.thread.createdAt;
-  return (
-    <button
-      type="button"
-      data-slot="frame-comment-summary"
-      aria-label={`Open comment ${props.number}`}
-      onClick={props.onActivate}
-      className="flex w-full flex-col gap-2 rounded-md border border-border bg-card p-3 text-left hover:bg-foreground/5"
-    >
-      <span className="flex w-full items-center gap-2">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-ui-xs font-medium text-primary-foreground">
-          {props.number}
-        </span>
-        <Avatar size="sm">
-          <AvatarFallback>{deriveInitials(author)}</AvatarFallback>
-        </Avatar>
-        <span className="min-w-0 flex-1 truncate text-ui-sm font-medium">
-          {author}
-        </span>
-        <time
-          dateTime={new Date(createdAt).toISOString()}
-          className="shrink-0 text-ui-xs text-muted-foreground"
-        >
-          {formatRelativeTime(createdAt)}
-        </time>
-      </span>
-      <span className="line-clamp-2 text-ui-sm">
-        {first === undefined
-          ? "Comment deleted"
-          : extractPlainTextFromComposerJSONContent(first.content)}
-      </span>
-      <span className="w-full truncate text-ui-xs text-muted-foreground">
-        {props.label}
-      </span>
-      <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-        {replies} {replies === 1 ? "reply" : "replies"}
-        {props.hasAnchor ? null : (
-          <Badge variant="outline" size="sm">
-            Anchor missing
-          </Badge>
-        )}
-      </span>
-    </button>
   );
 }
 

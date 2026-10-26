@@ -460,9 +460,22 @@ describe("<CommentThreadCard /> sharing a draft across two mounted instances", (
     await waitFor(() => {
       expect(replies).toHaveLength(1);
     });
+    await waitFor(() => {
+      const buttons = screen.getAllByRole("button", { name: /^Reply/ });
+      expect(buttons).toHaveLength(2);
+      expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
+        true,
+      );
+    });
 
     replyAt(0).answer.reject(new Error("network error"));
-    await settle();
+    await waitFor(() => {
+      const buttons = screen.getAllByRole("button", { name: /^Reply/ });
+      expect(buttons).toHaveLength(2);
+      expect(buttons.some((button) => button.hasAttribute("disabled"))).toBe(
+        false,
+      );
+    });
     // A failed submit is the single-flight rule's whole point: the draft it
     // was holding stays right where it was, in every instance that shares it.
     expect(composerEditorAt(0).getText()).toBe("shared reply text");

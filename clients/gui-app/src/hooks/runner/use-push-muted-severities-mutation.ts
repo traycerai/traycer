@@ -12,7 +12,7 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-export interface PushMutedSeveritiesChange {
+interface PushMutedSeveritiesChange {
   /** The account whose loaded set `severities` was derived from. */
   readonly userId: string;
   /** The whole new muted set, not a change to it. */

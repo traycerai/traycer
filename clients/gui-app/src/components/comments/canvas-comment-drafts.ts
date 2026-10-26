@@ -11,7 +11,7 @@ export interface SharedCommentComposerDraft {
   readonly onChange: (content: JsonContent, empty: boolean) => void;
 }
 
-export interface CanvasThreadDraft {
+interface CanvasThreadDraft {
   readonly reply: JsonContent | null;
   readonly edit: {
     readonly commentId: string;

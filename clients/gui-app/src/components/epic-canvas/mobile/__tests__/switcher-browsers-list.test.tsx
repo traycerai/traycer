@@ -594,7 +594,6 @@ describe("SwitcherBrowsersList", () => {
     const simulatorsScroller = simulators.closest(".overflow-y-auto");
 
     expect(emptyScroller).not.toBeNull();
-    expect(simulatorsScroller).not.toBeNull();
     expect(emptyScroller).toBe(simulatorsScroller);
     const wrapper = empty.parentElement;
     expect(wrapper?.classList.contains("shrink-0")).toBe(true);
