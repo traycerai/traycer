@@ -613,7 +613,7 @@ describe("a refused artifact delete in a batch keeps its guidance", () => {
 
     expect(first.code).toBe("E_HOST_STORAGE_FULL");
     expect(everyToastText()).toContain(
-      "The host machine is out of disk space. Free some space on it, then try again.",
+      "The host computer is out of disk space. Free some space on it, then try again.",
     );
   });
 

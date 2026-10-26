@@ -50,6 +50,7 @@ export const ENVIRONMENT_ITEM_KINDS = [
   "auto_policy",
   "member",
   "secret",
+  "sandbox_defaults",
 ] as const;
 export const environmentItemKindSchema = lazySchema(() =>
   z.string().min(1).max(64),
@@ -400,6 +401,45 @@ export const environmentReviewResponseSchemaV11 = lazySchema(() =>
 );
 export type EnvironmentReviewResponseV11 = z.infer<
   typeof environmentReviewResponseSchemaV11
+>;
+
+/**
+ * `environment.review@1.2`: each entry names what a held executable does, the
+ * facts its line on the retrospective sheet reads. All null on a held value
+ * and on any row the host cannot describe; a `@1.1` answer upgrades with all
+ * null.
+ *
+ * - `command`: what it runs, as configured: an MCP server's or hook's command
+ *   line, arguments included and env values left out; a shell's path and
+ *   arguments; a setup script's lines.
+ * - `event`: when it runs: a hook's trigger, or a setup script's.
+ * - `description`: a skill's one-line description, as the skill states it.
+ * - `harness`: the harness id an agent definition is for, or the program an
+ *   env setting changes (its key's `<harness>:` prefix).
+ * - `value`: a launch-sensitive variable's or env setting's value as
+ *   configured. A value that looks like a credential is never here: that row
+ *   is a held value.
+ */
+export const environmentReviewEntrySchemaV12 = lazySchema(() =>
+  environmentReviewEntrySchema.extend({
+    command: z.string().min(1).max(8192).nullable().default(null),
+    event: z.string().min(1).max(256).nullable().default(null),
+    description: z.string().min(1).max(1024).nullable().default(null),
+    harness: z.string().min(1).max(64).nullable().default(null),
+    value: z.string().min(1).max(8192).nullable().default(null),
+  }),
+);
+export type EnvironmentReviewEntryV12 = z.infer<
+  typeof environmentReviewEntrySchemaV12
+>;
+
+export const environmentReviewResponseSchemaV12 = lazySchema(() =>
+  environmentReviewResponseSchemaV11.extend({
+    entries: z.array(environmentReviewEntrySchemaV12),
+  }),
+);
+export type EnvironmentReviewResponseV12 = z.infer<
+  typeof environmentReviewResponseSchemaV12
 >;
 
 /**
@@ -1347,20 +1387,22 @@ export type EnvironmentSecretsConsentRequestV11 = z.infer<
  * that held it (a host, the broker's current, old and held copies) and whether
  * its removal there is `requested` or `confirmed`. Never a value.
  */
+const environmentSecretRemovalTargetSchema = lazySchema(() =>
+  z.object({
+    target: z.enum(["host", "broker_current", "broker_old", "broker_held"]),
+    hostId: z.string().min(1).nullable(),
+    hostName: z.string().nullable(),
+    state: z.enum(["requested", "confirmed"]),
+    at: z.number(),
+  }),
+);
+
 export const environmentSecretRemovalSchema = lazySchema(() =>
   z.object({
     outcome: z.enum(["revoked", "cleanup_requested", "destroyed"]),
     revokedAt: z.number(),
     destroyedAt: z.number().nullable(),
-    targets: z.array(
-      z.object({
-        target: z.enum(["host", "broker_current", "broker_old", "broker_held"]),
-        hostId: z.string().min(1).nullable(),
-        hostName: z.string().nullable(),
-        state: z.enum(["requested", "confirmed"]),
-        at: z.number(),
-      }),
-    ),
+    targets: z.array(environmentSecretRemovalTargetSchema),
   }),
 );
 export type EnvironmentSecretRemoval = z.infer<
@@ -1388,6 +1430,66 @@ export const environmentSecretsListResponseSchemaV11 = lazySchema(() =>
 );
 export type EnvironmentSecretsListResponseV11 = z.infer<
   typeof environmentSecretsListResponseSchemaV11
+>;
+
+/**
+ * `list@1.2`'s row: `@1.1`'s plus the names a computer running the
+ * configuration sets the secret's value under. `variables` are the
+ * configuration's variable names (Variables & shells); `providerVariables`
+ * are names in one provider's env (a provider's Env tab), by provider id.
+ * The desktop shows such a name as the secret's, never as a plain value.
+ */
+export const environmentSecretSchemaV12 = lazySchema(() =>
+  environmentSecretSchema.extend({
+    variables: z.array(z.string().min(1)),
+    providerVariables: z.array(
+      z.object({ providerId: z.string().min(1), name: z.string().min(1) }),
+    ),
+  }),
+);
+export type EnvironmentSecretV12 = z.infer<typeof environmentSecretSchemaV12>;
+
+export const environmentSecretsListRequestSchemaV12 =
+  environmentSecretsListRequestSchemaV11;
+export type EnvironmentSecretsListRequestV12 = z.infer<
+  typeof environmentSecretsListRequestSchemaV12
+>;
+
+/**
+ * `list@1.2`'s removal: `@1.1`'s, each target with `failedAt`, when a host
+ * that still holds a copy last said it could not delete it (it tries again
+ * by itself), else null. An authn that predates it sends none: null.
+ */
+export const environmentSecretRemovalSchemaV12 = lazySchema(() =>
+  environmentSecretRemovalSchema.extend({
+    targets: z.array(
+      environmentSecretRemovalTargetSchema.extend({
+        failedAt: z.number().nullable().default(null),
+      }),
+    ),
+  }),
+);
+export type EnvironmentSecretRemovalV12 = z.infer<
+  typeof environmentSecretRemovalSchemaV12
+>;
+
+/** `list@1.2`'s answer: `@1.1`'s, its rows with their names, its removals with their failures. */
+export const environmentSecretsListResponseSchemaV12 = lazySchema(() =>
+  environmentSecretsListResponseSchemaV11.extend({
+    secrets: z.array(environmentSecretSchemaV12),
+    removed: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          removal: environmentSecretRemovalSchemaV12,
+        }),
+      )
+      .default([]),
+  }),
+);
+export type EnvironmentSecretsListResponseV12 = z.infer<
+  typeof environmentSecretsListResponseSchemaV12
 >;
 
 export const environmentSecretsVersionsResponseSchemaV11 = lazySchema(() =>

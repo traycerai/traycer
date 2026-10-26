@@ -1,56 +1,61 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { useTeamViewingHost } from "./use-team-viewing-host";
+import { useConfigurationReadClient } from "./use-configuration-read-client";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { invalidateEnvironmentHostReports } from "@/hooks/environment/environment-host-list-key";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { environmentMutationKeys } from "@/lib/query-keys";
 
+/** The guide, from the configuration's room: no host has to be running it. */
 export function useConfigurationGuideQuery() {
   const source = useConfigurationSource();
-  const scope = useTeamViewingHost();
+  const client = useConfigurationReadClient();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
   return useHostQuery({
     cacheKeyIdentity: [viewerId],
-    client: scope.client,
+    client,
     method: "environment.configuration.guide.get",
     params: {
       environmentId: source.kind === "pool" ? source.environmentId : "",
     },
     preflight: cloudVerdictPreflight("environment.configuration.guide.get"),
     options: {
-      enabled:
-        source.kind === "pool" &&
-        scope.client !== null &&
-        viewerId.length > 0 &&
-        authorized,
+      enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
     },
   });
 }
 
+/**
+ * Whether the tier that serves the guide takes its writes: the pool once it
+ * advertises them, or the picked host in a build without one.
+ */
+export function useConfigurationGuideWritable(): boolean {
+  const client = useConfigurationReadClient();
+  return useHostSupportsMethod(
+    client.getActiveHostId(),
+    "environment.configuration.guide.set",
+  );
+}
+
+/** Set and reset, through the same client as the read. */
 export function useConfigurationGuideMutations() {
-  const scope = useTeamViewingHost();
+  const client = useConfigurationReadClient();
   const queries = useQueryClient();
-  const reread = (environmentId: string, hostId: string | null): void => {
-    invalidateEnvironmentHostReports(queries, environmentId);
-    void queries.invalidateQueries({
-      queryKey: hostQueryKeys.method(
-        hostId,
-        "environment.configuration.guide.get",
-        { environmentId },
-      ),
-    });
-  };
-  const set = useHostScopedMutationForClient(scope.client, {
+  const reread = (environmentId: string): void =>
+    invalidateConfigurationReads(queries, environmentId, [
+      "environment.configuration.guide.get",
+    ]);
+  const set = useHostScopedMutationForClient(client, {
     method: "environment.configuration.guide.set",
     mutationKey: environmentMutationKeys.configurationGuideSet(),
     errorMessage: "Couldn't save the guide.",
@@ -59,10 +64,9 @@ export function useConfigurationGuideMutations() {
       cloudVerdictPreflight("environment.configuration.guide.set")();
       return Promise.resolve(request);
     },
-    onSuccess: (_result, request, hostId) =>
-      reread(request.environmentId, hostId),
+    onSuccess: (_result, request) => reread(request.environmentId),
   });
-  const reset = useHostScopedMutationForClient(scope.client, {
+  const reset = useHostScopedMutationForClient(client, {
     method: "environment.configuration.guide.reset",
     mutationKey: environmentMutationKeys.configurationGuideReset(),
     errorMessage: "Couldn't reset the guide.",
@@ -71,8 +75,7 @@ export function useConfigurationGuideMutations() {
       cloudVerdictPreflight("environment.configuration.guide.reset")();
       return Promise.resolve(request);
     },
-    onSuccess: (_result, request, hostId) =>
-      reread(request.environmentId, hostId),
+    onSuccess: (_result, request) => reread(request.environmentId),
   });
   return { set, reset };
 }

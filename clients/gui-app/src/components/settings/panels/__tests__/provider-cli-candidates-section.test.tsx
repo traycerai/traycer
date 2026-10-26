@@ -5,7 +5,16 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
   ProviderAdvisory,
   ProviderCliCandidate,
@@ -57,6 +66,8 @@ type SectionMocks = {
   removeCustomPathMutate: Mock;
   ensurePackMutate: Mock;
   hostSupportsMethod: boolean | null;
+  // The host's negotiated `providers.setSelection`; null reads as no handshake.
+  setSelectionVersion: SchemaVersion | null;
   useVersionManagerSupport: Mock<(hostId: string | null) => boolean | null>;
   // Concretely typed, not bare `Mock`: a bare one is `Mock<Procedure>`, whose
   // return is `any`, and the two call sites below then trip
@@ -76,6 +87,7 @@ const mocks = vi.hoisted((): SectionMocks => ({
   removeCustomPathMutate: vi.fn(),
   ensurePackMutate: vi.fn(),
   hostSupportsMethod: false,
+  setSelectionVersion: null,
   useHostSupportsMethod: vi.fn(
     (hostId: string | null, _method: string): boolean | null => {
       // Mirrors the real boolean form: no host ⇒ not yet/never supported.
@@ -133,7 +145,11 @@ vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
 // Capability gate for Manage versions — evaluated against the scoped hostId
 // prop, never an ambient active-host hook.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSchemaVersion: () => null,
+  useHostMethodSchemaVersion: (
+    _hostId: string | null,
+    method: string,
+  ): SchemaVersion | null =>
+    method === "providers.setSelection" ? mocks.setSelectionVersion : null,
   useHostSupportsMethod: (
     hostId: string | null,
     method: string,
@@ -327,7 +343,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(
       screen.getByText(
-        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Amp CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", { name: "Amp installation guide" });
@@ -353,7 +369,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(
       screen.getByText(
-        "No Command Code CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Command Code CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", {
@@ -389,7 +405,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(screen.getByText("Looking for the Amp CLI…")).toBeDefined();
     expect(
-      screen.queryByText(/No Amp CLI was found on this machine/),
+      screen.queryByText(/No Amp CLI was found on this computer/),
     ).toBeNull();
     // The install guide is the actionable half of the wrong advice; it must
     // not be reachable while the answer is still unknown.
@@ -410,7 +426,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
 
     expect(
       screen.getByText(
-        "No Cursor CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Cursor CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     expect(screen.queryByRole("link")).toBeNull();
@@ -441,7 +457,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
       screen.getByRole("radio", { name: "Select /usr/local/bin/opencode" }),
     ).toBeDefined();
     expect(
-      screen.queryByText(/No Traycer CLI was found on this machine/),
+      screen.queryByText(/No Traycer CLI was found on this computer/),
     ).toBeNull();
   });
 
@@ -463,7 +479,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
       screen.getByRole("radio", { name: "Select /usr/local/bin/amp" }),
     ).toBeDefined();
     expect(
-      screen.queryByText(/No Amp CLI was found on this machine/),
+      screen.queryByText(/No Amp CLI was found on this computer/),
     ).toBeNull();
   });
 });
@@ -1552,7 +1568,7 @@ describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-pa
 
     expect(
       screen.getByText(
-        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+        "No Antigravity CLI was found on this computer, and Traycer ships no bundled copy of it. Install it.",
       ),
     ).toBeDefined();
     expect(screen.queryByText(/add its path below/u)).toBeNull();
@@ -1568,7 +1584,7 @@ describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-pa
 
     expect(
       screen.getByText(
-        "No Codex CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+        "No Codex CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
   });
@@ -1650,7 +1666,7 @@ describe("ProviderCliCandidatesSection: macOS requirement", () => {
     expect(screen.queryByText(MANAGED_NOTE)).toBeNull();
     expect(
       screen.getByText(
-        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+        "No Antigravity CLI was found on this computer, and Traycer ships no bundled copy of it. Install it.",
       ),
     ).toBeDefined();
   });
@@ -1854,4 +1870,193 @@ describe("ProviderCliCandidatesSection: OpenCode Managed lines", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("ProviderCliCandidatesSection: chats follow the Managed line", () => {
+  const NEW_CHATS_ONLY =
+    "New chats use the Managed line you pick; existing chats keep the line they started on.";
+  const FOLLOW =
+    "Your chats use the line you pick, including existing ones from their next message.";
+
+  function managedLine(line: 1 | 2): ProviderManagedLine {
+    return {
+      line,
+      candidate: {
+        ...bundledCandidate({
+          path: `/store/opencode${String(line)}/bin`,
+          version: line === 1 ? "1.14.0" : "2.1.2",
+          available: true,
+        }),
+        kind: "bundled",
+      },
+      packId: line === 1 ? "opencode" : "opencode2",
+      managedInstallState: { status: "installed", version: "x" },
+      managedVersions: null,
+      managedVersionsUnavailable: null,
+    };
+  }
+
+  const PATH_ROW = "Select /usr/local/bin/opencode";
+  const CUSTOM_ROW = "Select /opt/oc";
+  const EXTRA_ROWS: readonly ProviderCliCandidate[] = [
+    pathCandidate({ path: "/usr/local/bin/opencode", version: "1.14.0" }),
+    {
+      kind: "custom",
+      path: "/opt/oc",
+      version: "1.14.0",
+      available: true,
+      versionPending: false,
+    },
+  ];
+
+  function renderOpencode(
+    selected: ProviderSelection,
+    chatsFollow: boolean | undefined,
+  ): void {
+    renderOpencodeWith(selected, chatsFollow, []);
+  }
+
+  function renderOpencodeWith(
+    selected: ProviderSelection,
+    chatsFollow: boolean | undefined,
+    extra: readonly ProviderCliCandidate[],
+  ): void {
+    const base = providerState({
+      providerId: "opencode",
+      selected,
+      candidates: [bundledCandidate({ available: true }), ...extra],
+    });
+    renderSection({
+      ...base,
+      managedLines: [managedLine(1), managedLine(2)],
+      ...(chatsFollow === undefined ? {} : { chatsFollow }),
+    });
+  }
+
+  function checked(): readonly boolean[] {
+    const radios: readonly HTMLInputElement[] = screen.getAllByRole("radio");
+    return radios.map((radio) => radio.checked);
+  }
+
+  beforeEach(() => {
+    mocks.setSelectionVersion = { major: 2, minor: 3 };
+  });
+  afterEach(() => {
+    mocks.setSelectionVersion = null;
+  });
+
+  describe("on a host at providers.setSelection 2.3", () => {
+    it("checks neither row for a plain selection, and says new chats use 2.x until a pick", () => {
+      renderOpencode({ kind: "bundled" }, undefined);
+      expect(checked()).toEqual([false, false]);
+      expect(
+        screen.getByText("New chats use Managed 2.x until you pick one."),
+      ).toBeDefined();
+      expect(screen.queryByText(FOLLOW)).toBeNull();
+      expect(screen.queryByText(NEW_CHATS_ONLY)).toBeNull();
+    });
+
+    it.each([
+      [1, [false, true]],
+      [2, [true, false]],
+    ] as const)(
+      "checks only the followed row for line %s and drops the until-you-pick sentence",
+      (line, expected) => {
+        renderOpencode({ kind: "bundled", line }, true);
+        expect(checked()).toEqual(expected);
+        expect(screen.getByText(FOLLOW)).toBeDefined();
+        expect(screen.queryByText(/until you pick one/u)).toBeNull();
+      },
+    );
+
+    it("checks neither row for a line an older client saved, and names that line", () => {
+      renderOpencode({ kind: "bundled", line: 1 }, undefined);
+      expect(checked()).toEqual([false, false]);
+      expect(
+        screen.getByText("New chats use Managed 1.x until you pick one."),
+      ).toBeDefined();
+      expect(screen.queryByText(FOLLOW)).toBeNull();
+    });
+
+    it("reads an explicit chatsFollow false like an absent one", () => {
+      renderOpencode({ kind: "bundled", line: 1 }, false);
+      expect(checked()).toEqual([false, false]);
+    });
+
+    describe("with a PATH and a custom candidate", () => {
+      it("checks only the PATH row when it is saved and followed", () => {
+        renderOpencodeWith({ kind: "path" }, true, EXTRA_ROWS);
+        expect(checked()).toEqual([false, false, true, false]);
+        expect(screen.getByText(FOLLOW)).toBeDefined();
+      });
+
+      it("checks no row for a PATH selection chats do not follow, and a click saves it", () => {
+        renderOpencodeWith({ kind: "path" }, undefined, EXTRA_ROWS);
+        expect(checked()).toEqual([false, false, false, false]);
+        expect(
+          screen.getByText(
+            "New chats use the OpenCode on your PATH until you pick one.",
+          ),
+        ).toBeDefined();
+        expect(screen.queryByText(FOLLOW)).toBeNull();
+        fireEvent.click(screen.getByLabelText(PATH_ROW));
+        expect(mocks.setSelectionMutate).toHaveBeenCalledTimes(1);
+        expect(mocks.setSelectionMutate.mock.calls[0]?.[0]).toEqual({
+          providerId: "opencode",
+          selection: { kind: "path" },
+        });
+      });
+
+      it("checks only the custom row when it is saved and followed", () => {
+        renderOpencodeWith(
+          { kind: "custom", path: "/opt/oc" },
+          true,
+          EXTRA_ROWS,
+        );
+        expect(checked()).toEqual([false, false, false, true]);
+        expect(screen.getByText(FOLLOW)).toBeDefined();
+      });
+
+      it("checks no row for a custom selection chats do not follow, and names its path", () => {
+        renderOpencodeWith(
+          { kind: "custom", path: "/opt/oc" },
+          undefined,
+          EXTRA_ROWS,
+        );
+        expect(checked()).toEqual([false, false, false, false]);
+        expect(
+          screen.getByText("New chats use /opt/oc until you pick one."),
+        ).toBeDefined();
+        expect(screen.queryByLabelText(CUSTOM_ROW)).not.toBeNull();
+      });
+    });
+
+    it("saves line 2 when the default row is clicked under a plain selection", () => {
+      renderOpencode({ kind: "bundled" }, undefined);
+      fireEvent.click(screen.getByLabelText("Select Managed 2.x"));
+      expect(mocks.setSelectionMutate).toHaveBeenCalledTimes(1);
+      expect(mocks.setSelectionMutate.mock.calls[0]?.[0]).toEqual({
+        providerId: "opencode",
+        selection: { kind: "bundled", line: 2 },
+      });
+    });
+  });
+
+  describe("on a host at providers.setSelection 2.2", () => {
+    beforeEach(() => {
+      mocks.setSelectionVersion = { major: 2, minor: 2 };
+    });
+
+    it("checks the default row for a plain selection and shows the old caption", () => {
+      renderOpencode({ kind: "bundled" }, undefined);
+      expect(checked()).toEqual([true, false]);
+      expect(screen.getByText(NEW_CHATS_ONLY)).toBeDefined();
+      expect(screen.queryByText(/until you pick one/u)).toBeNull();
+    });
+
+    it("checks the named line even when chatsFollow is absent", () => {
+      renderOpencode({ kind: "bundled", line: 1 }, undefined);
+      expect(checked()).toEqual([false, true]);
+    });
+  });
 });

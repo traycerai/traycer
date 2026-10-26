@@ -8,12 +8,17 @@ import type {
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useSecretVersionActions } from "@/components/settings/secrets/use-secret-version-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
-import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  SECRET_SCOPE_LINE,
+  SECRETS_NEED_UPDATED_HOST,
+} from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * A secret's versions: each with when it was made,
@@ -23,11 +28,6 @@ import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
  * never the revoked ones. A refusal reads its line.
  */
 
-const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
 function versionState(version: SecretVersion): string {
   if (version.destroyedAt !== null) return "destroyed";
   if (version.current) return "current";
@@ -36,6 +36,14 @@ function versionState(version: SecretVersion): string {
 
 function refusalText(operation: "undo" | "destroy", code: string): string {
   return secretChangeRefusalLine(operation, code) ?? "That didn't go through.";
+}
+
+/** A failed Undo or Destroy: an old host by name, else the host's words. */
+function errorNote(error: Error | null): string | null {
+  if (error === null) return null;
+  return error instanceof HostMethodVersionUnsatisfiedError
+    ? SECRETS_NEED_UPDATED_HOST
+    : error.message;
 }
 
 function versionActionNote(
@@ -66,8 +74,8 @@ function VersionRow(props: {
   const { environmentId, undo, destroy } = useSecretVersionActions(props);
   const busy = undo.isPending || destroy.isPending;
   const note =
-    undo.error?.message ??
-    destroy.error?.message ??
+    errorNote(undo.error) ??
+    errorNote(destroy.error) ??
     versionActionNote(undo.data, destroy.data);
 
   return (
@@ -78,7 +86,8 @@ function VersionRow(props: {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-ui-xs text-foreground">
-          Version {version.ordinal} · {DATE_FORMAT.format(version.createdAt)}
+          Version {version.ordinal} ·{" "}
+          {formatSettingsDate(version.createdAt, true)}
           <span className="text-muted-foreground">
             {" · "}
             {versionState(version)}
@@ -186,7 +195,7 @@ export function SecretVersionsList(props: {
   /** Undo made another version current: the list's row re-reads too. */
   readonly onChanged: () => void;
 }): ReactNode {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId, resolved } = useAddressedEnvironment();
   const versions = useHostQuery<
     HostRpcRegistry,
     "environment.secrets.versions"
@@ -202,7 +211,7 @@ export function SecretVersionsList(props: {
             method: "environment.secrets.versions",
             version: { major: 1, minor: 1 },
           },
-    options: { enabled: true },
+    options: { enabled: resolved },
   });
   if (versions.isError) {
     return (

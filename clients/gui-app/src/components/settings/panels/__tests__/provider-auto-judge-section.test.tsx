@@ -496,7 +496,7 @@ describe("<ProviderAutoJudgeSection />", () => {
     expect(headingParagraph()).toBeTruthy();
     const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
     expect(unsupported.textContent).toBe(
-      "Traycer's judge. This machine's host can't change it; update it to choose.",
+      "Traycer's judge. This host can't change it; update it to choose.",
     );
     expect(screen.queryByRole("combobox")).toBeNull();
   });
@@ -549,7 +549,7 @@ describe("<ProviderAutoJudgeSection />", () => {
 
     const unreadable = screen.getByTestId("provider-auto-judge-unreadable");
     expect(unreadable.textContent).toBe(
-      "This machine's host can't report who reviews Claude Code's commands. Update it to see and change this.",
+      "This host can't report who reviews Claude Code's commands. Update it to see and change this.",
     );
     expect(screen.queryByRole("combobox")).toBeNull();
     // The important part: no fabricated echo of either possible value,
@@ -585,7 +585,7 @@ describe("<ProviderAutoJudgeSection />", () => {
   });
 
   // JOB 4: the "no handshake yet" case must NOT fall back to the read-only
-  // line - that line asserts a POSITIVE fact ("this machine's host can't
+  // line - that line asserts a POSITIVE fact ("this host can't
   // change who reviews..."), which is not known yet with no manifest at all
   // for this host. Falling back would tell the user something the section
   // has no evidence for; rendering nothing is the honest "not yet known" the

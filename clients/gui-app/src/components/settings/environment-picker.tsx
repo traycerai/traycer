@@ -1,27 +1,36 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import { ChevronDown } from "lucide-react";
 import {
-  environmentPickerModel,
-  isEnvironmentComputer,
   isStaleLocalPick,
+  LOCAL_BADGE_TOOLTIP,
+  personalSubtitle,
   type EnvironmentPickerModel,
   type LocalPickerRow,
 } from "@/components/settings/environment/environment-picker-model";
+import {
+  collisionLine,
+  type HostNameCollision,
+  type HostsRunningConfiguration,
+} from "@/components/settings/environment/hosts-running-configuration-model";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { EnvironmentPickerRow } from "@/components/settings/environment/environment-picker-row";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
+import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
-import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import {
   environmentPickValue,
   environmentSectionShown,
@@ -45,33 +54,15 @@ import {
  * this is the one place that knows each computer's state.
  */
 function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
-  const hosts = useMemo(
-    () => scope.hosts.filter(isEnvironmentComputer),
-    [scope.hosts],
-  );
-  const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);
-  const statuses = useRegisteredHostEnvironmentStatuses(hosts);
-  const versions = useHostNegotiatedMethodVersions(
-    hostIds,
-    "environment.status",
-  );
-  const model = useMemo(
-    () =>
-      environmentPickerModel({
-        hosts,
-        statuses,
-        versions,
-        windowHostId: scope.activeHostId,
-      }),
-    [hosts, statuses, versions, scope.activeHostId],
-  );
+  const model = useEnvironmentStatusModel(scope);
   const pick = useSettingsEnvironmentPickStore((state) => state.pick);
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const setDefaultPick = useSettingsEnvironmentPickStore(
     (state) => state.setDefaultPick,
   );
-  const stale = isStaleLocalPick(pick, model, statuses);
-  const { defaultPick } = model;
+  const statuses = model.statuses;
+  const stale = isStaleLocalPick(pick, model.picker, statuses);
+  const { defaultPick } = model.picker;
   // Syncs host-reported state into the window's pick: the store is read by
   // pages that do not mount this hook.
   useEffect(() => {
@@ -80,7 +71,7 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   useEffect(() => {
     if (stale) setPick(null);
   }, [stale, setPick]);
-  return model;
+  return model.picker;
 }
 
 /**
@@ -95,6 +86,7 @@ export function EnvironmentPicker(props: {
   readonly activeSection: SettingsSectionId | null;
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
+  const running = useHostsRunningPersonal();
   const pick = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
   );
@@ -112,58 +104,128 @@ export function EnvironmentPicker(props: {
       navigateToSettingsSection("providers");
     }
   };
-  const finishMoving = (hostId: string): void => {
+  // Finish moving and Rename both continue on that host's Overview.
+  const openHostOverview = (hostId: string): void => {
     setScopedHostId(hostId);
     navigateToSettingsSection("host");
   };
+  // Outside the menu, which unmounts its content as it closes on `Review`.
+  const [reviewing, setReviewing] = useState<EnvironmentInvitation | null>(
+    null,
+  );
   return (
-    <DropdownMenu>
-      <EnvironmentPickerTrigger pick={pick} />
-      <DropdownMenuContent
-        align="start"
-        className="w-[min(28rem,calc(100vw-2rem))]"
-        data-testid="environment-picker-menu"
-      >
-        <DropdownMenuRadioGroup value={environmentPickValue(pick)}>
-          <EnvironmentPickerRow
-            value={environmentPickValue(PERSONAL_PICK)}
-            label="Personal"
-            badge={null}
-            subtitle={model.personalSubtitle}
-            nested={false}
-            disabled={false}
-            testId="environment-picker-personal"
-            onSelect={() => choose(PERSONAL_PICK)}
-            verb={null}
-          />
-          {model.localRows.map((row) => (
+    <>
+      <DropdownMenu>
+        <EnvironmentPickerTrigger pick={pick} />
+        <DropdownMenuContent
+          align="start"
+          className="w-[min(28rem,calc(100vw-2rem))]"
+          data-testid="environment-picker-menu"
+        >
+          <DropdownMenuRadioGroup value={environmentPickValue(pick)}>
             <EnvironmentPickerRow
-              key={row.hostId}
-              value={environmentPickValue({
-                kind: "local",
-                hostId: row.hostId,
-                hostName: row.name,
-              })}
-              label={row.name}
-              badge="Local"
-              subtitle={row.subtitle}
-              nested
-              disabled={row.needsUpdate}
-              testId={`environment-picker-local-${row.hostId}`}
-              onSelect={() =>
-                choose({
+              value={environmentPickValue(PERSONAL_PICK)}
+              label="Personal"
+              badge={null}
+              badgeTooltip={null}
+              subtitle={personalRowSubtitle(running)}
+              nested={false}
+              disabled={false}
+              testId="environment-picker-personal"
+              onSelect={() => choose(PERSONAL_PICK)}
+              verb={null}
+            />
+            {running.collisions.map((collision) => (
+              <NameCollisionLine
+                key={collision.hostName}
+                collision={collision}
+                thisComputerId={
+                  running.hosts.find((host) => host.isThisComputer)?.hostId ??
+                  null
+                }
+                onRename={openHostOverview}
+              />
+            ))}
+            {model.localRows.map((row) => (
+              <EnvironmentPickerRow
+                key={row.hostId}
+                value={environmentPickValue({
                   kind: "local",
                   hostId: row.hostId,
                   hostName: row.name,
-                })
-              }
-              verb={localRowVerb(row, openMoveSheet, finishMoving)}
-            />
-          ))}
-          <TeamRows pick={pick} onPick={choose} />
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+                })}
+                label={row.name}
+                badge="Local"
+                badgeTooltip={LOCAL_BADGE_TOOLTIP}
+                subtitle={row.subtitle}
+                nested
+                disabled={row.needsUpdate}
+                testId={`environment-picker-local-${row.hostId}`}
+                onSelect={() =>
+                  choose({
+                    kind: "local",
+                    hostId: row.hostId,
+                    hostName: row.name,
+                  })
+                }
+                verb={localRowVerb(row, openMoveSheet, openHostOverview)}
+              />
+            ))}
+            <TeamRows pick={pick} onPick={choose} onReview={setReviewing} />
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <InviteAcceptDialog
+        invitation={reviewing}
+        onClose={() => setReviewing(null)}
+        onAccepted={(environmentId) => {
+          setReviewing(null);
+          choose({ kind: "team", environmentId });
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * Personal's line: the hosts running it, once their list has answered.
+ * Before that, and when it cannot be read, it names no host and claims none.
+ */
+function personalRowSubtitle(running: HostsRunningConfiguration): string {
+  if (running.state !== "ready") return "your settings";
+  return personalSubtitle(running.hosts.map((host) => host.name));
+}
+
+/**
+ * `Two computers are named <host> · Rename`, under Personal's row while two
+ * running hosts share a name. Rename opens the Overview of this computer when
+ * it is one of them, where its name is edited, else of the first.
+ */
+function NameCollisionLine(props: {
+  readonly collision: HostNameCollision;
+  readonly thisComputerId: string | null;
+  readonly onRename: (hostId: string) => void;
+}): ReactNode {
+  const { collision } = props;
+  const target =
+    collision.hostIds.find((hostId) => hostId === props.thisComputerId) ??
+    collision.hostIds.at(0);
+  return (
+    <DropdownMenuItem
+      inset
+      data-testid="environment-picker-name-collision"
+      onSelect={() => {
+        if (target !== undefined) props.onRename(target);
+      }}
+    >
+      <span className="text-ui-xs text-muted-foreground">
+        {collisionLine(collision)}
+        <span aria-hidden> · </span>
+        <span className="text-primary underline-offset-2 hover:underline">
+          Rename
+        </span>
+      </span>
+    </DropdownMenuItem>
   );
 }
 
@@ -181,7 +243,7 @@ function localRowVerb(
   }
   if (row.verb === "finish_moving") {
     return {
-      label: "finish moving",
+      label: "Finish moving",
       testId: `environment-picker-finish-${row.hostId}`,
       onSelect: () => finishMoving(row.hostId),
     };
@@ -216,9 +278,16 @@ function EnvironmentPickerTrigger(props: {
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate">{label}</span>
           {local ? (
-            <Badge variant="secondary" size="xs">
-              Local
-            </Badge>
+            <TooltipWrapper
+              label={LOCAL_BADGE_TOOLTIP}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Badge variant="secondary" size="xs">
+                Local
+              </Badge>
+            </TooltipWrapper>
           ) : null}
         </span>
         <ChevronDown className="size-3.5 shrink-0" aria-hidden />

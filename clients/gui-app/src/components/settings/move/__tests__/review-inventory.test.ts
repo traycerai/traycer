@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EnvironmentItemStatus } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import {
   appliedOnHostNames,
   roomSharedLine,
@@ -30,8 +30,8 @@ function item(
 function host(
   hostId: string,
   hostLabel: string | null,
-  applied: EnvironmentHostRecordV11["applied"],
-): EnvironmentHostRecordV11 {
+  applied: EnvironmentHostRecordV12["applied"],
+): EnvironmentHostRecordV12 {
   return {
     hostId,
     hostLabel,
@@ -41,6 +41,7 @@ function host(
     boundAt: 1,
     reachable: true,
     lastReportedAt: 1,
+    hasLocalRow: false,
     applied,
   };
 }
@@ -67,6 +68,45 @@ describe("sharedInUseFromItems", () => {
         names: ["NOTIFICATION_SMTP_PASSWORD"],
         page: "secrets",
       },
+    ]);
+  });
+});
+
+describe("sharedInUseFromItems naming", () => {
+  it("names a one-of-a-kind item by its page, with no count and no names", () => {
+    expect(
+      sharedInUseFromItems([
+        item("shell", "default", "applied"),
+        item("browser_agent_access", "browser", "applied"),
+        item("auto_policy", "auto", "applied"),
+      ]).map((row) => [row.label, row.names]),
+    ).toEqual([
+      ["The shell", []],
+      ["Browser agent access", []],
+      ["Permissions", []],
+    ]);
+  });
+
+  it("groups env overrides per provider, naming the variables without the provider prefix", () => {
+    const rows = sharedInUseFromItems([
+      item("env_override", "claude-code:ANTHROPIC_BASE_URL", "applied"),
+      item("env_override", "claude-code:ANTHROPIC_MODEL", "applied"),
+      item("env_override", "codex:OPENAI_BASE_URL", "applied"),
+    ]);
+    expect(rows.map((row) => [row.label, row.names])).toEqual([
+      ["2 Claude Code env settings", ["ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"]],
+      ["1 Codex env setting", ["OPENAI_BASE_URL"]],
+    ]);
+  });
+
+  it("keeps variables counted, with their names", () => {
+    const [row] = sharedInUseFromItems([
+      item("variable", "LOG_LEVEL", "applied"),
+      item("variable", "EDITOR", "applied"),
+    ]);
+    expect([row.label, row.names]).toEqual([
+      "2 variables",
+      ["LOG_LEVEL", "EDITOR"],
     ]);
   });
 });

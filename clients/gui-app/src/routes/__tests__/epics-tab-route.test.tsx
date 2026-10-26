@@ -74,6 +74,11 @@ vi.mock("@/components/layout/bridges/notification-emission-controller", () => ({
 vi.mock("@/components/layout/dialogs/system-tab-modal-host", () => ({
   SystemTabModalHost: () => null,
 }));
+// The retrospective and move sheets RootComponent mounts app-wide read this
+// computer's host through a <HostRuntimeProvider> this harness does not build.
+vi.mock("@/components/settings/move/environment-sheets-host", () => ({
+  EnvironmentSheetsHost: () => null,
+}));
 
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,

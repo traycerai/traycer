@@ -1,6 +1,10 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -11,7 +15,7 @@ export function useSecretVersionActions(props: {
   readonly hostId: string | null;
   readonly onChanged: () => void;
 }) {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId } = useAddressedEnvironment();
   const queryClient = useQueryClient();
   const reread = async (captured: {
     readonly hostId: string | null;
@@ -19,13 +23,23 @@ export function useSecretVersionActions(props: {
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope(
-          captured.hostId,
+          hostRpcServingTierHostId(
+            "environment.secrets.versions",
+            captured.hostId,
+            readProcessHostRpcTierPlan(),
+            null,
+          ),
           "environment.secrets.versions",
         ),
       }),
       queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope(
-          captured.hostId,
+          hostRpcServingTierHostId(
+            "environment.secrets.list",
+            captured.hostId,
+            readProcessHostRpcTierPlan(),
+            null,
+          ),
           "environment.secrets.list",
         ),
       }),

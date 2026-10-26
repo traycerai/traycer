@@ -31,6 +31,7 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
@@ -51,17 +52,18 @@ const HOST_NAME = "dev-box";
 const OFFLINE_LINE = "Changes apply on dev-box when it reconnects.";
 
 afterEach(() => {
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
 });
 
 function RowNotesProbe(): ReactNode {
-  const notes = usePersonalRowNotes("variable");
+  const notes = usePersonalRowNotes({ kind: "variable" });
   return (
     <ul data-testid="row-notes">
       {[...notes.entries()].map(([key, note]) => (
-        <li key={key}>{`${key}: ${note}`}</li>
+        <li key={key}>{`${key}: ${note.kind}`}</li>
       ))}
     </ul>
   );
@@ -137,6 +139,10 @@ function mountPageOver(first: EnvironmentStatusResponseV11): MountedPage {
     "environment.status",
     "environment.localOverrides",
   ]);
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,
@@ -190,7 +196,7 @@ describe("an edit made while the host is out of reach", () => {
   it("is Pending, with the page saying changes wait for the reconnect, until the receipt is accepted", async () => {
     const page = mountPageOver(waitingEdit("reconnecting"));
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["EDITED: Pending"]);
+      expect(notes()).toEqual(["EDITED: pending"]);
     });
     expect(
       (await screen.findByTestId("personal-page-status")).textContent,
@@ -218,7 +224,7 @@ describe("an edit made while the host is out of reach", () => {
   it("stays Pending across a reconnect that has not yet delivered its receipt", async () => {
     const page = mountPageOver(waitingEdit("reconnecting"));
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["EDITED: Pending"]);
+      expect(notes()).toEqual(["EDITED: pending"]);
     });
 
     await page.hostNowAnswers(waitingEdit("connected"));
@@ -226,7 +232,7 @@ describe("an edit made while the host is out of reach", () => {
     await vi.waitFor(() => {
       expect(statusLine()).not.toBe(OFFLINE_LINE);
     });
-    expect(notes()).toEqual(["EDITED: Pending"]);
+    expect(notes()).toEqual(["EDITED: pending"]);
   });
 
   it("clears only the edit whose receipt arrived, not its neighbour's", async () => {
@@ -240,7 +246,7 @@ describe("an edit made while the host is out of reach", () => {
       }),
     );
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["FIRST: Pending", "SECOND: Pending"]);
+      expect(notes()).toEqual(["FIRST: pending", "SECOND: pending"]);
     });
 
     await page.hostNowAnswers(
@@ -258,7 +264,7 @@ describe("an edit made while the host is out of reach", () => {
     );
 
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["SECOND: Pending"]);
+      expect(notes()).toEqual(["SECOND: pending"]);
     });
   });
 });

@@ -18,6 +18,7 @@ export function MemberRowDetails(props: MemberRowDetailsProps): ReactNode {
         key: props.userId,
       }}
       title="Member details"
+      controls={null}
     />
   );
 }

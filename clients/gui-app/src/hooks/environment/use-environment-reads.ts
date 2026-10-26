@@ -1,3 +1,7 @@
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -7,6 +11,11 @@ import type {
   EnvironmentReviewResponse,
   EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
+import {
+  CONFIGURATION_READS,
+  invalidateConfigurationReads,
+} from "@/hooks/environment/environment-host-list-key";
+import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -42,7 +51,11 @@ export function useEnvironmentStatusRead(
     params: {},
     options: { enabled: enabled && supported === true, poll: true },
   });
-  useRereadOnRevision(hostId, query.data ?? null);
+  const personal = usePersonalEnvironment(
+    client,
+    enabled && query.data?.principal?.kind === "personal",
+  );
+  useRereadOnRevision(hostId, query.data ?? null, personal.environmentId);
   return { supported, data: query.data ?? null, isError: query.isError };
 }
 
@@ -50,11 +63,14 @@ export function useEnvironmentStatusRead(
  * Re-reads the host's {@link DELTA_FED_READS} when its polled status reports
  * a new revision of the person's settings: a change made in the dashboard
  * reaches the host as a revision, and those reads are not re-read otherwise.
+ * On a host that runs Personal, Personal's configuration reads move with it,
+ * on every host that read them (`personalEnvironmentId`, `null` elsewhere).
  * The first status a reader sees for a host only records the revision.
  */
 function useRereadOnRevision(
   hostId: string | null,
   status: EnvironmentStatusResponseV11 | null,
+  personalEnvironmentId: string | null,
 ): void {
   const queryClient = useQueryClient();
   const seen = useRef<{
@@ -74,11 +90,25 @@ function useRereadOnRevision(
     for (const method of DELTA_FED_READS) {
       void queryClient
         .invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(hostId, method),
+          queryKey: hostQueryKeys.methodScope(
+            hostRpcServingTierHostId(
+              method,
+              hostId,
+              readProcessHostRpcTierPlan(),
+              null,
+            ),
+            method,
+          ),
         })
         .catch(ignoreError);
     }
-  }, [hostId, revision, queryClient]);
+    if (personalEnvironmentId !== null)
+      invalidateConfigurationReads(
+        queryClient,
+        personalEnvironmentId,
+        CONFIGURATION_READS,
+      );
+  }, [hostId, revision, personalEnvironmentId, queryClient]);
 }
 
 export function useEnvironmentNoticesRead(

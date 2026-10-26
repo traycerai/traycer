@@ -5,7 +5,12 @@ import {
   heldRowsFromReview,
   type HeldItemsGroup,
 } from "@/components/settings/move/held-from-review";
-import { heldItemsLineText } from "@/components/settings/move/held-items-line-copy";
+import {
+  heldItemsHostName,
+  heldItemsLineText,
+} from "@/components/settings/move/held-items-line-copy";
+import { findHostOption } from "@/components/settings/host-scope/host-scope-model";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { Button } from "@/components/ui/button";
@@ -15,8 +20,8 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * Secrets page held-items line (`3 items from MacBook Pro are not in use ·
- * Review them`). Self-retiring: omitted when no held row is left. Opens the
+ * Secrets page held-items line (`1 value and 1 command from MacBook Pro are
+ * on hold until you choose · Review them`). Self-retiring: omitted when no held row is left. Opens the
  * retrospective sheet for that host's held rows.
  */
 export interface HeldItemsLineProps {
@@ -55,8 +60,14 @@ function HeldItemsGroupLine(props: {
   const stopHostId = props.group.hostId ?? props.reviewHostId;
   const stopClient = useHostClientForHostId(stopHostId);
   const entry = useHostDirectoryEntry(stopHostId);
+  const { hosts } = useHostOptions();
   const personalName = usePersonalHostName();
-  const hostName = entry?.label ?? personalName ?? "this computer";
+  // The directory lists only hosts this window can dial; the account's list
+  // names the rest, an offline computer among them.
+  const hostName = heldItemsHostName(
+    [findHostOption(hosts, stopHostId)?.name ?? null, entry?.label ?? null],
+    { isSource: stopHostId === props.reviewHostId, name: personalName },
+  );
   return (
     <li>
       <Button
@@ -66,7 +77,17 @@ function HeldItemsGroupLine(props: {
         data-testid={`held-items-line-${stopHostId ?? "none"}`}
         onClick={() => setOpen(true)}
       >
-        {heldItemsLineText(props.group.entries.length, hostName)}
+        {heldItemsLineText(
+          {
+            values: props.group.entries.filter(
+              (entry) => entry.reason !== "executable_entry",
+            ).length,
+            commands: props.group.entries.filter(
+              (entry) => entry.reason === "executable_entry",
+            ).length,
+          },
+          hostName,
+        )}
       </Button>
       <RetrospectiveSession
         client={props.client}

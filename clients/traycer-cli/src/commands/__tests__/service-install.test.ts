@@ -134,10 +134,8 @@ vi.mock("../../store/cli-lock", () => ({
   },
 }));
 
-import {
-  buildServiceInstallCommand,
-  type ServiceInstallArgs,
-} from "../service-install";
+import type { ServiceInstallArgs } from "../service-install";
+import { writeInstalledHostFixture } from "./service-install-host-fixture";
 import type { CommandContext } from "../../runner/runner";
 import type { HostCredentialProvisionOutcome } from "../../host/credential-provisioning";
 import type { HostInstallAuthPreflight } from "../../host/install-auth";
@@ -191,10 +189,19 @@ function unauthenticatedPreflight(): HostInstallAuthPreflight {
   return { state: "unauthenticated", reason: "noninteractive-cannot-prompt" };
 }
 
+let buildServiceInstallCommand: typeof import("../service-install").buildServiceInstallCommand;
+
 describe("buildServiceInstallCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     testHome = mkdtempSync(join(tmpdir(), "traycer-service-install-test-"));
     osHome.current = testHome;
+    // The data root binds at module load: re-import under the redirected home,
+    // then write the install record + executable the command requires.
+    vi.resetModules();
+    ({ buildServiceInstallCommand } = await import("../service-install"));
+    writeInstalledHostFixture(
+      (await import("../../store/paths")).hostInstallRecordPath("production"),
+    );
     mocks.createServiceControllerMock.mockReturnValue({
       install: vi.fn().mockResolvedValue(undefined),
       takeoverDesktopRegistration: vi.fn(),

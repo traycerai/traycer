@@ -16,7 +16,6 @@ describe("the Limits pick on a provider's own page", () => {
   it("is offered for a provider that reports rolling windows", () => {
     render(<ProviderUsageLimitsSection providerId="codex" />);
 
-    expect(screen.getByText("Limits in usage readings")).toBeTruthy();
     expect(screen.getByTestId("limits-control").textContent).toBe("codex");
   });
 
@@ -24,7 +23,6 @@ describe("the Limits pick on a provider's own page", () => {
     render(<ProviderUsageLimitsSection providerId="openrouter" />);
 
     expect(screen.queryByTestId("limits-control")).toBeNull();
-    expect(screen.queryByText("Limits in usage readings")).toBeNull();
   });
 
   it("is withheld for a provider that reports no usage at all", () => {

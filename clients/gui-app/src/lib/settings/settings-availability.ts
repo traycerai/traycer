@@ -86,6 +86,19 @@ export function isVoiceInputRowAvailable(
 }
 
 /**
+ * Opening behavior › Links — the installed mobile app sends every web link
+ * to the phone's own browser (`useLinkOpeners` in `lib/links/open-link.ts`):
+ * its browser tile only views a host's browser and brings none of the user's
+ * sign-ins, so a choice between it and the default browser would decide
+ * nothing there.
+ */
+export function isLinkOpenRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp;
+}
+
+/**
  * Prevent sleep — its only consumer holds an OS power-save blocker through
  * the desktop power bridge, which the mobile app does not have.
  */

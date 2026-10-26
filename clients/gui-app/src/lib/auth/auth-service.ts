@@ -56,10 +56,19 @@ import type {
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import {
+  fetchEnvironmentInvitations,
+  acceptEnvironmentInvitation,
+} from "@traycer-clients/shared/auth/environment-invitations";
+import type {
+  EnvironmentInvitationsListResponse,
+  EnvironmentInvitationsAcceptResponse,
+} from "@traycer/protocol/host/environment/contracts";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
@@ -3073,8 +3082,8 @@ export class AuthService {
 
   /**
    * The floor under every sandbox call: a build that cannot reach the
-   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging)
-   * sends none of them, and each answers this failure instead.
+   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging
+   * mobile) sends none of them, and each answers this failure instead.
    */
   private sandboxControlRefusal(): SandboxControlFailure | null {
     const reason = this.sandboxControlUnavailableReason();
@@ -3133,6 +3142,29 @@ export class AuthService {
     return this.runnerHost.destroySandbox(bearer, sandboxId);
   }
 
+  async patchSandbox(
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to change this sandbox.");
+    }
+    return this.runnerHost.patchSandbox(bearer, sandboxId, request);
+  }
+
+  async keepSandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to keep this sandbox.");
+    }
+    return this.runnerHost.keepSandbox(bearer, sandboxId);
+  }
+
   /**
    * A lifecycle verb: the card's suspend / resume / stop / start, and the
    * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
@@ -3182,6 +3214,31 @@ export class AuthService {
       throw new Error("Sign in to start Automations.");
     }
     return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /** Explicit invitation access when the serving tier predates the host methods. */
+  async listEnvironmentInvitations(
+    signal: AbortSignal | null,
+  ): Promise<EnvironmentInvitationsListResponse> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to review team invitations.");
+    return fetchEnvironmentInvitations(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      signal,
+    );
+  }
+
+  async acceptEnvironmentInvitation(
+    environmentId: string,
+  ): Promise<EnvironmentInvitationsAcceptResponse> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to accept this invitation.");
+    return acceptEnvironmentInvitation(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+    );
   }
 
   /**

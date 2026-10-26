@@ -31,6 +31,7 @@ describe("push-token fetcher", () => {
       token: "apns-token",
       platform: "ios",
       environment: "production",
+      mutedSeverities: [],
     });
 
     expect(result).toEqual({ kind: "ok" });
@@ -38,6 +39,44 @@ describe("push-token fetcher", () => {
       "https://authn.example.test/api/v3/user/push-tokens",
     );
     expect(fetchMock.mock.lastCall?.[1]?.method).toBe("POST");
+  });
+
+  it("sends exactly the registration fields, and sends [] rather than omitting it", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await registerDevicePushTokenViaHttp(AUTHN, "jwt-abc", {
+      token: "apns-token",
+      platform: "ios",
+      environment: "production",
+      mutedSeverities: ["done", "info"],
+    });
+    await registerDevicePushTokenViaHttp(AUTHN, "jwt-abc", {
+      token: "apns-token",
+      platform: "ios",
+      environment: "production",
+      mutedSeverities: [],
+    });
+
+    const bodies = fetchMock.mock.calls.map((call) =>
+      JSON.parse(String(call[1]?.body)),
+    );
+    expect(bodies).toEqual([
+      {
+        token: "apns-token",
+        platform: "ios",
+        environment: "production",
+        mutedSeverities: ["done", "info"],
+      },
+      {
+        token: "apns-token",
+        platform: "ios",
+        environment: "production",
+        mutedSeverities: [],
+      },
+    ]);
   });
 
   it("maps 401 to unauthorized and 400 to rejected", async () => {
@@ -85,6 +124,7 @@ describe("push-token fetcher on a WebView without AbortSignal.timeout or AbortSi
       token: "apns-token",
       platform: "ios",
       environment: "production",
+      mutedSeverities: [],
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -98,6 +138,7 @@ describe("push-token fetcher on a WebView without AbortSignal.timeout or AbortSi
       token: "apns-token",
       platform: "ios",
       environment: "production",
+      mutedSeverities: [],
     });
     const signal = signalOfLastFetch(fetchMock);
     await vi.advanceTimersByTimeAsync(9_999);

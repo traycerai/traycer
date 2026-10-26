@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import {
@@ -20,6 +21,7 @@ import type {
 import type {
   CanvasMode,
   CanvasPageError,
+  CanvasPanGesture,
   CanvasElement,
   CanvasTextSelection,
 } from "@/lib/sandbox/canvas-bridge";
@@ -29,12 +31,27 @@ export interface CanvasPanelControls {
 }
 /** Selection and editing compose through these seams outside the opaque frame. */
 export interface CanvasFrameEvents {
+  readonly onZoom?: (
+    delta: number,
+    point: { readonly x: number; readonly y: number },
+  ) => void;
+  /** A wheel gesture the playing board could not scroll by, handed over as a
+   * canvas pan. */
+  readonly onPan?: (gesture: CanvasPanGesture) => void;
   readonly commentsEnabled?: boolean;
   readonly onCanvasView?: (view: CanvasCommentView | null) => void;
+  /** A comment-mode click on blank canvas: its screen spot for the composer,
+   * and the canvas-space point on the page the pin is stored at. */
   readonly onPaneComment?: (point: {
-    readonly x: number;
-    readonly y: number;
+    readonly screen: { readonly x: number; readonly y: number };
+    readonly canvas: { readonly x: number; readonly y: number };
+    readonly page: string;
   }) => void;
+  /** The canvas-space comment pins laid over the page, outside every board. */
+  readonly renderCanvasPins?: (
+    page: string,
+    viewport: { readonly x: number; readonly y: number; readonly zoom: number },
+  ) => ReactNode;
   readonly onSource?: (path: string, source: SandboxSource | null) => void;
   readonly onDoubleClick?: (path: string, element: CanvasElement) => void;
   readonly onBridge: (path: string, bridge: SandboxBridgeHost | null) => void;
@@ -46,6 +63,15 @@ export interface CanvasFrameEvents {
   readonly onBoardPage?: (path: string, page: string | null) => void;
   readonly onBoardSelect?: (path: string | null) => void;
   readonly onServedSource?: (path: string, sha256: string | null) => void;
+  /**
+   * Whether the live document already adopted this revision change in place
+   * (a stamped tid), so the board must keep its mount instead of reloading.
+   */
+  readonly sourceAdopted?: (
+    path: string,
+    previousSha256: string,
+    nextSha256: string,
+  ) => boolean;
   readonly onFrame?: (path: string, iframe: HTMLIFrameElement | null) => void;
   readonly onSize?: (path: string, size: SandboxSize) => void;
   readonly onTextSelection?: (
@@ -62,11 +88,67 @@ export interface CanvasFrameEvents {
     store: CanvasLayoutStore,
     panel: CanvasPanelControls,
   ) => ReactNode;
-  /** Controls placed in the canvas's top-right toolbar pill (the comments list). */
+  readonly renderCommentDraft?: () => ReactNode;
+  /** The independent commenting-mode control. */
   readonly renderToolbarControls?: () => ReactNode;
 }
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
+
+/**
+ * A manifest head moves on every file write in the artifact. A board reloads
+ * only when a file its document can read changed: its own entry, or anything
+ * outside the other boards and the layout file (a shared stylesheet or
+ * asset). Even its own entry changing is absorbed when the live document
+ * adopted the revision in place (a stamped comment tid).
+ */
+function sameBoardSourceIdentity(
+  previous: Extract<SandboxSource, { kind: "artifact" }>,
+  next: Extract<SandboxSource, { kind: "artifact" }>,
+): boolean {
+  return (
+    previous.artifactId === next.artifactId &&
+    previous.treePath === next.treePath &&
+    previous.entryPath === next.entryPath &&
+    previous.canvas === next.canvas &&
+    previous.canvasLinks === next.canvasLinks &&
+    previous.readSpan === next.readSpan &&
+    Object.hasOwn(previous.manifest.files, previous.entryPath) &&
+    Object.hasOwn(next.manifest.files, next.entryPath)
+  );
+}
+
+function boardSourceEquivalent(
+  previous: SandboxSource,
+  next: SandboxSource,
+  sourceAdopted: (beforeSha256: string, afterSha256: string) => boolean,
+): "unchanged" | "adopted" | null {
+  if (previous.kind !== "artifact" || next.kind !== "artifact") return null;
+  if (!sameBoardSourceIdentity(previous, next)) return null;
+  // Only other board DOCUMENTS are unrelated: a stylesheet or data file under
+  // boards/ can be read by this board and must still invalidate it.
+  const otherBoardOrLayout = (file: string): boolean =>
+    file !== previous.entryPath &&
+    (file === "canvas.json" ||
+      (file.startsWith("boards/") && /\.html?$/i.test(file)));
+  for (const file of new Set([
+    ...Object.keys(previous.manifest.files),
+    ...Object.keys(next.manifest.files),
+  ])) {
+    if (file === previous.entryPath || otherBoardOrLayout(file)) continue;
+    const beforeSha = Object.hasOwn(previous.manifest.files, file)
+      ? previous.manifest.files[file].sha256
+      : null;
+    const afterSha = Object.hasOwn(next.manifest.files, file)
+      ? next.manifest.files[file].sha256
+      : null;
+    if (beforeSha !== afterSha) return null;
+  }
+  const before = previous.manifest.files[previous.entryPath].sha256;
+  const after = next.manifest.files[next.entryPath].sha256;
+  if (before === after) return "unchanged";
+  return sourceAdopted(before, after) ? "adopted" : null;
+}
 export function CanvasBoardFrame({
   path,
   title,
@@ -75,6 +157,7 @@ export function CanvasBoardFrame({
   fullscreen,
   mode,
   onError,
+  navigation,
 }: {
   readonly path: string;
   readonly title: string;
@@ -83,10 +166,69 @@ export function CanvasBoardFrame({
   readonly fullscreen: boolean;
   readonly mode: CanvasMode;
   readonly onError?: (error: CanvasPageError | null) => void;
+  readonly navigation?: {
+    readonly search: string;
+    readonly hash: string;
+    readonly visit: number;
+  } | null;
 }) {
   const actions = useContext(CanvasNodeContext);
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const appliedNavigation = useRef<typeof navigation>(null);
+  // What the navigation prop says RIGHT NOW, for a navigateCanvas() reply
+  // that lands after the prop moved on: a cleared entry must reset the board
+  // even when the clear arrived while the request was still in flight.
+  const latestNavigation = useRef<typeof navigation>(null);
+  // The live document adopted a revision in place, so its server mount still
+  // holds the pre-adoption bytes.
+  const adoptedDocument = useRef(false);
+  const [remountEpoch, setRemountEpoch] = useState(0);
+  const navigate = useCallback((): void => {
+    latestNavigation.current = navigation;
+    const bridge = bridgeRef.current;
+    // A cleared navigation entry (play stopped) discards wherever the played
+    // document went: the board comes back as a fresh mount of its own source.
+    if (navigation === null || navigation === undefined) {
+      if (appliedNavigation.current !== null) {
+        appliedNavigation.current = null;
+        adoptedDocument.current = false;
+        setRemountEpoch((epoch) => epoch + 1);
+      }
+      return;
+    }
+    if (bridge === null || navigation === appliedNavigation.current) return;
+    // A query change reloads the document. An adopted document must not
+    // reload from its stale mount: give it a fresh mount from the current
+    // manifest, and apply the navigation once that document is ready.
+    if (
+      adoptedDocument.current &&
+      navigation.search !== (appliedNavigation.current?.search ?? "")
+    ) {
+      adoptedDocument.current = false;
+      setRemountEpoch((epoch) => epoch + 1);
+      return;
+    }
+    void bridge.navigateCanvas(navigation).then((applied) => {
+      if (!applied || bridgeRef.current !== bridge) return;
+      if (latestNavigation.current === navigation) {
+        appliedNavigation.current = navigation;
+        return;
+      }
+      // Stopped while this request was in flight: the document just went
+      // somewhere no longer wanted, so reset it like the cleared-entry
+      // branch would have. A REPLACED navigation needs nothing here - its
+      // own call is already pending and records itself.
+      if (
+        latestNavigation.current === null ||
+        latestNavigation.current === undefined
+      ) {
+        adoptedDocument.current = false;
+        setRemountEpoch((epoch) => epoch + 1);
+      }
+    });
+  }, [navigation]);
+  useEffect(navigate, [navigate]);
   const fittedPathRef = useRef<string | null>(null);
   useEffect(() => {
     events?.onSource?.(path, source);
@@ -95,6 +237,12 @@ export function CanvasBoardFrame({
   const onBridge = useCallback(
     (bridge: SandboxBridgeHost | null) => {
       bridgeRef.current = bridge;
+      // A new bridge is a freshly served document: never adopted, and sitting
+      // at the bare entry URL, so a held navigation must be applied again.
+      if (bridge !== null) {
+        adoptedDocument.current = false;
+        appliedNavigation.current = null;
+      }
       onError?.(null);
       let sha256: string | null = null;
       if (
@@ -110,10 +258,13 @@ export function CanvasBoardFrame({
   );
   const onStatus = useCallback(
     (status: SandboxStatus) => {
-      if (status === "ready") void bridgeRef.current?.setMode(mode);
+      if (status === "ready") {
+        void bridgeRef.current?.setMode(mode);
+        navigate();
+      }
       events?.onStatus(path, status);
     },
-    [events, path, mode],
+    [events, path, mode, navigate],
   );
   const onFrame = useCallback(
     (iframe: HTMLIFrameElement | null) => {
@@ -149,6 +300,19 @@ export function CanvasBoardFrame({
   useEffect(() => {
     void bridgeRef.current?.setMode(mode);
   }, [mode]);
+  const sourceEquivalent = useCallback(
+    (previous: SandboxSource, next: SandboxSource): boolean => {
+      const verdict = boardSourceEquivalent(
+        previous,
+        next,
+        (before, after) =>
+          events?.sourceAdopted?.(path, before, after) === true,
+      );
+      if (verdict === "adopted") adoptedDocument.current = true;
+      return verdict !== null;
+    },
+    [events, path],
+  );
   return (
     <SandboxFrame
       source={source}
@@ -167,6 +331,8 @@ export function CanvasBoardFrame({
       displayMode={fullscreen ? "fullscreen" : "inline"}
       pageNavigation={null}
       onBridge={onBridge}
+      sourceEquivalent={sourceEquivalent}
+      remountKey={String(remountEpoch)}
       onDoubleClick={(element) => events?.onDoubleClick?.(path, element)}
       onTextSelection={(selection) =>
         events?.onTextSelection?.(path, selection)
@@ -175,6 +341,16 @@ export function CanvasBoardFrame({
         onError?.(error);
         events?.onPageError?.(path, error);
       }}
+      onCanvasZoom={(gesture) => {
+        const frame = frameRef.current;
+        if (frame === null || fullscreen) return;
+        const bounds = frame.getBoundingClientRect();
+        events?.onZoom?.(gesture.delta, {
+          x: bounds.left + (gesture.x * bounds.width) / frame.clientWidth,
+          y: bounds.top + (gesture.y * bounds.height) / frame.clientHeight,
+        });
+      }}
+      onCanvasPan={(gesture) => events?.onPan?.(gesture)}
       onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
       ref={onFrame}
     />

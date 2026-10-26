@@ -114,10 +114,10 @@ The host is the background process that runs agents, terminals, and Tasks on a m
 | `traycer host apply` | Install the staged version. It succeeds once the files are in place and does not check that the host came back; use `host update` for that. |
 | `traycer host available` | List the host versions you can install. Prereleases are listed only when the installed host is a prerelease. |
 | `traycer host available --include-pre-releases` | Include prereleases. `--no-include-pre-releases` leaves them out. |
-| `traycer host uninstall` | Remove the installed and staged host files. The OS service stays registered, and a running host keeps running. |
+| `traycer host uninstall` | Ask the running host to stop, then remove the installed and staged host files. The OS service stays registered. |
 | `traycer host uninstall --all` | Deregister the OS service, ask the host to stop, then remove the host files. On Windows the host is stopped straight away, even when it is busy. |
 
-Neither form of `host uninstall` touches your data or credentials under `~/.traycer`.
+Neither form of `host uninstall` touches your data or credentials under `~/.traycer`. If the host does not stop, the command fails and keeps the install. `--force` works with or without `--all`: it forces the stop and removes the install even if the host remains running. Running terminal sessions and in-flight agent work are killed.
 
 Options for these commands:
 

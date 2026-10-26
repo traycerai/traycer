@@ -6,6 +6,9 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import type { ComposerSeedSourceKind } from "@/lib/composer/composer-seed-source";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -138,6 +141,82 @@ function deriveReauthReason(input: {
     : null;
 }
 
+/** The send button's hint while either composer's gate refuses a send. */
+export const SIGNED_OUT_SEND_HINT =
+  "Signed out of the provider — sign in to send messages";
+
+/**
+ * The gate's verdict over one `providers.list` answer (`undefined` while it
+ * has not arrived). The chat composer reads the tab's host; the landing
+ * composer reads its placement's.
+ */
+function resolveProviderReauthGate(input: {
+  readonly providers: readonly ProviderCliState[] | undefined;
+  readonly providerId: ProviderId | null;
+  readonly profileId: string | null;
+  readonly enabled: boolean;
+  readonly authoritative: boolean;
+}): ProviderReauthGate {
+  const { providers, providerId, profileId } = input;
+  // `providers.list` always returns every configured provider in one atomic
+  // response, so `data !== undefined` is a trustworthy "this provider's entry
+  // (or lack of one) is final" signal - mirrors
+  // `useResolvedSeededProfileId`'s `settled` derivation.
+  const settled = providers !== undefined;
+  const state = providers?.find((p) => p.providerId === providerId) ?? null;
+  // `null` for ambient - a non-null `profileId` can only ever match a managed
+  // profile's own real id (never the wire array's "ambient" sentinel), so no
+  // normalization is needed here the way the rail/rate-limit prompt need it.
+  const matchedProfile =
+    profileId === null || state === null
+      ? null
+      : (state.profiles.find((p) => p.profileId === profileId) ?? null);
+  const reason = deriveReauthReason({
+    enabled: input.enabled,
+    authoritative: input.authoritative,
+    settled,
+    profileId,
+    state,
+    matchedProfile,
+  });
+  return {
+    providerId,
+    profileId,
+    state,
+    signedOut: reason !== null,
+    reason,
+    profileLabel: matchedProfile?.label ?? null,
+  };
+}
+
+/**
+ * The landing composer's gate, read through its placement's client: the same
+ * verdict, so a signed-out provider is refused before the task is created
+ * rather than after its first turn fails. Never authoritative - the landing
+ * seed is a picker default (see `deriveReauthReason`) - and without the
+ * sign-out toast, which narrates a running chat's connection.
+ */
+export function useLandingProviderReauthGate(
+  client: HostClient<HostRpcRegistry> | null,
+  harnessId: GuiHarnessId,
+  profileId: string | null,
+  active: boolean,
+): ProviderReauthGate {
+  const providerId = providerCliIdForHarness(harnessId);
+  const enabled = active && providerId !== null;
+  const query = useProvidersListForClient(client, {
+    enabled,
+    subscribed: enabled,
+  });
+  return resolveProviderReauthGate({
+    providers: query.data?.providers,
+    providerId,
+    profileId,
+    enabled,
+    authoritative: false,
+  });
+}
+
 export function useProviderReauthGate(
   harnessId: GuiHarnessId,
   profileId: string | null,
@@ -153,36 +232,17 @@ export function useProviderReauthGate(
    */
   seedKind: ComposerSeedSourceKind,
 ): ProviderReauthGate {
-  const authoritative = seedKind === "authoritative";
   const providerId = providerCliIdForHarness(harnessId);
   const enabled = active && providerId !== null;
   const query = useTabProvidersList({ enabled, subscribed: enabled });
-  // `providers.list` always returns every configured provider in one atomic
-  // response, so `data !== undefined` is a trustworthy "this provider's entry
-  // (or lack of one) is final" signal - mirrors
-  // `useResolvedSeededProfileId`'s `settled` derivation.
-  const settled = query.data !== undefined;
-
-  const state =
-    query.data?.providers.find((p) => p.providerId === providerId) ?? null;
-  // `null` for ambient - a non-null `profileId` can only ever match a managed
-  // profile's own real id (never the wire array's "ambient" sentinel), so no
-  // normalization is needed here the way the rail/rate-limit prompt need it.
-  const matchedProfile =
-    profileId === null || state === null
-      ? null
-      : (state.profiles.find((p) => p.profileId === profileId) ?? null);
-
-  const reason = deriveReauthReason({
-    enabled,
-    authoritative,
-    settled,
+  const gate = resolveProviderReauthGate({
+    providers: query.data?.providers,
+    providerId,
     profileId,
-    state,
-    matchedProfile,
+    enabled,
+    authoritative: seedKind === "authoritative",
   });
-  const signedOut = reason !== null;
-  const profileLabel = matchedProfile?.label ?? null;
+  const { state, reason } = gate;
 
   // Bookend the reconnect loop with one-shot toasts: a notice when the provider
   // first goes signed-out (the failure has no transcript row - it's suppressed
@@ -235,5 +295,5 @@ export function useProviderReauthGate(
     }
   }, [providerUnauthenticated, providerAuthenticated, providerId]);
 
-  return { providerId, profileId, state, signedOut, reason, profileLabel };
+  return gate;
 }

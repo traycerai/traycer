@@ -147,6 +147,7 @@ describe("analytics", () => {
 
     const sections = [
       "agents",
+      "alerts",
       "app-diagnostics",
       "app-notifications",
       "appearance",

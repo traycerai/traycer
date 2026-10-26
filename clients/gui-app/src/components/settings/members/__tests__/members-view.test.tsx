@@ -106,6 +106,7 @@ function renderView(options: {
     (input: { userId: string }) => Promise<MembersRemoveOutcome>
   >;
   readonly onNoticeSeen: Mock<() => void>;
+  readonly onRetryMembers: Mock<() => void>;
 } {
   const harness = mountTeamPage(
     { kind: "host" },
@@ -121,6 +122,7 @@ function renderView(options: {
     Promise.resolve(options.removeOutcome),
   );
   const onNoticeSeen = vi.fn(() => undefined);
+  const onRetryMembers = vi.fn(() => undefined);
   const rowDetails = (): ReactNode => <button type="button">Details</button>;
   render(
     <harness.Wrapper>
@@ -130,6 +132,7 @@ function renderView(options: {
           environmentId="env-1"
           teamName="Acme"
           teamHandle="acme"
+          teamHostCount={1}
           currentUserId={options.currentUserId}
           viewerRole={options.viewerRole}
           membersRead="ready"
@@ -137,7 +140,7 @@ function renderView(options: {
           legacyMembers={["Priya"]}
           legacyRoleNoticeSeenAt={options.legacyRoleNoticeSeenAt}
           rowDetails={rowDetails}
-          onRetryMembers={() => undefined}
+          onRetryMembers={onRetryMembers}
           onInvite={(): Promise<MembersInviteOutcome> =>
             Promise.resolve({ outcome: "sent", seatDelta: null })
           }
@@ -146,13 +149,14 @@ function renderView(options: {
           invitePending={false}
           setRolePending={false}
           removePending={false}
+          seatsSupported={false}
           hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
           onNoticeSeen={onNoticeSeen}
         />
       </RunnerHostContext.Provider>
     </harness.Wrapper>,
   );
-  return { onSetRole, onRemove, onNoticeSeen };
+  return { onSetRole, onRemove, onNoticeSeen, onRetryMembers };
 }
 
 const BASE = {
@@ -286,7 +290,8 @@ describe("MembersView", () => {
     expect(table.textContent).not.toMatch(/\d+ turns?/);
   });
 
-  it("shows the legacy notice to an admin once and reports it seen", () => {
+  it("shows the legacy notice to an admin without reporting it seen, until Dismiss", async () => {
+    const user = userEvent.setup();
     const { onNoticeSeen } = renderView({
       ...BASE,
       viewerRole: "admin",
@@ -296,7 +301,44 @@ describe("MembersView", () => {
     expect(screen.getByTestId("members-legacy-notice").textContent).toContain(
       "One person gained editing: Priya.",
     );
-    expect(onNoticeSeen).toHaveBeenCalled();
+    expect(onNoticeSeen).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("members-legacy-notice-dismiss"));
+
+    expect(onNoticeSeen).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("members-legacy-notice")).toBeNull();
+  });
+
+  it("tags the member the notice names by name, else by email, and asks a nameless row to retry", async () => {
+    const user = userEvent.setup();
+    const emailOnly = member("u-mail", "", "viewer", {
+      displayName: null,
+      email: "mail@acme.test",
+    });
+    const unloaded = member("u-ghost", "", "viewer", {
+      displayName: null,
+      email: null,
+    });
+    const { onRetryMembers } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, EDITOR, emailOnly, unloaded],
+    });
+    const rowOf = (userId: string): HTMLElement => {
+      const row = screen
+        .getAllByTestId("members-row")
+        .find((candidate) => candidate.dataset.memberId === userId);
+      if (row === undefined) throw new Error(`no row for ${userId}`);
+      return row;
+    };
+    expect(within(rowOf("u-editor")).getByText("gained editing")).toBeTruthy();
+    expect(within(rowOf("u-mail")).getByText("mail@acme.test")).toBeTruthy();
+    expect(within(rowOf("u-mail")).queryByText("gained editing")).toBeNull();
+
+    await user.click(
+      within(rowOf("u-ghost")).getByRole("button", { name: "Retry" }),
+    );
+    expect(onRetryMembers).toHaveBeenCalledTimes(1);
   });
 
   it("does not show the legacy notice to a non-admin", () => {
@@ -471,6 +513,7 @@ describe("MembersView pending writes", () => {
             environmentId="env-1"
             teamName="Acme"
             teamHandle="acme"
+            teamHostCount={1}
             currentUserId="u-admin"
             viewerRole="admin"
             membersRead="ready"
@@ -485,6 +528,7 @@ describe("MembersView pending writes", () => {
             invitePending={writes.inviteMutation.isPending}
             setRolePending={writes.setRoleMutation.isPending}
             removePending={writes.removeMutation.isPending}
+            seatsSupported={false}
             hostLabel={() => null}
             onNoticeSeen={() => undefined}
           />

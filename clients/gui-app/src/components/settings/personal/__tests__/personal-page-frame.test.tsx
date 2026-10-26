@@ -31,10 +31,14 @@ import type {
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
+import {
+  usePersonalRowNotes,
+  type PersonalRowNotesTarget,
+} from "@/components/settings/personal/personal-page-context";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { UPDATE_HOST_TEXT } from "@/components/settings/personal/personal-page-status";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -53,6 +57,7 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 function variableOverride(key: string): LocalOverride {
@@ -64,9 +69,12 @@ function variableOverride(key: string): LocalOverride {
   };
 }
 
-function envOverrideOverride(key: string): LocalOverride {
+function envOverrideOverride(
+  key: string,
+  providerId: "claude-code" | "codex",
+): LocalOverride {
   return {
-    target: { kind: "env_override", providerId: "claude-code", key },
+    target: { kind: "env_override", providerId, key },
     os: "any",
     value: "local-value",
     setAt: 1,
@@ -77,23 +85,33 @@ interface HostCalls {
   status: number;
 }
 
-/** Shows what `usePersonalRowNotes("variable")` answers, one row per key. */
-function RowNotesProbe(): ReactNode {
-  const notes = usePersonalRowNotes("variable");
+const VARIABLE_TARGET: PersonalRowNotesTarget = { kind: "variable" };
+
+/** Shows what `usePersonalRowNotes(target)` answers, one row per key. */
+function RowNotesProbe(props: {
+  readonly target: PersonalRowNotesTarget;
+}): ReactNode {
+  const notes = usePersonalRowNotes(props.target);
   return (
     <ul data-testid="row-notes">
       {[...notes.entries()].map(([key, note]) => (
-        <li key={key}>{`${key}: ${note}`}</li>
+        <li key={key}>
+          {note.kind === "pending"
+            ? `${key}: Pending`
+            : `${key}: ${note.hostName} uses: ${note.value}`}
+        </li>
       ))}
     </ul>
   );
 }
 
-function FakePanel(): ReactNode {
+function FakePanel(props: {
+  readonly target: PersonalRowNotesTarget;
+}): ReactNode {
   return (
     <SettingsPanelShell title="Shell" description="How terminals start.">
       <button type="button">Edit the page</button>
-      <RowNotesProbe />
+      <RowNotesProbe target={props.target} />
     </SettingsPanelShell>
   );
 }
@@ -104,6 +122,7 @@ function renderFrame(options: {
   readonly methods: readonly string[] | null;
   readonly status: EnvironmentStatusResponseV11;
   readonly overrides: readonly LocalOverride[];
+  readonly target: PersonalRowNotesTarget;
 }): HostCalls {
   const calls: HostCalls = { status: 0 };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -117,6 +136,10 @@ function renderFrame(options: {
   if (options.methods !== null) {
     recordNegotiatedHostMethods(HOST_ID, options.methods);
   }
+  // These cases are about a host's own pages, which a Local row reads.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+  });
   scopeOverrides.current = {
     host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,
@@ -129,7 +152,7 @@ function renderFrame(options: {
   render(
     <QueryClientProvider client={queryClient}>
       <PersonalPageFrame section={options.section}>
-        <FakePanel />
+        <FakePanel target={options.target} />
       </PersonalPageFrame>
     </QueryClientProvider>,
   );
@@ -143,6 +166,7 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
       methods: ["host.status"],
       status: environmentStatusFixture({}),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     const line = await screen.findByTestId("personal-page-status");
     expect(line.textContent).toBe(UPDATE_HOST_TEXT);
@@ -162,17 +186,44 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       section: "shell",
       methods: STATUS_METHODS,
       status: environmentStatusFixture({
-        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
+        items: [
+          itemStatusFixture({
+            kind: "variable",
+            key: "LOG_LEVEL",
+            status: "pending",
+          }),
+        ],
       }),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe("Applied on dev-box.");
+    expect(line.textContent).toBe("Applying LOG_LEVEL on dev-box.");
     const header = line.closest("header");
     if (header === null) throw new Error("the line is not inside a header");
     expect(header.closest("[data-settings-panel-shell]")).not.toBeNull();
     expect(within(header).getByRole("heading", { name: "Shell" })).toBeTruthy();
     expect(line.closest("[inert]")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
+    ).toBeNull();
+  });
+
+  it("says nothing once every item applied, and leaves the page as it was", async () => {
+    renderFrame({
+      section: "shell",
+      methods: STATUS_METHODS,
+      status: environmentStatusFixture({
+        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
+      }),
+      // The override's note appears only once the page has rendered the
+      // status it read.
+      overrides: [variableOverride("LOG_LEVEL")],
+      target: VARIABLE_TARGET,
+    });
+    await screen.findByText("LOG_LEVEL: dev-box uses: local-value");
+    expect(screen.queryByTestId("personal-page-status")).toBeNull();
+    expect(screen.queryByText(/^Applied on/)).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -193,6 +244,7 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
         ],
       }),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     const line = await screen.findByTestId("personal-page-status");
     expect(line.textContent).toBe(
@@ -206,6 +258,7 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       methods: STATUS_METHODS,
       status: environmentStatusFixture({ reachability: "reconnecting" }),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     const line = await screen.findByTestId("personal-page-status");
     expect(line.textContent).toBe(
@@ -219,6 +272,7 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       methods: STATUS_METHODS,
       status: environmentStatusFixture({ principal: null }),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     await vi.waitFor(() => {
       expect(calls.status).toBeGreaterThan(0);
@@ -235,6 +289,7 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       methods: null,
       status: environmentStatusFixture({}),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
@@ -253,6 +308,7 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
         items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
       }),
       overrides: [variableOverride("LOG_LEVEL")],
+      target: VARIABLE_TARGET,
     });
     await vi.waitFor(() => {
       expect(
@@ -289,9 +345,10 @@ describe("usePersonalRowNotes (localOverrides and pendingUploads from the fake h
         items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
       }),
       overrides: [variableOverride("LOG_LEVEL")],
+      target: VARIABLE_TARGET,
     });
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["LOG_LEVEL: Overridden on dev-box"]);
+      expect(notes()).toEqual(["LOG_LEVEL: dev-box uses: local-value"]);
     });
   });
 
@@ -305,12 +362,13 @@ describe("usePersonalRowNotes (localOverrides and pendingUploads from the fake h
       // The variable's note appearing proves the overrides were read; the
       // env override beside it must not produce a row note of its own.
       overrides: [
-        envOverrideOverride("ANTHROPIC_BASE_URL"),
+        envOverrideOverride("ANTHROPIC_BASE_URL", "claude-code"),
         variableOverride("LOG_LEVEL"),
       ],
+      target: VARIABLE_TARGET,
     });
     await vi.waitFor(() => {
-      expect(notes()).toEqual(["LOG_LEVEL: Overridden on dev-box"]);
+      expect(notes()).toEqual(["LOG_LEVEL: dev-box uses: local-value"]);
     });
   });
 
@@ -333,9 +391,39 @@ describe("usePersonalRowNotes (localOverrides and pendingUploads from the fake h
         ],
       }),
       overrides: [],
+      target: VARIABLE_TARGET,
     });
     await vi.waitFor(() => {
       expect(notes()).toEqual(["WAITING: Pending"]);
+    });
+  });
+
+  it("reads a provider's Env by its own target: its overrides, and pending keys without the harness prefix", async () => {
+    renderFrame({
+      section: "shell",
+      methods: STATUS_METHODS,
+      status: environmentStatusFixture({
+        pendingUploads: [
+          pendingUploadFixture({ kind: "env_override", key: "claude:WAITING" }),
+          pendingUploadFixture({ kind: "env_override", key: "codex:OTHER" }),
+        ],
+      }),
+      overrides: [
+        envOverrideOverride("ANTHROPIC_BASE_URL", "claude-code"),
+        envOverrideOverride("OPENAI_BASE_URL", "codex"),
+        variableOverride("LOG_LEVEL"),
+      ],
+      target: {
+        kind: "env_override",
+        providerId: "claude-code",
+        keyPrefix: "claude:",
+      },
+    });
+    await vi.waitFor(() => {
+      expect(notes()).toEqual([
+        "ANTHROPIC_BASE_URL: dev-box uses: local-value",
+        "WAITING: Pending",
+      ]);
     });
   });
 
@@ -349,11 +437,12 @@ describe("usePersonalRowNotes (localOverrides and pendingUploads from the fake h
         ],
       }),
       overrides: [variableOverride("LOG_LEVEL"), variableOverride("OTHER")],
+      target: VARIABLE_TARGET,
     });
     await vi.waitFor(() => {
       expect(notes()).toEqual([
         "LOG_LEVEL: Pending",
-        "OTHER: Overridden on dev-box",
+        "OTHER: dev-box uses: local-value",
       ]);
     });
   });
@@ -404,6 +493,9 @@ describe("<PersonalPageFrame /> around a page that reads the variables", () => {
         ...STATUS_METHODS,
         "config.env.list",
       ]);
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+      });
       scopeOverrides.current = {
         host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
         hostId: HOST_ID,

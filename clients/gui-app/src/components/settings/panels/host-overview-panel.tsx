@@ -12,11 +12,7 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
-import {
-  hostOptionCanActivate,
-  hostOptionTeamOwner,
-} from "@/components/settings/host-scope/host-option-model";
-import type { SandboxCreateBelongsTo } from "@/components/hosts/sandbox-create-model";
+import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
 import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
@@ -36,6 +32,7 @@ import {
 } from "@/components/settings/panels/host-overview-tab-state";
 import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
+import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import {
   describeHostOfflineNotice,
@@ -136,7 +133,6 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import {
   isUnenrolledSandboxOption,
   type HostScopeOption,
-  type HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
@@ -1924,7 +1920,6 @@ export function HostOverviewPanel(props: {
           hostName={displayName}
           hostState={host.health.state}
           sandbox={host.sandbox}
-          likeThis={sandboxLikeThis(host, host.sandbox)}
           // Destroying a sandbox no host row stands for removes its row, so
           // Settings returns to the active host instead of calling it vanished.
           onDestroyed={
@@ -2005,8 +2000,17 @@ export function HostOverviewPanel(props: {
           hostId={scope.hostId}
           enabled={usable}
         />
-        {/* Whose bots this host runs, for the host the picker names. */}
+        {/* Which configuration this host runs, for the host the picker names. */}
         <HostEnvironmentSection scope={scope} />
+        {/* The settings card, on every tab like the lines above it: whether
+            this computer's settings are its own, moving, moved, shared by an
+            earlier version or stopped. */}
+        <HostOverviewSettingsCardSlot
+          client={client}
+          hostId={scope.hostId}
+          hostName={displayName}
+          usable={usable}
+        />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -3010,18 +3014,4 @@ function overviewBusySnapshot(
       reportedBreakdown: status?.busyBreakdown ?? null,
     }),
   };
-}
-
-/**
- * What a sandbox's "New sandbox like this" preselects: its team, Personal
- * for the person's own, or `null` for a team's whose id the registry has not
- * answered yet, which hides the button until it has.
- */
-function sandboxLikeThis(
-  host: HostScopeOption,
-  sandbox: HostScopeSandbox,
-): SandboxCreateBelongsTo | null {
-  const owner = hostOptionTeamOwner(host);
-  if (owner !== null) return { kind: "team", teamId: owner.teamId };
-  return sandbox.teamOwned ? null : { kind: "personal" };
 }

@@ -43,6 +43,8 @@ const MOBILE: SettingsAvailabilityContext = {
       get: () => Promise.resolve("granted"),
       request: () => Promise.resolve("granted"),
       openSettings: () => Promise.resolve(),
+      getMutedSeverities: () => Promise.resolve([]),
+      setMutedSeverities: () => Promise.resolve(),
       onChange: () => ({ dispose: () => undefined }),
     },
   }),
@@ -95,6 +97,16 @@ describe("settings search", () => {
     expect(searchSettings("   ", DESKTOP)).toEqual([]);
   });
 
+  it("describes the Variables and shells page by what Personal shares", () => {
+    const shell = searchSettings("Variables and shells", DESKTOP).find(
+      (result) =>
+        result.entry.section === "shell" && result.entry.anchor === null,
+    );
+    expect(shell?.entry.description).toBe(
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+    );
+  });
+
   it("finds a row by its exact name", () => {
     expect(labelsFor("panel animations", DESKTOP)[0]).toBe("Panel animations");
   });
@@ -114,7 +126,7 @@ describe("settings search", () => {
       "general#general-prevent-sleep",
     );
     expect(labelsFor("dictation", DESKTOP)).toContain("Voice input");
-    expect(labelsFor("proxy", DESKTOP)).toContain("Variables and shells");
+    expect(labelsFor("proxy", DESKTOP)).toContain("Variables & shells");
   });
 
   it("reaches Start a task and the download card on Getting started", () => {
@@ -220,13 +232,11 @@ describe("settings search", () => {
 
     for (const [query, section, label] of [
       ["Model routing", "fallback", "Model routing"],
-      ["Variables and shells", "shell", "Variables and shells"],
-      ["Agent selection", "agents", "Agent selection"],
-      ["Browser agent access", "browser-agent-access", "Browser agent access"],
+      ["Variables & shells", "shell", "Variables & shells"],
+      ["Agents", "agents", "Agents"],
       ["Secrets", "secrets", "Secrets"],
       ["MCP servers", "mcp-servers", "MCP servers"],
       ["Skills", "skills", "Skills"],
-      ["Agent definitions", "agent-definitions", "Agent definitions"],
       ["Providers", "providers", "Providers"],
       ["Permissions", "permissions", "Permissions"],
       ["Sandboxes", "sandboxes", "Sandboxes"],
@@ -243,18 +253,16 @@ describe("settings search", () => {
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
   });
 
-  it("opens the Browser agent access and Secrets pages on their own words", () => {
+  it("opens Browser agent access on Permissions, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
-      "browser-agent-access#<top>",
+      "permissions#<top>",
     );
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
 
-  it("opens MCP servers and Agent definitions on their own words", () => {
+  it("opens MCP servers on its own words, and Agent definitions on Agents", () => {
     expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
-    expect(landingFor("agent definitions", DESKTOP)).toBe(
-      "agent-definitions#<top>",
-    );
+    expect(landingFor("agent definitions", DESKTOP)).toBe("agents#<top>");
   });
 
   it("no longer offers Machine setup as a page of its own", () => {
@@ -450,6 +458,33 @@ describe("settings search", () => {
           featureSettings: FEATURE_SETTINGS,
         }),
       ).toContain("Agent roles");
+    });
+
+    it("finds delivery words under Alerts and chime words under Sounds", () => {
+      // Sounds used to hold the OS and push rows and carried their words; it
+      // now holds only the chimes, so neither page answers the other's words.
+      const sectionsFor = (
+        query: string,
+        context: SettingsAvailabilityContext,
+      ): ReadonlyArray<string> =>
+        searchSettings(query, context).map((result) => result.entry.section);
+      for (const [query, context] of [
+        ["push", MOBILE],
+        ["push", DESKTOP],
+        ["banner", DESKTOP],
+        ["badge", DESKTOP],
+      ] as const) {
+        const sections = sectionsFor(query, context);
+        expect(sections[0], query).toBe("alerts");
+        expect(sections, query).not.toContain("app-notifications");
+      }
+      for (const query of ["chime", "sound"]) {
+        for (const context of [DESKTOP, MOBILE]) {
+          const sections = sectionsFor(query, context);
+          expect(sections[0], query).toBe("app-notifications");
+          expect(sections, query).not.toContain("alerts");
+        }
+      }
     });
 
     it("offers the phone's push row on mobile and withholds it on desktop", () => {

@@ -18,6 +18,7 @@ import type {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Collapsible,
   CollapsibleContent,
@@ -130,7 +131,7 @@ const RULES_SECTION_ORDER: ReadonlyArray<RulesSectionKey> = [
 ];
 
 const PREDATES_AUTO_MODE =
-  "This machine's host predates Auto mode. Update it to choose a judge and write a policy.";
+  "This host predates Auto mode. Update it to choose a judge and write a policy.";
 
 /**
  * Settings ▸ Permissions ▸ Rules: the account's Auto mode policy, edited in
@@ -344,6 +345,27 @@ function scrolledThrough(editor: RulesEditorState | null): number {
   return editor?.scrollRequest?.nonce ?? 0;
 }
 
+/** A reset needs a fresh, checked policy and current write support. */
+function policyResetBlockedReason(input: {
+  readonly canWrite: boolean;
+  readonly record: AutoPolicyGetResponse | undefined;
+  readonly readFailed: boolean;
+  readonly openingRead: AutoPolicyOpeningRead;
+}): string | null {
+  if (!input.canWrite) return "This host can't change your rules.";
+  if (
+    input.record === undefined ||
+    input.readFailed ||
+    autoPolicyReadStateFor(input.record) !== "fresh"
+  ) {
+    return "Read your current rules before resetting them.";
+  }
+  if (input.openingRead !== "settled") {
+    return "Wait until your current rules have been checked.";
+  }
+  return null;
+}
+
 function RulesEditor(props: {
   readonly hostId: string | null;
   readonly active: boolean;
@@ -378,6 +400,7 @@ function RulesEditor(props: {
   });
   if (editor !== editorState) setEditorState(editor);
   const openingRead = useOpeningRead(props.active, query.refetch);
+  const [resetConfirm, setResetConfirm] = useState(false);
 
   const appliedDraftId = editor?.appliedDraftId ?? 0;
   const { onDraftsConsumed, onSnapshot } = props;
@@ -410,6 +433,16 @@ function RulesEditor(props: {
   }
 
   const saving = setPolicy.isPending;
+  // Use the live read even while the confirmation is open: the record or
+  // this host's write support may change after Reset was first offered.
+  const readState =
+    data === undefined ? editor.readState : autoPolicyReadStateFor(data);
+  const resetBlockedReason = policyResetBlockedReason({
+    canWrite,
+    record: data,
+    readFailed: query.isError,
+    openingRead,
+  });
   const commit = (): void => {
     const body = joinAutoPolicySections(editor.sections);
     setPolicy.mutate(
@@ -419,6 +452,27 @@ function RulesEditor(props: {
           setEditorState((current) =>
             editorFromRecord({
               body,
+              updatedAt: response.updatedAt,
+              readState: "fresh",
+              appliedDraftId: current?.appliedDraftId ?? 0,
+            }),
+          );
+        },
+      },
+    );
+  };
+  // Reset saves the empty policy: the custom rules go, and the built-in ones
+  // they sat on top of are the default.
+  const reset = (): void => {
+    if (saving || resetBlockedReason !== null) return;
+    setPolicy.mutate(
+      { body: "" },
+      {
+        onSuccess: (response) => {
+          setResetConfirm(false);
+          setEditorState((current) =>
+            editorFromRecord({
+              body: "",
               updatedAt: response.updatedAt,
               readState: "fresh",
               appliedDraftId: current?.appliedDraftId ?? 0,
@@ -439,11 +493,6 @@ function RulesEditor(props: {
       }),
     );
   };
-  // The LIVE record's state gates Save, not the one the edit started from: a
-  // read that turns unreadable or stale behind a dirty edit must stop a save
-  // over a policy this window can no longer see.
-  const readState =
-    data === undefined ? editor.readState : autoPolicyReadStateFor(data);
   const showNotes =
     editor.baseline.notes.length > 0 || editor.sections.notes.length > 0;
   const unrepresentable = unrepresentableLines(editor.sections);
@@ -459,7 +508,7 @@ function RulesEditor(props: {
         </h2>
         <p className="text-ui-sm text-muted-foreground">
           Your rules go on top of Traycer&apos;s built-in ones and apply to your
-          account on every machine. A repository with{" "}
+          account on every host. A repository with{" "}
           <code className="font-mono">.traycer/auto-policy.md</code> adds its
           own restrictions on top.
         </p>
@@ -514,7 +563,7 @@ function RulesEditor(props: {
       )}
       {hasShippedAutoPolicySections(shipped) ? (
         <p className="px-1 text-ui-xs text-muted-foreground">
-          Built-in rules come with each machine&apos;s Traycer version.
+          Built-in rules come with each host&apos;s Traycer version.
         </p>
       ) : null}
       <RulesFooter
@@ -529,6 +578,18 @@ function RulesEditor(props: {
         )}
         onDiscard={discard}
         onSave={commit}
+        onReset={() => setResetConfirm(true)}
+      />
+      <ConfirmDestructiveDialog
+        open={resetConfirm}
+        onOpenChange={setResetConfirm}
+        title="Reset the approval policy?"
+        description="This removes your custom rules and goes back to the default approval policy on every computer and sandbox."
+        cascadeSummary={null}
+        actionLabel="Reset to default"
+        isPending={saving}
+        blockedReason={resetBlockedReason}
+        onConfirm={reset}
       />
     </div>
   );
@@ -620,7 +681,7 @@ function RulesBanner(props: {
       : null,
     props.canWrite
       ? null
-      : "This machine's host can't save rules, so saving is off. Update it to make changes.",
+      : "This host can't save rules, so saving is off. Update it to make changes.",
     props.openingRead === "failed"
       ? "Traycer couldn't check whether another device changed your rules, so saving is off. Reopen Settings to try again."
       : null,
@@ -814,8 +875,20 @@ function BuiltInRules(props: {
 }
 
 /**
+ * Whether Reset has anything to remove: the stored policy holds custom rules,
+ * or the edit adds some.
+ */
+function hasCustomRules(
+  record: AutoPolicyGetResponse | undefined,
+  dirty: boolean,
+): boolean {
+  return dirty || (record?.body ?? "") !== "";
+}
+
+/**
  * The sticky footer: what is stored (or, when the draft is over the server's
- * cap, by how much), and the two actions. Save's pending affordance serves
+ * cap, by how much), and its actions: Reset to default, Discard and Save.
+ * Save's pending affordance serves
  * both waits - the write and the opening read - because both say the same
  * thing to the user: Save is busy, not broken.
  */
@@ -830,6 +903,7 @@ function RulesFooter(props: {
   readonly unrepresentable: boolean;
   readonly onDiscard: () => void;
   readonly onSave: () => void;
+  readonly onReset: () => void;
 }): ReactNode {
   const { editor, saving } = props;
   const dirty = editorIsDirty(editor);
@@ -851,6 +925,21 @@ function RulesFooter(props: {
         <AutoPolicySummary record={props.record} />
       )}
       <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={
+            saving ||
+            checking ||
+            saveBlocked ||
+            !hasCustomRules(props.record, dirty)
+          }
+          onClick={props.onReset}
+          data-testid="auto-policy-reset"
+        >
+          Reset to default
+        </Button>
         <Button
           type="button"
           variant="outline"

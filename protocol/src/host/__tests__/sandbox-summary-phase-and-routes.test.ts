@@ -3,9 +3,11 @@ import { RPC_ERROR_CODES } from "@traycer/protocol/framework/versioned-rpc-types
 import {
   SANDBOX_HEARTBEAT_PHASES,
   parseSandboxHeartbeatPhase,
+  sandboxCostSchema,
   sandboxListResponseSchema,
   sandboxRouteReadinessSchema,
   sandboxSummarySchema,
+  userSandboxCostSchema,
   type SandboxRouteState,
 } from "@traycer/protocol/host/sandbox-control";
 
@@ -259,5 +261,47 @@ describe("sandbox summary environmentId", () => {
       "env-team-1",
       null,
     ]);
+  });
+});
+
+describe("a server before the resting clock, keep and today's cost", () => {
+  it("reads a summary without the five new fields as nulls", () => {
+    const parsed = sandboxSummarySchema.parse(SANDBOX_VIEW);
+    expect({
+      keptBy: parsed.keptBy,
+      restingSince: parsed.restingSince,
+      destroyAfterRestingMinutes: parsed.destroyAfterRestingMinutes,
+      destroyAt: parsed.destroyAt,
+      createdByTaskId: parsed.createdByTaskId,
+    }).toEqual({
+      keptBy: null,
+      restingSince: null,
+      destroyAfterRestingMinutes: null,
+      destroyAt: null,
+      createdByTaskId: null,
+    });
+  });
+
+  it("reads a cost without todayMillicredits, and its response without todayYoursMillicredits, as 0", () => {
+    const cost = {
+      sandboxId: "sbx_1",
+      currentRateMillicreditsPerHour: 120,
+      state: "awake",
+      frozen: false,
+      charged: {
+        computeMillicredits: 300,
+        storageMillicredits: 4,
+        sinceCreatedAt: 1_791_000_000_000,
+      },
+      pendingMillicredits: 0,
+      segments: [],
+    };
+    expect(sandboxCostSchema.parse(cost).todayMillicredits).toBe(0);
+    const response = userSandboxCostSchema.parse({
+      sandboxes: [cost],
+      awakeBurnMillicreditsPerHour: 120,
+    });
+    expect(response.todayYoursMillicredits).toBe(0);
+    expect(response.sandboxes[0]?.todayMillicredits).toBe(0);
   });
 });

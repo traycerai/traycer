@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useEffect } from "react";
 import { create } from "zustand";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -12,7 +13,6 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -69,12 +69,13 @@ interface TeamViewingHost {
 }
 
 /**
- * Configuration reads stay on the pool. Live facts and room files share this
- * explicit team host, or no host; neither can fall through to Personal.
+ * The team's host inventory is read through its serving tier on the viewer's
+ * session. Host-local facts and file previews use the explicit team host
+ * picked from that list, or no host; neither falls through to Personal.
  */
 export function useTeamViewingHost(): TeamViewingHost {
   const source = useConfigurationSource();
-  const poolClient = usePoolTierHostClient(useHostClient());
+  const surfaceClient = usePoolTierHostClient(useHostClient());
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -82,7 +83,7 @@ export function useTeamViewingHost(): TeamViewingHost {
   const environmentId = source.kind === "pool" ? source.environmentId : "";
   const hosts = useHostQuery({
     cacheKeyIdentity: [viewerId],
-    client: poolClient,
+    client: surfaceClient,
     method: "environment.host.list",
     params: { environmentId },
     preflight: cloudVerdictPreflight("environment.host.list"),
@@ -99,7 +100,7 @@ export function useTeamViewingHost(): TeamViewingHost {
   const visit = useViewingHosts((state) => state.visit);
   const activeHostId = useEffectiveHostId();
   const rows = hosts.isError ? NO_HOSTS : (hosts.data?.hosts ?? NO_HOSTS);
-  const eligible = rows.filter(isReachable);
+  const eligible = rows.filter((host) => isEligible(host, activeHostId));
   const selected =
     eligible.find((host) => host.hostId === pickedId) ??
     recent
@@ -113,7 +114,7 @@ export function useTeamViewingHost(): TeamViewingHost {
   useEffect(() => {
     if (
       activeHostId !== null &&
-      rows.some((host) => host.hostId === activeHostId && isReachable(host))
+      rows.some((host) => host.hostId === activeHostId)
     ) {
       visit(viewerId, activeHostId);
     }
@@ -132,7 +133,15 @@ export function useTeamViewingHost(): TeamViewingHost {
   };
 }
 
-/** An older inventory cannot prove a host is eligible for a team read. */
-function isReachable(host: EnvironmentHostRecordV11): boolean {
-  return host.reachable;
+/**
+ * An older inventory cannot prove another host is eligible for a team read.
+ * The window's own host needs no proof: the window is talking to it, and the
+ * list holds only hosts bound to that environment. The cloud's flag lapses
+ * for a desktop host that is not relay-attached, minutes after its last report.
+ */
+function isEligible(
+  host: EnvironmentHostRecordV11,
+  activeHostId: string | null,
+): boolean {
+  return host.reachable || host.hostId === activeHostId;
 }

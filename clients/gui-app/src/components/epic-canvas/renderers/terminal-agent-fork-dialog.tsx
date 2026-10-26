@@ -827,6 +827,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
               className="min-w-0 rounded-lg border border-border/60 bg-foreground/3 p-3"
             >
               <ActiveHostWorkspaceControls
+                sandboxStaging={null}
                 disabled={false}
                 stagingKey={stagingKey}
                 layout="stacked"

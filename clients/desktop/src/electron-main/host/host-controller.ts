@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import { DESKTOP_RELEASE_CHANNEL } from "../../config";
 import { log } from "../app/logger";
+import { scrubSupportText } from "../app/support-scrubber";
 import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
   hasUnappliedPendingLoginItemRevision,
@@ -1610,12 +1611,22 @@ export class HostController {
    * included: a Restart clicked after an in-session `→ none`, or while
    * its stop runs, would otherwise bring back a host this machine no longer
    * manages.
+   *
+   * Refused too, at the head of the lane, while the live supervisor is a
+   * person's `traycer host start` (`overTerminalRun: "defer"`): this app
+   * never starts, restarts, replaces or kills that host. The record is
+   * identity-checked and needs no answer from the host's endpoint, which a
+   * saturated terminal host does not give - the CLI's own refusal waits for
+   * one, so without this a start went ahead over it and the lane waited for
+   * a replacement that could never come. `"body-decides"` is the ensure's:
+   * it adopts that host when it answers (`ensureOverTerminalRun`).
    */
   private enqueueHostStart<
     R extends MutationOutcome<unknown> | AbandonedByGuard,
   >(
     kind: HostStartMutationKind,
     coalesceKey: string,
+    overTerminalRun: "defer" | "body-decides",
     fn: () => Promise<R>,
   ): Promise<
     | R
@@ -1629,10 +1640,18 @@ export class HostController {
     if (this.automaticIntentsSuspended) {
       return Promise.resolve(this.hostStartSuspendedOutcome(kind));
     }
-    return this.enqueueLaneJob<R | HostStartSuspended>(kind, coalesceKey, () =>
-      this.automaticIntentsSuspended
-        ? Promise.resolve(this.hostStartSuspendedOutcome(kind))
-        : fn(),
+    return this.enqueueLaneJob<R | HostStartSuspended>(
+      kind,
+      coalesceKey,
+      async () => {
+        if (this.automaticIntentsSuspended) {
+          return this.hostStartSuspendedOutcome(kind);
+        }
+        if (overTerminalRun === "defer" && (await this.isTerminalHostRun())) {
+          return this.hostStartOverTerminalRunOutcome(kind);
+        }
+        return fn();
+      },
     );
   }
 
@@ -3689,6 +3708,39 @@ export class HostController {
     return this.automaticIntentsQuiesced || this.automaticIntentHolds > 0;
   }
 
+  /** What a host start resolves over a person's terminal run. */
+  private hostStartOverTerminalRunOutcome(
+    kind: HostStartMutationKind,
+  ): HostStartSuspended {
+    log.info("[host-controller] host mutation refused", {
+      kind,
+      reason: "not-service-run",
+    });
+    return { kind: "deferred", message: HOST_NOT_SERVICE_RUN_MESSAGE };
+  }
+
+  /**
+   * The ensure over a person's terminal run: that host is this computer's
+   * host while it runs, so one that answers is adopted - published and
+   * reported up with the version it answered with, as any host found serving
+   * is - and one that does not is left alone, deferred, with nothing started
+   * over it. Either way the job ends here and the lane frees.
+   */
+  private async ensureOverTerminalRun(): Promise<
+    MutationOutcome<ConvergeReadyOk>
+  > {
+    const version = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
+    if (version === null || !(await this.publishReachableHostSnapshot())) {
+      // For `recordEnsureOutcome`, as a CLI refusal with this code would be.
+      this.ensureFailureCode = HOST_NOT_SERVICE_RUN_CODE;
+      return this.hostStartOverTerminalRunOutcome("ensure");
+    }
+    return { kind: "ok", value: { running: true, version } };
+  }
+
   private hostStartSuspendedOutcome(
     kind: HostStartMutationKind,
   ): HostStartSuspended {
@@ -3864,6 +3916,7 @@ export class HostController {
       // that joined a queued liveness converge would inherit its
       // `--keep-installed` and report applied having moved nothing.
       `ensure:${force}:${versionPolicy}:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      "body-decides",
       async () => {
         const abandoned = await this.admitReprovision(intent);
         if (abandoned !== null) return abandoned;
@@ -3872,6 +3925,11 @@ export class HostController {
         // the click that asked for the host back.
         if (intent.kind === "background" && (await isHostRemovedByUser())) {
           return { kind: "ok", value: { running: false, version: null } };
+        }
+        if (await this.isTerminalHostRun()) {
+          const outcome = await this.ensureOverTerminalRun();
+          this.recordEnsureOutcome(outcome);
+          return outcome;
         }
         // `keep-installed` (`host ensure --keep-installed`, the `viability`
         // policy) is every implicit converge - background AND Doctor's
@@ -3907,9 +3965,10 @@ export class HostController {
    * `ok` clears it, a `failed` or `installed-not-converged` replaces it with
    * that outcome's message and the CLI code `classifyEnsureLikeError` saw (or
    * `null` for a failure the CLI did not name), a deferral on another Windows
-   * user's task does the same, and every other outcome - any other deferral,
-   * a busy host - leaves it as it was. Only the code reaches a log; the
-   * message is for the window.
+   * user's task or over a terminal run does the same, and every other
+   * outcome - any other deferral,
+   * a busy host - leaves it as it was. Failure messages are scrubbed before
+   * logging; the window keeps the original message.
    */
   private recordEnsureOutcome(outcome: MutationOutcome<ConvergeReadyOk>): void {
     const code = this.ensureFailureCode;
@@ -3923,14 +3982,24 @@ export class HostController {
       outcome.kind === "installed-not-converged"
     ) {
       this.lastEnsureFailure = { message: outcome.message, code };
+      log.warn("[host-controller] host ensure failed", {
+        code,
+        message: scrubSupportText(outcome.message),
+      });
       return;
     }
-    // A deferral is not a failure, but THIS one is the whole answer to "why
-    // is there no local host": a task that is not this account's holds the
-    // name - another Windows user's, or one whose owner could not be
-    // confirmed, each in its own words. The lifecycle card and the readiness
-    // surface read it from here.
-    if (outcome.kind === "deferred" && code === SERVICE_TASK_NOT_OWNED_CODE) {
+    // A deferral is not a failure, but THESE are the whole answer to "why is
+    // there no local host": a task that is not this account's holds the name
+    // - another Windows user's, or one whose owner could not be confirmed,
+    // each in its own words - or a host a person started in a terminal runs
+    // and does not answer, and this app leaves it alone. The lifecycle card,
+    // the readiness surface and this computer's host row read it from here;
+    // the terminal run's clears once that host answers (`getStatus`).
+    if (
+      outcome.kind === "deferred" &&
+      (code === SERVICE_TASK_NOT_OWNED_CODE ||
+        code === HOST_NOT_SERVICE_RUN_CODE)
+    ) {
       this.lastEnsureFailure = { message: outcome.message, code };
     }
   }
@@ -4753,7 +4822,7 @@ export class HostController {
 
           const outcome = await this.enqueueHostStart<
             MutationOutcome<ApplyStagedOk>
-          >("apply", `apply:${trigger}:${force}`, async () => {
+          >("apply", `apply:${trigger}:${force}`, "defer", async () => {
             if (trigger === "launch" && (await isHostRemovedByUser())) {
               return {
                 kind: "deferred",
@@ -5053,66 +5122,71 @@ export class HostController {
 
           const outcome = await this.enqueueHostStart<
             MutationOutcome<ActivateInstalledOk>
-          >("activate", `activate:${force}:${promoteReadyStage}`, async () => {
-            // A ready update supersedes activation debt - prevents the
-            // restart-old -> stamp -> restart-new double cycle. The reconcile
-            // already ran above; this only re-reads the (now-fresh) state and
-            // performs the apply/activate choreography, no further download.
-            // Skipped entirely when `promoteReadyStage` is false (a held host):
-            // the caller wants the installed bytes activated, never the stage.
-            const installed = await readDesktopHostInstallRecord(this.layout);
-            const staged = await readDesktopHostStagedRecord(this.layout);
-            if (
-              promoteReadyStage &&
-              deriveUpdateReady(
-                installed?.version ?? null,
-                staged?.version ?? null,
-              )
-            ) {
-              const eligibleStage = this.eligibleStage;
-              if (eligibleStage === null) {
-                return {
-                  kind: "deferred",
-                  message:
-                    "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
-                };
+          >(
+            "activate",
+            `activate:${force}:${promoteReadyStage}`,
+            "defer",
+            async () => {
+              // A ready update supersedes activation debt - prevents the
+              // restart-old -> stamp -> restart-new double cycle. The reconcile
+              // already ran above; this only re-reads the (now-fresh) state and
+              // performs the apply/activate choreography, no further download.
+              // Skipped entirely when `promoteReadyStage` is false (a held host):
+              // the caller wants the installed bytes activated, never the stage.
+              const installed = await readDesktopHostInstallRecord(this.layout);
+              const staged = await readDesktopHostStagedRecord(this.layout);
+              if (
+                promoteReadyStage &&
+                deriveUpdateReady(
+                  installed?.version ?? null,
+                  staged?.version ?? null,
+                )
+              ) {
+                const eligibleStage = this.eligibleStage;
+                if (eligibleStage === null) {
+                  return {
+                    kind: "deferred",
+                    message:
+                      "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
+                  };
+                }
+                // `respectHold: false` - this promotion is reached only via the
+                // explicit IPC activate/Update path. Every launch activation
+                // passes `promoteReadyStage: false`, so this branch never runs
+                // implicitly, and a known-ready update at launch goes through the
+                // reconcile's own `applyStaged("launch")` guarded by --respect-hold.
+                const applied = (await this.isPackagedMacOwned())
+                  ? await this.applyStagedPackagedMac(
+                      eligibleStage.fingerprint,
+                      false,
+                    )
+                  : await this.applyStagedCliOwned(
+                      force,
+                      eligibleStage.fingerprint,
+                      false,
+                    );
+                if (applied.kind === "stage-fingerprint-mismatch") {
+                  return applied;
+                }
+                return applied.kind === "ok"
+                  ? {
+                      kind: "ok",
+                      value: { activated: applied.value.runningActivated },
+                    }
+                  : applied;
               }
-              // `respectHold: false` - this promotion is reached only via the
-              // explicit IPC activate/Update path. Every launch activation
-              // passes `promoteReadyStage: false`, so this branch never runs
-              // implicitly, and a known-ready update at launch goes through the
-              // reconcile's own `applyStaged("launch")` guarded by --respect-hold.
-              const applied = (await this.isPackagedMacOwned())
-                ? await this.applyStagedPackagedMac(
-                    eligibleStage.fingerprint,
-                    false,
-                  )
-                : await this.applyStagedCliOwned(
-                    force,
-                    eligibleStage.fingerprint,
-                    false,
-                  );
-              if (applied.kind === "stage-fingerprint-mismatch") {
-                return applied;
+              if (await this.isPackagedMacOwned()) {
+                return this.runLockedMacActivationCycle(
+                  force,
+                  "activate",
+                  false,
+                  false,
+                  null,
+                );
               }
-              return applied.kind === "ok"
-                ? {
-                    kind: "ok",
-                    value: { activated: applied.value.runningActivated },
-                  }
-                : applied;
-            }
-            if (await this.isPackagedMacOwned()) {
-              return this.runLockedMacActivationCycle(
-                force,
-                "activate",
-                false,
-                false,
-                null,
-              );
-            }
-            return this.activateInstalledCliOwned(force);
-          });
+              return this.activateInstalledCliOwned(force);
+            },
+          );
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
         return {
@@ -5162,6 +5236,7 @@ export class HostController {
     return this.enqueueHostStart<MutationOutcome<InstallVersionOk>>(
       "install",
       `install:${pin}:${force}`,
+      "defer",
       async () => {
         // Explicit reinstall clears the removed-by-user sentinel (host-
         // removal-state.ts: "Cleared by an explicit reinstall").
@@ -5275,6 +5350,7 @@ export class HostController {
       // Intent- and target-discriminated for the same reasons
       // `convergeReady`'s key is.
       `register:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      "defer",
       async () => {
         const outcome = await this.registerServiceJob(intent);
         // `host service install` is the one repair that turns a disabled
@@ -6183,6 +6259,7 @@ export class HostController {
       // to leave alone, and a forced one joining an idle-only one would be
       // refused on the host's word after the person chose to override it.
       `respawn:${mode}:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      "defer",
       async () => {
         // Guard only - NOT `admitReprovision`. A restart is not a
         // reprovision: it must keep the removed-by-user deferral below and
@@ -6321,6 +6398,7 @@ export class HostController {
     return this.enqueueHostStart<MutationOutcome<ActivateInstalledOk>>(
       "recoverIfDown",
       "recoverIfDown",
+      "defer",
       async () => {
         const runningRuntimeVersion = await readRunningRuntimeVersion(
           this.layout,
@@ -6440,6 +6518,7 @@ export class HostController {
       // name a process, not the host that recorded it, so two repairs from
       // different hosts could otherwise collide on identical numbers.
       `freePortAndRestart:${pid}:${port}:${this.reprovisionCoalesceKeySuffix(intent)}`,
+      "defer",
       async () => {
         // Guard only - NOT `admitReprovision`. This is a restart, so the
         // removed-by-user deferral stays. What it does need is the identity

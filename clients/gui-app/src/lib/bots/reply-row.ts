@@ -1,3 +1,5 @@
+import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
+import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
 /**
@@ -48,9 +50,7 @@ export function repliedPostOf(
       message.role === "user" && message.persistentMessageId === messageId,
   );
   if (post === undefined) return null;
-  const text = post.segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
-    .join("\n");
+  const text = rowText(post);
   const firstLine =
     text
       .split("\n")
@@ -63,4 +63,31 @@ export function repliedPostOf(
         ? `${firstLine.slice(0, REPLIED_POST_EXCERPT_MAX - 1)}…`
         : firstLine,
   };
+}
+
+/**
+ * The text of the channel row `messageId` - a member's post or one of the
+ * bot's own rows - as the chat's store holds it (Tracy Bots T65): a thread
+ * names the post it answers by id only, and wherever a thread shows its
+ * post, the text is read from the channel. `null` when the store has not
+ * loaded that row.
+ */
+export function postTextOf(
+  messages: ReadonlyArray<OpenMessage>,
+  messageId: string,
+): string | null {
+  const post = messages.find((message) => message.messageId === messageId);
+  if (post === undefined) return null;
+  if (post.role === "user") {
+    return extractPlainTextFromComposerJSONContent(post.message.content);
+  }
+  return post.blocks
+    .flatMap((block) => (block.type === "text" ? [block.text] : []))
+    .join("\n");
+}
+
+function rowText(message: ChatMessage): string {
+  return message.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
 }

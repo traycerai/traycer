@@ -21,8 +21,10 @@ import {
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
   getSandboxAutomationViaHttp,
+  keepSandboxViaHttp,
   listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
+  patchSandboxViaHttp,
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -39,6 +41,10 @@ import type {
   DesktopAuthVerificationRevoked,
 } from "../../ipc-contracts/window-types";
 import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
+import {
+  createCachedIapTokenProvider,
+  resolveIapKeyFilePath,
+} from "../auth/iap-proxy-token";
 import { log } from "../app/logger";
 import {
   assertNumber,
@@ -51,6 +57,7 @@ import {
   parseSandboxAutomationOpenTarget,
   parseSandboxCreateRequest,
   parseSandboxLifecycleVerb,
+  parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
@@ -231,12 +238,26 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   // The sandbox control plane. traycer-server's base URL is read from the
   // baked config rather than the bridge options: it is a build constant (with
   // the same dev-only loopback override as `authnBaseUrl`), and nothing in main
-  // needs to vary it per window.
+  // needs to vary it per window. Each call carries the IAP proxy token a
+  // staging build mints (`iap-proxy-token.ts`); every other build's provider
+  // answers `null`, and its requests carry the user's bearer alone.
+  const iapProxyToken = createCachedIapTokenProvider({
+    keyFilePath: resolveIapKeyFilePath(process.resourcesPath),
+    audience: config.iapAudience,
+    fetch: globalThis.fetch,
+    now: Date.now,
+    warn: (message) => log.warn(message),
+  });
+
   bridge.handleInvoke(
     RunnerHostInvoke.listSandboxes,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "listSandboxes.bearerToken");
-      return listSandboxesViaHttp(config.serverBaseUrl, bearerToken);
+      return listSandboxesViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
     },
   );
 
@@ -244,7 +265,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.getSandboxCosts,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCosts.bearerToken");
-      return fetchSandboxCostsViaHttp(config.serverBaseUrl, bearerToken);
+      return fetchSandboxCostsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
     },
   );
 
@@ -252,7 +277,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.getSandboxCatalogue,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCatalogue.bearerToken");
-      return fetchSandboxCatalogueViaHttp(config.serverBaseUrl, bearerToken);
+      return fetchSandboxCatalogueViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
     },
   );
 
@@ -260,10 +289,12 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.createSandbox,
     async (_event, bearerToken: unknown, request: unknown) => {
       assertString(bearerToken, "createSandbox.bearerToken");
+      const parsedRequest = parseSandboxCreateRequest(request);
       return createSandboxViaHttp(
         config.serverBaseUrl,
         bearerToken,
-        parseSandboxCreateRequest(request),
+        await iapProxyToken(),
+        parsedRequest,
       );
     },
   );
@@ -276,6 +307,42 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       return destroySandboxViaHttp(
         config.serverBaseUrl,
         bearerToken,
+        await iapProxyToken(),
+        sandboxId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.patchSandbox,
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      request: unknown,
+    ) => {
+      assertString(bearerToken, "patchSandbox.bearerToken");
+      assertString(sandboxId, "patchSandbox.sandboxId");
+      const parsedRequest = parseSandboxPatchRequest(request);
+      return patchSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        sandboxId,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.keepSandbox,
+    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+      assertString(bearerToken, "keepSandbox.bearerToken");
+      assertString(sandboxId, "keepSandbox.sandboxId");
+      return keepSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
         sandboxId,
       );
     },
@@ -293,11 +360,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       assertString(bearerToken, "runSandboxVerb.bearerToken");
       assertString(sandboxId, "runSandboxVerb.sandboxId");
       assertNumber(timeoutMs, "runSandboxVerb.timeoutMs");
+      const parsedVerb = parseSandboxLifecycleVerb(verb);
       return runSandboxVerbViaHttp(
         config.serverBaseUrl,
         bearerToken,
+        await iapProxyToken(),
         sandboxId,
-        parseSandboxLifecycleVerb(verb),
+        parsedVerb,
         timeoutMs,
       );
     },
@@ -307,10 +376,13 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.getSandboxAutomation,
     async (_event, bearerToken: unknown, environmentId: unknown) => {
       assertString(bearerToken, "getSandboxAutomation.bearerToken");
+      const parsedEnvironmentId =
+        parseSandboxAutomationEnvironmentId(environmentId);
       return getSandboxAutomationViaHttp(
         config.serverBaseUrl,
         bearerToken,
-        parseSandboxAutomationEnvironmentId(environmentId),
+        await iapProxyToken(),
+        parsedEnvironmentId,
       );
     },
   );
@@ -319,10 +391,12 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.openSandboxAutomation,
     async (_event, bearerToken: unknown, target: unknown) => {
       assertString(bearerToken, "openSandboxAutomation.bearerToken");
+      const parsedTarget = parseSandboxAutomationOpenTarget(target);
       return openSandboxAutomationViaHttp(
         config.serverBaseUrl,
         bearerToken,
-        parseSandboxAutomationOpenTarget(target),
+        await iapProxyToken(),
+        parsedTarget,
       );
     },
   );

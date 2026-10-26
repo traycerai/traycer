@@ -1612,7 +1612,10 @@ const restyleExemptions = [
     // A hashed profile accent carried as a CSS custom property - ticket 02's
     // sanctioned form for a colour that is DATA - with the one fixed near-black
     // that is legible on every hue it can produce.
-    files: ["src/components/providers/profile-avatar-badge.tsx"],
+    files: [
+      "src/components/providers/profile-avatar-badge.tsx",
+      "src/components/bots/bot-avatars.tsx",
+    ],
     contracts: [
       { pattern: "^AvatarFallback$", allow: ["color", "typography"] },
     ],
@@ -3145,11 +3148,12 @@ export default tseslint.config(
     //     colour the user picked (`resolveProfileAccentColor`), never a token,
     //     so its initials need a fixed dark that reads on those values.
     //     `--foreground` would flip with the theme while the chip behind it
-    //     did not.
+    //     did not. A bot channel's pictures hash onto the same palette.
     files: [
       "src/components/auth/cinematic-backdrop.tsx",
       "src/components/layout/header/sign-in/device-code-progress.tsx",
       "src/components/providers/profile-avatar-badge.tsx",
+      "src/components/bots/bot-avatars.tsx",
     ],
     rules: {
       "shadcn/no-raw-colors": "off",

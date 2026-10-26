@@ -24,7 +24,7 @@ describe("heldSecretBindingProblem", () => {
 
   it("asks for a host, and rejects a bad or too many hosts", () => {
     expect(heldSecretBindingProblem(apiKey({ hosts: "  " }))).toBe(
-      "Enter the destination host.",
+      "Enter the server address.",
     );
     expect(heldSecretBindingProblem(apiKey({ hosts: "bad host!" }))).toContain(
       "is not a hostname",

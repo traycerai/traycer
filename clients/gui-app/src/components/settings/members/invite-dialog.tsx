@@ -5,20 +5,22 @@ import {
   INVITE_LABEL,
   inviteDialogLead,
   inviteEmailLabel,
+  INVITE_FAILED,
   inviteForbiddenRefusal,
   inviteRoleLabel,
-  inviteSeatCopy,
+  inviteRoleLine,
+  inviteSentBody,
   inviteSentLabel,
   ROLE_LABELS,
   seatLimitRefusal,
 } from "@/components/settings/members/copy";
 import type {
   MembersInviteOutcome,
-  SeatDelta,
   TeamRole,
 } from "@/components/settings/members/types";
 import { isTeamRole } from "@/components/settings/members/types";
 import { EnumSelect } from "@/components/settings/settings-enum-select";
+import { SettingsRowDescriptionContext } from "@/components/settings/settings-row-description";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,9 +34,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+/** The role line, which the Role picker names as its description. */
+const ROLE_LINE_ID = "members-invite-role-line";
+
 type InviteDialogPhase =
   | { readonly kind: "form"; readonly email: string; readonly role: TeamRole }
-  | { readonly kind: "sent"; readonly seatDelta: SeatDelta | null }
+  | {
+      readonly kind: "sent";
+      readonly email: string;
+      readonly role: TeamRole;
+    }
   | { readonly kind: "refused"; readonly message: string };
 
 function emailLooksValid(value: string): boolean {
@@ -51,21 +60,40 @@ function refusalMessage(
   teamName: string,
   outcome: Extract<
     MembersInviteOutcome,
-    { outcome: "forbidden" } | { outcome: "seat_limit" }
+    { outcome: "forbidden" } | { outcome: "seat_limit" } | { outcome: "failed" }
   >,
 ): string {
   if (outcome.outcome === "seat_limit") return seatLimitRefusal(teamName);
+  if (outcome.outcome === "failed") return INVITE_FAILED;
   return inviteForbiddenRefusal();
 }
 
 /**
- * Admin invite: email, role (Editor by default), then the seat sentence
- * from `invite`'s `seatDelta` when present; nothing when null.
+ * The line under the title: the lead on the form, what happens next once
+ * sent, nothing on a refusal, whose own line says it.
+ */
+function inviteDialogDescription(
+  phase: InviteDialogPhase,
+  teamName: string,
+): string | null {
+  if (phase.kind === "form") return inviteDialogLead(teamName);
+  if (phase.kind === "sent") {
+    return inviteSentBody(phase.email, teamName, phase.role);
+  }
+  return null;
+}
+
+/**
+ * Admin invite: email with the seat sentence under it (`seatLine`, read
+ * before Invite), then role (Editor by default) with a line saying what the
+ * picked role may do.
  */
 export function InviteDialog(props: {
   readonly open: boolean;
   readonly teamName: string;
   readonly busy: boolean;
+  /** Shown under the address while the form is open; it reads the seats itself. */
+  readonly seatLine: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly onInvite: (input: {
     readonly email: string;
@@ -91,9 +119,10 @@ export function InviteDialog(props: {
     if (phase.kind !== "form") return;
     const email = phase.email.trim();
     if (!emailLooksValid(email)) return;
-    void props.onInvite({ email, role: phase.role }).then((outcome) => {
+    const role = phase.role;
+    void props.onInvite({ email, role }).then((outcome) => {
       if (outcome.outcome === "sent") {
-        setPhase({ kind: "sent", seatDelta: outcome.seatDelta });
+        setPhase({ kind: "sent", email, role });
         return;
       }
       setPhase({
@@ -102,11 +131,6 @@ export function InviteDialog(props: {
       });
     });
   };
-
-  const seatCopy =
-    phase.kind === "sent"
-      ? inviteSeatCopy(props.teamName, phase.seatDelta)
-      : null;
 
   return (
     <Dialog open={props.open} onOpenChange={close}>
@@ -118,10 +142,8 @@ export function InviteDialog(props: {
           <DialogTitle>
             {phase.kind === "sent" ? inviteSentLabel() : INVITE_LABEL}
           </DialogTitle>
-          <DialogDescription>
-            {phase.kind === "form"
-              ? inviteDialogLead(props.teamName)
-              : inviteSentLabel()}
+          <DialogDescription data-testid="members-invite-description">
+            {inviteDialogDescription(phase, props.teamName)}
           </DialogDescription>
         </DialogHeader>
         {phase.kind === "form" ? (
@@ -142,28 +164,30 @@ export function InviteDialog(props: {
                   });
                 }}
               />
+              {props.seatLine}
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>{inviteRoleLabel()}</Label>
-              <EnumSelect
-                labels={ROLE_LABELS}
-                value={phase.role}
-                isValue={isTeamRole}
-                onValueChange={(role) => {
-                  setPhase({ kind: "form", email: phase.email, role });
-                }}
-                ariaLabel={inviteRoleLabel()}
-              />
+              <SettingsRowDescriptionContext.Provider value={ROLE_LINE_ID}>
+                <EnumSelect
+                  labels={ROLE_LABELS}
+                  value={phase.role}
+                  isValue={isTeamRole}
+                  onValueChange={(role) => {
+                    setPhase({ kind: "form", email: phase.email, role });
+                  }}
+                  ariaLabel={inviteRoleLabel()}
+                />
+              </SettingsRowDescriptionContext.Provider>
+              <p
+                id={ROLE_LINE_ID}
+                className="max-w-[72ch] text-ui-xs text-muted-foreground"
+                data-testid="members-invite-role-line"
+              >
+                {inviteRoleLine(phase.role, props.teamName)}
+              </p>
             </div>
           </div>
-        ) : null}
-        {phase.kind === "sent" && seatCopy !== null ? (
-          <p
-            className="max-w-[72ch] text-ui-sm"
-            data-testid="members-invite-seat-copy"
-          >
-            {seatCopy}
-          </p>
         ) : null}
         {phase.kind === "refused" ? (
           <p

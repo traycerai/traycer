@@ -10,6 +10,7 @@ import {
   type HostNotificationRotationProducer,
   type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
+import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
@@ -143,7 +144,7 @@ function environmentNotificationPresentation(
         title: "Move to Personal stalled",
         body:
           known?.kind === "environment_move_stalled"
-            ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not moved yet`
+            ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not in Personal yet`
             : "A computer's move to Personal stopped before it finished",
       };
     case "environment.apply.failed":
@@ -159,7 +160,7 @@ function environmentNotificationPresentation(
         title: "Your role changed",
         body:
           known?.kind === "team_role_changed"
-            ? `${known.teamName} • You are now ${roleName(known.to)}, were ${roleName(known.from)}`
+            ? `${known.teamName} • You're now ${roleName(known.to)} (you were ${roleName(known.from)}).`
             : "Your role in a team changed",
       };
     case "team.host.returned":
@@ -185,13 +186,10 @@ function environmentNotificationPresentation(
 function roleName(role: string): string {
   switch (role) {
     case "owner":
-      return "an owner";
     case "admin":
-      return "an admin";
     case "editor":
-      return "an editor";
     case "viewer":
-      return "a viewer";
+      return withIndefiniteArticle(role);
     default:
       return role;
   }
@@ -305,6 +303,12 @@ function teamNotificationPresentation(
     case "team.member.removed": {
       if (known?.kind !== "team_member_removed") {
         return { title: "Member removed", body: "A team member was removed" };
+      }
+      if (known.toRemovedMember === true) {
+        return {
+          title: "No longer a member",
+          body: `You are no longer a member of ${known.teamName}.`,
+        };
       }
       const done = known.hosts.filter(
         (host) =>

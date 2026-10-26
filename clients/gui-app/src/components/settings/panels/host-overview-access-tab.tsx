@@ -22,6 +22,7 @@ import {
   SETUP_STEPS,
   setupView,
   TERMINAL_ACCOUNT_SENTENCE,
+  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -29,7 +30,6 @@ import { RemoteAccessSection } from "@/components/settings/host-scope/remote-acc
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { HostOverviewTabSections } from "@/components/settings/panels/host-overview-tabs";
-import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -155,17 +155,8 @@ function AccessSections(props: {
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
-  const { hostId } = props;
   return (
     <>
-      {hostId === null ? null : (
-        <HostOverviewSettingsCard
-          client={props.client}
-          hostId={hostId}
-          hostName={props.hostName}
-          status={props.status}
-        />
-      )}
       <MovedNotice
         client={props.client}
         hostId={props.hostId}
@@ -181,7 +172,14 @@ function AccessSections(props: {
         hostId={props.hostId}
         status={props.status.remoteAccess}
       />
-      <TerminalAccountsSection client={props.client} />
+      <TerminalAccountsSection
+        client={props.client}
+        sentence={
+          props.status.principal?.kind === "team"
+            ? teamTerminalAccountSentence(props.status.principal.teamName)
+            : TERMINAL_ACCOUNT_SENTENCE
+        }
+      />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>
   );
@@ -384,6 +382,7 @@ const AMBIENT_PROFILE_ID = "ambient";
 
 function TerminalAccountsSection(props: {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly sentence: string;
 }): ReactNode {
   const list = useProvidersListForClient(props.client, {
     enabled: true,
@@ -412,7 +411,7 @@ function TerminalAccountsSection(props: {
       fill={false}
     >
       <p className="max-w-[72ch] px-5 pt-4 text-ui-sm text-muted-foreground">
-        {TERMINAL_ACCOUNT_SENTENCE}
+        {props.sentence}
       </p>
       <ul className="flex flex-col">
         {rows.map((row) => (

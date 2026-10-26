@@ -1,5 +1,4 @@
 import { useRouterState } from "@tanstack/react-router";
-import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
 import {
@@ -60,10 +59,6 @@ export function SettingsSurface(props: { readonly lastPath: string | null }) {
         ) : (
           <SettingsPanelForSection section={section ?? "general"} />
         )}
-        {/* A phone showing a section has no sidebar, whose copy of the
-            create dialog every other layout mounts: a panel's opener (a
-            card's "New sandbox like this") needs this one. Never both. */}
-        {isMobile && section !== null ? <SandboxCreateDialog /> : null}
       </div>
     </div>
   );

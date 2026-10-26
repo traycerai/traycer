@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentStatusResponse,
 } from "@traycer/protocol/host/environment-schemas";
 import type {
@@ -46,7 +46,9 @@ const NO_KEY: ProviderCliState["apiKey"] = {
   source: null,
 };
 
-function secret(overrides: Partial<EnvironmentSecret>): EnvironmentSecret {
+function secret(
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId: "secret-1",
     name: "DEPLOY_KEY",
@@ -58,6 +60,8 @@ function secret(overrides: Partial<EnvironmentSecret>): EnvironmentSecret {
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
@@ -100,7 +104,7 @@ describe("the steps", () => {
         "agents",
         "agents",
         "Choose how agents are picked for each task.",
-        "Open Agent selection",
+        "Open Agents",
       ],
     ]);
   });
@@ -170,7 +174,7 @@ describe("the provider step", () => {
 
 describe("the secret step", () => {
   const cases: ReadonlyArray<
-    [label: string, secrets: EnvironmentSecret[] | null, done: boolean]
+    [label: string, secrets: EnvironmentSecretV12[] | null, done: boolean]
   > = [
     ["a secret that is not revoked", [secret({})], true],
     [

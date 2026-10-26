@@ -22,8 +22,10 @@ import {
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
+  keepSandboxViaHttp,
   listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
+  patchSandboxViaHttp,
   runSandboxVerbViaHttp,
   SANDBOX_VERB_FETCH_TIMEOUT_MS,
   type EnsureSandboxAwakeDeps,
@@ -109,7 +111,14 @@ describe("runSandboxVerbViaHttp", () => {
       jsonResponse(200, { sandbox: SUMMARY }),
     );
 
-    await runSandboxVerbViaHttp(BASE, BEARER, ULID, "resume", VERB_TIMEOUT_MS);
+    await runSandboxVerbViaHttp(
+      BASE,
+      BEARER,
+      null,
+      ULID,
+      "resume",
+      VERB_TIMEOUT_MS,
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
@@ -129,6 +138,7 @@ describe("runSandboxVerbViaHttp", () => {
         await runSandboxVerbViaHttp(
           BASE,
           BEARER,
+          null,
           id,
           "resume",
           VERB_TIMEOUT_MS,
@@ -144,6 +154,7 @@ describe("runSandboxVerbViaHttp", () => {
       await runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "suspend",
         VERB_TIMEOUT_MS,
@@ -159,6 +170,7 @@ describe("runSandboxVerbViaHttp", () => {
       await runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "suspend",
         VERB_TIMEOUT_MS,
@@ -172,6 +184,7 @@ describe("runSandboxVerbViaHttp", () => {
       await runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "suspend",
         VERB_TIMEOUT_MS,
@@ -185,6 +198,7 @@ describe("runSandboxVerbViaHttp", () => {
       await runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "suspend",
         VERB_TIMEOUT_MS,
@@ -198,6 +212,7 @@ describe("runSandboxVerbViaHttp", () => {
       await runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "resume",
         VERB_TIMEOUT_MS,
@@ -219,6 +234,7 @@ describe("runSandboxVerbViaHttp", () => {
     const result = await runSandboxVerbViaHttp(
       BASE,
       BEARER,
+      null,
       "sbx_1",
       "suspend",
       VERB_TIMEOUT_MS,
@@ -244,6 +260,7 @@ describe("runSandboxVerbViaHttp", () => {
       await runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "start",
         VERB_TIMEOUT_MS,
@@ -267,6 +284,7 @@ describe("runSandboxVerbViaHttp", () => {
         await runSandboxVerbViaHttp(
           BASE,
           BEARER,
+          null,
           "sbx_1",
           "stop",
           VERB_TIMEOUT_MS,
@@ -283,6 +301,7 @@ describe("runSandboxVerbViaHttp", () => {
     const result = await runSandboxVerbViaHttp(
       BASE,
       BEARER,
+      null,
       "sbx_1",
       "stop",
       VERB_TIMEOUT_MS,
@@ -300,6 +319,7 @@ describe("runSandboxVerbViaHttp", () => {
     const result = await runSandboxVerbViaHttp(
       BASE,
       BEARER,
+      null,
       "sbx_1",
       "stop",
       VERB_TIMEOUT_MS,
@@ -335,6 +355,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
     const pending = runSandboxVerbViaHttp(
       BASE,
       BEARER,
+      null,
       "sbx_1",
       "resume",
       120_000,
@@ -359,6 +380,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
       const pending = runSandboxVerbViaHttp(
         BASE,
         BEARER,
+        null,
         "sbx_1",
         "resume",
         requested,
@@ -380,6 +402,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
     const pending = runSandboxVerbViaHttp(
       BASE,
       BEARER,
+      null,
       "sbx_1",
       "resume",
       -5_000,
@@ -395,14 +418,14 @@ describe("runSandboxVerbViaHttp request deadline", () => {
     stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
 
     await expect(
-      runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", -5_000),
+      runSandboxVerbViaHttp(BASE, BEARER, null, "sbx_1", "resume", -5_000),
     ).resolves.toEqual({ kind: "ok", settled: true, state: SUMMARY.state });
   });
 
   it("leaves no timer behind once the request has answered", async () => {
     stubFetch(async () => jsonResponse(200, { sandbox: SUMMARY }));
 
-    await runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", 120_000);
+    await runSandboxVerbViaHttp(BASE, BEARER, null, "sbx_1", "resume", 120_000);
 
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -423,7 +446,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
       jsonResponse(200, { sandboxes: [] }),
     );
 
-    await listSandboxesViaHttp(BASE, BEARER);
+    await listSandboxesViaHttp(BASE, BEARER, null);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -431,7 +454,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
   it("aborts a request that never answers once the site's timeout passes, and resolves to a network error", async () => {
     const fetchMock = stubHangingFetch();
 
-    const pending = listSandboxesViaHttp(BASE, BEARER);
+    const pending = listSandboxesViaHttp(BASE, BEARER, null);
     const signal = signalOfLastFetch(fetchMock);
     expect(signal.aborted).toBe(false);
 
@@ -450,6 +473,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
     const pending = runSandboxVerbViaHttp(
       BASE,
       BEARER,
+      null,
       "sbx_1",
       "resume",
       30_000,
@@ -470,7 +494,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
 describe("destroySandboxViaHttp", () => {
   it("DELETEs the sandbox and reads 200 as settled, 202 as still destroying", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, "sbx_1")).toEqual({
+    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
       kind: "ok",
       settled: true,
     });
@@ -479,7 +503,7 @@ describe("destroySandboxViaHttp", () => {
     expect(init?.method).toBe("DELETE");
 
     stubFetch(async () => jsonResponse(202, {}));
-    expect(await destroySandboxViaHttp(BASE, BEARER, "sbx_1")).toEqual({
+    expect(await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
       kind: "ok",
       settled: false,
     });
@@ -489,7 +513,7 @@ describe("destroySandboxViaHttp", () => {
     // An empty id would otherwise DELETE the collection.
     const fetchMock = stubFetch(async () => jsonResponse(200, {}));
     for (const id of UNSAFE_IDS) {
-      expect(await destroySandboxViaHttp(BASE, BEARER, id)).toEqual(
+      expect(await destroySandboxViaHttp(BASE, BEARER, null, id)).toEqual(
         INVALID_ID_RESULT,
       );
     }
@@ -498,11 +522,83 @@ describe("destroySandboxViaHttp", () => {
 
   it("hands a 404 sandbox_not_found to the caller as a typed refusal", async () => {
     stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
-    expect(await destroySandboxViaHttp(BASE, BEARER, "sbx_1")).toMatchObject({
+    expect(
+      await destroySandboxViaHttp(BASE, BEARER, null, "sbx_1"),
+    ).toMatchObject({
       kind: "refused",
       status: 404,
       code: "sandbox_not_found",
     });
+  });
+});
+
+describe("patchSandboxViaHttp", () => {
+  it("PATCHes the sandbox with the request as its body", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    const request = {
+      displayName: null,
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: 0,
+    };
+    expect(
+      await patchSandboxViaHttp(BASE, BEARER, null, "sbx_1", request),
+    ).toEqual({
+      kind: "ok",
+      settled: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx_1`);
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+  });
+
+  it("refuses an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    for (const id of UNSAFE_IDS) {
+      expect(
+        await patchSandboxViaHttp(BASE, BEARER, null, id, {
+          displayName: "x",
+          idleMinutes: null,
+          destroyAfterRestingMinutes: null,
+        }),
+      ).toEqual(INVALID_ID_RESULT);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("keepSandboxViaHttp", () => {
+  it("POSTs to the sandbox's keep route with no body", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    expect(await keepSandboxViaHttp(BASE, BEARER, null, "sbx_1")).toEqual({
+      kind: "ok",
+      settled: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx_1/keep`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeNull();
+  });
+
+  it("hands a 404 sandbox_not_found, a keep that lost to the idle timer, to the caller", async () => {
+    stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
+    expect(await keepSandboxViaHttp(BASE, BEARER, null, "sbx_1")).toMatchObject(
+      {
+        kind: "refused",
+        status: 404,
+        code: "sandbox_not_found",
+      },
+    );
+  });
+
+  it("refuses an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    for (const id of UNSAFE_IDS) {
+      expect(await keepSandboxViaHttp(BASE, BEARER, null, id)).toEqual(
+        INVALID_ID_RESULT,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -528,7 +624,7 @@ describe("fetchSandboxCostsViaHttp", () => {
 
   it("parses the user's cost view", async () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, COSTS));
-    const result = await fetchSandboxCostsViaHttp(BASE, BEARER);
+    const result = await fetchSandboxCostsViaHttp(BASE, BEARER, null);
     expect(String(fetchMock.mock.calls[0][0])).toBe(
       `${BASE}/api/sandboxes/cost`,
     );
@@ -545,7 +641,7 @@ describe("fetchSandboxCostsViaHttp", () => {
         awakeBurnMillicreditsPerHour: "lots",
       }),
     );
-    expect(await fetchSandboxCostsViaHttp(BASE, BEARER)).toEqual({
+    expect(await fetchSandboxCostsViaHttp(BASE, BEARER, null)).toEqual({
       kind: "network-error",
       detail: "the sandbox cost did not match the contract",
     });
@@ -555,7 +651,7 @@ describe("fetchSandboxCostsViaHttp", () => {
 describe("the other sandbox routes parse or fail the same way", () => {
   it("list: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { sandboxes: [{ id: "" }] }));
-    expect(await listSandboxesViaHttp(BASE, BEARER)).toEqual({
+    expect(await listSandboxesViaHttp(BASE, BEARER, null)).toEqual({
       kind: "network-error",
       detail: "the sandbox list did not match the contract",
     });
@@ -565,7 +661,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
     stubFetch(async () =>
       jsonResponse(200, { sandboxes: [OLDER_SUMMARY_BODY] }),
     );
-    const result = await listSandboxesViaHttp(BASE, BEARER);
+    const result = await listSandboxesViaHttp(BASE, BEARER, null);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
       expect(result.response.sandboxes[0]?.frozenAt).toBeNull();
@@ -574,7 +670,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
 
   it("catalogue: a body that is not the contract is a network error", async () => {
     stubFetch(async () => jsonResponse(200, { providers: "none" }));
-    expect(await fetchSandboxCatalogueViaHttp(BASE, BEARER)).toEqual({
+    expect(await fetchSandboxCatalogueViaHttp(BASE, BEARER, null)).toEqual({
       kind: "network-error",
       detail: "the sandbox catalogue did not match the contract",
     });
@@ -587,7 +683,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
         reason: "cpus-out-of-range",
       }),
     );
-    const result = await createSandboxViaHttp(BASE, BEARER, {
+    const result = await createSandboxViaHttp(BASE, BEARER, null, {
       os: "linux",
       cpus: 64,
       memoryMb: 4096,
@@ -599,6 +695,9 @@ describe("the other sandbox routes parse or fail the same way", () => {
       createdByHostId: null,
       createdByAgentId: null,
       environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: null,
+      clientRequestId: null,
     });
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       "Content-Type": "application/json",
@@ -618,7 +717,7 @@ describe("getSandboxAutomationViaHttp", () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { available: true, sandbox: automationRow }),
     );
-    const result = await getSandboxAutomationViaHttp(BASE, BEARER, null);
+    const result = await getSandboxAutomationViaHttp(BASE, BEARER, null, null);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${BASE}/api/sandboxes/automation`);
     expect(init?.method).toBe("GET");
@@ -634,7 +733,7 @@ describe("getSandboxAutomationViaHttp", () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { available: true, sandbox: null }),
     );
-    await getSandboxAutomationViaHttp(BASE, BEARER, null);
+    await getSandboxAutomationViaHttp(BASE, BEARER, null, null);
     const url = new URL(String(fetchMock.mock.calls[0][0]));
     expect(url.pathname).toBe("/api/sandboxes/automation");
     expect(url.searchParams.has("environmentId")).toBe(false);
@@ -645,7 +744,7 @@ describe("getSandboxAutomationViaHttp", () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { available: true, sandbox: null }),
     );
-    await getSandboxAutomationViaHttp(BASE, BEARER, "env_team 1");
+    await getSandboxAutomationViaHttp(BASE, BEARER, null, "env_team 1");
     const url = new URL(String(fetchMock.mock.calls[0][0]));
     expect(url.pathname).toBe("/api/sandboxes/automation");
     expect(url.searchParams.get("environmentId")).toBe("env_team 1");
@@ -656,7 +755,7 @@ describe("getSandboxAutomationViaHttp", () => {
     stubFetch(async () =>
       jsonResponse(200, { available: true, sandbox: null }),
     );
-    const result = await getSandboxAutomationViaHttp(BASE, BEARER, null);
+    const result = await getSandboxAutomationViaHttp(BASE, BEARER, null, null);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") expect(result.automation.pods).toEqual([]);
   });
@@ -670,7 +769,12 @@ describe("getSandboxAutomationViaHttp", () => {
         pods: [{ sandbox: pod, ordinal: 2, liveShells: 3, headroom: 5 }],
       }),
     );
-    const result = await getSandboxAutomationViaHttp(BASE, BEARER, "env_1");
+    const result = await getSandboxAutomationViaHttp(
+      BASE,
+      BEARER,
+      null,
+      "env_1",
+    );
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
       expect(result.automation.pods).toHaveLength(1);
@@ -685,32 +789,40 @@ describe("getSandboxAutomationViaHttp", () => {
     stubFetch(async () =>
       jsonResponse(200, { available: true, sandbox: null }),
     );
-    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null)).toEqual({
-      kind: "ok",
-      automation: { available: true, sandbox: null, pods: [] },
-    });
+    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null, null)).toEqual(
+      {
+        kind: "ok",
+        automation: { available: true, sandbox: null, pods: [] },
+      },
+    );
   });
 
   it("reads a typed sandbox_not_found 404 as not available, never a failure", async () => {
     stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
-    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null)).toEqual({
-      kind: "ok",
-      automation: { available: false, sandbox: null, pods: [] },
-    });
+    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null, null)).toEqual(
+      {
+        kind: "ok",
+        automation: { available: false, sandbox: null, pods: [] },
+      },
+    );
   });
 
   it("reads a bare 404 as not available", async () => {
     stubFetch(async () => new Response("Not Found", { status: 404 }));
-    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null)).toEqual({
-      kind: "ok",
-      automation: { available: false, sandbox: null, pods: [] },
-    });
+    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null, null)).toEqual(
+      {
+        kind: "ok",
+        automation: { available: false, sandbox: null, pods: [] },
+      },
+    );
   });
 
   it("maps 401 and 403 to unauthorized", async () => {
     for (const status of [401, 403]) {
       stubFetch(async () => jsonResponse(status, {}));
-      expect(await getSandboxAutomationViaHttp(BASE, BEARER, null)).toEqual({
+      expect(
+        await getSandboxAutomationViaHttp(BASE, BEARER, null, null),
+      ).toEqual({
         kind: "unauthorized",
       });
     }
@@ -718,10 +830,12 @@ describe("getSandboxAutomationViaHttp", () => {
 
   it("reads a malformed body as a network error", async () => {
     stubFetch(async () => jsonResponse(200, { available: "yes" }));
-    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null)).toEqual({
-      kind: "network-error",
-      detail: "the Automations read did not match the contract",
-    });
+    expect(await getSandboxAutomationViaHttp(BASE, BEARER, null, null)).toEqual(
+      {
+        kind: "network-error",
+        detail: "the Automations read did not match the contract",
+      },
+    );
   });
 });
 
@@ -732,7 +846,7 @@ describe("openSandboxAutomationViaHttp", () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { sandbox: row }),
     );
-    const result = await openSandboxAutomationViaHttp(BASE, BEARER, null);
+    const result = await openSandboxAutomationViaHttp(BASE, BEARER, null, null);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${BASE}/api/sandboxes/automation`);
     expect(init?.method).toBe("POST");
@@ -745,7 +859,7 @@ describe("openSandboxAutomationViaHttp", () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { sandbox: row }),
     );
-    const result = await openSandboxAutomationViaHttp(BASE, BEARER, {
+    const result = await openSandboxAutomationViaHttp(BASE, BEARER, null, {
       environmentId: "env_team",
       ordinal: 2,
     });
@@ -767,7 +881,7 @@ describe("openSandboxAutomationViaHttp", () => {
     const fetchMock = stubFetch(async () =>
       jsonResponse(200, { sandbox: row }),
     );
-    await openSandboxAutomationViaHttp(BASE, BEARER, {
+    await openSandboxAutomationViaHttp(BASE, BEARER, null, {
       environmentId: "env_team",
       ordinal: null,
     });
@@ -785,7 +899,7 @@ describe("openSandboxAutomationViaHttp", () => {
       }),
     );
     expect(
-      await openSandboxAutomationViaHttp(BASE, BEARER, {
+      await openSandboxAutomationViaHttp(BASE, BEARER, null, {
         environmentId: "env_team",
         ordinal: null,
       }),
@@ -804,7 +918,7 @@ describe("openSandboxAutomationViaHttp", () => {
   it("carries a null message for a refusal that sends none", async () => {
     stubFetch(async () => jsonResponse(409, { code: "team_pods_full" }));
     expect(
-      await openSandboxAutomationViaHttp(BASE, BEARER, {
+      await openSandboxAutomationViaHttp(BASE, BEARER, null, {
         environmentId: "env_team",
         ordinal: null,
       }),
@@ -813,7 +927,7 @@ describe("openSandboxAutomationViaHttp", () => {
 
   it("reads 202 as not yet settled", async () => {
     stubFetch(async () => jsonResponse(202, { sandbox: row }));
-    const result = await openSandboxAutomationViaHttp(BASE, BEARER, null);
+    const result = await openSandboxAutomationViaHttp(BASE, BEARER, null, null);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") expect(result.settled).toBe(false);
   });
@@ -824,7 +938,7 @@ describe("openSandboxAutomationViaHttp", () => {
         jsonResponse(status, { code: "verb_not_available" }),
       );
       expect(
-        await openSandboxAutomationViaHttp(BASE, BEARER, null),
+        await openSandboxAutomationViaHttp(BASE, BEARER, null, null),
       ).toMatchObject({
         kind: "refused",
         status,
@@ -1385,6 +1499,64 @@ describe("ensureSandboxAwake", () => {
         }),
       ).rejects.toThrow("socket closed");
       expect(controlled.cancel).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("the IAP proxy credential", () => {
+  const PROXY_TOKEN = "proxy-token-fixture";
+
+  it("sends the proxy token ahead of the user's bearer on a GET", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandboxes: [] }),
+    );
+
+    await listSandboxesViaHttp(BASE, BEARER, PROXY_TOKEN);
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Record<
+      string,
+      string
+    >;
+    expect(headers).toEqual({
+      "Proxy-Authorization": `Bearer ${PROXY_TOKEN}`,
+      Authorization: `Bearer ${BEARER}`,
+      Accept: "application/json",
+    });
+    expect(Object.keys(headers)[0]).toBe("Proxy-Authorization");
+  });
+
+  it("sends it on a call with a body too, keeping the content type", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+
+    await patchSandboxViaHttp(BASE, BEARER, PROXY_TOKEN, ULID, {
+      displayName: null,
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: 0,
+    });
+
+    const headers = fetchMock.mock.calls[0][1]?.headers as Record<
+      string,
+      string
+    >;
+    expect(headers).toEqual({
+      "Proxy-Authorization": `Bearer ${PROXY_TOKEN}`,
+      Authorization: `Bearer ${BEARER}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    });
+    expect(Object.keys(headers)[0]).toBe("Proxy-Authorization");
+  });
+
+  it("sends the user's bearer alone when there is no proxy token", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandboxes: [] }),
+    );
+
+    await listSandboxesViaHttp(BASE, BEARER, null);
+
+    expect(fetchMock.mock.calls[0][1]?.headers).toEqual({
+      Authorization: `Bearer ${BEARER}`,
+      Accept: "application/json",
     });
   });
 });

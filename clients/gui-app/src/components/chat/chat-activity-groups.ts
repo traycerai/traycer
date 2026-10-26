@@ -8,7 +8,6 @@ import {
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
 import { formatClockDuration } from "@/lib/format-duration";
-import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ApprovalSegment,
   CommandSegment,
@@ -22,7 +21,13 @@ import {
   deriveActivityGroupRenderId,
   derivePromotedSubagentRenderId,
 } from "./chat-collapsible-key";
-import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
+import {
+  activityLabelLine,
+  activityToolKind,
+  commandActivityLabel,
+  normalizedToolName,
+  toolCallActivityLabel,
+} from "@traycer/protocol/host/agent/gui/activity-step-label";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 
 export type ActivitySegment =
@@ -129,17 +134,6 @@ interface ActivitySummaryCounts {
   shellUpdates: number;
 }
 
-type ToolActivityKind =
-  | "explore"
-  | "read"
-  | "search"
-  | "edit"
-  | "run"
-  | "hook"
-  | "browser"
-  | "tool";
-
-const SUMMARY_MAX = 96;
 const EMPTY_QUESTION_TOOL_IDS: ReadonlySet<string> = new Set();
 const EMPTY_PROMOTED_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
@@ -178,46 +172,6 @@ const hiddenReasoningTimelineCache = new WeakMap<
   ReadonlyArray<MessageSegment>,
   TimelineCacheEntry
 >();
-
-const READ_TOOL_NAMES = new Set([
-  "read",
-  "read_file",
-  "readfile",
-  "view",
-  "open_file",
-]);
-
-const EXPLORE_TOOL_NAMES = new Set([
-  "glob",
-  "list",
-  "ls",
-  "list_files",
-  "listfiles",
-  "find",
-]);
-
-const SEARCH_TOOL_NAMES = new Set([
-  "grep",
-  "search",
-  "rg",
-  "web_search",
-  "websearch",
-  "web_fetch",
-  "webfetch",
-]);
-
-const EDIT_TOOL_NAMES = new Set([
-  "edit",
-  "edit_file",
-  "editfile",
-  "multi_edit",
-  "multiedit",
-  "write_file",
-  "writefile",
-  "apply_patch",
-]);
-
-const RUN_TOOL_NAMES = new Set(["bash", "shell", "run_command", "command"]);
 
 function createEmptyCounts(): ActivitySummaryCounts {
   return {
@@ -504,13 +458,13 @@ export function activityChildLabel(
 export function latestActivityLabel(segment: ActivitySegment): string {
   switch (segment.kind) {
     case "autonomous_resume":
-      return singleLine(
+      return activityLabelLine(
         segment.triggers
           .map((trigger) => `${trigger.title} · ${trigger.summary}`)
           .join(", "),
       );
     case "command":
-      return commandActivityLabel(segment);
+      return commandActivityLabel(segment.command);
     case "file_change":
       return fileChangeActivityLabel(segment);
     case "subagent":
@@ -518,7 +472,7 @@ export function latestActivityLabel(segment: ActivitySegment): string {
     case "approval":
       return approvalActivityLabel(segment);
     case "tool":
-      return toolActivityLabel(segment);
+      return toolCallActivityLabel(segment.toolName, segment.inputSummary);
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;
@@ -527,12 +481,8 @@ export function latestActivityLabel(segment: ActivitySegment): string {
   }
 }
 
-function commandActivityLabel(segment: CommandSegment): string {
-  return `Ran ${singleLine(segment.command)}`;
-}
-
 function fileChangeActivityLabel(segment: FileChangeSegment): string {
-  return `${fileOperationVerb(segment.operation)} ${singleLine(
+  return `${fileOperationVerb(segment.operation)} ${activityLabelLine(
     segment.filePath,
   )}`;
 }
@@ -542,15 +492,15 @@ function subagentActivityLabel(segment: SubagentSegment): string {
   const task = segment.task ?? segment.result;
   return task === null
     ? `Spawned ${name}`
-    : `Spawned ${name}: ${singleLine(task)}`;
+    : `Spawned ${name}: ${activityLabelLine(task)}`;
 }
 
 function approvalActivityLabel(segment: ApprovalSegment): string {
   const label = segment.toolName ?? segment.description ?? "request";
-  if (segment.decision === null) return `Requested ${singleLine(label)}`;
+  if (segment.decision === null) return `Requested ${activityLabelLine(label)}`;
   return segment.decision.approved
-    ? `Approved ${singleLine(label)}`
-    : `Denied ${singleLine(label)}`;
+    ? `Approved ${activityLabelLine(label)}`
+    : `Denied ${activityLabelLine(label)}`;
 }
 
 /**
@@ -617,42 +567,10 @@ function shouldPromoteCommandSegment(
 }
 
 function isCommandLikeTool(toolName: string): boolean {
-  const normalized = normalizedToolName(toolName);
   return (
-    normalized === "bash" ||
-    normalized === "shell" ||
-    normalized === "monitor" ||
-    RUN_TOOL_NAMES.has(normalized)
+    activityToolKind(toolName) === "run" ||
+    normalizedToolName(toolName) === "monitor"
   );
-}
-
-function toolActivityLabel(segment: ToolSegment): string {
-  const toolKind = toolActivityKind(segment.toolName);
-  const summary = segment.inputSummary;
-  const detail = summary === null ? segment.toolName : summary;
-  switch (toolKind) {
-    case "read":
-      return `Read ${singleLine(detail)}`;
-    case "explore":
-      return `Explored ${singleLine(detail)}`;
-    case "search":
-      return `Searched ${singleLine(detail)}`;
-    case "edit":
-      return `Edited ${singleLine(detail)}`;
-    case "run":
-      return `Ran ${singleLine(detail)}`;
-    case "hook":
-      return `Ran ${singleLine(segment.toolName)}`;
-    case "browser":
-      return `Browsed ${singleLine(detail)}`;
-    case "tool":
-      return `Used ${singleLine(detail)}`;
-    default: {
-      const _exhaustive: never = toolKind;
-      void _exhaustive;
-      return `Used ${singleLine(detail)}`;
-    }
-  }
 }
 
 function activityGroupFromRun(
@@ -824,7 +742,7 @@ function countToolActivity(
   counts: ActivitySummaryCounts,
   segment: ToolSegment,
 ): void {
-  const kind = toolActivityKind(segment.toolName);
+  const kind = activityToolKind(segment.toolName);
   if (kind === "explore") {
     counts.exploredFiles += 1;
     return;
@@ -856,22 +774,6 @@ function countToolActivity(
     return;
   }
   counts.usedTools += 1;
-}
-
-function toolActivityKind(toolName: string): ToolActivityKind {
-  if (isTraycerBrowserReplToolName(toolName)) return "browser";
-  const normalized = normalizedToolName(toolName);
-  if (normalized.includes("hook")) return "hook";
-  if (READ_TOOL_NAMES.has(normalized)) return "read";
-  if (EXPLORE_TOOL_NAMES.has(normalized)) return "explore";
-  if (SEARCH_TOOL_NAMES.has(normalized)) return "search";
-  if (EDIT_TOOL_NAMES.has(normalized)) return "edit";
-  if (RUN_TOOL_NAMES.has(normalized)) return "run";
-  return "tool";
-}
-
-function normalizedToolName(toolName: string): string {
-  return toolName.toLowerCase().replace(/[\s.-]+/g, "_");
 }
 
 function countPhrase(
@@ -986,13 +888,6 @@ function thinkingPhrase(counts: ActivitySummaryCounts): string | null {
 function capitalizeFirst(value: string): string {
   if (value.length === 0) return value;
   return `${value[0].toUpperCase()}${value.slice(1)}`;
-}
-
-function singleLine(value: string): string {
-  return formatSingleLine(value, {
-    maxLength: SUMMARY_MAX,
-    ellipsis: "...",
-  });
 }
 
 function fileOperationVerb(operation: string): string {

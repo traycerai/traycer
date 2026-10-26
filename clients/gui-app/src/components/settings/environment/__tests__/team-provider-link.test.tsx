@@ -4,11 +4,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
+import { LINK_INTRO } from "@/lib/providers/provider-link-copy";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   mountTeamPage,
   mountTeamPageNegotiating,
+  personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -76,7 +78,57 @@ function floorOf(harness: TeamPageHarness, method: string): unknown {
     ?.requiredHostMethodVersion;
 }
 
+const TEAM_LIST = {
+  environments: [
+    {
+      environmentId: "env-a",
+      ownerKind: "organization" as const,
+      ownerId: "team-a",
+      roomId: "room-a",
+      label: "Acme",
+      effectiveRole: "admin" as const,
+      kind: "team" as const,
+      hostCount: 1,
+      providerHandle: "handle-a",
+    },
+  ],
+};
+
 describe("ProviderLinkDialog", () => {
+  it("introduces a team's link with the team's name, and Personal's with the plain intro", async () => {
+    useProviderLinkDialogStore.setState({
+      target: {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-a",
+      },
+    });
+    const team = mountTeamPage(poolSource("admin"), {
+      ...linkHandlers,
+      "environment.list": () => TEAM_LIST,
+    });
+    render(<ProviderLinkDialog />, { wrapper: team.Wrapper });
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "This signs Traycer in to your plan once. Acme's agents use it on every host running Acme; it counts as a device on your plan.",
+        ),
+      ).toBeTruthy();
+    });
+    cleanup();
+
+    useProviderLinkDialogStore.setState({
+      target: {
+        providerId: "claude-code",
+        profileId: null,
+        environmentId: "env-personal",
+      },
+    });
+    const personal = mountTeamPage(personalPoolSource(), linkHandlers);
+    render(<ProviderLinkDialog />, { wrapper: personal.Wrapper });
+    expect(await screen.findByText(LINK_INTRO)).toBeTruthy();
+  });
+
   it("links a team's plan with its environment id behind the 1.1 floor, and keeps the code out of every cache", async () => {
     useProviderLinkDialogStore.setState({
       target: {

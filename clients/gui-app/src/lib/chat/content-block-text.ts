@@ -173,17 +173,21 @@ type LifecycleContentBlock = Exclude<
   { type: "subagent" | "approval" | "todo" | "plan" | "error" }
 >;
 
+function compactionPreview(
+  block: Extract<LifecycleContentBlock, { type: "compaction" }>,
+): string {
+  if (block.status !== "errored") return block.summary ?? "Context compacted";
+  if (block.notApplied) return "Context not compacted";
+  return block.error ?? "Context compaction failed";
+}
+
 function appendLifecycleContentBlockPreview(
   preview: ContentBlocksPreviewBuilder,
   block: LifecycleContentBlock,
 ): void {
   switch (block.type) {
     case "compaction":
-      preview.append(
-        block.status === "errored"
-          ? (block.error ?? "Context compaction failed")
-          : (block.summary ?? "Context compacted"),
-      );
+      preview.append(compactionPreview(block));
       return;
     case "autonomous_resume": {
       if (block.triggers.length === 0) {

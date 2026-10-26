@@ -265,7 +265,7 @@ describe("install outcome delivery", () => {
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith(
-        "Install failed permanently on this machine",
+        "Install failed permanently on this computer",
       );
     });
   });

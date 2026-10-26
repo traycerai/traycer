@@ -1,6 +1,6 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,9 +16,9 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
-  secrets: [] as EnvironmentSecret[],
+  secrets: [] as EnvironmentSecretV12[],
   tasks: [] as readonly { readonly id: string }[],
-  hosts: [] as HostListItem[],
+  hosts: [] as RunningHost[],
   user: null as AuthenticatedUser | null,
   staged: null as { readonly target: { readonly kind: string } } | null,
   openLink: vi.fn(() => Promise.resolve()),
@@ -50,9 +50,18 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: mocks.tasks }),
 }));
 
-vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
-  useRegisteredHosts: () => ({ data: { hosts: mocks.hosts } }),
-}));
+// The computers Personal reaches come from one hook, not the account registry.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: mocks.hosts,
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
@@ -116,7 +125,7 @@ function storedKeyProvider(): ProviderCliState {
   };
 }
 
-function secret(): EnvironmentSecret {
+function secret(): EnvironmentSecretV12 {
   return {
     secretId: "secret-1",
     name: "DEPLOY_KEY",
@@ -128,31 +137,25 @@ function secret(): EnvironmentSecret {
     currentVersionId: "v1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
-function personalHost(hostId: string): HostListItem {
+function runningHost(hostId: string, kind: RunningHost["kind"]): RunningHost {
   return {
     hostId,
-    displayName: hostId,
-    platform: "linux",
-    kind: "personal",
-    publicKey: `pk-${hostId}`,
-    createdAt: "2026-10-01T00:00:00.000Z",
-    status: {
-      connectivity: "connectable",
-      viewerReachability: "unknown",
-      clientCloud: "ok",
-      updateState: "current",
-      appVersion: "1.5.0",
-      lastSeenAt: "2026-10-09T00:00:00.000Z",
-    },
-    updatePolicy: "manual",
-    sandboxState: "awake",
-    sandboxFrozen: false,
-    profile: "agent",
-    owner: { kind: "user", id: "u1" },
+    hostName: hostId,
+    name: hostId,
+    kind,
+    isThisComputer: false,
+    lastReportedAt: null,
+    applied: [],
   };
+}
+
+function personalHost(hostId: string): RunningHost {
+  return runningHost(hostId, "personal");
 }
 
 function zeroUser(): AuthenticatedUser {
@@ -237,6 +240,31 @@ describe("GettingStartedSettingsPanel", () => {
     expect(screen.queryByTestId("set-up-team-group")).toBeNull();
   });
 
+  it("completes Install on another computer from two Personal computers, not a computer and a sandbox", () => {
+    mocks.hosts = [
+      personalHost("a"),
+      { ...personalHost("box"), kind: "sandbox" },
+    ];
+    render(<GettingStartedSettingsPanel />);
+    expect(
+      screen.getByRole("button", {
+        name: "Install Traycer on another computer, Not started",
+      }),
+    ).toBeTruthy();
+    cleanup();
+
+    mocks.hosts = [personalHost("a"), personalHost("b")];
+    render(<GettingStartedSettingsPanel />);
+    expect(
+      screen.getByRole("button", {
+        name: "Install Traycer on another computer, Complete",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("getting-started-card-install").textContent,
+    ).toContain("So your settings follow you to it.");
+  });
+
   it("hides the credits step until a sandbox is staged in this window", () => {
     render(<GettingStartedSettingsPanel />);
     expect(screen.queryByTestId("getting-started-card-credits")).toBeNull();
@@ -251,6 +279,9 @@ describe("GettingStartedSettingsPanel", () => {
       screen.getByRole("button", { name: "Add credits, Not started" }),
     ).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("0 of 5 complete");
+    expect(
+      screen.getByTestId("getting-started-card-credits").textContent,
+    ).toContain("Credits pay for your sandboxes, awake or resting.");
   });
 
   it("completes a step by the fact it names, never by a click", () => {

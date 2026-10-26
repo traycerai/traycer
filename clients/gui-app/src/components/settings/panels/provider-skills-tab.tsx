@@ -61,7 +61,7 @@ import {
   SKILL_CONFLICT_LABEL,
   SKILL_CONFLICT_TONE,
   SKILL_CONFLICT_TOOLTIP,
-  SKILL_SOURCE_LABEL,
+  skillSourceLabel,
   SKILL_SOURCE_ORDER,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
@@ -80,6 +80,7 @@ import {
   useConfigurationSource,
   useCanEditConfiguration,
 } from "@/components/settings/environment/configuration-source";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 
 const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
@@ -447,6 +448,7 @@ function ProviderSkillsTabBody({
         {openSkill === null ? null : (
           <ProviderSkillDetailDialog
             skill={openSkill}
+            sourceLabel={skillSourceLabel(openSkill.source, providerLabel)}
             removal={skillRemovability({
               removeScopes: allowed.removeScopes,
               source: openSkill.source,
@@ -520,9 +522,14 @@ function ProviderSkillsTabBody({
       >
         {globalOnly ? (
           <p className="text-ui-xs text-muted-foreground">
-            {team
-              ? "Available to agents running this team."
-              : "Applies to every workspace on this host."}
+            {source.kind === "pool" ? (
+              <CloudSkillsScopeCaption
+                configuration={source.configuration}
+                providerLabel={providerLabel}
+              />
+            ) : (
+              "Applies to every workspace on this host."
+            )}
           </p>
         ) : (
           <McpScopePicker
@@ -560,6 +567,7 @@ function ProviderSkillsTabBody({
           />
           <SkillSourceFilterMenu
             skills={skills}
+            providerLabel={providerLabel}
             hiddenSources={hiddenSources}
             onHiddenSourcesChange={setHiddenSources}
           />
@@ -568,6 +576,7 @@ function ProviderSkillsTabBody({
 
       <SkillsListBody
         markTarget={{ entryKind: "skills", providerId, scope: effectiveScope }}
+        providerLabel={providerLabel}
         projectNeedsWorkspace={projectNeedsWorkspace}
         workspacesLoading={workspacesLoading}
         listLoading={listLoading}
@@ -587,6 +596,17 @@ function ProviderSkillsTabBody({
       {renderDialogs()}
     </div>
   );
+}
+
+/** Where a cloud configuration's global skill applies. */
+function CloudSkillsScopeCaption(props: {
+  readonly configuration: "personal" | "team";
+  readonly providerLabel: string;
+}): ReactNode {
+  const name = useConfigurationName();
+  return props.configuration === "personal"
+    ? `Which of Personal's skills ${props.providerLabel} uses, on every computer and sandbox running Personal.`
+    : `Which of ${name}'s skills ${props.providerLabel} uses, on every host running ${name}.`;
 }
 
 function skillAfterUpdate(
@@ -673,10 +693,12 @@ function SkillEntryButton({
  */
 function SkillSourceFilterMenu({
   skills,
+  providerLabel,
   hiddenSources,
   onHiddenSourcesChange,
 }: {
   readonly skills: readonly ProviderSkill[];
+  readonly providerLabel: string;
   readonly hiddenSources: ReadonlySet<ProviderSkillSourceBadge>;
   readonly onHiddenSourcesChange: (
     next: ReadonlySet<ProviderSkillSourceBadge>,
@@ -734,7 +756,7 @@ function SkillSourceFilterMenu({
               onHiddenSourcesChange(next);
             }}
           >
-            {SKILL_SOURCE_LABEL[source]}
+            {skillSourceLabel(source, providerLabel)}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
@@ -828,6 +850,7 @@ function SkillUpdateConfirm({
 
 function SkillsListBody({
   markTarget,
+  providerLabel,
   projectNeedsWorkspace,
   workspacesLoading,
   listLoading,
@@ -844,6 +867,7 @@ function SkillsListBody({
   onOpenSkill,
 }: {
   readonly markTarget: PersonalMarkTarget;
+  readonly providerLabel: string;
   readonly projectNeedsWorkspace: boolean;
   readonly workspacesLoading: boolean;
   readonly listLoading: boolean;
@@ -925,6 +949,7 @@ function SkillsListBody({
         <SkillRow
           key={`${skill.source}:${skill.path}`}
           skill={skill}
+          providerLabel={providerLabel}
           markTarget={markTarget}
           onOpen={() => {
             onOpenSkill(skill);
@@ -1037,8 +1062,8 @@ function useOpenSkillActions(
   };
 }
 
-function skillOpenLabel(skill: ProviderSkill): string {
-  const badge = SKILL_SOURCE_LABEL[skill.source];
+function skillOpenLabel(skill: ProviderSkill, providerLabel: string): string {
+  const badge = skillSourceLabel(skill.source, providerLabel);
   if (skill.conflict === true) {
     return `Open ${skill.name} (${badge}, ${SKILL_CONFLICT_LABEL}: ${SKILL_CONFLICT_TOOLTIP})`;
   }
@@ -1047,10 +1072,12 @@ function skillOpenLabel(skill: ProviderSkill): string {
 
 function SkillRow({
   skill,
+  providerLabel,
   markTarget,
   onOpen,
 }: {
   readonly skill: ProviderSkill;
+  readonly providerLabel: string;
   /** Where the row's Personal mark reads from (`PersonalEntryMark`). */
   readonly markTarget: PersonalMarkTarget;
   readonly onOpen: () => void;
@@ -1066,7 +1093,7 @@ function SkillRow({
         // skill name under `shared`, `provider`, `plugin` and `managed` roots
         // (rows are keyed `source:path`), which would leave a screen reader
         // with several buttons all reading "Open deploy".
-        aria-label={skillOpenLabel(skill)}
+        aria-label={skillOpenLabel(skill, providerLabel)}
         className="flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {/* No leading tile. A skill is a markdown directory; no provider's
@@ -1110,13 +1137,17 @@ function SkillRow({
               SKILL_SOURCE_TONE[skill.source],
             )}
           >
-            {SKILL_SOURCE_LABEL[skill.source]}
+            {skillSourceLabel(skill.source, providerLabel)}
           </span>
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
-      {/* Beside the row, not inside it: the mark can hold its own button. */}
-      <PersonalEntryMark target={markTarget} name={skill.name} />
+      {/* Beside the row, not inside it: the mark can hold its own button. A
+          built-in reads "Built-in" alone: it is the environment's or the
+          tool's, never one computer's. */}
+      {skill.source === "managed" ? null : (
+        <PersonalEntryMark target={markTarget} name={skill.name} />
+      )}
     </li>
   );
 }

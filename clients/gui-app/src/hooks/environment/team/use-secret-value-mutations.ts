@@ -1,4 +1,8 @@
 import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
@@ -10,7 +14,7 @@ import type {
   RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
@@ -25,8 +29,9 @@ import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
  * dispatch, so the value never becomes the mutation's variables and reaches
  * no query or mutation cache.
  *
- * A team's write carries its `environmentId` at @1.1, so an older host refuses
- * it before it is sent rather than writing the person's own secrets.
+ * A write that names its environment (a team's, or Personal's) carries it at
+ * @1.1, so an older host refuses it before it is sent rather than writing
+ * whatever environment it runs.
  */
 
 type ValueMethod =
@@ -38,7 +43,7 @@ interface CapturedHost {
   readonly hostId: string | null;
 }
 
-function teamFloor(
+function namedEnvironmentFloor(
   environmentId: string | null,
   method: ValueMethod,
 ): RequiredHostMethodVersion | null {
@@ -47,7 +52,7 @@ function teamFloor(
     : { method, version: { major: 1, minor: 1 } };
 }
 
-function preflightTeam(
+function preflightNamedEnvironment(
   environmentId: string | null,
   method: ValueMethod,
 ): void {
@@ -58,7 +63,15 @@ function preflightTeam(
 function rereadSecrets(queryClient: QueryClient, hostId: string | null): void {
   for (const method of SECRET_READS) {
     void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, method),
+      queryKey: hostQueryKeys.methodScope(
+        hostRpcServingTierHostId(
+          method,
+          hostId,
+          readProcessHostRpcTierPlan(),
+          null,
+        ),
+        method,
+      ),
     });
   }
 }
@@ -75,7 +88,7 @@ export function useEnvironmentSecretsCreateMutation(
   void,
   CapturedHost
 > {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId } = useAddressedEnvironment();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -86,11 +99,11 @@ export function useEnvironmentSecretsCreateMutation(
     client,
     method: "environment.secrets.create",
     mapVariables: () => {
-      preflightTeam(environmentId, "environment.secrets.create");
+      preflightNamedEnvironment(environmentId, "environment.secrets.create");
       return { ...readRequest(), environmentId };
     },
     requiredHostMethodVersion: () =>
-      teamFloor(environmentId, "environment.secrets.create"),
+      namedEnvironmentFloor(environmentId, "environment.secrets.create"),
     options: {
       mutationKey: settingsDetailsMutationKeys.secretCreate(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
@@ -114,7 +127,7 @@ export function useEnvironmentSecretsVerifyCandidateMutation(
   HostRpcError,
   void
 > {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId } = useAddressedEnvironment();
   return useHostMutation<
     HostRpcRegistry,
     "environment.secrets.verify",
@@ -124,11 +137,11 @@ export function useEnvironmentSecretsVerifyCandidateMutation(
     client,
     method: "environment.secrets.verify",
     mapVariables: () => {
-      preflightTeam(environmentId, "environment.secrets.verify");
+      preflightNamedEnvironment(environmentId, "environment.secrets.verify");
       return { ...readRequest(), environmentId };
     },
     requiredHostMethodVersion: () =>
-      teamFloor(environmentId, "environment.secrets.verify"),
+      namedEnvironmentFloor(environmentId, "environment.secrets.verify"),
     options: {
       mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
     },
@@ -150,7 +163,7 @@ export function useEnvironmentSecretsReplaceValueMutation(
   SecretReplaceTarget,
   CapturedHost
 > {
-  const environmentId = useConfigurationEnvironmentId();
+  const { environmentId } = useAddressedEnvironment();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -161,11 +174,14 @@ export function useEnvironmentSecretsReplaceValueMutation(
     client,
     method: "environment.secrets.replaceValue",
     mapVariables: (target) => {
-      preflightTeam(environmentId, "environment.secrets.replaceValue");
+      preflightNamedEnvironment(
+        environmentId,
+        "environment.secrets.replaceValue",
+      );
       return { ...target, value: readValue(), environmentId };
     },
     requiredHostMethodVersion: () =>
-      teamFloor(environmentId, "environment.secrets.replaceValue"),
+      namedEnvironmentFloor(environmentId, "environment.secrets.replaceValue"),
     options: {
       mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),

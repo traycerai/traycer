@@ -117,6 +117,7 @@ function NestedPickerSurface() {
               usagePresentation={null}
               eligibilityControls={null}
               admissionByProfileId={null}
+              showTerminalBadge
             />
           )}
         </div>
@@ -267,6 +268,7 @@ function OpenProfileDropdownSurface() {
               usagePresentation={null}
               eligibilityControls={null}
               admissionByProfileId={WORK_LOCKED_ADMISSION}
+              showTerminalBadge
             />
           )}
         </div>

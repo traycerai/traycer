@@ -3,19 +3,28 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
+import {
+  hashKey,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
+import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { repliedPostOf, replyRowIdFor } from "@/lib/bots/reply-row";
 import {
   botUserSenderAvatarUrl,
+  botUserSenderId,
   botUserSenderLabel,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -73,6 +82,11 @@ export type BotTranscriptSurface =
         | null;
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
+      /** What the top of the channel says while nobody has written in it. */
+      readonly intro: {
+        readonly botTitle: string;
+        readonly directive: string | null;
+      };
     }
   | {
       readonly kind: "thread";
@@ -82,6 +96,115 @@ export type BotTranscriptSurface =
 
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
+const CHAT_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
+
+/**
+ * Per query client, per chat, the newest successful `bot.conversation.send`
+ * by the cache's mutation id, which only grows. Recorded as the success
+ * happens, whether or not a transcript is mounted, and kept after the cache
+ * drops the mutation (five minutes unobserved): the session registry keeps a
+ * closed channel's handle longer than that.
+ */
+const newestSendByClient = new WeakMap<QueryClient, Map<string, number>>();
+const sendLedgerListeners = new Set<() => void>();
+const CONVERSATION_SEND_KEY = hashKey(botMutationKeys.conversationSend());
+
+function conversationIdOf(variables: unknown): string | null {
+  if (typeof variables !== "object" || variables === null) return null;
+  if (!("conversationId" in variables)) return null;
+  return typeof variables.conversationId === "string"
+    ? variables.conversationId
+    : null;
+}
+
+/** The ledger of `queryClient`, which listens to its mutation cache from its first read. */
+function sendLedgerOf(queryClient: QueryClient): Map<string, number> {
+  const existing = newestSendByClient.get(queryClient);
+  if (existing !== undefined) return existing;
+  const ledger = new Map<string, number>();
+  newestSendByClient.set(queryClient, ledger);
+  queryClient.getMutationCache().subscribe((event) => {
+    if (event.type !== "updated") return;
+    const { mutation } = event;
+    if (mutation.state.status !== "success") return;
+    if (hashKey(mutation.options.mutationKey ?? []) !== CONVERSATION_SEND_KEY) {
+      return;
+    }
+    const chatId = conversationIdOf(mutation.state.variables);
+    if (chatId === null) return;
+    if ((ledger.get(chatId) ?? -1) >= mutation.mutationId) return;
+    ledger.set(chatId, mutation.mutationId);
+    for (const listener of [...sendLedgerListeners]) listener();
+  });
+  return ledger;
+}
+
+function subscribeSendLedger(listener: () => void): () => void {
+  sendLedgerListeners.add(listener);
+  return () => sendLedgerListeners.delete(listener);
+}
+
+/** The newest successful send to `chatId`; `null` for none. */
+function useNewestSendTo(chatId: string): number | null {
+  const ledger = sendLedgerOf(useQueryClient());
+  return useSyncExternalStore(
+    subscribeSendLedger,
+    () => ledger.get(chatId) ?? null,
+  );
+}
+
+/** The sends one session handle has counted, and whether one is still owed. */
+interface SendMarker {
+  counted: number | null;
+  owed: boolean;
+}
+
+/**
+ * Kept with the session handle the registry retains, not with the view: a
+ * send that succeeds while the transcript is unmounted (the tab showing
+ * another panel) is still owed when it comes back to the same closed session.
+ */
+const sendMarkers = new WeakMap<ChatSessionStoreHandle, SendMarker>();
+
+/**
+ * Re-subscribes once a send to `chatId` succeeds while the view `waiting`
+ * on a chat the host had not created: the send is the write that creates it.
+ * A send that lands while the subscription is still connecting, or while the
+ * view is unmounted, is owed to the first close after it; one the live view
+ * has caught up with is owed nothing. Sends from before the session handle
+ * was first shown are not counted.
+ */
+function useResubscribeOnNextSend(input: {
+  readonly handle: ChatSessionStoreHandle;
+  readonly chatId: string;
+  readonly waiting: boolean;
+  readonly caughtUp: boolean;
+  readonly retry: () => void;
+}): void {
+  const { handle, chatId, waiting, caughtUp, retry } = input;
+  const newestSend = useNewestSendTo(chatId);
+  useEffect(() => {
+    let marker = sendMarkers.get(handle);
+    if (marker === undefined) {
+      marker = { counted: newestSend, owed: false };
+      sendMarkers.set(handle, marker);
+    }
+    if (
+      newestSend !== null &&
+      (marker.counted === null || newestSend > marker.counted)
+    ) {
+      marker.counted = newestSend;
+      marker.owed = true;
+    }
+    if (caughtUp) {
+      marker.owed = false;
+      return;
+    }
+    if (!waiting || !marker.owed) return;
+    marker.owed = false;
+    retry();
+  }, [caughtUp, handle, newestSend, retry, waiting]);
+}
 
 /**
  * A bot chat's transcript (Tracy Bots): the conversation a person has with
@@ -147,6 +270,25 @@ export function BotChatTranscript(props: {
   );
 }
 
+type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
+
+/**
+ * A channel nobody has written in opens with what it is for, as Slack's
+ * does; a windowed one is empty only when the host counts no row. `null`
+ * on a thread, before the snapshot, and once the channel has a row.
+ */
+function channelIntro(
+  surface: BotTranscriptSurface | null,
+  snapshotLoaded: boolean,
+  renderedRows: number,
+  transcriptWindow: { readonly rowCount: number } | null,
+): ChannelIntro | null {
+  if (surface?.kind !== "channel" || !snapshotLoaded) return null;
+  if (renderedRows > 0) return null;
+  if (transcriptWindow !== null && transcriptWindow.rowCount > 0) return null;
+  return surface.intro;
+}
+
 function BotChatTranscriptBody(props: {
   readonly handle: ChatSessionStoreHandle;
   readonly botId: string;
@@ -193,8 +335,23 @@ function BotChatTranscriptBody(props: {
       reportVisibleTranscriptRange: s.reportVisibleTranscriptRange,
       requestFindReadOrdinal: s.requestFindReadOrdinal,
       requestTranscriptOrdinal: s.requestTranscriptOrdinal,
+      fatalClose: s.fatalClose,
+      retry: s.retry,
     })),
   );
+  // A host that creates the channel chat only on its first post answers a
+  // subscribe before it with CHAT_NOT_VISIBLE: the channel is empty, not
+  // broken, so it is drawn empty, and the next post sent to it re-subscribes.
+  const channelNotHereYet =
+    surface?.kind === "channel" &&
+    state.fatalClose?.code === CHAT_NOT_VISIBLE_CODE;
+  useResubscribeOnNextSend({
+    handle,
+    chatId,
+    waiting: channelNotHereYet,
+    caughtUp: state.snapshotLoaded && state.fatalClose === null,
+    retry: state.retry,
+  });
   const profile = useAuthStore((s) => s.profile);
   const tabClient = useTabHostClient();
   // Label-only, cache-only: whoever fetched this host's catalog (a composer,
@@ -224,6 +381,7 @@ function BotChatTranscriptBody(props: {
         botUserSenderLabel(sender, displayContext, resolveMember),
       resolveUserSenderAvatarUrl: (sender) =>
         botUserSenderAvatarUrl(sender, resolveMember),
+      resolveUserSenderId: botUserSenderId,
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -372,6 +530,28 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+  const intro = channelIntro(
+    surface,
+    state.snapshotLoaded,
+    messages.length,
+    transcriptWindow,
+  );
+
+  // The channel's first screen, as a created channel nobody has written in
+  // opens: the next post re-subscribes on its own, so nothing more is said.
+  if (channelNotHereYet) {
+    return (
+      <div
+        data-testid="bot-channel-not-here-yet"
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <BotChannelIntro
+          botTitle={surface.intro.botTitle}
+          directive={surface.intro.directive}
+        />
+      </div>
+    );
+  }
 
   return (
     <ChatContainerContext.Provider value={botId}>
@@ -382,29 +562,36 @@ function BotChatTranscriptBody(props: {
           data-testid="bot-chat-transcript"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <ChatMessages
-            taskTitle={title}
-            taskId={chatId}
-            epicId={botId}
-            hostId={hostId}
-            messages={messages}
-            transcriptWindow={transcriptWindow}
-            onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-            onFindReadOrdinalChange={state.requestFindReadOrdinal}
-            baselineEpoch={state.transcriptBaselineEpoch}
-            hydrationSequence={state.transcriptHydrationSequence}
-            coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-            backgroundItems={state.backgroundItems}
-            getMessageActions={getMessageActions}
-            nextStepActions={null}
-            instanceId={instanceId}
-            visible
-            systemOverlayActive={false}
-            scrollRequest={scrollRequest}
-            onScrollRequestSettled={onScrollRequestSettled}
-            composerOverlayHeight={0}
-            subagentDrillIn={subagentDrillIn}
-          />
+          {intro !== null ? (
+            <BotChannelIntro
+              botTitle={intro.botTitle}
+              directive={intro.directive}
+            />
+          ) : (
+            <ChatMessages
+              taskTitle={title}
+              taskId={chatId}
+              epicId={botId}
+              hostId={hostId}
+              messages={messages}
+              transcriptWindow={transcriptWindow}
+              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+              onFindReadOrdinalChange={state.requestFindReadOrdinal}
+              baselineEpoch={state.transcriptBaselineEpoch}
+              hydrationSequence={state.transcriptHydrationSequence}
+              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+              backgroundItems={state.backgroundItems}
+              getMessageActions={getMessageActions}
+              nextStepActions={null}
+              instanceId={instanceId}
+              visible
+              systemOverlayActive={false}
+              scrollRequest={scrollRequest}
+              onScrollRequestSettled={onScrollRequestSettled}
+              composerOverlayHeight={0}
+              subagentDrillIn={subagentDrillIn}
+            />
+          )}
         </div>
       </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>

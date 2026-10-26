@@ -135,7 +135,11 @@ describe("TeamRows", () => {
         <DropdownMenuTrigger>open</DropdownMenuTrigger>
         <DropdownMenuContent>
           <DropdownMenuRadioGroup value="personal">
-            <TeamRows pick={{ kind: "personal" }} onPick={props.onPick} />
+            <TeamRows
+              pick={{ kind: "personal" }}
+              onPick={props.onPick}
+              onReview={() => undefined}
+            />
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -203,7 +207,7 @@ describe("usePickedTeamLabel", () => {
     );
   }
 
-  it("names the picked team and ignores a non-team environment id", async () => {
+  it("names a team by its label, the user-owned row Personal, and an unknown id nothing", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve({ environments: [personal, team("a", "Acme", "admin")] }),
     );
@@ -211,13 +215,14 @@ describe("usePickedTeamLabel", () => {
       <>
         <Label id="env-a" />
         <Label id="env-personal" />
+        <Label id="env-gone" />
       </>,
       { wrapper: Wrapper },
     );
     const labels = (): string[] =>
       screen.getAllByTestId("label").map((el) => el.textContent);
     await waitFor(() => {
-      expect(labels()).toEqual(["Acme", "none"]);
+      expect(labels()).toEqual(["Acme", "Personal", "none"]);
     });
   });
 });
@@ -229,7 +234,7 @@ describe("ConfigurationSourceBoundary", () => {
       <p data-testid="probe">
         {source.kind === "host"
           ? "host"
-          : `${source.environmentId}|${source.roomId}|${String(source.providerHandle)}|${source.effectiveRole}`}
+          : `${source.environmentId}|${source.roomId}|${String(source.providerHandle)}|${source.effectiveRole}|${source.configuration}`}
       </p>
     );
   }
@@ -237,7 +242,9 @@ describe("ConfigurationSourceBoundary", () => {
   it("mounts no child while the team descriptor is loading", () => {
     const { Wrapper } = mountClient(() => new Promise<never>(() => undefined));
     render(
-      <ConfigurationSourceBoundary environmentId="env-a">
+      <ConfigurationSourceBoundary
+        target={{ kind: "team", environmentId: "env-a" }}
+      >
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: Wrapper },
@@ -250,7 +257,9 @@ describe("ConfigurationSourceBoundary", () => {
       Promise.resolve({ environments: [personal] }),
     );
     render(
-      <ConfigurationSourceBoundary environmentId="env-gone">
+      <ConfigurationSourceBoundary
+        target={{ kind: "team", environmentId: "env-gone" }}
+      >
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: Wrapper },
@@ -264,7 +273,9 @@ describe("ConfigurationSourceBoundary", () => {
   it("offers Retry when the list fails, and mounts no child", async () => {
     const { Wrapper } = mountClient(() => Promise.reject(new Error("down")));
     render(
-      <ConfigurationSourceBoundary environmentId="env-a">
+      <ConfigurationSourceBoundary
+        target={{ kind: "team", environmentId: "env-a" }}
+      >
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: Wrapper },
@@ -283,13 +294,15 @@ describe("ConfigurationSourceBoundary", () => {
         Promise.resolve({ environments: [personal, team("a", "Acme", role)] }),
       );
       render(
-        <ConfigurationSourceBoundary environmentId="env-a">
+        <ConfigurationSourceBoundary
+          target={{ kind: "team", environmentId: "env-a" }}
+        >
           <Probe />
         </ConfigurationSourceBoundary>,
         { wrapper: Wrapper },
       );
       expect((await screen.findByTestId("probe")).textContent).toBe(
-        `env-a|room-a|handle-a|${role}`,
+        `env-a|room-a|handle-a|${role}|team`,
       );
     },
   );
@@ -299,24 +312,30 @@ describe("ConfigurationSourceBoundary", () => {
       Promise.resolve(legacyTeamList("a", "Acme")),
     );
     render(
-      <ConfigurationSourceBoundary environmentId="env-a">
+      <ConfigurationSourceBoundary
+        target={{ kind: "team", environmentId: "env-a" }}
+      >
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|null|viewer",
+      "env-a|room-a|null|viewer|team",
     );
   });
 
-  it("keeps the host source, without reading the list, when no team is picked", () => {
-    const { Wrapper } = mountClient(() => new Promise<never>(() => undefined));
+  it("resolves Personal to the user-owned row, as Personal's own configuration", async () => {
+    const { Wrapper } = mountClient(() =>
+      Promise.resolve({ environments: [team("a", "Acme", "admin"), personal] }),
+    );
     render(
-      <ConfigurationSourceBoundary environmentId={null}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: Wrapper },
     );
-    expect(screen.getByTestId("probe").textContent).toBe("host");
+    const text = (await screen.findByTestId("probe")).textContent;
+    expect(text).toContain(`${personal.environmentId}|`);
+    expect(text).toContain("|owner|personal");
   });
 });

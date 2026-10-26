@@ -4,7 +4,7 @@ import { TerminalAccountFirstMention } from "@/components/home/pickers/terminal-
 import { useTerminalAccountMentionStore } from "@/stores/onboarding/terminal-account-mention-store";
 
 const SENTENCE =
-  "This computer's own sign-in, which stays on this computer. Link a plan to use one everywhere.";
+  "This computer's own sign-in, which stays on this computer. Sign in on Providers to use one everywhere.";
 const PERSIST_NAME = "traycer-gui-app:terminal-account-mention";
 
 function resetStore(): void {

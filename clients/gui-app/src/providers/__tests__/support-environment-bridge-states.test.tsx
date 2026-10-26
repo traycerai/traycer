@@ -45,7 +45,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsRotationResponse,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -81,7 +81,7 @@ const EARLIER_HOST_SECTION: SupportEnvironmentSection = {
   servedTask: null,
 };
 
-function secret(secretId: string, name: string): EnvironmentSecret {
+function secret(secretId: string, name: string): EnvironmentSecretV12 {
   return {
     secretId,
     name,
@@ -93,6 +93,8 @@ function secret(secretId: string, name: string): EnvironmentSecret {
     currentVersionId: "ver-2",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 

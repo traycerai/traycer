@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 /**
  * The source store behind `kind: "bot"` tabs (Tracy Bots).
@@ -32,6 +33,14 @@ export interface BotTabRecord {
 interface BotTabsState {
   readonly tabs: Readonly<Record<string, BotTabRecord>>;
   /**
+   * The bot whose tab is the fixed Tracy entry: the personal main bot, drawn
+   * beside Home, kept first in the strip and never closed or moved. `null`
+   * with "Show Tracy" off or before the bot is known. Persisted with the
+   * records so a restart draws the entry in place from the first frame.
+   */
+  readonly fixedBotId: string | null;
+  readonly setFixedBotId: (botId: string | null) => void;
+  /**
    * Opens a tab for `botId` bound to `hostId`, or keeps the existing one. The
    * existing record's host WINS: a tab's binding is for life, and a second
    * open naming another host is a request to view the bot through a tab that
@@ -61,6 +70,11 @@ export const useBotTabsStore = create<BotTabsState>()(
   persist(
     (set, get) => ({
       tabs: {},
+      fixedBotId: null,
+      setFixedBotId: (botId) => {
+        if (get().fixedBotId === botId) return;
+        set({ fixedBotId: botId });
+      },
       openBotTab: (record) => {
         const existing = lookupBotTab(get().tabs, record.botId);
         if (existing !== null) {
@@ -85,6 +99,9 @@ export const useBotTabsStore = create<BotTabsState>()(
         const next = { ...get().tabs };
         delete next[botId];
         set({ tabs: next });
+        // Every close comes through here: a reopened tab starts with no
+        // thread open, and nothing follows the closed one's session.
+        useBotOpenThreadStore.getState().setOpenThread(botId, null);
       },
       setBotTabTitle: (botId, title) => {
         const existing = lookupBotTab(get().tabs, botId);
@@ -100,7 +117,10 @@ export const useBotTabsStore = create<BotTabsState>()(
     {
       ...basePersistOptions(BOT_TABS_PERSIST_KEY),
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ tabs: state.tabs }),
+      partialize: (state) => ({
+        tabs: state.tabs,
+        fixedBotId: state.fixedBotId,
+      }),
     },
   ),
 );
@@ -115,6 +135,26 @@ export function lookupBotTab(
   botId: string,
 ): BotTabRecord | null {
   return Object.hasOwn(tabs, botId) ? tabs[botId] : null;
+}
+
+/**
+ * Before a bot's tab is opened again from a list or a fixed entry: an open
+ * tab keeps its host unless this client can no longer dial it (a restored
+ * tab, a host gone since), and then it moves to `hostId`, this window's host,
+ * which finds the one serving the bot. `isConnectable` is `null` while the
+ * directory has not answered, which says nothing about the tab's host, so
+ * the tab keeps it.
+ */
+export function rebindUnreachableBotTab(
+  botId: string,
+  hostId: string,
+  isConnectable: ((hostId: string) => boolean) | null,
+): void {
+  const state = useBotTabsStore.getState();
+  const existing = lookupBotTab(state.tabs, botId);
+  if (existing !== null && isConnectable !== null) {
+    if (!isConnectable(existing.hostId)) state.rebindBotTab(botId, hostId);
+  }
 }
 
 /** Every open bot tab, oldest first - the order a restore places them in. */

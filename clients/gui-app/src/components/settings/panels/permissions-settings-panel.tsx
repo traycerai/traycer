@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Permissions).
  * Update that file whenever this settings surface changes.
  */
+import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
@@ -34,7 +35,10 @@ import { JudgeTab } from "@/components/settings/panels/permissions/judge-tab";
 import { RulesTab } from "@/components/settings/panels/permissions/rules-tab";
 import { ActivityTab } from "@/components/settings/panels/permissions/activity-tab";
 import { useRulesEdit } from "@/components/settings/panels/permissions/rules-edit-store";
-import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import {
   acknowledgeSettingsOpenIntent,
@@ -42,7 +46,9 @@ import {
 } from "@/stores/tabs/settings-open-intent-store";
 
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened -
@@ -74,8 +80,11 @@ import { TeamPermissions } from "@/components/settings/environment/team-permissi
  */
 export function PermissionsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
+  // Keyed by configuration: a draft or a write's outcome stays with the
+  // configuration it was made in.
+  const configurationKey = useConfigurationKey();
   return source.kind === "pool" ? (
-    <TeamPermissionsUnlessMachineAsked />
+    <TeamPermissionsUnlessMachineAsked key={configurationKey} />
   ) : (
     <HostPermissionsSettingsPanel />
   );
@@ -104,11 +113,33 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
       hostId === windowHostId ? null : { kind: "local", hostId, hostName },
     );
   }, [hostId, hostName, windowHostId, setPick]);
-  return hostId === null ? <TeamPermissions /> : null;
+  return hostId === null ? (
+    <TeamPermissions>
+      <PermissionsBrowserAgentAccess />
+    </TeamPermissions>
+  ) : null;
 }
+
+/**
+ * The page's Browser agent access region, below its policy. It reads the
+ * ambient binding, so a Local row's pick re-provides it to that computer.
+ */
+function PermissionsBrowserAgentAccess(): ReactNode {
+  return (
+    <div className="pt-5">
+      <EnvironmentHostBinding>
+        <BrowserAgentAccessGroup />
+      </EnvironmentHostBinding>
+    </div>
+  );
+}
+
+const PERSONAL_PERMISSIONS_DESCRIPTION =
+  "What your agents may do without asking, on every computer and sandbox.";
 
 function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
+  const pick = useEnvironmentPick();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
   const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);
@@ -180,7 +211,11 @@ function HostPermissionsSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Permissions"
-      description="How much an agent may do on its own, and who reviews the rest."
+      description={
+        pick.kind === "personal"
+          ? PERSONAL_PERMISSIONS_DESCRIPTION
+          : "How much an agent may do on its own, and who reviews the rest."
+      }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <Tabs
@@ -255,6 +290,7 @@ function HostPermissionsSettingsPanel(): ReactNode {
           )}
         </TabsContent>
       </Tabs>
+      <PermissionsBrowserAgentAccess />
     </SettingsPanelShell>
   );
 }

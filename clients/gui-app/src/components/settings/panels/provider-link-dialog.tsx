@@ -20,7 +20,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useHostClient } from "@/lib/host/runtime";
-import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import {
+  useConfigurationEnvironmentId,
+  useConfigurationIsPersonal,
+} from "@/components/settings/environment/configuration-source";
+import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
   useTeamPlanLinkCompleteMutation,
   useTeamPlanLinkPollQuery,
@@ -31,6 +36,7 @@ import {
   LINK_DEVICE_LINE,
   LINK_EXPIRED,
   LINK_INTRO,
+  teamLinkIntro,
   LINK_LINKING,
   LINK_SIGN_IN_LINE,
   LINK_UNAVAILABLE,
@@ -124,6 +130,8 @@ function TeamProviderLinkDialogFor(props: {
     props.environmentId,
     () => codeRef.current.trim(),
   );
+  const personal = useConfigurationIsPersonal();
+  const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
   const poll = pollOf(state);
   const pollAnswer = useTeamPlanLinkPollQuery(
     props.environmentId,
@@ -169,10 +177,12 @@ function TeamProviderLinkDialogFor(props: {
   return (
     <LinkDialogFrame
       title="Link a plan"
+      intro={personal ? LINK_INTRO : teamLinkIntro(teamName)}
       state={shown}
       target={target}
       code={code}
       submitting={completeLink.isPending}
+      startable
       onCodeChange={changeCode}
       onStart={start}
       onSubmitCode={submitCode}
@@ -186,14 +196,17 @@ function ProviderLinkDialogFor(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const client = useHostClient();
+  // Personal by its own id: a host that has not moved its settings has no
+  // environment of its own to link into.
+  const { environmentId, resolved } = useAddressedEnvironment();
   const complete = useCallback(
     (linkId: string, code: string | null) =>
       client.request("providers.linkComplete", {
         linkId,
         code,
-        environmentId: null,
+        environmentId,
       }),
-    [client],
+    [client, environmentId],
   );
   const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
   const [state, setState] = useState<LinkDialogState>(INTRO);
@@ -216,7 +229,7 @@ function ProviderLinkDialogFor(props: {
       const response = await client.request("providers.link", {
         providerId: providerId.data,
         profileId: linkTarget.profileId,
-        environmentId: null,
+        environmentId,
       });
       setState(stateOfLinkStart(response));
     } catch (error) {
@@ -261,10 +274,14 @@ function ProviderLinkDialogFor(props: {
   return (
     <LinkDialogFrame
       title="Link to your plan"
+      intro={LINK_INTRO}
       state={state}
       target={target}
       code={code}
       submitting={submitting}
+      // Continue waits for Personal's id, so a link never names the host's
+      // own environment in its place.
+      startable={resolved}
       onCodeChange={setCode}
       onStart={(linkTarget) => void start(linkTarget)}
       onSubmitCode={(current) => void submitCode(current)}
@@ -275,10 +292,13 @@ function ProviderLinkDialogFor(props: {
 
 function LinkDialogFrame(props: {
   readonly title: string;
+  readonly intro: string;
   readonly state: LinkDialogState;
   readonly target: ProviderLinkTarget;
   readonly code: string;
   readonly submitting: boolean;
+  /** False while the environment the link names is still being read. */
+  readonly startable: boolean;
   readonly onCodeChange: (code: string) => void;
   readonly onStart: (target: ProviderLinkTarget) => void;
   readonly onSubmitCode: (current: SignInState) => void;
@@ -299,7 +319,7 @@ function LinkDialogFrame(props: {
       >
         <DialogHeader className="gap-1.5">
           <DialogTitle>{props.title}</DialogTitle>
-          <DialogDescription>{LINK_INTRO}</DialogDescription>
+          <DialogDescription>{props.intro}</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-5 text-ui-sm">
           <LinkBody
@@ -316,6 +336,7 @@ function LinkDialogFrame(props: {
             target={props.target}
             code={props.code}
             submitting={props.submitting}
+            startable={props.startable}
             onStart={props.onStart}
             onSubmitCode={props.onSubmitCode}
             onClose={props.onClose}
@@ -476,6 +497,7 @@ function LinkActions(props: {
   readonly target: ProviderLinkTarget;
   readonly code: string;
   readonly submitting: boolean;
+  readonly startable: boolean;
   readonly onStart: (target: ProviderLinkTarget) => void;
   readonly onSubmitCode: (
     current: Extract<LinkDialogState, { readonly kind: "sign_in" }>,
@@ -496,6 +518,7 @@ function LinkActions(props: {
           <Button
             type="button"
             size="sm"
+            disabled={!props.startable}
             onClick={() => props.onStart(props.target)}
             data-testid="provider-link-continue"
           >

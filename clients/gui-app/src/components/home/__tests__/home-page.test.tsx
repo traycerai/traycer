@@ -320,6 +320,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: {
           selection: {
             harnessId: "codex",
@@ -384,6 +385,16 @@ vi.mock(
 
 vi.mock("@/components/home/host-update-banner", () => ({
   HostUpdateBanner: () => <div data-testid="host-update-banner-slot" />,
+}));
+// The Start toast asks which computer this app runs on through the host
+// runtime; answer as a shell with no local host, so it shows only the setup
+// reminder.
+vi.mock("@/components/settings/move/this-computer", () => ({
+  useThisComputer: () => ({
+    hostId: null,
+    hostName: "this computer",
+    client: null,
+  }),
 }));
 
 vi.mock("@/components/home/current-tasks-section", () => ({

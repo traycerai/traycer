@@ -96,6 +96,28 @@ const testState = vi.hoisted(() => ({
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
 }));
 
+// Sandbox staging has its own suites (`composer/__tests__`): here the picker
+// stages nothing and the send is never intercepted.
+vi.mock(
+  "@/components/composer/use-sandbox-staging",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/composer/use-sandbox-staging")
+    >()),
+    useInTaskSandboxStagingSurface: () => null,
+    useSandboxStagingTask: () => ({
+      hosts: null,
+      groups: [],
+      collaborators: null,
+    }),
+    useSandboxStaging: () => null,
+  }),
+);
+vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
+  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxHandoff: () => undefined,
+}));
+
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsCreateRequest,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsVerifyRequest,
@@ -19,10 +19,33 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  type EnvironmentClientFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+
+// The writes name their environment through the surface's client.
+const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => hostBoundary.client,
+}));
+
+/** A host client the page under test reads through `useHostClient()`. */
+function buildBoundClient(options: {
+  readonly hostId: string;
+  readonly handlers: MockHandlerMap<HostRpcRegistry>;
+}): EnvironmentClientFixture {
+  const built = buildEnvironmentClient(options);
+  hostBoundary.client = built.client;
+  return built;
+}
 
 /**
  * The add dialog's typed value lives in the dialog's own state and is sent by a
@@ -52,7 +75,7 @@ interface SecretsHost {
   readonly createRequests: EnvironmentSecretsCreateRequest[];
 }
 
-function createdSecret(): EnvironmentSecret {
+function createdSecret(): EnvironmentSecretV12 {
   return {
     secretId: "sec-new",
     name: "STRIPE_KEY",
@@ -64,6 +87,8 @@ function createdSecret(): EnvironmentSecret {
     currentVersionId: "ver-1",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
   };
 }
 
@@ -76,7 +101,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
   };
   const verifyRequests: EnvironmentSecretsVerifyRequest[] = [];
   const createRequests: EnvironmentSecretsCreateRequest[] = [];
-  const { client } = buildEnvironmentClient({
+  const { client } = buildBoundClient({
     hostId: HOST_ID,
     handlers: {
       "environment.secrets.list": () => ({ removed: [], secrets: [] }),
@@ -104,6 +129,7 @@ function renderPage(host: SecretsHost): QueryClient {
         <SecretsPage
           client={host.client}
           hostId={HOST_ID}
+          emptyText={SECRETS_EMPTY_TEXT}
           hostName={() => "dev-box"}
         />
       </RunnerHostContext.Provider>
@@ -113,11 +139,18 @@ function renderPage(host: SecretsHost): QueryClient {
 }
 
 beforeEach(() => {
+  // A Local pick names the host's own environment: these cases are about the
+  // dialog and the list, not about which environment a call names.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
+  });
   openLinkMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   cleanup();
+  hostBoundary.client = null;
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   openLinkMock.mockReset();
 });
 

@@ -17,7 +17,7 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -42,7 +42,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 const FLAKY = "env-flaky";
 const STEADY = "env-steady";
 
-function machine(hostId: string): EnvironmentHostRecordV11 {
+function machine(hostId: string): EnvironmentHostRecordV12 {
   return {
     hostId,
     hostLabel: hostId,
@@ -52,6 +52,7 @@ function machine(hostId: string): EnvironmentHostRecordV11 {
     boundAt: 1,
     reachable: true,
     lastReportedAt: null,
+    hasLocalRow: false,
     applied: [],
   };
 }

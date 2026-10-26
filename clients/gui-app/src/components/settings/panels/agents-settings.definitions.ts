@@ -4,9 +4,9 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 export const AGENT_SELECTION = defineSettingsSection("agents", {
   page: {
     availableWhen: alwaysAvailable,
-    label: "Agent selection",
+    label: "Agents",
     description:
-      "How Traycer picks a coding agent, model, and reasoning effort when it spawns child agents.",
+      "How agents are picked, and the agents each coding agent can start.",
     keywords: [
       "agents",
       "guide",
@@ -17,6 +17,10 @@ export const AGENT_SELECTION = defineSettingsSection("agents", {
       "delegation",
       "child agent",
       "routing",
+      "agent definition",
+      "subagent",
+      "agents.md",
+      "custom agent",
     ],
   },
 });

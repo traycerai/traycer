@@ -169,6 +169,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       editorReadOnly={false}
       attachmentPending={false}
       workspaceDisabledHint={null}
+      stagedAhead={false}
       header={header}
       topBanner={topBanner}
       toolbarLayout={toolbarLayout}

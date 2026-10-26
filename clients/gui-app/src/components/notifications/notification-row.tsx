@@ -28,6 +28,7 @@ import {
   type TeamHostNotificationKind,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
+import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
 import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -53,6 +54,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
+  sandboxIdOfNotificationRow,
   useMergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import {
@@ -189,7 +191,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     hasLocalHost: runnerHost?.hasLocalHost ?? false,
     localHostId: localHost?.hostId ?? null,
     body: row.body,
-    hasPayload: row.payload !== null,
+    hasPayload: rowHasDestination(row),
   });
   const isRead = row.readAt !== null;
   const originUnavailability = originRefusal({
@@ -285,7 +287,10 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         aria-hidden
         className="flex size-6 shrink-0 items-center justify-center"
       >
-        <Icon className={cn("size-4", glyph.colorClassName)} />
+        <NotificationRowBotAvatar
+          payload={row.payload}
+          fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
+        />
       </span>
       <NotificationRowWithSecrets row={row}>
         <NotificationRowMain
@@ -355,6 +360,14 @@ function NotificationSecretsExtra(props: {
   return <SecretExportNoticeLine detail={secrets} />;
 }
 
+/**
+ * Whether activating the row goes somewhere: its payload, or for a sandbox
+ * push (which has none) the Sandboxes row its key names.
+ */
+function rowHasDestination(row: MergedNotificationRow): boolean {
+  return row.payload !== null || sandboxIdOfNotificationRow(row) !== null;
+}
+
 function resolvePackRowPresentation(options: {
   readonly attribution: MergedNotificationRow["providerPackAttribution"];
   readonly hasLocalHost: boolean;
@@ -422,7 +435,7 @@ function NotificationRowMain(props: {
 
   const remoteHint =
     props.remoteHostLabel === null
-      ? "Act on this from that machine — it cannot be applied here."
+      ? "Act on this from that computer — it cannot be applied here."
       : `Act on this from ${props.remoteHostLabel} — it cannot be applied here.`;
 
   return (

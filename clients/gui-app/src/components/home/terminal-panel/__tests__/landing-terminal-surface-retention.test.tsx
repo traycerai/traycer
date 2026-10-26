@@ -10,6 +10,7 @@ import {
   selectLandingTerminalSurfaceActive,
 } from "../landing-terminal-surface-binding";
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type {
   SplitSideName,
@@ -97,6 +98,7 @@ function seedLayout(
 afterEach(() => {
   cleanup();
   useTabsStore.setState(INITIAL_LAYOUT);
+  useLandingPanelStore.getState().clearTerminalRequest();
 });
 
 describe("resolveHostedLandingDraftId", () => {
@@ -203,6 +205,20 @@ describe("<LandingTerminalHost /> retention", () => {
     });
 
     expect(screen.queryByTestId("landing-terminal-panel-body")).toBeNull();
+  });
+});
+
+describe("<LandingTerminalPaneAnchor /> terminal request", () => {
+  it("drops a terminal asked for on its start page when that page unmounts unserved", () => {
+    const store = useLandingPanelStore.getState();
+    store.requestTerminal("landing:window-test", "sbx-host");
+    store.bindTerminalRequest("draft-a");
+    const view = render(<LandingTerminalPaneAnchor draftId="draft-a" />);
+    expect(useLandingPanelStore.getState().terminalRequest).not.toBeNull();
+
+    view.unmount();
+
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
   });
 });
 

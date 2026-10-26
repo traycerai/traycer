@@ -15,6 +15,7 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import { Tabs, TabsList, TabsContent, TabsTrigger } from "@/components/ui/tabs";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import {
   ORDERED_PROVIDERS,
   providerDisplayName,
@@ -22,6 +23,9 @@ import {
 } from "@/lib/provider-ordering";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { useConfigurationProviderItemsQuery } from "@/hooks/environment/team/use-provider-items-query";
+import { useConfigurationPlansQuery } from "@/hooks/environment/team/use-plans-query";
+import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
@@ -31,22 +35,50 @@ import {
 } from "./configuration-write-issue";
 import { TeamTextItems } from "./team-text-items";
 import { TeamProfileItem, TeamPackItem } from "./team-provider-items";
-import { TeamMcpItems } from "./team-mcp-servers";
+import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { TeamPlans } from "./team-plans";
 import { TeamProviderKeys } from "./team-provider-keys";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
-import { TeamSkills } from "./team-skills";
+import { EnvironmentProviderSkillsTab } from "./environment-skills";
+import { teamProviderStateWord } from "./team-provider-state-word";
+import { ConfigurationReadFailed } from "./team-read-failed";
+import { usePickedTeamLabel } from "./team-pick-label";
+import { providerEnvSubtitle } from "@/components/settings/panels/provider-env-subtitle";
+import {
+  useConfigurationIsPersonal,
+  useConfigurationSource,
+} from "./configuration-source";
 
 export function TeamProviders(): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const source = useConfigurationSource();
+  const teamName =
+    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
+    "this team";
   const query = useConfigurationProviderItemsQuery();
+  const read = useBoundedRead(query);
   const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
     subscribed: true,
   });
+  const plansQuery = useConfigurationPlansQuery();
+  const secretsQuery = useEnvironmentSecretsQuery(useHostClient());
+  const railWord = (provider: {
+    readonly providerId: ProviderId;
+    readonly harnessId: string;
+  }): string | null =>
+    personal
+      ? providerState(items, provider.harnessId)
+      : teamProviderStateWord({
+          providerId: provider.providerId,
+          harnessId: provider.harnessId,
+          plans: plansQuery.data?.plans ?? null,
+          secrets: secretsQuery.data?.secrets ?? null,
+        });
   const [providerId, setProviderId] = useState<ProviderId>("claude-code");
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
@@ -74,15 +106,17 @@ export function TeamProviders(): ReactNode {
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Plans, keys and settings for agents running this team."
+      description={
+        personal
+          ? "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal."
+          : `Plans, keys and settings for each coding agent, on every host running ${teamName}.`
+      }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationWriteFeedback issue={issue} />
-      {query.isPending ? <MutedAgentSpinner /> : null}
-      {query.isError ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Couldn't read these provider settings.
-        </p>
+      {read.pending ? <MutedAgentSpinner /> : null}
+      {read.failed ? (
+        <ConfigurationReadFailed page="providers" onRetry={read.retry} />
       ) : null}
       {query.data === undefined ? null : (
         <>
@@ -98,15 +132,18 @@ export function TeamProviders(): ReactNode {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {ORDERED_PROVIDERS.map((provider) => (
-                <SelectItem
-                  key={provider.providerId}
-                  value={provider.providerId}
-                >
-                  {providerDisplayName(provider.providerId)} ·{" "}
-                  {providerState(items, provider.harnessId)}
-                </SelectItem>
-              ))}
+              {ORDERED_PROVIDERS.map((provider) => {
+                const word = railWord(provider);
+                return (
+                  <SelectItem
+                    key={provider.providerId}
+                    value={provider.providerId}
+                  >
+                    {providerDisplayName(provider.providerId)}
+                    {word === null ? null : ` · ${word}`}
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
           <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
@@ -131,7 +168,7 @@ export function TeamProviders(): ReactNode {
                     {providerDisplayName(provider.providerId)}
                   </span>
                   <span className="text-ui-xs text-muted-foreground">
-                    {providerState(items, provider.harnessId)}
+                    {railWord(provider)}
                   </span>
                 </Button>
               ))}
@@ -142,7 +179,7 @@ export function TeamProviders(): ReactNode {
                 className="h-auto w-full flex-wrap justify-start"
               >
                 <TabsTrigger value="plans">Plans & limits</TabsTrigger>
-                <TabsTrigger value="env">Variables</TabsTrigger>
+                <TabsTrigger value="env">Env</TabsTrigger>
                 <TabsTrigger value="mcp">MCP</TabsTrigger>
                 <TabsTrigger value="skills">Skills</TabsTrigger>
                 {packIds.length > 0 ? (
@@ -175,6 +212,17 @@ export function TeamProviders(): ReactNode {
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
+                <p
+                  className="text-ui-xs text-muted-foreground"
+                  data-testid="team-provider-env-subtitle"
+                >
+                  {providerEnvSubtitle(
+                    providerDisplayName(providerId),
+                    personal
+                      ? { kind: "personal" }
+                      : { kind: "team", teamName },
+                  )}
+                </p>
                 <ConfigurationOsPicker value={os} onChange={setOs} />
                 <TeamTextItems
                   items={items}
@@ -194,10 +242,10 @@ export function TeamProviders(): ReactNode {
                 />
               </TabsContent>
               <TabsContent value="mcp">
-                <TeamMcpItems providerId={harness} />
+                <EnvironmentProviderMcpTab providerId={providerId} />
               </TabsContent>
               <TabsContent value="skills">
-                <TeamSkills providerId={providerId} />
+                <EnvironmentProviderSkillsTab providerId={providerId} />
               </TabsContent>
               <TabsContent value="pack" className="flex flex-col gap-3">
                 {packIds.map((id) => (

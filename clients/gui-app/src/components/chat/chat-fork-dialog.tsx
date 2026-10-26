@@ -1013,6 +1013,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </div>
           </section>
           <ActiveHostWorkspaceControls
+            sandboxStaging={null}
             // Locked while the create is in flight, like every other control in
             // this dialog. The host picker is LIVE here (`kind: "selected"`), so
             // an unlocked retarget would move `selectedHostId` out from under a

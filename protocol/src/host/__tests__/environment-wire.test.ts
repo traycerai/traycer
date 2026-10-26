@@ -26,7 +26,12 @@ import {
   configShellSetUpgradeV10ToV11,
   configShellSetV10,
 } from "@traycer/protocol/host/config/contracts";
-import { ENVIRONMENT_RPC_METHODS } from "@traycer/protocol/host/environment-contracts";
+import {
+  ENVIRONMENT_RPC_METHODS,
+  environmentReviewUpgradeV11ToV12,
+  environmentReviewV11,
+  environmentReviewV12,
+} from "@traycer/protocol/host/environment-contracts";
 import * as env from "@traycer/protocol/host/environment-schemas";
 import { EXECUTABLE_WRITE_GRANT_MAX_LENGTH } from "@traycer/protocol/host/executable-write-grant";
 import {
@@ -77,11 +82,16 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
   isEnvironmentMethodName,
 );
 
+/** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
+const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
+  "environment.review",
+  "environment.secrets.list",
+]);
+
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
   "providers.link",
   "providers.linkComplete",
-  "environment.secrets.list",
   "environment.secrets.create",
   "environment.secrets.verify",
   "environment.secrets.replaceValue",
@@ -222,15 +232,17 @@ describe("new methods are off every released floor", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, with @1.0 alone or @1.0 and @1.1", () => {
+  it("registers each in hostRpcRegistry as unsupported-degrade, major 1 only, with @1.0 alone, @1.0 and @1.1, or @1.0 to @1.2", () => {
     const shapes = ENVIRONMENT_METHOD_NAMES.map(
       (name) => `${name}: ${registryShapeOf(hostRpcRegistry[name])}`,
     );
     expect(shapes).toEqual(
       ENVIRONMENT_METHOD_NAMES.map((name) =>
-        ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
-          ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
-          : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
+        ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
+          ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`
+          : ENVIRONMENT_METHODS_WITH_MINOR_1_1.has(name)
+            ? `${name}: degrade=unsupported majors=1 latestMinor=1 minors=0,1`
+            : `${name}: degrade=unsupported majors=1 latestMinor=0 minors=0`,
       ),
     );
     expect(hostRpcRegistry["environment.status"].degrade).toEqual({
@@ -1820,6 +1832,76 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
         "environment.review"
       ][1].versions[1].contract.responseSchema.parse(upgraded),
     ).toEqual(upgraded);
+  });
+});
+
+describe("environment.review@1.2 names what a held executable runs", () => {
+  const line = hostRpcRegistry["environment.review"][1];
+  const v11Answer = {
+    entries: [
+      { ...REVIEW_ENTRY, reason: "executable_entry", kind: "mcp_server" },
+    ],
+    shownAt: null,
+    acknowledgedAt: null,
+    evidence: { version: null, at: null },
+  };
+
+  it("opens @1.2 after @1.1, with the upgrade between them", () => {
+    expect(line.versions[2].contract).toBe(environmentReviewV12);
+    expect(line.versions[2].upgradeFromPreviousVersion).toBe(
+      environmentReviewUpgradeV11ToV12,
+    );
+  });
+
+  it("upgrades a @1.1 answer with none of an entry's facts", () => {
+    const v11 = environmentReviewV11.responseSchema.parse(v11Answer);
+    const upgraded = environmentReviewUpgradeV11ToV12.upgradeResponse(v11);
+    expect(upgraded.entries).toEqual([
+      {
+        ...v11Answer.entries[0],
+        command: null,
+        event: null,
+        description: null,
+        harness: null,
+        value: null,
+      },
+    ]);
+    expect(environmentReviewV12.responseSchema.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("keeps each fact as sent, defaults all to null, and refuses an empty one", () => {
+    const parse = (entry: object) =>
+      environmentReviewV12.responseSchema.parse({
+        ...v11Answer,
+        entries: [{ ...v11Answer.entries[0], ...entry }],
+      }).entries[0];
+    expect(
+      parse({ command: "node hook.js --loud", event: "Notification" }),
+    ).toMatchObject({ command: "node hook.js --loud", event: "Notification" });
+    expect(
+      parse({ description: "reviewing pull requests", harness: "claude" }),
+    ).toMatchObject({
+      description: "reviewing pull requests",
+      harness: "claude",
+    });
+    expect(parse({ value: "--inspect" })).toMatchObject({ value: "--inspect" });
+    expect(parse({})).toMatchObject({
+      command: null,
+      event: null,
+      description: null,
+      harness: null,
+      value: null,
+    });
+    for (const field of ["command", "description", "harness", "value"]) {
+      expect(
+        environmentReviewV12.responseSchema.safeParse({
+          ...v11Answer,
+          entries: [{ ...v11Answer.entries[0], [field]: "" }],
+        }).success,
+      ).toBe(false);
+    }
   });
 });
 

@@ -22,8 +22,8 @@ export interface SwitcherNewChat {
  * the chat itself. No New Conversation modal on the phone.
  *
  * The modal is also what this replaces as a fix, not just as a design: its
- * host (`NewConversationModalHost`) mounts only while the router sits on this
- * tab's route, and the installed app boots its router at `/` on a cold launch
+ * host (`NewConversationModalHost`) shows it only while the router sits on
+ * this tab's route, and the installed app boots its router at `/` on a cold launch
  * while the restored tab fills the screen. The sheet and its "+" do not wait
  * for the route, so "+" filed an open request nothing rendered and closed the
  * sheet - the user landed back on the chat they were in. This path owns its

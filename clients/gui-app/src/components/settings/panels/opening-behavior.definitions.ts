@@ -1,4 +1,7 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  alwaysAvailable,
+  isLinkOpenRowAvailable,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // Per-category rows contribute to their parent search target because they
@@ -16,7 +19,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     label: "Links",
     description: null,
     breadcrumb: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: isLinkOpenRowAvailable,
     keywords: ["url", "hyperlink", "external", "browser"],
   },
   openLinks: {
@@ -25,7 +28,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     search: { anchor: "opening-links-default" },
     label: "Open links",
     description: null,
-    availableWhen: alwaysAvailable,
+    availableWhen: isLinkOpenRowAvailable,
     keywords: [
       "url",
       "external",
@@ -46,7 +49,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     search: { contributesTo: "openLinks" },
     label: "Markdown",
     description: "In chat, artifacts, comm graph, and markdown previews.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isLinkOpenRowAvailable,
     keywords: [],
   },
   linkTerminal: {
@@ -55,7 +58,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     search: { contributesTo: "openLinks" },
     label: "Terminal",
     description: "URLs and hyperlinks printed by a terminal.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isLinkOpenRowAvailable,
     keywords: [],
   },
   linkGithub: {
@@ -64,7 +67,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     search: { contributesTo: "openLinks" },
     label: "GitHub",
     description: "Pull request rows, headers, commits, and worktree PR chips.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isLinkOpenRowAvailable,
     keywords: [],
   },
   linkImages: {
@@ -73,7 +76,7 @@ export const OPENING_BEHAVIOR = defineSettingsSection("opening-behavior", {
     search: { contributesTo: "openLinks" },
     label: "Images",
     description: "Images opened from the lightbox.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isLinkOpenRowAvailable,
     keywords: [],
   },
   tilePlacement: {

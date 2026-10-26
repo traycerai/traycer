@@ -113,6 +113,7 @@ function buildService(hostLayout: HostFsLayout): DesktopSupportService {
   return new DesktopSupportService({
     appName: "Traycer",
     host: { getSnapshot: () => null },
+    readHostEnsureFailure: async () => null,
     authSession: { get: () => authSession },
     hostLayout,
   });

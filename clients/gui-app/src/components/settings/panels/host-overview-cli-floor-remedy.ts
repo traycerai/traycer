@@ -138,14 +138,14 @@ export function describeCliFloorRemedy(
     // named - a POSIX host has no PowerShell to open.
     return describeCopyRemedy(
       input,
-      `Run the copied commands on ${input.hostName} from a terminal outside Traycer on that machine: first the tools upgrade, then the host restart. Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.`,
+      `Run the copied commands on ${input.hostName} from a terminal outside Traycer on that computer: first the tools upgrade, then the host restart. Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.`,
       "traycer cli upgrade\ntraycer host restart",
       "Copy commands",
     );
   }
   return describeCopyRemedy(
     input,
-    `First update Traycer's command-line tools on ${input.hostName}. Open a terminal on that machine and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.`,
+    `First update Traycer's command-line tools on ${input.hostName}. Open a terminal on that computer and run the copied command. When it finishes, come back here: this page rechecks while it is open, and Update now appears once the host accepts the update.`,
     posixCliUpgradeCommand(input.cliBinaryPath),
     "Copy command",
   );
@@ -411,7 +411,7 @@ function describeWindowsCliUpgrade(
 ): CliUpgradeInstructions {
   const invocation = windowsCliInvocation(input.cliBinaryPath);
   return {
-    sentence: `Run the copied commands on ${input.hostName} from a PowerShell window outside Traycer on that machine (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.`,
+    sentence: `Run the copied commands on ${input.hostName} from a PowerShell window outside Traycer on that computer (a Windows Terminal tab there, or an SSH session that opens PowerShell). Restarting briefly disconnects this host. When it reconnects, this page rechecks on its own, and Update now appears once the host accepts the update.`,
     command: `${invocation} cli upgrade\n${invocation} host restart`,
     label: "Copy commands",
   };

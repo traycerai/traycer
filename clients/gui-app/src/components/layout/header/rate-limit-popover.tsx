@@ -93,6 +93,7 @@ import {
   useProvidersSetProfileEnabledForClient,
 } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
+import { mergeOrder } from "@/lib/order-merge";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -150,7 +151,10 @@ import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-o
  * A rail/Overview entry, in draw order: either a host-RPC provider or the
  * synthetic Traycer entry. `railTabProviderId` maps each to a `ProviderId` so a
  * single `sortProviderStatesByProviderOrder` positions Traycer at its
- * `PROVIDER_ID_ORDER` slot among the providers.
+ * `PROVIDER_ID_ORDER` slot among the providers, and the user's own
+ * `usageProviders` arrangement then reorders the lot through `mergeOrder` -
+ * the same two steps the status-bar strip takes, so the rail reads top to
+ * bottom in the order the strip reads left to right.
  */
 type RailTabDescriptor =
   | { readonly kind: "provider"; readonly providerId: RateLimitProviderId }
@@ -381,18 +385,32 @@ function useTraycerSubscription() {
 function orderRailTabs(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
   includeTraycer: boolean,
+  usageOrder: ReadonlyArray<RateLimitProviderId>,
 ): ReadonlyArray<RailTabDescriptor> {
   const descriptors: RailTabDescriptor[] = providers.map((provider) => ({
     kind: "provider",
     providerId: provider.providerId,
   }));
   if (includeTraycer) descriptors.push({ kind: "traycer" });
-  return sortProviderStatesByProviderOrder(
+  const canonical = sortProviderStatesByProviderOrder(
     descriptors.map((descriptor) => ({
       providerId: railTabProviderId(descriptor),
       descriptor,
     })),
-  ).map((entry) => entry.descriptor);
+  );
+  // The arrangement names only windowed providers; a tab it cannot place (a
+  // credits-only provider, Traycer) lands beside its canonical neighbour,
+  // exactly as a late-connected provider does in the strip.
+  const byProviderId = new Map(
+    canonical.map((entry) => [entry.providerId, entry.descriptor]),
+  );
+  return mergeOrder(
+    usageOrder,
+    canonical.map((entry) => entry.providerId),
+  ).flatMap((providerId) => {
+    const descriptor = byProviderId.get(providerId);
+    return descriptor === undefined ? [] : [descriptor];
+  });
 }
 
 function configuredProviderProfiles(
@@ -812,9 +830,11 @@ function RateLimitPopoverScopedBody({
   // disappears live as either changes - not snapshotted at popover-open time.
   const traycerSubscription = useTraycerSubscription();
 
+  // The same persisted order the status-bar strip draws its segments in.
+  const usageOrder = useArrangementValue("usageProviders");
   const railTabs = useMemo(
-    () => orderRailTabs(providers, traycerSubscription.eligible),
-    [providers, traycerSubscription.eligible],
+    () => orderRailTabs(providers, traycerSubscription.eligible, usageOrder),
+    [providers, traycerSubscription.eligible, usageOrder],
   );
   // Which profiles the host calls `limited`, for the rail dots.
   // Passive: it reads the entries the strip and the blocks below already keep
@@ -1053,7 +1073,7 @@ function RateLimitHostPickerRow({
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
         updateViewForHost={null}
-        offersAutomations={false}
+        composer={null}
         environmentLabelForHost={null}
       />
     </div>

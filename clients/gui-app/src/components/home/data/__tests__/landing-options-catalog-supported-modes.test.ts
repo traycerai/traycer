@@ -82,7 +82,7 @@ describe("unsupportedPermissionModeCopy", () => {
           "full_access",
         ],
       }),
-    ).toBe("Needs a newer Traycer on this machine.");
+    ).toBe("Needs a newer Traycer on this host.");
   });
 
   it("blames the provider when the catalog carries auto elsewhere but not on this row", () => {

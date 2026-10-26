@@ -4,7 +4,10 @@ import type {
   EnvironmentStatusResponse,
 } from "@traycer/protocol/host/environment-schemas";
 import {
+  envOverrideProviderName,
   itemLabel,
+  itemPageName,
+  moveRowLabel,
   pendingUploadKeys,
   personalPageItemKinds,
   personalPageStatusLine,
@@ -271,17 +274,14 @@ describe("personalPageStatusLine", () => {
     });
   });
 
-  it("says applied when every item of the page is applied", () => {
+  it("says nothing when every item of the page is applied", () => {
     const state = ready({
       items: [
         variable("LOG_LEVEL", { status: "applied" }),
         itemStatusFixture({ kind: "shell", key: "default", status: "applied" }),
       ],
     });
-    expect(personalPageStatusLine(state, SHELL_KINDS, HOST)).toEqual({
-      tone: "success",
-      text: "Applied on dev-box.",
-    });
+    expect(personalPageStatusLine(state, SHELL_KINDS, HOST)).toBeNull();
   });
 
   it("ignores items of other kinds, failed or not", () => {
@@ -297,10 +297,7 @@ describe("personalPageStatusLine", () => {
         itemStatusFixture({ kind: "skill", key: "s", status: "pending" }),
       ],
     });
-    expect(personalPageStatusLine(state, SHELL_KINDS, HOST)).toEqual({
-      tone: "success",
-      text: "Applied on dev-box.",
-    });
+    expect(personalPageStatusLine(state, SHELL_KINDS, HOST)).toBeNull();
   });
 
   describe("worst first when several statuses mix", () => {
@@ -380,10 +377,54 @@ describe("itemLabel", () => {
     [{ kind: "fallback_policy", key: "x" }, "Model routing"],
     [{ kind: "agent_selection_guide", key: "x" }, "Agent selection"],
     [{ kind: "browser_agent_access", key: "x" }, "Browser agent access"],
+    [{ kind: "auto_policy", key: "x" }, "Permissions"],
     [{ kind: "managed_profile", key: "p1" }, "A profile"],
     [{ kind: "something_new", key: "x" }, "A setting"],
   ])("labels %j as %s", (item, label) => {
     expect(itemLabel(item)).toBe(label);
+  });
+});
+
+describe("itemPageName", () => {
+  it.each([
+    ["shell", "The shell"],
+    ["fallback_policy", "Model routing"],
+    ["agent_selection_guide", "Agent selection"],
+    ["browser_agent_access", "Browser agent access"],
+    ["auto_policy", "Permissions"],
+    ["variable", null],
+    ["mcp_server", null],
+    ["something_new", null],
+  ])("names %s as %s", (kind, name) => {
+    expect(itemPageName(kind)).toBe(name);
+  });
+});
+
+describe("moveRowLabel", () => {
+  it.each([
+    [{ kind: "variable", key: "EDITOR", label: "EDITOR" }, "EDITOR"],
+    [{ kind: "mcp_server", key: "gh", label: "github-mcp" }, "github-mcp"],
+    [{ kind: "env_override", key: "no-such:X", label: "X" }, "X"],
+    [
+      {
+        kind: "env_override",
+        key: "claude-code:ANTHROPIC_BASE_URL",
+        label: "ANTHROPIC_BASE_URL",
+      },
+      "ANTHROPIC_BASE_URL (Claude Code)",
+    ],
+  ])("names the row %j as %s", (row, label) => {
+    expect(moveRowLabel(row)).toBe(label);
+  });
+});
+
+describe("envOverrideProviderName", () => {
+  it.each([
+    ["claude-code:ANTHROPIC_BASE_URL", "Claude Code"],
+    ["no-such-provider:X", null],
+    ["NO_SEPARATOR", null],
+  ])("reads %s as %s", (key, name) => {
+    expect(envOverrideProviderName(key)).toBe(name);
   });
 });
 
@@ -443,24 +484,19 @@ describe("personalPageItemKinds", () => {
       true,
     );
     expect(personalPageItemKinds("providers")?.has("env_override")).toBe(true);
-    expect(personalPageItemKinds("agents")?.has("agent_selection_guide")).toBe(
-      true,
-    );
-    expect(
-      personalPageItemKinds("browser-agent-access")?.has(
-        "browser_agent_access",
-      ),
-    ).toBe(true);
+    expect([...(personalPageItemKinds("agents") ?? [])].sort()).toEqual([
+      "agent_definition",
+      "agent_selection_guide",
+    ]);
+    expect(personalPageItemKinds("browser-agent-access")).toBeNull();
   });
 
-  it("lists the item kinds the MCP servers, Skills, Agent definitions and Machine setup pages edit", () => {
+  it("lists the item kinds the MCP servers, Skills and Machine setup pages edit", () => {
     expect([...(personalPageItemKinds("mcp-servers") ?? [])]).toEqual([
       "mcp_server",
     ]);
     expect([...(personalPageItemKinds("skills") ?? [])]).toEqual(["skill"]);
-    expect([...(personalPageItemKinds("agent-definitions") ?? [])]).toEqual([
-      "agent_definition",
-    ]);
+    expect(personalPageItemKinds("agent-definitions")).toBeNull();
     expect([...(personalPageItemKinds("machine-setup") ?? [])]).toEqual([
       "setup_script",
     ]);

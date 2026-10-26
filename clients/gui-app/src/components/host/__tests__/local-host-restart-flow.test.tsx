@@ -162,7 +162,7 @@ const UNREACHABLE_CLIENT_MESSAGE =
   "may be signed out, or its credentials may be refreshing. Force restart " +
   "kills the host process and relaunches it, ending whatever it is running.";
 const HOST_CHANGED_DESCRIPTION =
-  "This machine's host was replaced while this dialog was open, so nothing " +
+  "This computer's host was replaced while this dialog was open, so nothing " +
   "was stopped. Restart again to check the new host.";
 
 function makeQueryClient(): QueryClient {
@@ -953,7 +953,7 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
         "Host changed",
         expect.objectContaining({
           description:
-            "This machine's host was replaced while this dialog was open, so nothing was stopped. Restart again to check the new host.",
+            "This computer's host was replaced while this dialog was open, so nothing was stopped. Restart again to check the new host.",
         }),
       );
     });

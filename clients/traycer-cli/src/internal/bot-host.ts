@@ -118,8 +118,8 @@ export function findBot(bots: readonly BotRecord[], ref: string): BotRecord {
 
 /**
  * Refuses unless `bot` runs on `hostId`, for what only the bot's own host can
- * do: list its threads, or follow one. `elsewhere` finishes the sentence for
- * a bot on another of the person's hosts.
+ * do: follow a thread. `elsewhere` finishes the sentence for a bot on
+ * another of the person's hosts.
  */
 export function refuseUnlessBoundHere(
   bot: BotRecord,
@@ -127,12 +127,24 @@ export function refuseUnlessBoundHere(
   elsewhere: string,
 ): void {
   if (bot.boundHostId === hostId) return;
+  refuseUnlessSomeHostRuns(bot);
   throw cliError({
     code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-    message:
-      bot.boundHostId === null
-        ? `traycer: no host runs ${bot.title}; move it to a host first.`
-        : `traycer: ${bot.title} runs on another of your hosts; ${elsewhere}`,
+    message: `traycer: ${bot.title} runs on another of your hosts; ${elsewhere}`,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+/**
+ * Refuses a bot no host runs, for what any host serves of a running bot:
+ * list its threads.
+ */
+export function refuseUnlessSomeHostRuns(bot: BotRecord): void {
+  if (bot.boundHostId !== null) return;
+  throw cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message: `traycer: no host runs ${bot.title}; move it to a host first.`,
     details: null,
     exitCode: 1,
   });

@@ -215,7 +215,7 @@ describe("HostOverviewAnswerCard CLI floor remedy", () => {
     // E09: removing the PowerShell/outside wording would make this visible
     // shell-guidance pin RED even if the copy payload remained unchanged.
     expect(screen.getByTestId("host-overview-updates").textContent).toContain(
-      "PowerShell window outside Traycer on that machine",
+      "PowerShell window outside Traycer on that computer",
     );
     fireEvent.click(screen.getByRole("button", { name: "Copy commands" }));
     // E07: withholding Windows Desktop fallback commands would leave this

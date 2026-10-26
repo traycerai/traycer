@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { MemberRow } from "@/components/settings/members/member-row";
 import {
   isLastAdminMember,
+  memberGainedEditing,
   membersCardTitle,
   pendingInviteHiddenAddress,
   pendingInviteTitle,
@@ -15,6 +16,7 @@ import type {
 export function MembersList(props: {
   readonly environmentId: string;
   readonly teamName: string;
+  readonly teamHostCount: number | null;
   readonly currentUserId: string;
   readonly viewerIsAdmin: boolean;
   readonly members: readonly MembersListMember[];
@@ -25,6 +27,7 @@ export function MembersList(props: {
   readonly rowDetails: (subject: MembersDetailsSubject) => ReactNode;
   readonly onRoleChange: (member: MembersListMember, role: TeamRole) => void;
   readonly onRemove: (member: MembersListMember) => void;
+  readonly onRetry: () => void;
 }): ReactNode {
   return (
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40">
@@ -34,15 +37,17 @@ export function MembersList(props: {
       <ul data-testid="members-list">
         {props.visibleMembers.map((member) => {
           const lastAdmin = isLastAdminMember(props.members, member.userId);
-          const gainedEditing =
-            member.displayName !== null &&
-            props.legacyMembers.includes(member.displayName);
+          const gainedEditing = memberGainedEditing(
+            member,
+            props.legacyMembers,
+          );
           return (
             <MemberRow
               key={member.userId}
               member={member}
               isSelf={member.userId === props.currentUserId}
               isLastAdmin={lastAdmin}
+              teamHostCount={props.teamHostCount}
               viewerIsAdmin={props.viewerIsAdmin}
               gainedEditing={gainedEditing}
               details={props.rowDetails({
@@ -52,6 +57,7 @@ export function MembersList(props: {
               })}
               onRoleChange={(role) => props.onRoleChange(member, role)}
               onRemove={() => props.onRemove(member)}
+              onRetry={props.onRetry}
             />
           );
         })}

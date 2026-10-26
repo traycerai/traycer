@@ -140,6 +140,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
   // A member's picture can resolve after the row first painted.
   senderAvatarUrl: (a, b) => a.senderAvatarUrl === b.senderAvatarUrl,
+  senderUserId: (a, b) => a.senderUserId === b.senderUserId,
   // The row-level request state is carried by reference from the open
   // message, so a resolve arrives as a new object and identity is enough.
   conversationRequest: (a, b) =>
@@ -240,8 +241,11 @@ function isTranscriptListRowUnchanged(
   if (b.kind !== "placeholder") return false;
   // Skeleton entries arrive whole and are never mutated in place, so reference
   // equality is the right test - and a redelivered chunk that genuinely
-  // replaces an entry SHOULD re-render the row it describes.
-  return a.entry === b.entry;
+  // replaces an entry SHOULD re-render the row it describes. A void carries
+  // the very entry objects the index held, so the same entry can come back as
+  // a carried row: reusing the indexed row would publish a carried one as
+  // authoritative.
+  return a.entry === b.entry && a.provenance === b.provenance;
 }
 
 /** {@link computeStableChatTimelineRows} for the windowed row union. */

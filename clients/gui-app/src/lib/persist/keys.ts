@@ -450,6 +450,13 @@ export const PERSIST_STORES = [
     leaf: "team-host-disclosure-seen",
     kind: "static",
   },
+  // The shape a person last picked behind a New row's gear, per host and
+  // configuration (`sandbox-shape-memory-store.ts`).
+  {
+    camelName: "sandboxShapeMemory",
+    leaf: "sandbox-shape-memory",
+    kind: "static",
+  },
   // The teams whose "Continue on a <team> host" caution each person has
   // confirmed (`team-continue-caution-seen-store.ts`).
   {

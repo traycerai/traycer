@@ -68,6 +68,7 @@ function rowFor(input: {
     localService: undefined,
     hasLiveSession: () => false,
     localHostSettingUp: false,
+    localHostTerminalRunNote: null,
     sandboxes: [input.summary],
     nowMs: 0,
   });
@@ -93,19 +94,19 @@ function unenrolledRow(state: "failed" | "creating"): HostScopeOption {
 
 describe("hostOptionPickerGroup for a sandbox no host row stands for", () => {
   it("puts it in the host list's sandbox group, whatever its state", () => {
-    expect(hostOptionPickerGroup(unenrolledRow("failed"), true, false)).toBe(
+    expect(hostOptionPickerGroup(unenrolledRow("failed"), true, null)).toBe(
       "sandbox",
     );
-    expect(hostOptionPickerGroup(unenrolledRow("creating"), true, false)).toBe(
+    expect(hostOptionPickerGroup(unenrolledRow("creating"), true, null)).toBe(
       "sandbox",
     );
   });
 
-  it("hides it from every picker, even one that offers automations", () => {
+  it("hides it from every picker, composer included", () => {
     for (const state of ["failed", "creating"] as const) {
       const row = unenrolledRow(state);
-      expect(hostOptionPickerGroup(row, false, false)).toBe("hidden");
-      expect(hostOptionPickerGroup(row, false, true)).toBe("hidden");
+      expect(hostOptionPickerGroup(row, false, null)).toBe("hidden");
+      expect(hostOptionPickerGroup(row, false, { userId: "u" })).toBe("hidden");
     }
   });
 
@@ -135,8 +136,8 @@ describe("hostOptionPickerGroup for a sandbox no host row stands for", () => {
         teamOwned: false,
       },
     });
-    expect(hostOptionPickerGroup(row, false, false)).toBe("hidden");
-    expect(hostOptionPickerGroup(row, true, false)).toBe("sandbox");
+    expect(hostOptionPickerGroup(row, false, null)).toBe("hidden");
+    expect(hostOptionPickerGroup(row, true, null)).toBe("sandbox");
   });
 });
 
@@ -179,11 +180,9 @@ describe("a burst sandbox no host row stands for", () => {
     const unenrolled = unenrolledBurstRow();
     const registered = registeredBurstRow();
 
-    expect(hostOptionPickerGroup(registered, true, false)).toBe(
-      "agent-sandbox",
-    );
-    expect(hostOptionPickerGroup(unenrolled, true, false)).toBe(
-      hostOptionPickerGroup(registered, true, false),
+    expect(hostOptionPickerGroup(registered, true, null)).toBe("agent-sandbox");
+    expect(hostOptionPickerGroup(unenrolled, true, null)).toBe(
+      hostOptionPickerGroup(registered, true, null),
     );
   });
 
@@ -191,11 +190,11 @@ describe("a burst sandbox no host row stands for", () => {
     const unenrolled = unenrolledBurstRow();
     const registered = registeredBurstRow();
 
-    const registeredGroups = groupHostOptions([registered], true, false, null);
+    const registeredGroups = groupHostOptions([registered], true, null, null);
     expect(registeredGroups.agentSandboxes).toEqual([registered]);
     expect(registeredGroups.sandboxes).toEqual([]);
 
-    const groups = groupHostOptions([unenrolled], true, false, null);
+    const groups = groupHostOptions([unenrolled], true, null, null);
     expect(groups.agentSandboxes).toEqual([unenrolled]);
     expect(groups.sandboxes).toEqual([]);
     expect(groups.teams).toEqual([]);
@@ -204,8 +203,8 @@ describe("a burst sandbox no host row stands for", () => {
 
   it("stays hidden from every picker", () => {
     const row = unenrolledBurstRow();
-    expect(hostOptionPickerGroup(row, false, false)).toBe("hidden");
-    expect(hostOptionPickerGroup(row, false, true)).toBe("hidden");
+    expect(hostOptionPickerGroup(row, false, null)).toBe("hidden");
+    expect(hostOptionPickerGroup(row, false, { userId: "u" })).toBe("hidden");
     expect(hostOptionCanActivate(row)).toBe(false);
     expect(pickableHostOptions([row], null)).toEqual([]);
   });
@@ -215,7 +214,7 @@ describe("groupHostOptions for a sandbox no host row stands for", () => {
   it("lists it in the host list's top-level sandboxes and in no team group", () => {
     for (const state of ["failed", "creating"] as const) {
       const row = unenrolledRow(state);
-      const groups = groupHostOptions([row], true, false, null);
+      const groups = groupHostOptions([row], true, null, null);
 
       expect(groups.sandboxes).toEqual([row]);
       expect(groups.teams).toEqual([]);
@@ -229,7 +228,7 @@ describe("groupHostOptions for a sandbox no host row stands for", () => {
       const groups = groupHostOptions(
         [unenrolledRow(state)],
         false,
-        false,
+        null,
         null,
       );
 

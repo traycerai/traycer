@@ -16,6 +16,12 @@ export type EnvironmentNotificationDetail =
       readonly to: string;
     }
   | {
+      readonly kind: "team_member_welcome";
+      readonly environmentId: string;
+      readonly teamName: string;
+      readonly role: string;
+    }
+  | {
       readonly kind: "team_host_returned";
       readonly environmentId: string;
       readonly teamName: string;
@@ -57,6 +63,19 @@ export function environmentNotificationDetail(
       teamName: known.teamName,
       from: known.from,
       to: known.to,
+    };
+  }
+  // The newcomer's own row, when it names their role: the grant they got.
+  if (
+    known.kind === "team_member_joined" &&
+    known.toNewcomer &&
+    known.role !== undefined
+  ) {
+    return {
+      kind: "team_member_welcome",
+      environmentId: known.environmentId,
+      teamName: known.teamName,
+      role: known.role,
     };
   }
   if (known.kind === "team_host_returned") {

@@ -46,7 +46,7 @@ export const SET_UP_PERSONAL_STEPS: ReadonlyArray<SetUpPersonalStep> = [
     id: "agents",
     section: "agents",
     text: "Choose how agents are picked for each task.",
-    action: "Open Agent selection",
+    action: "Open Agents",
   },
 ];
 

@@ -8,9 +8,9 @@ import { composerSurfaceKey } from "@/stores/host/surface-host-selection-store";
 
 /**
  * G1 owns `stores/composer/staged-sandbox-store.ts`. Until that module
- * lands, nothing is staged in this window: the credits step stays hidden
- * and the Credits panel quotes the default shape. The glob is empty on
- * this branch and picks the store up the moment G1 merges.
+ * lands, nothing is staged in this window and the credits step stays
+ * hidden. The glob is empty on this branch and picks the store up the
+ * moment G1 merges.
  */
 interface StagedSandboxStoreApi {
   readonly getState: () => {
@@ -27,13 +27,6 @@ const STAGED_SANDBOX_STORE_MODULES = import.meta.glob<StagedSandboxStoreModule>(
   "/src/stores/composer/staged-sandbox-store.ts",
   { eager: true },
 );
-
-export interface StagedNewShape {
-  readonly os: string;
-  readonly region: string;
-  readonly cpus: number;
-  readonly memoryMb: number;
-}
 
 function stagedSandboxStore(): StagedSandboxStoreApi | null {
   const modules = Object.values(STAGED_SANDBOX_STORE_MODULES);
@@ -77,28 +70,4 @@ export function useStagedSandboxInThisWindow(): unknown {
 
 export function sandboxIsStagedInThisWindow(staged: unknown): boolean {
   return staged !== null;
-}
-
-export function stagedNewShape(staged: unknown): StagedNewShape | null {
-  if (!isRecord(staged)) return null;
-  const target = staged.target;
-  if (!isRecord(target) || target.kind !== "new") return null;
-  const shape = target.shape;
-  if (!isRecord(shape)) return null;
-  if (typeof shape.os !== "string" || typeof shape.region !== "string") {
-    return null;
-  }
-  if (typeof shape.cpus !== "number" || typeof shape.memoryMb !== "number") {
-    return null;
-  }
-  return {
-    os: shape.os,
-    region: shape.region,
-    cpus: shape.cpus,
-    memoryMb: shape.memoryMb,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

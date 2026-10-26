@@ -6,6 +6,7 @@ import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   botSubscribeServerFrameSchema,
+  type BotActivity,
   type BotRecord,
   type BotSubscribeServerFrame,
   type BotTaskEntry,
@@ -36,12 +37,16 @@ import {
 export interface BotSubscriptionSnapshot {
   readonly bot: BotRecord;
   readonly tasks: ReadonlyArray<BotTaskEntry>;
-  /** `null` when the serving host does not know the count. */
+  /**
+   * `null` when the serving host does not know the count: the bot's host has
+   * not read its conversations yet, or another host cannot read the room.
+   */
   readonly openRequestCount: number | null;
   /**
    * Moves when a row is written to the bot's channel or a thread on its
    * bound host; the bot's thread listing is read again when it does. `null`
-   * when the serving host is not the bound one.
+   * while the serving host cannot read the environment room the bot's host
+   * writes it to.
    */
   readonly conversationsRevision: number | null;
   readonly boundHost: {
@@ -50,6 +55,12 @@ export interface BotSubscriptionSnapshot {
     readonly epoch: number;
     readonly isThisHost: boolean;
   };
+  /**
+   * What the bot's running chats are doing, kept live from the stream's
+   * `activity` frames, from any host (T65). `null` while the serving host
+   * cannot read the environment room the bot's host writes it to.
+   */
+  readonly activity: BotActivity | null;
 }
 
 /**
@@ -90,8 +101,8 @@ interface ActiveSubscriptionArgs {
 /**
  * Module-level ref-counted sessions, keyed by the owning client instance +
  * host + bot: Home's row and an open bot tab on the same host share one
- * session, while the same bot subscribed through two hosts (a tab on its
- * bound host, Home on the app-wide one) keeps two.
+ * session, while the same bot subscribed through two hosts (a tab moved to
+ * its bound host, Home on the app-wide one) keeps two.
  */
 const subscriptions: SharedStreamSubscriptionRegistry<BotStreamEvent> =
   new Map();
@@ -230,6 +241,7 @@ function toSnapshot(
     openRequestCount: frame.openRequestCount,
     conversationsRevision: frame.conversationsRevision,
     boundHost: frame.boundHost,
+    activity: frame.activity,
   };
 }
 
@@ -280,6 +292,20 @@ function createSharedSubscription(
       markTerminal(frame);
       return;
     }
+    if (frame.kind === "activity") {
+      // One entry moved; the snapshot it patches came first on this session.
+      const last = shared.lastEvent;
+      if (last?.kind !== "snapshot" || last.activity === null) return;
+      const activity = withActivityEntry(last.activity, frame);
+      shared.lastEvent = { ...last, activity };
+      notifyConsumers();
+      const key = botQueryKeys.subscription(args);
+      const cached =
+        queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
+      if (cached !== null)
+        queryClient.setQueryData(key, { ...cached, activity });
+      return;
+    }
     shared.lastEvent = frame;
     notifyConsumers();
     const key = botQueryKeys.subscription(args);
@@ -318,6 +344,20 @@ function createSharedSubscription(
   });
 
   return shared;
+}
+
+/** `activity` with the one entry an `activity` frame names replaced or removed. */
+function withActivityEntry(
+  activity: BotActivity,
+  frame: Extract<BotSubscribeServerFrame, { kind: "activity" }>,
+): BotActivity {
+  if (frame.target.kind === "trunk") return { ...activity, trunk: frame.entry };
+  const { threadId } = frame.target;
+  const threads = Object.fromEntries(
+    Object.entries(activity.threads).filter(([id]) => id !== threadId),
+  );
+  if (frame.entry !== null) threads[threadId] = frame.entry;
+  return { ...activity, threads };
 }
 
 function describeStreamClose(reason: StreamCloseReason | null): string | null {

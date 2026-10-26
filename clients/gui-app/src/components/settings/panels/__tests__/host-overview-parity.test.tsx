@@ -94,12 +94,12 @@ interface OverviewSemanticSnapshot {
   readonly headingTexts: readonly string[];
   readonly displayedName: string;
   /**
-   * The kind tag's TEXT — "Local" or "Remote" — rather than whether a tag is
-   * there at all.
+   * The kind tag's TEXT — "This computer" or "Remote" — rather than whether a
+   * tag is there at all.
    *
    * The predecessor was `thisComputerTagPresent`, a boolean, because only a
-   * local host got a tag ("This computer") and a remote one got nothing. Both
-   * kinds are labelled now, in the picker's own vocabulary, so the structural
+   * local host got a tag and a remote one got nothing. Both kinds are
+   * labelled now, in the picker's own vocabulary, so the structural
    * difference is gone and what is left is one string. That makes this
    * comparison STRICTER than the boolean it replaces: a missing tag on either
    * side, or a tag on the wrong side, now fails rather than being the expected
@@ -173,8 +173,8 @@ const SHARED_ROW_NAME = "stale-registry-label";
  * every one of them explicitly instead of just excluding it.
  */
 const LOCAL_ONLY_SNAPSHOT_DIFFERENCES = [
-  // The kind tag beside the name reads "Local" on one and "Remote" on the
-  // other. One tag, one slot, one word different — asserted verbatim below.
+  // The kind tag beside the name reads "This computer" on one and "Remote" on
+  // the other. One tag, one slot, one word different — asserted verbatim below.
   "kindTagLabel",
   // The Danger zone sits on a third capability plane the page was never meant
   // to unify: "Remove Traycer" uninstalls components from THIS computer over
@@ -472,7 +472,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(remote.displayedName).toBe("Studio Mac");
   });
 
-  it("differs ONLY on the kind tag's word — Local vs Remote, named and asserted", async () => {
+  it("differs ONLY on the kind tag's word — This computer vs Remote, named and asserted", async () => {
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -503,10 +503,10 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
 
     // One tag each, in the SAME slot, differing only in the word — the picker's
     // own vocabulary, which is what the two surfaces used to disagree about
-    // ("This computer" here, "Local" there, and nothing at all for a remote
-    // host). Asserted per variant rather than merely "they differ", so a tag
-    // that vanished, or two that swapped, fails here.
-    expect(local.kindTagLabel).toBe("Local");
+    // (a tag here, nothing at all for a remote host). Asserted per variant
+    // rather than merely "they differ", so a tag that vanished, or two that
+    // swapped, fails here.
+    expect(local.kindTagLabel).toBe("This computer");
     expect(remote.kindTagLabel).toBe("Remote");
 
     // The recovery console is absent in both — not a local/remote difference
@@ -668,7 +668,7 @@ function kindTagNodes(root: HTMLElement): readonly Element[] {
     (child) =>
       child.tagName === "SPAN" &&
       child.children.length === 0 &&
-      (child.textContent.trim() === "Local" ||
+      (child.textContent.trim() === "This computer" ||
         child.textContent.trim() === "Remote"),
   );
 }

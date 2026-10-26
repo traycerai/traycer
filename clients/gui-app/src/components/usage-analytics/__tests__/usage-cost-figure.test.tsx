@@ -129,7 +129,7 @@ describe("UsageCostFigure", () => {
     });
     expect(
       screen.getByTestId("usage-served-by-local-note").textContent,
-    ).toMatch(/this machine/i);
+    ).toMatch(/this computer/i);
   });
 
   it("omits the local-scope note when servedBy is cloud", () => {
@@ -166,7 +166,7 @@ describe("UsageCostFigure", () => {
       hostScopeName: "Studio Mac",
     });
     const note = screen.getByTestId("usage-served-by-local-note");
-    expect(note.textContent).toMatch(/this machine/i);
+    expect(note.textContent).toMatch(/this computer/i);
     expect(note.hasAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(false);
   });
 

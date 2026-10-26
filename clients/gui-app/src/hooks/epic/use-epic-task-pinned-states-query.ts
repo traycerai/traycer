@@ -296,6 +296,7 @@ export function useLocalHomedOpenTaskRows(
     pinnedStates: localRows.pinnedStates,
     isFetching: localRows.isFetching,
     hasError: localRows.hasError,
+    refetchFailed: localRows.refetchFailed,
     hostIds: localHomedByHost,
   };
 }
@@ -314,6 +315,11 @@ function combineLocalTaskRows(
     pinnedStates: combineLocalPinReadings(results),
     isFetching: results.some((result) => result.isFetching),
     hasError: results.some((result) => result.isError),
+    refetchFailed: () => {
+      for (const result of results) {
+        if (result.isError) void result.refetch();
+      }
+    },
   };
 }
 

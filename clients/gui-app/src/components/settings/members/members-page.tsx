@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -75,8 +76,9 @@ function listRow(member: EnvironmentMembersListMember): MembersListMember {
 
 /**
  * The read's rows, each pending removal marked on its row, and a pending
- * removal the read no longer lists kept as its own row: `pending` until its
- * receipt completes, then `done`.
+ * removal the read no longer lists kept as its own row while it is
+ * `pending`. Once its receipt completes the removal is done and the person
+ * leaves the list.
  */
 function overlayRemovals(
   members: readonly EnvironmentMembersListMember[],
@@ -99,7 +101,7 @@ function overlayRemovals(
     if (listed.has(removal.member.userId)) continue;
     rows.push({ ...removal.member, removalState: removalState(removal) });
   }
-  return rows;
+  return rows.filter((row) => row.removalState !== "done");
 }
 
 /**
@@ -138,10 +140,11 @@ function membersReadState(
 /**
  * Settings ▸ Members for a team pick. Reads `environment.members@1.1` and
  * writes through invite / setRole / remove / noticeSeen; the view's dialogs
- * read removePreview for the member they name.
+ * read removePreview for the member they name, and the invite sheet reads
+ * seats when the host serves it.
  */
 export function MembersPage(props: MembersPageProps): ReactNode {
-  const client = useOptionalHostClient();
+  const client = usePoolTierHostClient(useOptionalHostClient());
   const hostId = useReactiveHostReadiness(client).hostId;
   const membersPresent = useHostMethodSupport(hostId, "environment.members");
   const membersVersion = useHostMethodSchemaVersion(
@@ -160,6 +163,8 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       : membersPresent;
   const listSupported =
     useHostMethodSupport(hostId, "environment.list") === true;
+  const seatsSupported =
+    useHostMethodSupport(hostId, "environment.members.seats") === true;
   const teamLabel = usePickedTeamLabel(props.environmentId);
   const team = useTeamEnvironmentDescriptor(
     client,
@@ -248,6 +253,7 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       environmentId={props.environmentId}
       teamName={teamName}
       teamHandle={team.teamHandle}
+      teamHostCount={team.hostCount}
       currentUserId={currentUserId}
       viewerRole={viewerRole}
       membersRead={membersRead}
@@ -262,6 +268,7 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       invitePending={writes.inviteMutation.isPending}
       setRolePending={writes.setRoleMutation.isPending}
       removePending={writes.removeMutation.isPending}
+      seatsSupported={seatsSupported}
       hostLabel={hostLabel}
       onNoticeSeen={onNoticeSeen}
     />

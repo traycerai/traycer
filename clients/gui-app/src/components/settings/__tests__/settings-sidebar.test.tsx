@@ -15,10 +15,10 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -64,6 +64,19 @@ vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersions: () => new Map(),
 }));
+// The picker's Personal row reads the hosts running Personal from one hook;
+// these suites are about the sidebar around it.
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined }),
 }));
@@ -78,6 +91,9 @@ vi.mock("@/components/settings/environment/team-pick-label", () => ({
 }));
 vi.mock("@/components/settings/environment/team-rows", () => ({
   TeamRows: () => null,
+}));
+vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
+  InviteAcceptDialog: () => null,
 }));
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
@@ -332,25 +348,24 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(ids).not.toContain("service");
   });
 
-  it("labels the agent-selection section for selection, not the Task's Agents", () => {
-    const ids = SETTINGS_SECTIONS.map((section) => section.id);
-    const labels = SETTINGS_SECTIONS.map((section) => section.label);
-    // The id stays `agents` (compatibility identifier + `/settings/agents`
-    // route); only the product copy moves.
-    expect(ids).toContain("agents");
-    expect(labels).toContain("Agent selection");
-    expect(labels).not.toContain("Agents");
+  it("labels the agents section Agents; the id stays the compatibility identifier", () => {
+    const section = SETTINGS_SECTIONS.find(({ id }) => id === "agents");
+    expect(section?.label).toBe("Agents");
   });
 
-  it("labels application sounds apart from host notification events", () => {
-    const app = SETTINGS_SECTIONS.find(
+  it("labels application sounds and alerts apart from host notification events", () => {
+    const sounds = SETTINGS_SECTIONS.find(
       (section) => section.id === "app-notifications",
     );
+    const alerts = SETTINGS_SECTIONS.find((section) => section.id === "alerts");
     const host = SETTINGS_SECTIONS.find(
       (section) => section.id === "notifications",
     );
-    expect(app?.label).toBe("Sounds");
+    expect(sounds?.label).toBe("Sounds");
+    expect(alerts?.label).toBe("Alerts");
     expect(host?.label).toBe("Notifications");
+    // Different controls, so different icons too (the rail-table rule).
+    expect(new Set([sounds?.icon, alerts?.icon, host?.icon]).size).toBe(3);
   });
 
   it("puts Getting started before General in the application settings order", () => {
@@ -616,11 +631,6 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     sandboxControl.reason = null;
     runnerHostStub.current = null;
     scopeOverrides.current = { client: null };
-    useSandboxCreateDialogStore.setState({
-      open: false,
-      preselect: null,
-      workingHostTeamId: null,
-    });
     openLinkMock.open.mockClear();
   });
 
@@ -633,76 +643,16 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     );
   }
 
-  it("offers New sandbox… to a signed-in user", async () => {
+  it("offers no New sandbox… entry: creation happens from the pickers", async () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
-    expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 
-  it("opens the create form with no preselection and the active host's team as the working host's", async () => {
-    const { hostScopeOptionFixture } =
-      await import("@/components/settings/host-scope/host-scope-fixture");
-    const { sandboxSummaryFixture } =
-      await import("@/hooks/sandboxes/__tests__/sandbox-fixtures");
-    scopeOverrides.current = {
-      client: null,
-      host: hostScopeOptionFixture({
-        hostId: "alpha-1",
-        name: "alpha-1",
-        kind: "sandbox",
-        isLocalMachine: false,
-        item: {
-          hostId: "alpha-1",
-          displayName: "alpha-1",
-          platform: "linux-x64",
-          kind: "sandbox",
-          publicKey: "pk",
-          createdAt: new Date(0).toISOString(),
-          updatePolicy: "manual",
-          status: {
-            connectivity: "connectable",
-            viewerReachability: "unknown",
-            clientCloud: "ok",
-            updateState: "current",
-            appVersion: "1.4.2",
-            lastSeenAt: new Date(0).toISOString(),
-          },
-          owner: { kind: "team", id: "team-a", name: "Alpha" },
-        },
-        sandbox: {
-          state: "awake",
-          frozen: false,
-          summary: sandboxSummaryFixture({ id: "sbx-alpha-1" }),
-          teamOwned: true,
-        },
-      }),
-    };
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-
-    fireEvent.click(await screen.findByTestId("settings-new-sandbox"));
-
-    const store = useSandboxCreateDialogStore.getState();
-    expect(store.open).toBe(true);
-    expect(store.preselect).toBeNull();
-    expect(store.workingHostTeamId).toBe("team-a");
-  });
-
-  it("opens the create form with no working host team when the active host is the person's own", async () => {
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-
-    fireEvent.click(await screen.findByTestId("settings-new-sandbox"));
-
-    const store = useSandboxCreateDialogStore.getState();
-    expect(store.open).toBe(true);
-    expect(store.preselect).toBeNull();
-    expect(store.workingHostTeamId).toBeNull();
-  });
-
-  it("says why instead of offering New sandbox… on a build that cannot reach the control plane", async () => {
-    sandboxControl.reason = "Sandboxes aren't available in staging builds.";
+  it("says why on a build that cannot reach the control plane", async () => {
+    sandboxControl.reason = SANDBOXES_UNAVAILABLE_IN_STAGING;
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
@@ -717,7 +667,7 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
-    expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
     expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
   });
 
@@ -729,15 +679,6 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
     expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
     expect(screen.queryByTestId("settings-sandboxes-unavailable")).toBeNull();
-  });
-
-  it("offers no New sandbox… when signed out", async () => {
-    useAuthStore.setState({ status: "signed-out" });
-    renderSidebar();
-
-    // The rest of the rail rendered, so the entry's absence is the assertion.
-    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
-    expect(screen.queryByTestId("settings-new-sandbox")).toBeNull();
   });
 
   it("mounts the Automations entry for a signed-in user on a build that reaches the control plane", async () => {
@@ -773,7 +714,7 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     renderSidebar();
 
     // The rest of the rail rendered, so the row's absence is the assertion.
-    expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
     expect(screen.queryByTestId("settings-secrets-and-github")).toBeNull();
     expect(screen.queryByText("Secrets and GitHub")).toBeNull();
   });
@@ -792,16 +733,23 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["browser", "app"],
   ["opening-behavior", "app"],
   ["app-notifications", "app"],
+  ["alerts", "app"],
   ["keybindings", "app"],
-  ["app-diagnostics", "app"],
   ["layout", "app"],
+  ["app-diagnostics", "app"],
+  ["devices", "account"],
+  ["link-phone", "account"],
+  ["usage", "account"],
+  ["credits", "account"],
+  ["notifications", "account"],
+  ["delete-account", "account"],
   ["providers", "personal"],
   ["mcp-servers", "personal"],
   ["skills", "personal"],
   ["permissions", "personal"],
+  ["agents", "personal"],
   ["fallback", "personal"],
   ["shell", "personal"],
-  ["agents", "personal"],
   ["browser-agent-access", "personal"],
   ["secrets", "personal"],
   ["sandboxes", "personal"],
@@ -812,12 +760,6 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   // is every vitest run, and withheld from production builds.
   ["dev-artifact-proof", "app"],
   ["dev-canvas-proof", "app"],
-  ["devices", "account"],
-  ["link-phone", "account"],
-  ["usage", "account"],
-  ["credits", "account"],
-  ["notifications", "account"],
-  ["delete-account", "account"],
   ["host", "host"],
   ["worktrees", "host"],
   ["diagnostics", "host"],
@@ -860,19 +802,19 @@ describe("<SettingsSidebar /> scope groups", () => {
     return aside;
   }
 
-  it("orders the groups Guide, Application, Environment, Account, Host", () => {
+  it("orders the groups Guide, Application, Account, Environment, Host", () => {
     expect(SETTINGS_SECTION_GROUPS.map((group) => group.id)).toEqual([
       "guide",
       "app",
-      "personal",
       "account",
+      "personal",
       "host",
     ]);
     expect(SETTINGS_SECTION_GROUPS.map((group) => group.label)).toEqual([
       "Guide",
       "Application",
-      "Environment",
       "Account",
+      "Environment",
       "Host",
     ]);
   });
@@ -898,7 +840,7 @@ describe("<SettingsSidebar /> scope groups", () => {
     const headings = Array.from(aside.querySelectorAll("h2")).map(
       (heading) => heading.textContent,
     );
-    expect(headings).toEqual(["Application", "Environment", "Account", "Host"]);
+    expect(headings).toEqual(["Application", "Account", "Environment", "Host"]);
   });
 
   it("files each rendered row under its group's heading", async () => {
@@ -929,16 +871,24 @@ describe("<SettingsSidebar /> scope groups", () => {
     const expected = new Map<string, Array<string>>();
     for (const [id, group] of EXPECTED_SECTION_GROUPS) {
       if (id === "delete-account") continue;
-      // Machine setup is retired from navigation; Members is a team's page,
-      // and the default pick is Personal.
-      if (id === "machine-setup" || id === "members") continue;
+      // Machine setup, Agent definitions and Browser agent access are retired
+      // from navigation; Members is a team's page, and the default pick is
+      // Personal.
+      if (
+        id === "machine-setup" ||
+        id === "agent-definitions" ||
+        id === "browser-agent-access" ||
+        id === "members"
+      ) {
+        continue;
+      }
       const heading = GROUP_HEADING_BY_ID[group];
       expected.set(heading, [...(expected.get(heading) ?? []), id]);
     }
     expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
   });
 
-  it("renders the host picker once, after Environment and Account and before the host rows", async () => {
+  it("renders the host picker once, after Account and Environment and before the host rows", async () => {
     const aside = await renderRail();
 
     const pickers = screen.getAllByTestId("settings-host-switcher");
@@ -987,9 +937,7 @@ describe("<SettingsSidebar /> scope groups", () => {
       "fallback",
       "shell",
       "agents",
-      "browser-agent-access",
       "secrets",
-      "agent-definitions",
       "devices",
       "usage",
       "credits",
@@ -1040,18 +988,53 @@ describe("<SettingsSidebar /> Environment pick", () => {
   const present = (id: string): boolean =>
     screen.queryByTestId(`settings-sidebar-item-${id}`) !== null;
 
-  it("lists Permissions right after Skills and Sandboxes, with no Members, under Personal", async () => {
-    await renderRail();
-
-    const ids = Array.from(
+  /** The Environment group's rows by label, in rail order. */
+  function environmentRows(): string[] {
+    const heading = Array.from(document.querySelectorAll("h2")).find(
+      (node) => node.textContent === "Environment",
+    );
+    const next = Array.from(document.querySelectorAll("h2")).find(
+      (node) => node.textContent === "Host",
+    );
+    if (heading === undefined || next === undefined) {
+      throw new Error("the Environment group did not render");
+    }
+    return Array.from(
       document.querySelectorAll<HTMLElement>(
         "[data-testid^='settings-sidebar-item-']",
       ),
-    ).map((node) => node.dataset.testid?.replace("settings-sidebar-item-", ""));
-    expect(ids.indexOf("permissions")).toBe(ids.indexOf("skills") + 1);
-    expect(present("sandboxes")).toBe(true);
-    expect(present("members")).toBe(false);
+    )
+      .filter(
+        (row) =>
+          (heading.compareDocumentPosition(row) &
+            Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0 &&
+          (next.compareDocumentPosition(row) &
+            Node.DOCUMENT_POSITION_PRECEDING) !==
+            0,
+      )
+      .map((row) => row.textContent);
+  }
+
+  const PERSONAL_ROWS = [
+    "Providers",
+    "MCP servers",
+    "Skills",
+    "Permissions",
+    "Agents",
+    "Model routing",
+    "Variables & shells",
+    "Secrets",
+    "Sandboxes",
+  ];
+
+  it("lists Personal's Environment rows exactly, with no retired page and no Members", async () => {
+    await renderRail();
+
+    expect(environmentRows()).toEqual(PERSONAL_ROWS);
     expect(present("machine-setup")).toBe(false);
+    expect(present("agent-definitions")).toBe(false);
+    expect(present("browser-agent-access")).toBe(false);
     expect(present("credits")).toBe(true);
   });
 
@@ -1062,12 +1045,14 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    for (const id of ["mcp-servers", "skills", "sandboxes", "members"]) {
-      expect(present(id), id).toBe(false);
-    }
-    for (const id of ["providers", "permissions", "secrets", "agents"]) {
-      expect(present(id), id).toBe(true);
-    }
+    expect(environmentRows()).toEqual([
+      "Providers",
+      "Permissions",
+      "Agents",
+      "Model routing",
+      "Variables & shells",
+      "Secrets",
+    ]);
   });
 
   it("shows Members when a team is picked", async () => {
@@ -1077,7 +1062,6 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    expect(present("members")).toBe(true);
-    expect(present("mcp-servers")).toBe(true);
+    expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
   });
 });

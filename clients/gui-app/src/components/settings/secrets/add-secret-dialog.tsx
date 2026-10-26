@@ -18,9 +18,12 @@ import {
   useEnvironmentSecretsVerifyCandidateMutation,
 } from "@/hooks/environment/team/use-secret-value-mutations";
 import type { HostRpcRegistry } from "@/lib/host";
-import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
-  DESKTOP_SECRET_KINDS,
+  secretChangeRefusalLine,
+  secretDestinationUnreachableLine,
+} from "@/lib/sandboxes/secret-change-refusal-copy";
+import {
+  ADD_SECRET_KINDS,
   SECRET_KIND_LABEL,
   type DesktopSecretKind,
   secretKindHint,
@@ -29,6 +32,7 @@ import {
 import {
   initialSecretForm,
   secretCreateRequest,
+  secretFormHosts,
   secretFormProblem,
   secretVerifyCandidateRequest,
   secretVerifyProblem,
@@ -39,25 +43,35 @@ import {
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
+  PROVIDER_KEYS_LINE,
   SECRET_CUSTODY_SENTENCE,
   SECRET_SAVED_OFFLINE,
   SECRETS_NEED_UPDATED_HOST,
-  secretSaveConfirmationLines,
 } from "@/lib/sandboxes/secrets-page-copy";
+import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
+import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 
 /**
  * Settings ▸ Personal ▸ Secrets ▸ Add a secret:
- * kind first, then the kind's form with Verify, then the confirmation of
- * where the value becomes readable. Only the kinds whose form lives in the
- * app (API keys, model provider keys and database logins) are offered; SSH,
- * the cloud and certificate kinds have no row. A kind no protocol of which
- * is brokered is greyed with the catalogue's own line.
+ * kind first, then the kind's form with Verify, then the custody sentence
+ * once more before Save. API keys and database logins are offered; a
+ * provider's key is set on its Account tab, which the picker points to, and
+ * SSH, the cloud and certificate kinds have no row. A kind no protocol of
+ * which is brokered is greyed with the catalogue's own line. A value a
+ * Variables row refused arrives as `prefill`, its name and value filled in.
  *
  * The typed value lives in this component's state only: Verify and Save read
  * it when their request is dispatched, so it reaches no query or mutation
  * cache, and closing the dialog drops it.
  */
+
+/** A name and value Add a secret opens with. */
+export interface SecretPrefill {
+  readonly name: string;
+  readonly value: string;
+}
 
 type Step =
   | { readonly kind: "pick" }
@@ -88,6 +102,7 @@ function errorText(error: unknown, fallback: string): string {
 
 function createOutcomeNote(
   outcome: EnvironmentSecretsCreateResponse,
+  form: SecretFormState,
 ): SecretVerifyLine | null {
   switch (outcome.outcome) {
     case "created":
@@ -101,8 +116,10 @@ function createOutcomeNote(
       return {
         tone: "warning",
         text:
-          secretChangeRefusalLine("create", outcome.code) ??
-          "Couldn't save this secret.",
+          outcome.code === "destination_unresolvable"
+            ? secretDestinationUnreachableLine(secretFormHosts(form))
+            : (secretChangeRefusalLine("create", outcome.code) ??
+              "Couldn't save this secret."),
       };
   }
 }
@@ -141,16 +158,50 @@ function KindOption(props: {
 
 function KindPicker(props: {
   readonly onPick: (kind: DesktopSecretKind) => void;
+  readonly onProviders: () => void;
 }): ReactNode {
   return (
-    <ul
-      className="grid grid-cols-1 gap-2 sm:grid-cols-2"
-      data-testid="secret-kind-picker"
-    >
-      {DESKTOP_SECRET_KINDS.map((kind) => (
-        <KindOption key={kind} kind={kind} onPick={props.onPick} />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-2">
+      <ul
+        className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+        data-testid="secret-kind-picker"
+      >
+        {ADD_SECRET_KINDS.map((kind) => (
+          <KindOption key={kind} kind={kind} onPick={props.onPick} />
+        ))}
+      </ul>
+      <p
+        className="max-w-[72ch] text-ui-xs text-muted-foreground"
+        data-testid="secret-provider-keys-line"
+      >
+        {PROVIDER_KEYS_LINE.before}
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          onClick={props.onProviders}
+          data-testid="secret-provider-keys-link"
+        >
+          {PROVIDER_KEYS_LINE.link}
+        </Button>
+        {PROVIDER_KEYS_LINE.after}
+      </p>
+    </div>
+  );
+}
+
+/** Where the value is stored and who reads it, then how Traycer handles it. */
+function Custody(): ReactNode {
+  return (
+    <div className="flex flex-col gap-1">
+      <p
+        className="max-w-[72ch] text-ui-xs text-muted-foreground"
+        data-testid="secret-custody-sentence"
+      >
+        {SECRET_CUSTODY_SENTENCE}
+      </p>
+      <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+    </div>
   );
 }
 
@@ -181,16 +232,40 @@ function Busy(props: { readonly busy: boolean }): ReactNode {
   ) : null;
 }
 
+/** A kind's empty form, with a carried-in name and value when there is one. */
+function prefilledForm(
+  kind: DesktopSecretKind,
+  prefill: SecretPrefill | null,
+): SecretFormState {
+  const form = initialSecretForm(kind);
+  return prefill === null
+    ? form
+    : { ...form, name: prefill.name, value: prefill.value };
+}
+
+/** A named kind opens its form; a carried-in value opens an API key's. */
+function initialStepOf(
+  initialKind: DesktopSecretKind | undefined,
+  prefill: SecretPrefill | null,
+): Step {
+  if (initialKind !== undefined) {
+    return { kind: "form", form: prefilledForm(initialKind, prefill) };
+  }
+  return prefill === null
+    ? PICK
+    : { kind: "form", form: prefilledForm("api_key", prefill) };
+}
+
 export function AddSecretDialog(props: {
   readonly open: boolean;
   readonly initialKind?: DesktopSecretKind;
+  /** A name and value carried in from a refused variable, or `null`. */
+  readonly prefill: SecretPrefill | null;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  const initialStep: Step =
-    props.initialKind === undefined
-      ? PICK
-      : { kind: "form", form: initialSecretForm(props.initialKind) };
+  const { prefill } = props;
+  const initialStep = initialStepOf(props.initialKind, prefill);
   const [step, setStep] = useState<Step>(initialStep);
   // The form a Verify or Save sends, read at dispatch.
   const sentForm = useRef<SecretFormState | null>(null);
@@ -208,6 +283,9 @@ export function AddSecretDialog(props: {
   const busy = verifyCandidate.isPending || create.isPending;
   const [verifyNote, setVerifyNote] = useState<SecretVerifyLine | null>(null);
   const [saveNote, setSaveNote] = useState<SecretVerifyLine | null>(null);
+  // The form's problem shows once Continue was pressed, never before the
+  // person has typed anything.
+  const [continuePressed, setContinuePressed] = useState(false);
   // Which open of the dialog a check or save belongs to. A close ends the
   // open, so a request that settles after it (the person closed and opened
   // the dialog again) neither closes nor writes into the form now showing.
@@ -220,13 +298,23 @@ export function AddSecretDialog(props: {
     setStep(initialStep);
     setVerifyNote(null);
     setSaveNote(null);
+    setContinuePressed(false);
     verifyCandidate.reset();
     create.reset();
     props.onOpenChange(false);
   };
 
   const pick = (kind: DesktopSecretKind): void => {
-    setStep({ kind: "form", form: initialSecretForm(kind) });
+    setContinuePressed(false);
+    setStep({ kind: "form", form: prefilledForm(kind, prefill) });
+  };
+
+  const continueToConfirm = (form: SecretFormState): void => {
+    if (secretFormProblem(form) !== null) {
+      setContinuePressed(true);
+      return;
+    }
+    setStep({ kind: "confirm", form });
   };
 
   const changeForm = (form: SecretFormState): void => {
@@ -259,7 +347,7 @@ export function AddSecretDialog(props: {
       // The mutation re-reads the list once the secret is saved, whichever
       // open is showing.
       const outcome = await create.mutateAsync();
-      const note = createOutcomeNote(outcome);
+      const note = createOutcomeNote(outcome, form);
       if (openGeneration.current !== sentFrom) return;
       if (note === null) {
         close(false);
@@ -291,18 +379,21 @@ export function AddSecretDialog(props: {
           <DialogDescription>{STEP_DESCRIPTION[step.kind]}</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pb-5">
-          {step.kind === "pick" ? <KindPicker onPick={pick} /> : null}
+          {step.kind === "pick" ? (
+            <KindPicker
+              onPick={pick}
+              onProviders={() => {
+                close(false);
+                navigateToSettingsSection("providers");
+              }}
+            />
+          ) : null}
           {step.kind === "form" ? (
             <>
               <SecretIntakeFields state={step.form} onChange={changeForm} />
-              <p
-                className="max-w-[72ch] text-ui-xs text-muted-foreground"
-                data-testid="secret-custody-sentence"
-              >
-                {SECRET_CUSTODY_SENTENCE}
-              </p>
+              <Custody />
               <Note note={verifyNote} testId="secret-form-verify-line" />
-              <FormProblem form={step.form} />
+              {continuePressed ? <FormProblem form={step.form} /> : null}
             </>
           ) : null}
           {step.kind === "confirm" ? (
@@ -310,18 +401,7 @@ export function AddSecretDialog(props: {
               className="flex flex-col gap-2 text-ui-sm"
               data-testid="secret-save-confirmation"
             >
-              <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-                {SECRET_CUSTODY_SENTENCE}
-              </p>
-              {secretSaveConfirmationLines(
-                step.form.name,
-                step.form.mode,
-                step.form.sandboxesByDefault,
-              ).map((line) => (
-                <p key={line} className="max-w-[72ch]">
-                  {line}
-                </p>
-              ))}
+              <Custody />
               <Note note={saveNote} testId="secret-save-note" />
             </div>
           ) : null}
@@ -351,8 +431,8 @@ export function AddSecretDialog(props: {
               type="button"
               size="sm"
               variant="secondary"
-              disabled={busy || secretFormProblem(step.form) !== null}
-              onClick={() => setStep({ kind: "confirm", form: step.form })}
+              disabled={busy}
+              onClick={() => continueToConfirm(step.form)}
               data-testid="secret-form-continue"
             >
               Continue
@@ -411,6 +491,7 @@ function FormProblem(props: { readonly form: SecretFormState }): ReactNode {
   if (problem === null) return null;
   return (
     <p
+      role="alert"
       className="text-ui-xs text-muted-foreground"
       data-testid="secret-form-problem"
     >

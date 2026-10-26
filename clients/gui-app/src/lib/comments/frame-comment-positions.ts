@@ -36,7 +36,10 @@ export function deriveFrameCommentPositions(
     boards.map((board, index) => [board.path, { board, index }]),
   );
   for (const thread of threads) {
-    if (thread.data.anchorKind === "artifact") {
+    if (
+      thread.data.anchorKind === "artifact" ||
+      thread.data.anchorKind === "canvas-point"
+    ) {
       positions.set(thread.threadId, 0);
       continue;
     }

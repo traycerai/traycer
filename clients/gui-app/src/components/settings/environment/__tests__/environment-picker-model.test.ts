@@ -44,7 +44,7 @@ describe("localPickerRow", () => {
     expect(localPickerRow(OLD_LAPTOP, awaiting, V11)).toEqual({
       hostId: "old",
       name: "Old laptop",
-      subtitle: "not moved · Personal's settings are not on it",
+      subtitle: "its own settings, not in Personal yet",
       verb: "move_to_personal",
       needsUpdate: false,
       defaultsToLocal: true,
@@ -54,7 +54,7 @@ describe("localPickerRow", () => {
   it("gives a host whose consent is recorded and which is still moving the partly-moved row", () => {
     const row = localPickerRow(OLD_LAPTOP, consentRecorded, V11);
     expect(row).toMatchObject({
-      subtitle: "partly moved",
+      subtitle: "partly in Personal",
       verb: "finish_moving",
       needsUpdate: false,
       defaultsToLocal: false,
@@ -119,7 +119,9 @@ describe("localPickerRow", () => {
 
 describe("personalSubtitle", () => {
   it("names up to two hosts and counts the rest", () => {
-    expect(personalSubtitle([])).toBe("your settings");
+    expect(personalSubtitle([])).toBe(
+      "your settings · not on any computer or sandbox",
+    );
     expect(personalSubtitle(["MacBook Pro"])).toBe(
       "your settings · on MacBook Pro",
     );
@@ -143,7 +145,7 @@ describe("environmentPickerModel", () => {
     principal: { kind: "personal" },
   });
 
-  it("names the hosts running Personal, leaving out a computer that has a Local row", () => {
+  it("gives a computer that has a Local row its own row", () => {
     const model = environmentPickerModel({
       hosts: [
         { hostId: "a", name: "MacBook Pro" },
@@ -165,9 +167,6 @@ describe("environmentPickerModel", () => {
       ]),
       windowHostId: "a",
     });
-    expect(model.personalSubtitle).toBe(
-      "your settings · on MacBook Pro, dev-box and 1 more",
-    );
     expect(model.localRows.map((row) => row.hostId)).toEqual(["old"]);
   });
 

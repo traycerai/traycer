@@ -1,24 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
-  EnvironmentReviewResponseV11,
-  EnvironmentStatusResponseV11,
-} from "@traycer/protocol/host/environment-schemas";
-import type {
-  EnvironmentMoveStopPreviewResponse,
+  EnvironmentMoveStopPreviewResponseV11,
   EnvironmentMoveStopRequest,
 } from "@traycer/protocol/host/environment/move-contracts";
 import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
@@ -31,17 +27,59 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+
+// Details opens the configuration drawer, which has its own suite and reads
+// the host pool; a marker here, so the card's layout around it is what is
+// under test.
+vi.mock("@/components/settings/details/overview-card-details-line", () => ({
+  OverviewCardDetailsLine: () => (
+    <button type="button" data-testid="card-details">
+      Details
+    </button>
+  ),
+}));
+
+// Export diagnostics opens the same drawer on its export tab; a marker here
+// shows whether, and on which tab, the card asked for it.
+vi.mock("@/components/settings/details/settings-details-button", () => ({
+  SettingsDetailsDialog: (props: {
+    readonly open: boolean;
+    readonly initialTab: string;
+  }) =>
+    props.open ? (
+      <div data-testid="details-dialog" data-tab={props.initialTab} />
+    ) : null,
+}));
+vi.mock(
+  "@/components/settings/details/use-host-settings-details-subject",
+  () => ({
+    useHostSettingsDetailsSubject: () => ({
+      environmentId: "env-a",
+      kind: "host_settings",
+      key: "old",
+    }),
+  }),
+);
 
 const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
 const STOPPED_AT = Date.UTC(2026, 9, 21, 12);
 
 /**
  * The card over a fake host that negotiated the redesign's methods, so the
- * dated lines, Stop sharing and the retrospective run their real reads.
+ * dated lines, Stop using Personal and the retrospective run their real reads.
  */
 function renderCard(
   status: EnvironmentStatusResponseV11,
   handlers: MockHandlerMap<HostRpcRegistry>,
+): void {
+  renderCardWithRetry(status, handlers, true);
+}
+
+function renderCardWithRetry(
+  status: EnvironmentStatusResponseV11,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  retrySupported: boolean,
 ): void {
   const { client } = buildEnvironmentClient({ hostId: "old", handlers });
   recordNegotiatedHostManifest("old", {
@@ -50,6 +88,9 @@ function renderCard(
     "environment.review.record": { major: 1, minor: 0 },
     "environment.move.stopPreview": { major: 1, minor: 0 },
     "environment.move.stop": { major: 1, minor: 0 },
+    ...(retrySupported
+      ? { "environment.setup.retry": { major: 1, minor: 0 } }
+      : {}),
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -66,27 +107,6 @@ function renderCard(
   );
 }
 
-function reviewFixture(shownAt: number | null): EnvironmentReviewResponseV11 {
-  return {
-    entries: [],
-    shownAt,
-    acknowledgedAt: null,
-    evidence: { version: null, at: null },
-  };
-}
-
-/** A promise and the function that settles it, for an answer held back. */
-function deferred<T>(): {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
-
 const MOVE_LINES = [
   "host-settings-card-local",
   "host-settings-card-progress",
@@ -99,6 +119,7 @@ function shownLines(): string[] {
 
 beforeEach(() => {
   useMoveSheetStore.setState({ target: null });
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
 });
 
 afterEach(() => {
@@ -111,6 +132,7 @@ describe("<HostOverviewSettingsCard />", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
         setup: { stage: "moving_settings", state: "awaiting_consent" },
       }),
       {},
@@ -125,6 +147,27 @@ describe("<HostOverviewSettingsCard />", () => {
       hostId: "old",
       hostName: "Old laptop",
     });
+  });
+
+  it("puts Details on the Local line, between the sentence and Move to Personal", () => {
+    renderCard(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+        setup: { stage: "moving_settings", state: "awaiting_consent" },
+      }),
+      {},
+    );
+
+    const line = screen.getByTestId("host-settings-card-local").parentElement;
+    expect(
+      Array.from(line?.children ?? []).map((child) => child.textContent),
+    ).toEqual([
+      "Settings on this computer only.",
+      "Details",
+      "Move to Personal",
+    ]);
+    expect(screen.getAllByTestId("card-details")).toHaveLength(1);
   });
 
   it("shows N of M items applied while moving", () => {
@@ -151,6 +194,118 @@ describe("<HostOverviewSettingsCard />", () => {
       "Moving this computer's settings to Personal · 2 of 4 items applied",
     );
     expect(screen.queryByTestId("host-settings-card-move")).toBeNull();
+    // Details sits on the progress line's own row, not as a line of the card.
+    const details = screen.getAllByTestId("card-details");
+    expect(details).toHaveLength(1);
+    const row = screen.getByTestId("host-settings-card-progress").parentElement;
+    expect(row?.contains(details[0])).toBe(true);
+    expect(row).not.toBe(screen.getByTestId("host-settings-card"));
+    expect(details[0].parentElement).toBe(row);
+  });
+
+  it("shows no count while the move has registered no item", () => {
+    renderCard(
+      environmentStatusFixture({
+        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        setup: { stage: "moving_settings", state: "running" },
+      }),
+      {},
+    );
+
+    expect(
+      screen
+        .getByTestId("host-settings-card-progress")
+        .textContent.replace(/\s+/g, " "),
+    ).toBe("Moving this computer's settings to Personal");
+  });
+
+  describe("when the move stopped", () => {
+    const stoppedStatus = (state: "stalled" | "failed") =>
+      environmentStatusFixture({
+        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        setup: { stage: "moving_settings", state },
+        items: [
+          itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),
+          itemStatusFixture({ kind: "variable", key: "B", status: "pending" }),
+          itemStatusFixture({ kind: "variable", key: "C", status: "pending" }),
+        ],
+        pendingUploads: [pendingUploadFixture({ kind: "variable", key: "D" })],
+      });
+
+    it("says it timed out when it stalled, with the items left", () => {
+      renderCard(stoppedStatus("stalled"), {});
+
+      expect(
+        screen.getByTestId("host-settings-card-move-stopped").textContent,
+      ).toBe("Moving stopped: it timed out. 3 items left.");
+      expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+      expect(screen.queryByTestId("card-details")).toBeNull();
+    });
+
+    it("says it couldn't finish when it failed", () => {
+      renderCard(stoppedStatus("failed"), {});
+
+      expect(
+        screen.getByTestId("host-settings-card-move-stopped").textContent,
+      ).toBe("Moving stopped: it couldn't finish. 3 items left.");
+    });
+
+    it("sends environment.setup.retry from Retry", async () => {
+      const retries: unknown[] = [];
+      renderCard(stoppedStatus("stalled"), {
+        "environment.setup.retry": (request) => {
+          retries.push(request);
+          return { attemptId: "retry-1" };
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(retries).toEqual([{}]));
+    });
+
+    it("offers no Retry on a host without environment.setup.retry", () => {
+      renderCardWithRetry(stoppedStatus("failed"), {}, false);
+
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      ).toBeTruthy();
+    });
+
+    it("opens the Details drawer on Export diagnostics", () => {
+      renderCard(stoppedStatus("failed"), {});
+      expect(screen.queryByTestId("details-dialog")).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+
+      expect(screen.getByTestId("details-dialog").dataset.tab).toBe("export");
+    });
+  });
+
+  it("leaves a configuration's sandbox defaults out of the items moving", () => {
+    expect(
+      hostSettingsCardState(
+        environmentStatusFixture({
+          consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+          setup: { stage: "moving_settings", state: "running" },
+          items: [
+            itemStatusFixture({
+              kind: "variable",
+              key: "A",
+              status: "applied",
+            }),
+            itemStatusFixture({
+              kind: "sandbox_defaults",
+              key: "sandbox",
+              status: "pending",
+            }),
+          ],
+        }),
+      ),
+    ).toEqual({ kind: "moving", applied: 1, total: 1 });
   });
 
   it("says when it moved, from the consent, once setup is past the move", () => {
@@ -163,15 +318,77 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(shownLines()).toEqual(["host-settings-card-moved"]);
-    expect(screen.getByTestId("host-settings-card-moved").textContent).toBe(
-      `Moved to Personal on ${new Date(ACCEPTED_AT).toLocaleDateString(
-        undefined,
-        {
-          day: "numeric",
-          month: "short",
-        },
-      )}`,
+    const moved = screen.getByTestId("host-settings-card-moved");
+    expect(moved.textContent).toBe("Moved to Personal on 20 Oct");
+    // Details sits on the same row as the date, with no second Details row.
+    const details = screen.getAllByTestId("card-details");
+    expect(details).toHaveLength(1);
+    expect(moved.parentElement?.contains(details[0])).toBe(true);
+  });
+
+  it("offers Finish moving while an upload is still pending", () => {
+    renderCard(
+      environmentStatusFixture({
+        planes: { records: "moved", broker: "local", room: "moved" },
+        pendingUploads: [pendingUploadFixture({ kind: "variable", key: "D" })],
+        setup: null,
+      }),
+      {},
     );
+
+    expect(screen.getByTestId("host-settings-card-local").textContent).toBe(
+      "Settings on this computer only.",
+    );
+    expect(screen.getByTestId("host-settings-card-move").textContent).toBe(
+      "Finish moving",
+    );
+  });
+
+  it("says shared by an earlier version with Details, and Details opens the retrospective for this computer", () => {
+    renderCard(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "shared_unrecorded",
+          room: "shared_unrecorded",
+        },
+      }),
+      {},
+    );
+
+    expect(shownLines()).toEqual([]);
+    const line = screen.getByTestId("overview-shared-by-earlier-version");
+    expect(line.textContent).toBe("Shared by an earlier version · Details");
+    expect(screen.getByTestId("overview-stop-sharing").textContent).toBe(
+      "Stop using Personal on this computer",
+    );
+    fireEvent.click(
+      screen.getByTestId("overview-shared-by-earlier-version-details"),
+    );
+    expect(useRetrospectiveSheetStore.getState()).toMatchObject({
+      target: { hostId: "old", hostName: "Old laptop" },
+      open: true,
+    });
+  });
+
+  it("after a stop says the date and keeps the local line with its Move to Personal", () => {
+    renderCard(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "stopped", broker: "stopped", room: "stopped" },
+        stoppedAt: STOPPED_AT,
+      }),
+      {},
+    );
+
+    expect(shownLines()).toEqual(["host-settings-card-local"]);
+    expect(
+      screen.getByText("This computer stopped using Personal on 21 Oct"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("host-settings-card-move").textContent).toBe(
+      "Move to Personal",
+    );
+    expect(screen.queryByTestId("overview-stop-sharing")).toBeNull();
   });
 
   it("shows none of these lines with no consent on record", () => {
@@ -186,7 +403,7 @@ describe("<HostOverviewSettingsCard />", () => {
   });
 });
 
-describe("<HostOverviewSettingsCard /> after Stop sharing", () => {
+describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
   it("counts the removals a stop still owes, and names each failed one with its failure", () => {
     renderCard(
       environmentStatusFixture({
@@ -218,6 +435,17 @@ describe("<HostOverviewSettingsCard /> after Stop sharing", () => {
     ).toEqual(["LOG_LEVEL couldn't be removed: permission denied."]);
   });
 
+  it("explains Stop using Personal under its button", () => {
+    renderCard(environmentStatusFixture({}), {});
+
+    expect(screen.getByTestId("overview-stop-sharing").textContent).toBe(
+      "Stop using Personal on this computer",
+    );
+    expect(screen.getByTestId("overview-stop-sharing-help").textContent).toBe(
+      "Returns Old laptop to its own settings: it stops receiving Personal and reporting to it. Shows what Personal manages here first. Nothing in Personal is deleted.",
+    );
+  });
+
   it("refetches a changed preview on choices_missing, names the row that now needs a choice, and sends again only once it has one", async () => {
     const logLevel = {
       row: {
@@ -228,6 +456,8 @@ describe("<HostOverviewSettingsCard /> after Stop sharing", () => {
         detail: null,
       },
       reason: "edited_here" as const,
+      origin: "changed_here" as const,
+      usedBy: [],
     };
     const editor = {
       row: {
@@ -238,8 +468,10 @@ describe("<HostOverviewSettingsCard /> after Stop sharing", () => {
         detail: null,
       },
       reason: "depended_on" as const,
+      origin: "depended_on" as const,
+      usedBy: [],
     };
-    const previews: EnvironmentMoveStopPreviewResponse[] = [
+    const previews: EnvironmentMoveStopPreviewResponseV11[] = [
       { managed: [], needsChoice: [logLevel] },
       { managed: [], needsChoice: [logLevel, editor] },
     ];
@@ -291,64 +523,6 @@ describe("<HostOverviewSettingsCard /> after Stop sharing", () => {
         },
       ],
     });
-  });
-});
-
-describe("<HostOverviewSettingsCard /> retrospective", () => {
-  const SHARED_EARLIER = environmentStatusFixture({
-    planes: { records: "shared_unrecorded", broker: "local", room: "local" },
-  });
-
-  it("stays closed while the review is loading, then opens and records shown once the review says it was never shown", async () => {
-    const review = deferred<EnvironmentReviewResponseV11>();
-    const recorded: string[] = [];
-    let reviewReads = 0;
-    renderCard(SHARED_EARLIER, {
-      "environment.status": () => SHARED_EARLIER,
-      "environment.review": () => {
-        reviewReads += 1;
-        return review.promise;
-      },
-      "environment.review.record": (request) => {
-        recorded.push(request.event);
-        return { outcome: "recorded" };
-      },
-    });
-
-    await waitFor(() => expect(reviewReads).toBe(1));
-    expect(screen.queryByTestId("retrospective-sheet")).toBeNull();
-    expect(recorded).toEqual([]);
-
-    await act(async () => {
-      review.resolve(reviewFixture(null));
-      await review.promise;
-    });
-
-    await screen.findByTestId("retrospective-sheet");
-    await waitFor(() => expect(recorded).toEqual(["shown"]));
-  });
-
-  it("does not open once the review says it was already shown", async () => {
-    let answered = 0;
-    const recorded: string[] = [];
-    renderCard(SHARED_EARLIER, {
-      "environment.status": () => SHARED_EARLIER,
-      "environment.review": () => {
-        answered += 1;
-        return reviewFixture(STOPPED_AT);
-      },
-      "environment.review.record": (request) => {
-        recorded.push(request.event);
-        return { outcome: "recorded" };
-      },
-    });
-
-    await waitFor(() => expect(answered).toBeGreaterThan(0));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(screen.queryByTestId("retrospective-sheet")).toBeNull();
-    expect(recorded).toEqual([]);
   });
 });
 

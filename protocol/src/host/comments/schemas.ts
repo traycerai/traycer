@@ -7,6 +7,7 @@ import {
 import {
   commentThreadWireSchema,
   commentThreadWireSchemaPreAnchor,
+  commentThreadWireSchemaPreCanvasPoint,
 } from "../epic/unary-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -41,6 +42,12 @@ export const commentsListThreadSchemaPreAnchor = lazySchema(() =>
     anchorWarning: z.string().nullable(),
   }),
 );
+export const commentsListThreadSchemaPreCanvasPoint = lazySchema(() =>
+  commentsListThreadSchemaPreAnchor.extend({
+    thread: commentThreadWireSchemaPreCanvasPoint,
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
 export const commentsListThreadSchema = lazySchema(() =>
   commentsListThreadSchemaPreAnchor.extend({ thread: commentThreadWireSchema }),
 );
@@ -61,6 +68,12 @@ export const commentsListArtifactSchemaPreAnchor = lazySchema(() =>
     kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),
   }),
 );
+export const commentsListArtifactSchemaPreCanvasPoint = lazySchema(() =>
+  commentsListArtifactSchemaPreAnchor.extend({
+    threads: z.array(commentsListThreadSchemaPreCanvasPoint),
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
 export const commentsListArtifactSchema = lazySchema(() =>
   commentsListArtifactSchemaPreAnchor.extend({
     threads: z.array(commentsListThreadSchema),
@@ -79,6 +92,12 @@ export const commentsListThreadsResponseSchemaPreAnchor = lazySchema(() =>
     artifacts: z.array(commentsListArtifactSchemaPreAnchor),
   }),
 );
+export const commentsListThreadsResponseSchemaPreCanvasPoint = lazySchema(() =>
+  commentsListThreadsResponseSchemaPreAnchor.extend({
+    artifacts: z.array(commentsListArtifactSchemaPreCanvasPoint),
+  }),
+);
+/** 1.3 adds the canvas-point anchor kind; 1.2 keeps its frozen enum. */
 export const commentsListThreadsResponseSchema = lazySchema(() =>
   commentsListThreadsResponseSchemaPreAnchor.extend({
     artifacts: z.array(commentsListArtifactSchema),

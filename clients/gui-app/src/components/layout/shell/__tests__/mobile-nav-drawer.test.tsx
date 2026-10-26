@@ -150,6 +150,16 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => ({ signOut: () => testState.signOut() }),
 }));
 
+// The fixed Tracy row asks for this window's host and the hosts this client
+// can dial; the directory behind them needs a host runtime this suite does
+// not mount. It draws no row here: no bot tab is the entry.
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: true }),
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     authnBaseUrl: "https://authn.test",

@@ -1,10 +1,7 @@
-import { useId, useMemo, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
-import { useStore } from "zustand";
+import { useId, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import type {
   BotOnboardingArea,
-  BotOnboardingChoice,
   BotOnboardingGithub,
   BotOnboardingReadResponse,
 } from "@traycer/protocol/host/bot/onboarding-schemas";
@@ -15,29 +12,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import { CreateBotNoHost } from "@/components/home/bots/create-bot-form";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
-import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
-import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import {
+  useTeamOnboardingFlow,
+  type TeamOnboardingFlow,
+} from "@/components/home/bots/use-team-onboarding-flow";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useHostsAdvertisingMethod } from "@/hooks/host/use-hosts-advertising-method";
-import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
-import {
-  useBotOnboardingChooseMutation,
-  useBotOnboardingCompleteMutation,
-} from "@/hooks/bots/use-bot-mutations";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
-import {
-  chooseBotCreateHost,
-  type BotCreateHostChoice,
-} from "@/lib/home-bots/bot-create-host";
 import { teamGithubDashboardUrl } from "@/lib/sandboxes/secrets-dashboard";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -129,112 +112,14 @@ function OnboardingSteps(props: {
   readonly environmentBindings: HostEnvironmentBindings;
   readonly data: BotOnboardingReadResponse;
 }): ReactNode {
-  const {
-    environmentId,
-    teamName,
-    connectableHostIds,
+  const { teamName, environmentBindings, data } = props;
+  const flow = useTeamOnboardingFlow({
+    environmentId: props.environmentId,
+    connectableHostIds: props.connectableHostIds,
     environmentBindings,
     data,
-  } = props;
-  const tabClient = useTabHostClient();
-  const choose = useBotOnboardingChooseMutation(tabClient);
-
-  const localHostId = useReactiveLocalHostId();
-  const effectiveHostId = useEffectiveHostId();
-  const completingHostIds = useHostsAdvertisingMethod(
-    connectableHostIds,
-    "bot.onboarding.complete",
-  );
-  const hostChoice = chooseBotCreateHost({
-    environmentId,
-    localHostId,
-    effectiveHostId,
-    connectableHostIds,
-    bindings: environmentBindings.byHostId,
-    failedHostIds: environmentBindings.failedHostIds,
-    creatingHostIds: completingHostIds,
+    onOpened: NOTHING,
   });
-  const pending = pendingOf(data);
-  const hostId = completionHostId(pending, completingHostIds, hostChoice);
-  const namedClient = useHostClientForHostId(hostId);
-  const createClient = hostId === null ? null : namedClient;
-  const complete = useBotOnboardingCompleteMutation(createClient);
-  const toolbarStore = useComposerToolbarStore(
-    null,
-    fallbackSeedSource(null, createClient),
-    null,
-    // The chosen host's last-used buckets, the machine the bots will run on.
-    {
-      hostClient: createClient,
-      hostId,
-      tuiOnly: false,
-      chatLineCarriesAutoMode: null,
-    },
-  );
-  const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
-  const reasoning = useStore(toolbarStore, (s) => s.reasoning);
-  const maxModeContext = useMemo(
-    () => chatMaxModeContextForToolbar(reasoning, ""),
-    [reasoning],
-  );
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  const navigate = useNavigate();
-
-  const defaultAreas = useMemo(
-    () =>
-      data.catalog.filter((entry) => entry.tickedByDefault).map((e) => e.area),
-    [data.catalog],
-  );
-  // A choice being sent shows as made; the mutation stays pending until the
-  // read carries it back.
-  const chosen: ReadonlyArray<string> = choose.isPending
-    ? choose.variables.areas
-    : (data.choice?.areas ?? defaultAreas);
-  const toggle = (area: string, checked: boolean): void => {
-    const areas = checked
-      ? [...chosen.filter((a) => a !== area), area]
-      : chosen.filter((a) => a !== area);
-    choose.mutate({ environmentId, areas });
-  };
-
-  const busy = choose.isPending || complete.isPending;
-  const canOpen =
-    data.unlocked &&
-    hostId !== null &&
-    chosen.length > 0 &&
-    modelSlug.length > 0 &&
-    !busy;
-
-  const openChannels = (): void => {
-    if (!canOpen) return;
-    const toolbar = toolbarStore.getState();
-    const areas = [...chosen];
-    // `mutateAsync`, as the create form's submit: the continuation opens the
-    // channel through module-level actions whether or not the card is still
-    // mounted. A failure is already toasted by the mutations.
-    void (async () => {
-      // The host creates the team's kept choice; one never made is the
-      // default the boxes show.
-      if (data.choice === null) {
-        await choose.mutateAsync({ environmentId, areas });
-      }
-      const response = await complete.mutateAsync({
-        environmentId,
-        harness: toolbar.selection.harnessId,
-        model: toolbar.selection.modelSlug,
-        effort: toolbar.reasoning.length === 0 ? null : toolbar.reasoning,
-        profile: toolbar.selection.profileId,
-      });
-      if (response.bots.length === 0) return;
-      const first = response.bots[0];
-      const title =
-        data.catalog.find((entry) => entry.area === first.area)?.title ??
-        first.area;
-      openBotTab({ botId: first.botId, hostId, title });
-      navigateToTabIntent(navigate, botTabIntent(first.botId), undefined);
-    })().catch(() => undefined);
-  };
-
   return (
     <div
       data-testid="bot-onboarding-card"
@@ -244,86 +129,94 @@ function OnboardingSteps(props: {
       <GithubStep github={data.github} teamName={teamName} />
       <BotsStep
         catalog={data.catalog}
-        chosen={chosen}
-        pendingAreas={pending.map((entry) => entry.area)}
-        disabled={complete.isPending}
-        onToggle={toggle}
+        chosen={flow.chosen}
+        pendingAreas={flow.pendingAreas}
+        disabled={flow.completing}
+        onToggle={flow.toggle}
       />
-      {data.unlocked && pending.length === 0 && hostChoice.kind !== "chosen" ? (
-        <CreateBotNoHost
-          checking={hostChoice.kind === "checking"}
-          environmentLabel={teamName}
-          someUnchecked={environmentBindings.failedHostIds.length > 0}
-          onRetry={environmentBindings.retryFailed}
-        />
-      ) : null}
-      {data.unlocked ? (
-        <div className="flex min-w-0">
-          <HarnessModelPicker
-            labelDisplay="responsive"
-            maxModeContext={maxModeContext}
-            store={toolbarStore}
-            withServiceTier={false}
-            withReasoning
-            tuiOnly={false}
-            lockedHarnessId={null}
-            disabled={busy || hostId === null}
-            registerActivation={false}
-            createProfileHostId={hostId}
-            runTargetHostId={hostId}
-            terminalLoginSurface={null}
-            profileAdmission={null}
-            embedding={null}
-          />
-        </div>
-      ) : null}
+      <OnboardingCreateControls
+        flow={flow}
+        unlocked={data.unlocked}
+        teamName={teamName}
+        environmentBindings={environmentBindings}
+      />
       <div className="flex justify-end">
-        <Button
-          type="button"
-          size="sm"
-          disabled={!canOpen}
-          data-testid="bot-onboarding-open"
-          onClick={openChannels}
-        >
-          {complete.isPending ? (
-            <AgentSpinningDots
-              className="ml-1"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          Open your channels
-        </Button>
+        <OnboardingOpenButton flow={flow} label="Open your channels" />
       </div>
     </div>
   );
 }
 
-/** The chosen areas whose bot another host has not finished yet. */
-function pendingOf(
-  data: BotOnboardingReadResponse,
-): BotOnboardingChoice["pending"] {
-  return data.choice?.pending ?? [];
-}
+const NOTHING = (): void => undefined;
 
 /**
- * Where "Open your channels" sends the completion. While an area is pending,
- * only its own host can finish it: there, when this client reaches it, or
- * nowhere until it does. Otherwise the host the app picks for the bots.
+ * What the create needs once GitHub is connected: the notice when no host can
+ * make the bots, and the model they run on.
  */
-function completionHostId(
-  pending: BotOnboardingChoice["pending"],
-  completingHostIds: ReadonlySet<string>,
-  hostChoice: BotCreateHostChoice,
-): string | null {
-  if (pending.length > 0) {
-    return (
-      pending
-        .map((entry) => entry.hostId)
-        .find((id) => id !== null && completingHostIds.has(id)) ?? null
-    );
-  }
-  return hostChoice.kind === "chosen" ? hostChoice.hostId : null;
+export function OnboardingCreateControls(props: {
+  readonly flow: TeamOnboardingFlow;
+  readonly unlocked: boolean;
+  readonly teamName: string;
+  readonly environmentBindings: HostEnvironmentBindings;
+}): ReactNode {
+  const { flow, unlocked, teamName, environmentBindings } = props;
+  if (!unlocked) return null;
+  return (
+    <>
+      {flow.nothingPending && flow.hostChoice.kind !== "chosen" ? (
+        <CreateBotNoHost
+          checking={flow.hostChoice.kind === "checking"}
+          environmentLabel={teamName}
+          someUnchecked={environmentBindings.failedHostIds.length > 0}
+          onRetry={environmentBindings.retryFailed}
+        />
+      ) : null}
+      <div className="flex min-w-0">
+        <HarnessModelPicker
+          labelDisplay="responsive"
+          maxModeContext={flow.maxModeContext}
+          store={flow.toolbarStore}
+          withServiceTier={false}
+          withReasoning
+          tuiOnly={false}
+          lockedHarnessId={null}
+          disabled={flow.busy || flow.hostId === null}
+          registerActivation={false}
+          createProfileHostId={flow.hostId}
+          runTargetHostId={flow.hostId}
+          terminalLoginSurface={null}
+          profileAdmission={null}
+          embedding={null}
+        />
+      </div>
+    </>
+  );
+}
+
+/** The onboarding's primary action, which creates the chosen bots. */
+export function OnboardingOpenButton(props: {
+  readonly flow: TeamOnboardingFlow;
+  readonly label: string;
+}): ReactNode {
+  const { flow } = props;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      disabled={!flow.canOpen}
+      data-testid="bot-onboarding-open"
+      onClick={flow.openChannels}
+    >
+      {flow.completing ? (
+        <AgentSpinningDots
+          className="ml-1"
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      {props.label}
+    </Button>
+  );
 }
 
 function StepTrail(props: { readonly unlocked: boolean }): ReactNode {
@@ -341,7 +234,7 @@ function StepTrail(props: { readonly unlocked: boolean }): ReactNode {
   );
 }
 
-function BotsStep(props: {
+export function BotsStep(props: {
   readonly catalog: ReadonlyArray<BotOnboardingArea>;
   readonly chosen: ReadonlyArray<string>;
   readonly pendingAreas: ReadonlyArray<string>;
@@ -384,7 +277,7 @@ function BotsStep(props: {
   );
 }
 
-function GithubStep(props: {
+export function GithubStep(props: {
   readonly github: BotOnboardingGithub;
   readonly teamName: string;
 }): ReactNode {

@@ -102,6 +102,7 @@ export type AnalyticsCommand =
 
 export type AnalyticsSettingsSection =
   | "agents"
+  | "alerts"
   | "app-diagnostics"
   | "app-notifications"
   | "appearance"
@@ -337,6 +338,7 @@ export type AnalyticsSetting =
   | "catalogProbeTimeout"
   | "catalogProbeTimeoutSameForAll"
   | "chatAutoArchive"
+  | "claudeSessionName"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
@@ -359,6 +361,7 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGreeting"
   | "showRecentHistory"
+  | "showTracy"
   | "startPageWallpaper"
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
@@ -1390,6 +1393,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
 const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
   Object.keys({
     agents: true,
+    alerts: true,
     "app-diagnostics": true,
     "app-notifications": true,
     appearance: true,
@@ -1446,6 +1450,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     catalogProbeTimeout: true,
     catalogProbeTimeoutSameForAll: true,
     chatAutoArchive: true,
+    claudeSessionName: true,
     codeFontFamily: true,
     codeFontSize: true,
     composerMode: true,
@@ -1465,6 +1470,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     quoteReplyEnabled: true,
     showGreeting: true,
     showRecentHistory: true,
+    showTracy: true,
     startPageWallpaper: true,
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,

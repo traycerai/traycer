@@ -241,6 +241,7 @@ export function botSnapshotFrame(
       epoch: bot.hostEpoch,
       isThisHost: false,
     },
+    activity: null,
   };
 }
 

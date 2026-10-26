@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { use, useEffect, useRef } from "react";
+import { KeyboardOwnerContext } from "@/hooks/use-primary-action-shortcut";
 import { normalizeCode, parseChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -191,7 +192,8 @@ interface UseDictationHotkeyArgs {
  * the multi-key chord at a natural pace still reads as a tap.
  */
 export function useDictationHotkey(args: UseDictationHotkeyArgs): void {
-  const { enabled } = args;
+  // A surface kept mounted while not shown owns no hotkey.
+  const enabled = use(KeyboardOwnerContext) && args.enabled;
   // Latest-value ref so the singleton reads live state/handlers without
   // re-subscribing on every render.
   const argsRef = useRef(args);

@@ -164,6 +164,8 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   coldRewrittenMessageIds: true,
   jumpTargetOrdinal: "ordinal included in the fixed store charge",
   findReadOrdinal: "ordinal included in the fixed store charge",
+  heldReadOrdinals:
+    "one ordinal per surface showing a held row, included in the fixed store charge",
   accumulatedFileChangeSummaries: true,
   accumulatedSummaryGenerationSeated:
     "boolean included in the fixed store charge",
@@ -204,6 +206,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   worktreeBinding: true,
   missingWorktreePaths: true,
   suggestedPrompt: true,
+  opencodeLineHeld: true,
   thinkingTokens: true,
 } as const satisfies Readonly<Record<ChatSessionDataKey, true | string>>;
 

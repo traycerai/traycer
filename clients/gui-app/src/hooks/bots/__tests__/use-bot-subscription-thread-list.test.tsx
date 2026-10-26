@@ -14,28 +14,12 @@ import {
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { BotSubscribeServerFrame } from "@traycer/protocol/host/bot/schemas";
 import type { BotThreadListResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
-import type {
-  IStreamSession,
-  ServerFrameHandler,
-  StatusChangeHandler,
-} from "@traycer-clients/shared/host-transport/i-stream-session";
-import type {
-  IHostStreamClient,
-  ReconnectAllOptions,
-} from "@traycer-clients/shared/host-transport/host-stream-client";
-import type {
-  ParamsOf,
-  StreamMethodSupport,
-} from "@traycer-clients/shared/host-transport/ws-stream-client";
-import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -46,94 +30,10 @@ import {
   useBotSubscriptionForClient,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = mockLocalHostEntry.hostId;
-
-class StubSession implements IStreamSession {
-  private serverFrameHandler: ServerFrameHandler = () => undefined;
-  readonly close = vi.fn();
-
-  sendClientFrame(): void {}
-
-  onServerFrame(handler: ServerFrameHandler): void {
-    this.serverFrameHandler = handler;
-  }
-
-  onStatusChange(_handler: StatusChangeHandler): void {}
-
-  getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return null;
-  }
-
-  requestReconnect(): void {}
-
-  emit(frame: BotSubscribeServerFrame): void {
-    this.serverFrameHandler(frame, null);
-  }
-}
-
-/** A stream client whose every subscribe is `session`; nothing else is reached. */
-class StubHostStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
-  readonly instanceId = "stub-stream-client";
-
-  constructor(private readonly session: IStreamSession) {}
-
-  isReady(): boolean {
-    return true;
-  }
-
-  subscribe<Method extends keyof HostStreamRpcRegistry & string>(
-    _method: Method,
-    _params: ParamsOf<HostStreamRpcRegistry, Method>,
-  ): IStreamSession {
-    return this.session;
-  }
-
-  subscribeWithParamsProvider<
-    Method extends keyof HostStreamRpcRegistry & string,
-  >(
-    _method: Method,
-    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
-  ): IStreamSession {
-    return this.session;
-  }
-
-  getMethodSchemaVersion(): SchemaVersion | null {
-    return null;
-  }
-
-  close(): void {}
-
-  isClosed(): boolean {
-    return false;
-  }
-
-  getClosedReason(): string | null {
-    return null;
-  }
-
-  onClosed(): () => void {
-    return () => {};
-  }
-
-  notifyBearerRotated(): void {}
-  notifyCloudVerdictChanged(): void {}
-
-  reconnectAll(_reason: string, _options: ReconnectAllOptions): void {}
-
-  getMethodSupport(): StreamMethodSupport {
-    return "unknown";
-  }
-
-  subscribeMethodSupport(): () => void {
-    return () => {};
-  }
-
-  subscribeAvailabilityRecovered(): () => void {
-    return () => {};
-  }
-}
 
 function snapshot(
   conversationsRevision: number | null,
@@ -163,6 +63,7 @@ function snapshot(
     openRequestCount,
     conversationsRevision,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
+    activity: null,
     hasBinaryPayload: false,
   };
 }

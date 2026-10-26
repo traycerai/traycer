@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Box, Cloud, Laptop, MonitorSmartphone, Server } from "lucide-react";
+import { Box, Laptop, Monitor, MonitorSmartphone, Server } from "lucide-react";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { PingRing } from "@/components/ui/ping-ring";
 import { cn } from "@/lib/utils";
@@ -12,8 +12,9 @@ const LIVE_RING_PEAK_OPACITY = 0.6;
  * The old list drew a CLOUD on every row — including the laptop the app was
  * running on. That single wrong icon is most of why the local host read as
  * a different species from itself in the section below. The glyph now answers
- * "what kind of host is this?": the one on this computer, another host you own,
- * or something reached over a relay.
+ * "what kind of host is this?": the one on this computer, another computer you
+ * own, or a sandbox. Another computer is reached over a relay, and is still a
+ * computer: a cloud there read as a sandbox.
  */
 export function HostGlyph(props: {
   readonly host: HostScopeOption;
@@ -31,7 +32,7 @@ export function HostGlyph(props: {
     return <Box className={className} aria-hidden />;
   }
   if (props.host.entry?.kind === "remote") {
-    return <Cloud className={className} aria-hidden />;
+    return <Monitor className={className} aria-hidden />;
   }
   if (props.host.entry?.kind === "mock") {
     return <Server className={className} aria-hidden />;

@@ -16,7 +16,8 @@ export interface ConfirmDestructiveDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  description: string;
+  /** Text, or text with an inline link; it reads as one paragraph. */
+  description: ReactNode;
   /** Optional cascade summary inlined into the description. Omit when no descendants. */
   cascadeSummary: string | null;
   /** Label for the destructive action button (e.g. "Delete" or "Remove"). */

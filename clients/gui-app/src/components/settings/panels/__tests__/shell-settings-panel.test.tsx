@@ -26,7 +26,12 @@ const hostBindingMock = vi.hoisted(
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostBinding: () => hostBindingMock.current };
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingMock.current,
+    // Add a secret, which a key-shaped value is refused for, reads the client.
+    useHostClient: () => hostBindingMock.current?.hostClient,
+  };
 });
 
 // What `useHostCredentialRefusal` answers for the scoped host: `null` is a
@@ -54,6 +59,7 @@ import type {
   IRunnerHost,
   TraycerShellConfigSetInput,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { LocalOverride } from "@traycer/protocol/host/environment-schemas";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -65,9 +71,15 @@ import {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
+import {
+  PersonalPageContext,
+  type PersonalPageContextValue,
+} from "@/components/settings/personal/personal-page-context";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import {
   ALL_CONFIG_RPC_METHODS,
   CONFIG_SHELL_METHODS,
@@ -113,6 +125,8 @@ function renderShellPanelOverRpc(options: {
   readonly hostId?: string;
   readonly isLocalMachine?: boolean;
   readonly connectable?: boolean;
+  /** Supplies the Personal page context that offers local values for Use everywhere. */
+  readonly localOverrides?: readonly LocalOverride[];
   /**
    * Recorded via `recordNegotiatedHostMethods`. Defaults to the full shell
    * family (a host that has handshaked and supports everything); pass `null`
@@ -120,7 +134,11 @@ function renderShellPanelOverRpc(options: {
    * distinct from a recorded-but-empty manifest.
    */
   readonly methods?: readonly string[] | null;
-}): ConfigHostFixture {
+}): ConfigHostFixture & {
+  readonly queryClient: QueryClient;
+  readonly rerenderPanel: () => void;
+  readonly unmountPanel: () => void;
+} {
   const hostId = options.hostId ?? "host-a";
   const isLocalMachine = options.isLocalMachine ?? true;
   const cli = options.cli ?? new MockTraycerCli();
@@ -134,7 +152,12 @@ function renderShellPanelOverRpc(options: {
   if (options.methods !== null) {
     recordNegotiatedHostMethods(
       hostId,
-      options.methods ?? CONFIG_SHELL_METHODS,
+      options.methods ?? [
+        ...CONFIG_SHELL_METHODS,
+        ...(options.localOverrides === undefined
+          ? []
+          : ["config.env.localOverride.clear"]),
+      ],
     );
   }
 
@@ -162,15 +185,39 @@ function renderShellPanelOverRpc(options: {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  render(
+  const personalPageValue = {
+    section: "shell",
+    pick: PERSONAL_PICK,
+    state: { kind: "unknown" },
+    line: null,
+    hostName: hostId,
+    localOverrides: options.localOverrides ?? [],
+    hostId,
+    client: fixture.client,
+    notices: [],
+    review: [],
+  } satisfies PersonalPageContextValue;
+  const panel = () => (
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <StaleRereader hostId={hostId} />
-        <ShellSettingsPanel />
+        {options.localOverrides === undefined ? (
+          <ShellSettingsPanel />
+        ) : (
+          <PersonalPageContext.Provider value={personalPageValue}>
+            <ShellSettingsPanel />
+          </PersonalPageContext.Provider>
+        )}
       </RunnerHostProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
-  return fixture;
+  const rendered = render(panel());
+  return {
+    ...fixture,
+    queryClient,
+    rerenderPanel: () => rendered.rerender(panel()),
+    unmountPanel: () => rendered.unmount(),
+  };
 }
 
 /**
@@ -178,7 +225,7 @@ function renderShellPanelOverRpc(options: {
  * only on a save refused as stale.
  */
 function StaleRereader(props: { readonly hostId: string }) {
-  useRereadOnStaleWrite(props.hostId);
+  useRereadOnStaleWrite(props.hostId, null);
   return null;
 }
 
@@ -1214,7 +1261,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     value: string,
   ): Promise<void> {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
     fireEvent.change(screen.getByPlaceholderText(placeholder), {
       target: { value: name },
@@ -1289,7 +1336,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     renderShellPanelOverRpc({ cli: envCli() });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
 
     expect(screen.getByPlaceholderText("NODE_ENV")).toBeTruthy();
@@ -1306,7 +1353,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     });
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
     expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText("OPENAI_API_KEY"), {
@@ -1329,6 +1376,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
 describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
   const REFUSAL = "Sandboxes don't take sign-ins";
   const NAME_LINE = `${REFUSAL}: a variable whose name looks like a credential is not stored here.`;
+  const USERNAME_ONLY_URL = "https://short-token@example.com/path";
 
   function envCli(): MockTraycerCli {
     const cli = new MockTraycerCli();
@@ -1354,9 +1402,18 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     return { set, remove };
   }
 
+  function localVariableOverride(key: string, value: string): LocalOverride {
+    return {
+      target: { kind: "variable", key },
+      os: "any",
+      value,
+      setAt: 1,
+    };
+  }
+
   async function addVariable(name: string, value: string): Promise<void> {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Add variable" }),
+      await screen.findByRole("button", { name: "Add a variable" }),
     );
     fireEvent.change(screen.getByLabelText("New variable name"), {
       target: { value: name },
@@ -1441,6 +1498,161 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
       value: "sk-x",
       executableWriteGrant: null,
     });
+  });
+
+  it("refuses Use everywhere for a sign-in URL, without setting or clearing it", async () => {
+    const cli = envCli();
+    cli.envOverrides = [{ key: "REPO_URL", value: "https://example.com/path" }];
+    const { set } = envHandlers(cli);
+    const clear = vi.fn(() =>
+      Promise.resolve({
+        outcome: "saved" as const,
+        overrides: [],
+      }),
+    );
+    const panel = renderShellPanelOverRpc({
+      cli,
+      localOverrides: [localVariableOverride("REPO_URL", USERNAME_ONLY_URL)],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.clear": clear,
+      },
+    });
+
+    const ownValue = await screen.findByTestId("env-row-own-value");
+    expect(ownValue.textContent).toContain("Use everywhere");
+    expect(ownValue.textContent).toContain(USERNAME_ONLY_URL);
+
+    credentialRefusal.current = REFUSAL;
+    panel.rerenderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+
+    const writeMutationKeys = panel.queryClient
+      .getMutationCache()
+      .getAll()
+      .map(({ options }) => options.mutationKey);
+    expect(writeMutationKeys).not.toContainEqual(["config.env.set"]);
+    expect(writeMutationKeys).not.toContainEqual(
+      environmentMutationKeys.localOverrideClear(),
+    );
+    expect(set).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(cli.envOverrides).toEqual([
+      { key: "REPO_URL", value: "https://example.com/path" },
+    ]);
+  });
+
+  it("still moves an ordinary local variable everywhere", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const { set } = envHandlers(cli);
+    const clear = vi.fn(() =>
+      Promise.resolve({
+        outcome: "saved" as const,
+        overrides: [],
+      }),
+    );
+    renderShellPanelOverRpc({
+      cli,
+      localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.clear": clear,
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledOnce();
+      expect(clear).toHaveBeenCalledOnce();
+    });
+    expect(set).toHaveBeenCalledWith({
+      key: "LOG_LEVEL",
+      value: "error",
+      executableWriteGrant: null,
+    });
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+    });
+  });
+
+  it("clears a host's own variable after its save resolves, even if the panel unmounts", async () => {
+    credentialRefusal.current = REFUSAL;
+    let releaseSave: (() => void) | undefined;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const set = vi.fn(
+      async (request: { key: string; value: string | null }) => {
+        await new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        });
+        return { key: request.key, value: request.value };
+      },
+    );
+    const clear = vi.fn(() =>
+      Promise.resolve({ outcome: "saved" as const, overrides: [] }),
+    );
+    const panel = renderShellPanelOverRpc({
+      cli,
+      localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.clear": clear,
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() => expect(set).toHaveBeenCalledOnce());
+    expect(clear).not.toHaveBeenCalled();
+
+    panel.unmountPanel();
+    if (releaseSave === undefined) throw new Error("save did not start");
+    act(() => releaseSave?.());
+
+    await waitFor(() => expect(clear).toHaveBeenCalledOnce());
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+    });
+  });
+
+  it("keeps a host's own variable when saving it for everyone fails", async () => {
+    credentialRefusal.current = REFUSAL;
+    let rejectSave: ((error: Error) => void) | undefined;
+    const failedSave = new Promise<never>((_resolve, reject) => {
+      rejectSave = reject;
+    });
+    const cli = envCli();
+    cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
+    const set = vi.fn(() => failedSave);
+    const clear = vi.fn(() =>
+      Promise.resolve({ outcome: "saved" as const, overrides: [] }),
+    );
+    renderShellPanelOverRpc({
+      cli,
+      localOverrides: [localVariableOverride("LOG_LEVEL", "error")],
+      overrideHandlers: {
+        "config.env.set": set,
+        "config.env.localOverride.clear": clear,
+      },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Use everywhere" }),
+    );
+    await waitFor(() => expect(set).toHaveBeenCalledOnce());
+    if (rejectSave === undefined) throw new Error("save did not start");
+    await act(async () => {
+      rejectSave?.(new Error("save failed"));
+      await failedSave.catch(() => undefined);
+    });
+
+    expect(clear).not.toHaveBeenCalled();
   });
 });
 

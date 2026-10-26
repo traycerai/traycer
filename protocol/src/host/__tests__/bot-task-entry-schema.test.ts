@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   botSubscribeServerFrameSchema,
   botTaskEntrySchema,
+  type BotActivity,
+  type BotSessionActivity,
   type BotTaskEntry,
   type BotTaskLastCheckin,
 } from "@traycer/protocol/host/bot/schemas";
@@ -157,6 +159,7 @@ function snapshotFrame(
   readonly openRequestCount: number | null;
   readonly conversationsRevision: number | null;
   readonly boundHost: object;
+  readonly activity: BotActivity | null;
   readonly hasBinaryPayload: false;
 } {
   return {
@@ -183,6 +186,7 @@ function snapshotFrame(
     openRequestCount,
     conversationsRevision: 0,
     boundHost: { hostId: "host-1", epoch: 0, isThisHost: true },
+    activity: null,
     hasBinaryPayload: false,
   };
 }
@@ -537,5 +541,73 @@ describe("botTaskEntrySchema lastCheckin", () => {
         }).success,
       ).toBe(false);
     });
+  });
+});
+
+const REPLYING: BotSessionActivity = {
+  state: "replying",
+  startedAt: 1_760_000_000_000,
+  step: "Ran bun test",
+  requestId: "req-1",
+};
+
+describe("the bot.subscribe activity", () => {
+  it("carries the trunk and each thread's session in the snapshot", () => {
+    const parsed = botSubscribeServerFrameSchema.safeParse({
+      ...snapshotFrame([], 0),
+      activity: {
+        trunk: REPLYING,
+        threads: {
+          "thread-1": {
+            state: "failed",
+            startedAt: null,
+            step: null,
+            requestId: "req-2",
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success || parsed.data.kind !== "snapshot") return;
+    expect(parsed.data.activity?.threads["thread-1"]?.state).toBe("failed");
+  });
+
+  it("replaces one entry, or removes it, in an activity frame", () => {
+    for (const frame of [
+      {
+        kind: "activity",
+        target: { kind: "thread", threadId: "thread-1" },
+        entry: REPLYING,
+        hasBinaryPayload: false,
+      },
+      {
+        kind: "activity",
+        target: { kind: "trunk" },
+        entry: null,
+        hasBinaryPayload: false,
+      },
+    ]) {
+      expect(botSubscribeServerFrameSchema.safeParse(frame).success).toBe(true);
+    }
+  });
+
+  it("refuses a thread target with no thread id, and a state it does not know", () => {
+    expect(
+      botSubscribeServerFrameSchema.safeParse({
+        kind: "activity",
+        target: { kind: "thread" },
+        entry: REPLYING,
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      botSubscribeServerFrameSchema.safeParse({
+        kind: "activity",
+        target: { kind: "trunk" },
+        entry: { ...REPLYING, state: "thinking" },
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
   });
 });

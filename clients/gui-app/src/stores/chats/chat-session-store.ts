@@ -311,6 +311,7 @@ import type {
 // receives is open (`OpenMessage` above).
 import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
 import type { OpenChatSnapshot } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { OpencodeLineHeld } from "@traycer/protocol/common/opencode-line";
 
 export type ChatStreamClientHandle = Pick<
   ChatStreamClient,
@@ -1439,6 +1440,14 @@ export interface ChatSessionState {
    */
   readonly findReadOrdinal: number | null;
   /**
+   * The rows a surface outside the transcript shows and so needs hydrated,
+   * one entry per hold: a bot thread's post, shown in its thread panel from
+   * the channel's row (Tracy Bots T65). Never a viewport move. Separate
+   * from the jump and the find read for the same reason they are separate
+   * from each other. See {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly heldReadOrdinals: ReadonlyArray<number>;
+  /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
    * Separate from {@link accumulatedFileChanges} rather than replacing it,
@@ -1583,6 +1592,14 @@ export interface ChatSessionState {
    * against a host below `1.20`, which never suggests anything.
    */
   readonly suggestedPrompt: string | undefined;
+  /**
+   * Why the host keeps this chat on its recorded OpenCode line although the
+   * saved selection names the other one (`chat.subscribe@1.38`), for the
+   * composer's one line. Snapshot-only, where an ABSENT key clears: the host
+   * re-sends the snapshot when the chat moves or the hold changes. `undefined`
+   * against a host below `1.38`.
+   */
+  readonly opencodeLineHeld: OpencodeLineHeld | undefined;
   /**
    * The active turn's thinking-token estimate (`chat.subscribe@1.20`), for the
    * streaming "Thinking" label. Seeded by the snapshot's
@@ -1951,6 +1968,8 @@ export interface ChatSessionState {
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   /** See the implementation - names the ordinal a find index read needs. */
   requestFindReadOrdinal: (ordinal: number | null) => void;
+  /** See the implementation - holds a row hydrated for a surface that shows it. */
+  holdTranscriptOrdinal: (ordinal: number) => () => void;
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -2305,6 +2324,15 @@ export interface ChatSessionStoreOptions {
    * `IHostStreamClient.isSilentFor?` makes for the same reason.
    */
   readonly transportSilentFor?: ((ms: number) => boolean) | null;
+  /**
+   * Whether an adjudicated fatal close raises the app's "Agent stream closed
+   * unexpectedly" notification. `silent` for a session whose surface says the
+   * failure itself, in its own view: a bot's channel and threads, whose
+   * opener sets it. OPTIONAL for the reason {@link transportSilentFor} is:
+   * absent is `raise`, the behaviour every other session and the suites that
+   * build these options by hand already have.
+   */
+  readonly fatalCloseNotification?: "raise" | "silent";
 }
 
 /**
@@ -4910,6 +4938,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           // also the reconnect path - a chip the host still holds comes back
           // from here.
           suggestedPrompt: frame.snapshot.suggestedPrompt,
+          // Absent unless the caller's `extra` seats it: the full snapshot
+          // this fold reads carries no hold, and only a windowed snapshot on
+          // `1.38` does. So every other replacement - a legacy snapshot, or a
+          // downgrade onto the legacy line - clears a hold an earlier host
+          // reported, which the current one never said.
+          opencodeLineHeld: undefined,
           // Paired with the snapshot's OWN active turn, so a reconnect
           // mid-thought seats the number under the turn it measured.
           thinkingTokens: thinkingTokensFromSnapshot(
@@ -6844,6 +6878,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         {
           ...aux,
           transcriptRowContext: hydratedRowContext(window),
+          // Straight across: absent is "not held", and it is the value that
+          // clears the line.
+          opencodeLineHeld: frame.snapshot.opencodeLineHeld,
         },
         // The HOST's answer, not a scan of the adapted frame: those records are
         // the hydrated subset, and a failure several user rows back is exactly
@@ -6925,6 +6962,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
           jumpTargetOrdinal: null,
           findReadOrdinal: null,
+          // `heldReadOrdinals` stays: each hold belongs to the surface still
+          // showing its row and ends only by that surface's release, so a
+          // re-upgrade keeps the row held and no earlier release can take
+          // a later hold of the same ordinal.
           accumulatedFileChangeSummaries: [],
           accumulatedSummaryGenerationSeated: false,
           accumulatedSummaryAssemblyStarted: false,
@@ -8133,11 +8174,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The FRAME's pair, not the store's: this runs before the snapshot's
           // judgement and pending list are published, and protecting the rows
           // the PREVIOUS snapshot was blocked on would protect the wrong ones
-          // for exactly the beat that matters.
-          pendingInterviewOrdinals(
-            frame.snapshot.derived.interviewAnswerability,
-            frame.snapshot.pendingInterviews,
-          ),
+          // for exactly the beat that matters. A held read (a bot thread's
+          // post on show) is the store's own and outlives every frame.
+          [
+            ...pendingInterviewOrdinals(
+              frame.snapshot.derived.interviewAnswerability,
+              frame.snapshot.pendingInterviews,
+            ),
+            ...get().heldReadOrdinals,
+          ],
         );
         // NOW the boundary decision, with the applied window in hand - the
         // fold runs FIRST, deliberately, so everything below reads post-fold
@@ -10121,16 +10166,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
           fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          notificationDependencies.appLocalNotifications
-            .getState()
-            .upsertRecurringFailure(
-              chatStreamErrorNotification({
-                hostId: options.hostId,
-                epicId: options.epicId,
-                chatId: options.chatId,
-                details: reason.details,
-              }),
-            );
+          if (options.fatalCloseNotification !== "silent") {
+            notificationDependencies.appLocalNotifications
+              .getState()
+              .upsertRecurringFailure(
+                chatStreamErrorNotification({
+                  hostId: options.hostId,
+                  epicId: options.epicId,
+                  chatId: options.chatId,
+                  details: reason.details,
+                }),
+              );
+          }
         }
         callbacks.onConnectionStatus(status, reason, retryCause);
       };
@@ -10337,6 +10384,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       jumpTargetOrdinal: null,
       findReadOrdinal: null,
+      heldReadOrdinals: [],
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
@@ -10346,6 +10394,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       lastFailedAttempt: undefined,
       lastFallbackOutcome: undefined,
       suggestedPrompt: undefined,
+      opencodeLineHeld: undefined,
       thinkingTokens: null,
       managedCommands: [],
       heldUpdates: [],
@@ -10408,6 +10457,29 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (get().findReadOrdinal === ordinal) return;
         set({ findReadOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
+      },
+
+      /**
+       * Holds the row at `ordinal` hydrated until the returned release: for
+       * a surface outside the transcript that shows the row, such as a bot
+       * thread's post in its panel. Like a find read, it never moves the
+       * viewport, so this is what fetches the row; held, not one-shot, so the
+       * row stays while the surface shows it.
+       */
+      holdTranscriptOrdinal: (ordinal: number) => {
+        set({ heldReadOrdinals: [...get().heldReadOrdinals, ordinal] });
+        requestPlannedHydration();
+        let released = false;
+        return () => {
+          if (released || disposed) return;
+          released = true;
+          const held = get().heldReadOrdinals;
+          const at = held.indexOf(ordinal);
+          if (at === -1) return;
+          set({
+            heldReadOrdinals: [...held.slice(0, at), ...held.slice(at + 1)],
+          });
+        };
       },
       wake: () => {
         if (disposed) return;
@@ -14596,6 +14668,7 @@ function pendingInterviewOrdinals(
  *
  * The find read is the same circle with no scroll at all at the end of it: it
  * never moves the viewport, so nothing but this list will ever fetch its row.
+ * A held read (a bot thread's post) is a find read that lasts while it is shown.
  */
 function requiredHydrationOrdinalsOf(
   state: ChatSessionState,
@@ -14607,7 +14680,11 @@ function requiredHydrationOrdinalsOf(
     state.pendingInterviews,
   );
   let ordinals = interviews;
-  for (const extra of [state.jumpTargetOrdinal, state.findReadOrdinal]) {
+  for (const extra of [
+    state.jumpTargetOrdinal,
+    state.findReadOrdinal,
+    ...state.heldReadOrdinals,
+  ]) {
     if (extra === null || ordinals.includes(extra)) continue;
     ordinals = [...ordinals, extra];
   }

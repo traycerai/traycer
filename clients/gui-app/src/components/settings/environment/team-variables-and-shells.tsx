@@ -6,6 +6,7 @@ import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-ch
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { configurationShellValueSchema } from "@/hooks/environment/team/configuration-item-values";
@@ -13,6 +14,7 @@ import type { ConfigurationItem } from "@/hooks/environment/team/use-configurati
 import {
   useCanEditConfiguration,
   useConfigurationSource,
+  useConfigurationIsPersonal,
 } from "./configuration-source";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
 import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
@@ -22,9 +24,17 @@ import {
 } from "./configuration-write-issue";
 import { TeamVariableLiveFacts } from "./team-variable-live-facts";
 import { TeamTextItems } from "./team-text-items";
+import { ConfigurationReadFailed } from "./team-read-failed";
+import { usePickedTeamLabel } from "./team-pick-label";
 
 export function TeamVariablesAndShells(): ReactNode {
+  const personal = useConfigurationIsPersonal();
+  const source = useConfigurationSource();
+  const teamName =
+    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
+    "this team";
   const query = useConfigurationVariablesQuery();
+  const read = useBoundedRead(query);
   const [os, setOs] = useState<EnvironmentOs>("any");
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   const outcome = (result: EnvironmentConfigurationItemWriteResponse): void =>
@@ -36,17 +46,22 @@ export function TeamVariablesAndShells(): ReactNode {
   return (
     <SettingsPanelShell
       title="Variables & shells"
-      description="Variables and shells for hosts running this team."
+      description={
+        personal
+          ? "Plain values every computer and sandbox running Personal gets, and the shell agents run in."
+          : `Plain values every host running ${teamName} gets, and the shell agents run in.`
+      }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
       <ConfigurationOsPicker value={os} onChange={setOs} />
       <ConfigurationWriteFeedback issue={issue} />
-      {query.isError ? (
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          Couldn't read variables and shells.
-        </p>
+      {read.failed ? (
+        <ConfigurationReadFailed
+          page="variables and shells"
+          onRetry={read.retry}
+        />
       ) : null}
-      {query.isPending ? <MutedAgentSpinner /> : null}
+      {read.pending ? <MutedAgentSpinner /> : null}
       {query.data === undefined ? null : (
         <>
           <h2 className="text-ui-sm font-medium">Variables</h2>

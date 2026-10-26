@@ -1,15 +1,16 @@
 import type { ReactNode } from "react";
 import {
-  DONE_REMOVAL_LABEL,
   GAINED_EDITING_TAG,
-  PENDING_REMOVAL_LABEL,
+  MEMBER_UNLOADED,
   REMOVE_LABEL,
+  RETRY_LABEL,
   REVOKE_LABEL,
   ROLE_LABELS,
-  YOU_TAG,
   memberDetailLine,
   memberDisplayName,
   memberRoleAriaLabel,
+  memberRowTitle,
+  pendingRemovalLabel,
 } from "@/components/settings/members/copy";
 import type {
   MembersListMember,
@@ -24,13 +25,17 @@ export function MemberRow(props: {
   readonly member: MembersListMember;
   readonly isSelf: boolean;
   readonly isLastAdmin: boolean;
+  readonly teamHostCount: number | null;
   readonly viewerIsAdmin: boolean;
   readonly gainedEditing: boolean;
   readonly details: ReactNode;
   readonly onRoleChange: (role: TeamRole) => void;
   readonly onRemove: () => void;
+  /** Reads the members again, for a row with nothing to name it by. */
+  readonly onRetry: () => void;
 }): ReactNode {
   const name = memberDisplayName(props.member);
+  const title = memberRowTitle(props.member, props.isSelf);
   const pending = props.member.inviteState === "pending";
   const beingRemoved = props.member.removalState !== "none";
   const showRoleSelect =
@@ -53,16 +58,31 @@ export function MemberRow(props: {
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-medium text-ui-sm">{name}</span>
-          {props.isSelf ? <Badge variant="muted">{YOU_TAG}</Badge> : null}
+          {title === null ? (
+            <span
+              className="flex flex-wrap items-center gap-1 text-ui-sm text-muted-foreground"
+              data-testid="members-row-unloaded"
+            >
+              {MEMBER_UNLOADED} ·
+              <Button
+                type="button"
+                variant="link"
+                size="inline"
+                onClick={props.onRetry}
+              >
+                {RETRY_LABEL}
+              </Button>
+            </span>
+          ) : (
+            <span className="font-medium text-ui-sm">{title}</span>
+          )}
           {props.gainedEditing ? (
             <Badge variant="muted">{GAINED_EDITING_TAG}</Badge>
           ) : null}
           {props.member.removalState === "pending" ? (
-            <Badge variant="muted">{PENDING_REMOVAL_LABEL}</Badge>
-          ) : null}
-          {props.member.removalState === "done" ? (
-            <Badge variant="muted">{DONE_REMOVAL_LABEL}</Badge>
+            <Badge variant="muted">
+              {pendingRemovalLabel(props.teamHostCount)}
+            </Badge>
           ) : null}
         </div>
         {detail.length === 0 ? null : (

@@ -71,6 +71,17 @@ const USER_RECORD_MAJORS_REQUEST_HEADER = "x-traycer-user-record-majors";
 const USER_RECORD_VERSION_RESPONSE_HEADER = "x-traycer-user-record-version";
 
 /**
+ * Explicit-Accept hint for older authn instances during rollout. Current
+ * identity routes leave invitations pending even without it. This client
+ * accepts one only after its grant is shown, through the serving tier or
+ * directly through authn when that tier predates the invitation methods.
+ * Copied from authn-v3's `invite-acceptance.ts`, like the headers above.
+ * The frozen recovery route keeps its existing request shape.
+ */
+const INVITE_ACCEPTANCE_REQUEST_HEADER = "x-traycer-invite-acceptance";
+const EXPLICIT_INVITE_ACCEPTANCE = "explicit";
+
+/**
  * The frozen route. It pins the record to major 1 whatever a caller
  * advertises, so this client never reads a served-version header off it: the
  * parse version is {@link FROZEN_RECORD_VERSION} by construction, which also
@@ -543,6 +554,7 @@ async function fetchUserRouteOnce(
           ? {
               [USER_RECORD_MAJORS_REQUEST_HEADER]:
                 ADVERTISED_USER_RECORD_MAJORS,
+              [INVITE_ACCEPTANCE_REQUEST_HEADER]: EXPLICIT_INVITE_ACCEPTANCE,
             }
           : {}),
       },

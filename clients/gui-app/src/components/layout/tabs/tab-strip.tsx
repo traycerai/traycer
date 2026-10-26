@@ -29,6 +29,7 @@ import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { HomeStripSlot } from "@/components/layout/tabs/tab-strip-home-item";
+import { TracyStripSlot } from "@/components/layout/tabs/tracy-strip-entry";
 import { useHomeTabDrawn } from "@/components/layout/tabs/use-home-tab-drawn";
 import {
   useTabStripController,
@@ -204,14 +205,18 @@ function TabStripBody() {
         data-join-glow={joinGlowing ? "" : undefined}
         className="group/strip relative flex min-w-0 flex-1 items-end"
       >
-        {/* Outside the scrollable list and before it: Home is fixed, so it
-            must not scroll away with the task tabs. */}
+        {/* Outside the scrollable list and before it: Home and the Tracy
+            entry are fixed, so they must not scroll away with the task tabs,
+            and no drop lands among them. */}
         {controller.homeTabDrawn ? (
           <HomeStripSlot
             isActive={controller.homeIsActive}
             onActivate={controller.onHomeTab}
           />
         ) : null}
+        {controller.tracy === null ? null : (
+          <TracyStripSlot entry={controller.tracy} />
+        )}
         <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
           {hasOverflow ? (
             <HiddenTabsMenu

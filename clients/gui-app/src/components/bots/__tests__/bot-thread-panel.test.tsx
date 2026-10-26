@@ -11,11 +11,13 @@
  */
 import { StrictMode } from "react";
 import {
+  act,
   cleanup,
   render,
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -74,12 +76,18 @@ type ThreadTranscriptState = Pick<
   | "reportVisibleTranscriptRange"
   | "requestFindReadOrdinal"
   | "requestTranscriptOrdinal"
+  | "holdTranscriptOrdinal"
 >;
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
+  channelHandle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
   toastFromHostError: vi.fn<(error: Error, fallback: string) => void>(),
+  /** What the host's locate answers for the anchor: its ordinal, or `null`. */
+  locatedOrdinal: null as number | null,
+  /** Every locate the component asked for while it had a target. */
+  locateTargets: [] as ChatLocateRowArgs["target"][],
 }));
 
 vi.mock("@/lib/host-error-toast", () => ({
@@ -90,7 +98,18 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
   >()),
-  useChatSessionHandleForContainer: () => mocks.handle,
+  // The thread reads its own session; the post it answers comes from the
+  // channel's.
+  useChatSessionHandleForContainer: (
+    _botId: string,
+    chatId: string,
+  ): ChatSessionStoreHandle | null =>
+    chatId === CONVERSATION_ID ? mocks.channelHandle : mocks.handle,
+}));
+// The thread's typing line is `bot-channel-typing.test.tsx`'s; here the bot
+// is idle.
+vi.mock("@/hooks/bots/use-bot-activity", () => ({
+  useBotActivity: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
@@ -99,7 +118,11 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (_args: ChatLocateRowArgs) => null,
+  useChatLocateRow: (args: ChatLocateRowArgs) => {
+    if (args.target === null) return null;
+    mocks.locateTargets.push(args.target);
+    return mocks.locatedOrdinal;
+  },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
@@ -160,7 +183,6 @@ function threadSummary(anchorSenderUserId: string | null): BotThreadSummary {
       messageId: "anchor-1",
       requestId: "req-1",
       senderUserId: anchorSenderUserId,
-      text: "Ship the release today?",
       sentAt: 1_000,
       resolvedAt: null,
     },
@@ -200,6 +222,7 @@ function botReply(options: ReadonlyArray<string> | null): Message {
 
 function createThreadStore(
   messages: ReadonlyArray<Message>,
+  holdTranscriptOrdinal: ThreadTranscriptState["holdTranscriptOrdinal"],
 ): UseBoundStore<StoreApi<ThreadTranscriptState>> {
   return create<ThreadTranscriptState>()(() => ({
     snapshotLoaded: true,
@@ -225,6 +248,7 @@ function createThreadStore(
     reportVisibleTranscriptRange: vi.fn(),
     requestFindReadOrdinal: vi.fn(),
     requestTranscriptOrdinal: vi.fn(),
+    holdTranscriptOrdinal,
   }));
 }
 
@@ -234,6 +258,34 @@ const SEND_RESPONSE: BotConversationSendResponse = {
   delivery: "written",
   threadId: THREAD_ID,
 };
+
+/** The channel's own rows, where the anchor's text is read from. */
+let channelMessages: ReadonlyArray<Message>;
+
+function announcement(messageId: string, text: string): Message {
+  const base = botReply(null);
+  if (base.role !== "assistant") throw new Error("botReply is the bot's row");
+  return {
+    ...base,
+    messageId,
+    blocks: [
+      {
+        type: "text",
+        blockId: `${messageId}:text`,
+        status: "completed",
+        timestamp: 1_000,
+        text,
+        providerNotice: null,
+      },
+    ],
+  };
+}
+
+/** The channel store's hold action: records each hold and its release. */
+const channelHold = vi.fn<(ordinal: number) => () => void>(
+  () => channelRelease,
+);
+const channelRelease = vi.fn<() => void>();
 
 let sent: ReadonlyArray<BotConversationSendRequest>;
 /** What the host answers the next `bot.conversation.send` with. */
@@ -269,11 +321,14 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
 function mountPanel(
   thread: BotThreadPanelThread,
   messages: ReadonlyArray<Message>,
-): void {
+): RenderResult {
   mocks.handle = {
-    store: createThreadStore(messages),
+    store: createThreadStore(messages, () => () => undefined),
   } as ChatSessionStoreHandle;
-  render(
+  mocks.channelHandle = {
+    store: createThreadStore(channelMessages, channelHold),
+  } as ChatSessionStoreHandle;
+  return render(
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
@@ -303,6 +358,11 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 
 beforeEach(() => {
   sent = [];
+  channelMessages = [];
+  mocks.locatedOrdinal = null;
+  mocks.locateTargets = [];
+  channelHold.mockClear();
+  channelRelease.mockClear();
   sendAnswer = () => Promise.resolve(SEND_RESPONSE);
   mocks.toastFromHostError.mockClear();
   mocks.client = hostClientRecordingSends();
@@ -311,6 +371,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mocks.handle = null;
+  mocks.channelHandle = null;
   mocks.client = null;
 });
 
@@ -407,19 +468,20 @@ describe("<BotThreadPanel /> a listed thread", () => {
     });
   });
 
-  it("tells the person when their pick could not be sent", async () => {
+  it("says in the thread's box when their pick could not be sent, and raises no toast", async () => {
     const user = userEvent.setup();
     sendAnswer = () => Promise.reject(new Error("host refused the pick"));
     mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
 
     await user.click(screen.getByRole("button", { name: "Hold" }));
 
-    await waitFor(() => {
-      expect(mocks.toastFromHostError).toHaveBeenCalledTimes(1);
-    });
-    const [error, fallback] = mocks.toastFromHostError.mock.calls[0];
-    expect(error.message).toBe("host refused the pick");
-    expect(fallback).toBe("Couldn't send your choice.");
+    expect(
+      (await screen.findByTestId("bot-thread-composer-send-failed"))
+        .textContent,
+    ).toBe("Couldn't send. Edit and try again.");
+    // The host was asked and refused: a pick that never left would show the same notice.
+    expect(sent.map((request) => request.text)).toEqual(["Hold"]);
+    expect(mocks.toastFromHostError).not.toHaveBeenCalled();
   });
 
   it("draws no choices under a reply that offers none", () => {
@@ -465,7 +527,63 @@ describe("<BotThreadPanel /> the anchor", () => {
     ).toBe("open");
   });
 
+  it("shows the anchor without text while the channel has no row for it, and its text once the channel's row is there", () => {
+    mountPanel(listed("user-teammate"), []);
+    const bare = screen.getByTestId("bot-thread-anchor");
+    expect(within(bare).queryByText("Ship the release today?")).toBeNull();
+    cleanup();
+
+    channelMessages = [
+      announcement("other-post", "Something else"),
+      announcement("anchor-1", "Ship the release today?"),
+    ];
+    mountPanel(listed("user-teammate"), []);
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
+    expect(within(anchor).queryByText("Something else")).toBeNull();
+  });
+
+  it("locates an anchor the channel has not loaded, holds that ordinal hydrated, shows its text once the row lands, and releases the hold on unmount", () => {
+    mocks.locatedOrdinal = 7;
+    const view = mountPanel(listed("user-teammate"), []);
+
+    expect(mocks.locateTargets[0]).toEqual({
+      kind: "message",
+      messageId: "anchor-1",
+    });
+    expect(channelHold).toHaveBeenCalledWith(7);
+    // StrictMode re-runs the effect, so what matters is that one hold is live.
+    const liveHolds = (): number =>
+      channelHold.mock.calls.length - channelRelease.mock.calls.length;
+    expect(liveHolds()).toBe(1);
+    const bare = screen.getByTestId("bot-thread-anchor");
+    expect(within(bare).queryByText("Ship the release today?")).toBeNull();
+
+    // Hydration brings the held row into the channel's loaded messages.
+    act(() => {
+      mocks.channelHandle?.store.setState({
+        messages: [announcement("anchor-1", "Ship the release today?")],
+      });
+    });
+    const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByText("Ship the release today?")).toBeTruthy();
+    expect(liveHolds()).toBe(1);
+
+    view.unmount();
+    expect(liveHolds()).toBe(0);
+  });
+
+  it("does not locate or hold anything when the channel already has the anchor's row", () => {
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    mocks.locatedOrdinal = 7;
+    mountPanel(listed("user-teammate"), []);
+
+    expect(mocks.locateTargets).toEqual([]);
+    expect(channelHold).not.toHaveBeenCalled();
+  });
+
   it("draws a bot's own announcement in the bot's frame, with no request badge", () => {
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
     mountPanel(listed(null), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");

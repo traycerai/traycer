@@ -1,13 +1,23 @@
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
+  environmentConfigurationGuideGetUpgradeV10ToV11,
   environmentConfigurationGuideGetV10,
+  environmentConfigurationGuideGetV11,
   environmentConfigurationGuideResetV10,
   environmentConfigurationGuideSetV10,
   environmentConfigurationItemsDeleteV10,
   environmentConfigurationItemsPutV10,
   environmentConfigurationItemsV10,
+  environmentConfigurationMcpServersDeleteV10,
+  environmentConfigurationMcpServersSetEnabledV10,
+  environmentConfigurationMcpServersListV10,
+  environmentConfigurationMcpServersPutUpgradeV10ToV11,
   environmentConfigurationMcpServersPutV10,
+  environmentConfigurationMcpServersPutV11,
   environmentConfigurationPolicyPutV10,
+  environmentConfigurationSkillsListV10,
+  environmentConfigurationSkillsRemoveV10,
+  environmentConfigurationSkillsSetProvidersV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
@@ -21,16 +31,25 @@ import {
   environmentReviewRecordResponseSchema,
 } from "@traycer/protocol/host/environment-schemas";
 import {
+  environmentInvitationsAcceptV10,
+  environmentInvitationsListV10,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
   environmentMembersRemovePreviewV10,
   environmentMembersRemoveV10,
+  environmentMembersSeatsV10,
   environmentMembersSetRoleV10,
 } from "@traycer/protocol/host/environment/contracts";
 import {
   environmentMoveAcceptV10,
+  environmentMovePlanUpgradeV10ToV11,
+  environmentMovePlanUpgradeV11ToV12,
   environmentMovePlanV10,
+  environmentMovePlanV11,
+  environmentMovePlanV12,
+  environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
+  environmentMoveStopPreviewV11,
   environmentMoveStopV10,
 } from "@traycer/protocol/host/environment/move-contracts";
 
@@ -71,11 +90,19 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.plan": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentMovePlanV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentMovePlanV11,
+          upgradeFromPreviousVersion: environmentMovePlanUpgradeV10ToV11,
+        },
+        2: {
+          contract: environmentMovePlanV12,
+          upgradeFromPreviousVersion: environmentMovePlanUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -97,11 +124,15 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stopPreview": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentMoveStopPreviewV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentMoveStopPreviewV11,
+          upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -162,10 +193,54 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.configuration.mcpServers.put": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentConfigurationMcpServersPutV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentConfigurationMcpServersPutV11,
+          upgradeFromPreviousVersion:
+            environmentConfigurationMcpServersPutUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.mcpServers.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationMcpServersListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.mcpServers.delete": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationMcpServersDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.mcpServers.setEnabled": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationMcpServersSetEnabledV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -179,6 +254,45 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentConfigurationSkillsUploadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.remove": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsRemoveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.skills.setProviders": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationSkillsSetProvidersV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -257,6 +371,45 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentMembersRemovePreviewV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.members.seats": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMembersSeatsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.invitations.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentInvitationsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.invitations.accept": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentInvitationsAcceptV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -344,11 +497,18 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.configuration.guide.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentConfigurationGuideGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        // `unset` is new: a `@1.0` caller is answered `not_served` instead.
+        1: {
+          contract: environmentConfigurationGuideGetV11,
+          upgradeFromPreviousVersion:
+            environmentConfigurationGuideGetUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

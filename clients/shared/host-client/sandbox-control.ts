@@ -18,6 +18,7 @@ import {
   type SandboxCreateRequest,
   type SandboxLifecycleVerb,
   type SandboxListResponse,
+  type SandboxPatchRequest,
   type SandboxSummary,
   type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
@@ -126,8 +127,8 @@ export type SandboxAutomationOpenFetchResult =
   | SandboxControlFailure;
 
 /**
- * `destroy` answers with a body the client does not read: the sandbox list is
- * what every surface renders the row from. `settled` is the status the server
+ * `destroy`, `patch` and `keep` answer with a body the client does not read:
+ * the sandbox list is what every surface renders the row from. `settled` is the status the server
  * chose: `true` for `200` (the row is at rest), `false` for `202` (still
  * moving at the server's deadline).
  */
@@ -188,43 +189,61 @@ interface CallInit {
   readonly timeoutMs: number;
 }
 
+/**
+ * `proxyToken` is the Google IAP id-token a staging desktop's main process
+ * mints (its `iap-proxy-token.ts`), sent as `Proxy-Authorization` ahead of the
+ * user's `Authorization`. Every other caller passes `null` and sends exactly
+ * the user's bearer: a browser cannot set `Proxy-Authorization` at all.
+ */
 async function call(
   url: string,
   init: CallInit,
   bearerToken: string,
+  proxyToken: string | null,
 ): Promise<RawCall> {
   // Not `AbortSignal.timeout`, which the iOS WebView floor does not have; see
   // `request-abort.ts`. Cleared once the body is read, which the timeout also
   // bounds.
   const abort = composeRequestAbort(null, init.timeoutMs);
   try {
-    return await callWithSignal(url, init, bearerToken, abort.signal);
+    return await callWithSignal(
+      url,
+      init,
+      requestHeaders(init, bearerToken, proxyToken),
+      abort.signal,
+    );
   } finally {
     abort.clear();
   }
 }
 
+/** The proxy credential first and the caller's own last, as the host sends them. */
+function requestHeaders(
+  init: CallInit,
+  bearerToken: string,
+  proxyToken: string | null,
+): Record<string, string> {
+  const headers: Record<string, string> =
+    proxyToken === null
+      ? {}
+      : { "Proxy-Authorization": `Bearer ${proxyToken}` };
+  headers.Authorization = `Bearer ${bearerToken}`;
+  headers.Accept = "application/json";
+  if (init.body !== null) headers["Content-Type"] = "application/json";
+  return headers;
+}
+
 async function callWithSignal(
   url: string,
   init: CallInit,
-  bearerToken: string,
+  headers: Record<string, string>,
   signal: AbortSignal,
 ): Promise<RawCall> {
   let response: Response;
   try {
     response = await fetch(url, {
       method: init.method,
-      headers:
-        init.body === null
-          ? {
-              Authorization: `Bearer ${bearerToken}`,
-              Accept: "application/json",
-            }
-          : {
-              Authorization: `Bearer ${bearerToken}`,
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
+      headers,
       body: init.body,
       signal,
     });
@@ -281,11 +300,13 @@ function isSuccess(status: number): boolean {
 export async function listSandboxesViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
 ): Promise<SandboxListFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, ""),
     { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -299,15 +320,17 @@ export async function listSandboxesViaHttp(
   return { kind: "ok", response: parsed.data };
 }
 
-/** `GET /api/sandboxes/catalogue`: providers, shape bounds, regions, prices. */
+/** `GET /api/sandboxes/catalogue`: providers, shapes, regions, prices. */
 export async function fetchSandboxCatalogueViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
 ): Promise<SandboxCatalogueFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, "/catalogue"),
     { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -328,11 +351,13 @@ export async function fetchSandboxCatalogueViaHttp(
 export async function fetchSandboxCostsViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
 ): Promise<SandboxCostsFetchResult> {
   const raw = await call(
     sandboxesUrl(serverBaseUrl, "/cost"),
     { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -362,6 +387,7 @@ const AUTOMATION_NOT_SERVED: SandboxAutomationResponse = {
 export async function getSandboxAutomationViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
   /** A team's environment, for its pods; `null` reads the caller's own. */
   environmentId: string | null,
 ): Promise<SandboxAutomationFetchResult> {
@@ -373,6 +399,7 @@ export async function getSandboxAutomationViaHttp(
     url.toString(),
     { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (raw.status === 404) {
@@ -397,6 +424,7 @@ export async function getSandboxAutomationViaHttp(
 export async function openSandboxAutomationViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
   /**
    * A team's pod to open; `null` opens the caller's own Automations host with
    * no body, as before.
@@ -417,6 +445,7 @@ export async function openSandboxAutomationViaHttp(
       timeoutMs: SANDBOX_CREATE_FETCH_TIMEOUT_MS,
     },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -438,6 +467,7 @@ export async function openSandboxAutomationViaHttp(
 export async function createSandboxViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
   request: SandboxCreateRequest,
 ): Promise<SandboxCreateFetchResult> {
   const raw = await call(
@@ -448,6 +478,7 @@ export async function createSandboxViaHttp(
       timeoutMs: SANDBOX_CREATE_FETCH_TIMEOUT_MS,
     },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -469,6 +500,7 @@ export async function createSandboxViaHttp(
 export async function destroySandboxViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
   sandboxId: string,
 ): Promise<SandboxVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
@@ -480,6 +512,63 @@ export async function destroySandboxViaHttp(
       timeoutMs: SANDBOX_DESTROY_FETCH_TIMEOUT_MS,
     },
     bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  return { kind: "ok", settled: raw.status !== 202 };
+}
+
+/**
+ * `PATCH /api/sandboxes/:id`: rename the row and change its idle and resting
+ * periods (each `null` in `request` leaves that setting as it is). The answer's
+ * row is not read: the sandbox list is what every surface renders from.
+ */
+export async function patchSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  sandboxId: string,
+  request: SandboxPatchRequest,
+): Promise<SandboxVerbFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
+    {
+      method: "PATCH",
+      body: JSON.stringify(request),
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+    },
+    bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  return { kind: "ok", settled: raw.status !== 202 };
+}
+
+/**
+ * `POST /api/sandboxes/:id/keep`: turn a sandbox an agent created into one
+ * that waits for its owner. `404 sandbox_not_found` when the row is already
+ * destroyed, including one its idle timer destroyed while the keep was on its
+ * way.
+ */
+export async function keepSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  sandboxId: string,
+): Promise<SandboxVerbFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}/keep`),
+    {
+      method: "POST",
+      body: null,
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+    },
+    bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -500,6 +589,7 @@ export async function destroySandboxViaHttp(
 export async function runSandboxVerbViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
+  proxyToken: string | null,
   sandboxId: string,
   verb: SandboxLifecycleVerb,
   timeoutMs: number,
@@ -516,6 +606,7 @@ export async function runSandboxVerbViaHttp(
       ),
     },
     bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
@@ -649,15 +740,15 @@ const WAKE_TIMED_OUT: SandboxWakeOutcome = {
 };
 
 /**
- * Why a STAGING build offers no sandbox surfaces
+ * Why a STAGING mobile build offers no sandbox surfaces
  * (`IRunnerHost.sandboxControlUnavailableReason`). Staging's traycer-server,
- * which serves the sandbox control plane, is fronted by Google IAP, and IAP
- * admits only the host's own service account: an app's call carries the
- * user's bearer alone and is refused before it reaches the server. No client
- * holds an IAP credential, and none is given one.
+ * which serves the sandbox control plane, is fronted by Google IAP, and a
+ * call that carries the user's bearer alone is refused before it reaches the
+ * server. Only the desktop's main process holds an IAP credential (see
+ * {@link call}); a WebView cannot send one.
  */
 export const SANDBOXES_UNAVAILABLE_IN_STAGING =
-  "Sandboxes aren't available in staging builds: the staging server only accepts calls from hosts.";
+  "Sandboxes aren't available in staging builds.";
 
 export const SANDBOX_FROZEN_MESSAGE =
   "This sandbox is paused because your credits ran out. Add credits to wake it.";

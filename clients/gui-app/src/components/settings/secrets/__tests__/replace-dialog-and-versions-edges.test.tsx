@@ -8,24 +8,54 @@ import {
   within,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type {
-  EnvironmentSecret,
+  EnvironmentSecretV12,
   EnvironmentSecretsReplaceValueRequest,
   EnvironmentSecretsReplaceValueResponse,
   EnvironmentSecretsUndoResponse,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { ReplaceSecretValueDialog } from "@/components/settings/secrets/replace-secret-value-dialog";
 import { SecretVersionsList } from "@/components/settings/secrets/secret-versions-list";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  type EnvironmentClientFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   SECRET_REPLACE_STALE,
   SECRET_SAVED_OFFLINE,
 } from "@/lib/sandboxes/secrets-page-copy";
+
+// The writes name their environment through the surface's client.
+const hostBoundary = vi.hoisted((): { client: unknown } => ({ client: null }));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => hostBoundary.client,
+}));
+
+/** A host client the page under test reads through `useHostClient()`. */
+function buildBoundClient(options: {
+  readonly hostId: string;
+  readonly handlers: MockHandlerMap<HostRpcRegistry>;
+}): EnvironmentClientFixture {
+  const built = buildEnvironmentClient(options);
+  hostBoundary.client = built.client;
+  return built;
+}
 
 // The edges of Replace value and of the versions
 // list that `secret-row-rotation.test.tsx` reaches only through the whole
@@ -38,8 +68,8 @@ const HOST_ID = "host-edges";
 const TYPED = "sk_live_EDGE_VALUE_77aa";
 
 function secretFixture(
-  overrides: Partial<EnvironmentSecret>,
-): EnvironmentSecret {
+  overrides: Partial<EnvironmentSecretV12>,
+): EnvironmentSecretV12 {
   return {
     secretId: "sec-1",
     name: "STRIPE_KEY",
@@ -51,6 +81,8 @@ function secretFixture(
     currentVersionId: "ver-3",
     revoked: false,
     updatedAt: 1,
+    variables: [],
+    providerVariables: [],
     ...overrides,
   };
 }
@@ -68,8 +100,18 @@ function versionFixture(overrides: Partial<SecretVersion>): SecretVersion {
   };
 }
 
+beforeEach(() => {
+  // A Local pick names the host's own environment: these cases are about the
+  // dialog and the list, not about which environment a call names.
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  hostBoundary.client = null;
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 function testQueryClient(): QueryClient {
@@ -97,11 +139,11 @@ interface DialogMount {
 }
 
 function mountDialog(
-  secret: EnvironmentSecret,
+  secret: EnvironmentSecretV12,
   answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
 ): DialogMount {
   const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-  const { client } = buildEnvironmentClient({
+  const { client } = buildBoundClient({
     hostId: HOST_ID,
     handlers: {
       "environment.secrets.replaceValue": (request) => {
@@ -229,7 +271,7 @@ describe("the Replace value dialog's answers", () => {
 
 /** The parent that owns `open`, as the secret row does, with a way to reopen. */
 function ReopenableReplaceDialog(props: {
-  readonly secret: EnvironmentSecret;
+  readonly secret: EnvironmentSecretV12;
   readonly client: HostClient<HostRpcRegistry>;
 }): ReactNode {
   const [open, setOpen] = useState(true);
@@ -259,7 +301,7 @@ describe("the Replace value dialog across a close and a reopen", () => {
       answer: EnvironmentSecretsReplaceValueResponse,
     ) => void = () => undefined;
     const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBoundClient({
       hostId: HOST_ID,
       handlers: {
         "environment.secrets.replaceValue": (request) => {
@@ -302,15 +344,15 @@ describe("the Replace value dialog across a close and a reopen", () => {
 interface RerenderableDialog {
   readonly requests: EnvironmentSecretsReplaceValueRequest[];
   /** What a re-read of the list does: the same open dialog gets a new secret. */
-  readonly showSecret: (secret: EnvironmentSecret) => void;
+  readonly showSecret: (secret: EnvironmentSecretV12) => void;
 }
 
 function mountRerenderableDialog(
-  secret: EnvironmentSecret,
+  secret: EnvironmentSecretV12,
   answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
 ): RerenderableDialog {
   const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-  const { client } = buildEnvironmentClient({
+  const { client } = buildBoundClient({
     hostId: HOST_ID,
     handlers: {
       "environment.secrets.replaceValue": (request) => {
@@ -320,7 +362,7 @@ function mountRerenderableDialog(
     },
   });
   const queryClient = testQueryClient();
-  const dialogFor = (shown: EnvironmentSecret): ReactNode =>
+  const dialogFor = (shown: EnvironmentSecretV12): ReactNode =>
     underCache(
       queryClient,
       <ReplaceSecretValueDialog
@@ -360,7 +402,7 @@ describe("the Replace value dialog's expected version", () => {
 
   it("sends the version the list shows now once the dialog is closed and opened again", async () => {
     const requests: EnvironmentSecretsReplaceValueRequest[] = [];
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBoundClient({
       hostId: HOST_ID,
       handlers: {
         "environment.secrets.replaceValue": (request) => {
@@ -433,11 +475,11 @@ describe("the Replace value dialog's expected version", () => {
 });
 
 function mountVersions(
-  secret: EnvironmentSecret,
+  secret: EnvironmentSecretV12,
   versions: SecretVersion[],
   undoAnswer: EnvironmentSecretsUndoResponse,
 ): void {
-  const { client } = buildEnvironmentClient({
+  const { client } = buildBoundClient({
     hostId: HOST_ID,
     handlers: {
       "environment.secrets.versions": () => ({ versions, removal: null }),

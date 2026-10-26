@@ -14,9 +14,17 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Permissions",
-    description:
-      "How much an agent may do on its own, and who reviews the rest.",
-    keywords: ["permissions", "approve", "approval", "ask before"],
+    description: "What your agents may do without asking.",
+    // Browser agent access is a region of this page, below the tabs.
+    keywords: [
+      "permissions",
+      "approve",
+      "approval",
+      "ask before",
+      "browser agent access",
+      "browser",
+      "playwright",
+    ],
   },
   modesTab: {
     kind: "group",
@@ -58,7 +66,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     kind: "group",
     search: { anchor: "permissions-tab-activity" },
     label: "Activity",
-    description: "What the judge decided recently on this machine.",
+    description: "What the judge decided recently on this host.",
     breadcrumb: "Permissions",
     availableWhen: alwaysAvailable,
     keywords: ["activity", "recent decisions", "history", "log"],
@@ -79,7 +87,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
   // vocabulary: nothing stores an anchor token, so General keeps no alias and
   // "default permission" lands on this row by its keywords alone. Application
   // scope inside a host-scoped page - the one exception the page makes, which
-  // is why its tab is not gated and the row carries an "All machines" badge.
+  // is why its tab is not gated and the row is captioned "This app only".
   defaultPermission: {
     kind: "row",
     group: "startingMode",
@@ -139,7 +147,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     search: { contributesTo: "rulesTab" },
     label: "Your rules",
     description:
-      "Your rules go on top of Traycer's built-in ones and apply to your account on every machine.",
+      "Your rules go on top of Traycer's built-in ones and apply to your account on every host.",
     breadcrumb: "Rules",
     availableWhen: alwaysAvailable,
     keywords: [
@@ -160,7 +168,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     kind: "group",
     search: { contributesTo: "rulesTab" },
     label: "Built-in rules",
-    description: "Built-in rules come with each machine's Traycer version.",
+    description: "Built-in rules come with each host's Traycer version.",
     breadcrumb: "Rules",
     availableWhen: alwaysAvailable,
     keywords: [

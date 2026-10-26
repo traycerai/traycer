@@ -24,7 +24,6 @@ import {
   type SecretFormState,
 } from "@/lib/sandboxes/secret-intake-form";
 import { secretVerifyLine } from "@/lib/sandboxes/secret-verify-copy";
-import { secretSaveConfirmationLines } from "@/lib/sandboxes/secrets-page-copy";
 
 /** A database form that passes `secretFormProblem`, brokered and consented. */
 function validDatabaseForm(): SecretFormState {
@@ -272,7 +271,7 @@ describe("secretFormProblem", () => {
 
   it("refuses no host", () => {
     expect(secretFormProblem({ ...validDatabaseForm(), hosts: "  " })).toBe(
-      "Enter the destination host.",
+      "Enter the server address.",
     );
   });
 
@@ -684,36 +683,5 @@ describe("secretVerifyLine", () => {
       tone: "warning",
       text: "Couldn't check right now. Try again in a moment.",
     });
-  });
-});
-
-describe("secretSaveConfirmationLines", () => {
-  it("names the secret and where it becomes readable, brokered and granted by default", () => {
-    const lines = secretSaveConfirmationLines("STRIPE_KEY", "brokered", true);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("STRIPE_KEY");
-    expect(lines[0]).toContain("plain value on every host you own");
-    expect(lines[1]).toBe(
-      "On your sandboxes agents use it without reading it. Every sandbox you have now and later gets it.",
-    );
-  });
-
-  it("changes the second line for an exposed secret", () => {
-    const lines = secretSaveConfirmationLines("STRIPE_KEY", "exposed", true);
-    expect(lines[0]).toContain("plain value on every host you own");
-    expect(lines[1]).toBe(
-      "On your sandboxes any process can read it. Every sandbox you have now and later gets it.",
-    );
-  });
-
-  it("changes the second line when sandboxes do not get it by default", () => {
-    expect(
-      secretSaveConfirmationLines("STRIPE_KEY", "brokered", false)[1],
-    ).toBe(
-      "On your sandboxes agents use it without reading it. A sandbox gets it only when you approve one.",
-    );
-    expect(secretSaveConfirmationLines("STRIPE_KEY", "exposed", false)[1]).toBe(
-      "On your sandboxes any process can read it. A sandbox gets it only when you approve one.",
-    );
   });
 });

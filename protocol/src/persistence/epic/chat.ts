@@ -174,9 +174,13 @@ export const chatSchema = lazySchema(() =>
     /**
      * The OpenCode line this chat runs, recorded by the host the first time
      * the chat's harness is an opencode-family harness (its first send, or an
-     * `agent.configure` into OpenCode), and never changed after. ABSENT reads
-     * as line 1, which is every chat that ran OpenCode before the line
-     * existed. On the record rather than the run-settings tuple: a settings
+     * `agent.configure` into OpenCode). It changes only when a person picks
+     * the other line in Settings: the host then moves the chat at the start
+     * of its next turn, on a fresh session, unless something holds it on this
+     * line (`opencodeLineHeld` on the `chat.subscribe` snapshot). Every
+     * reader takes this recorded value. ABSENT reads as line 1, which is
+     * every chat that ran OpenCode before the line existed. On the record
+     * rather than the run-settings tuple: a settings
      * write replaces the whole tuple, and queued items carry their own copy,
      * while the line belongs to the chat and its provider session. Lives only
      * on the live record; the frozen wire copies predate it.

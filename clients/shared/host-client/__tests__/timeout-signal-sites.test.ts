@@ -81,6 +81,7 @@ const SITES: readonly Site[] = [
         token: "apns",
         platform: "ios",
         environment: "production",
+        mutedSeverities: [],
       }),
   },
   {

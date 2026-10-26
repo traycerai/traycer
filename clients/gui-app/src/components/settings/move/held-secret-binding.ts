@@ -20,7 +20,7 @@ export function heldSecretBindingProblem(
   const unsupported = secretProtocolUnsupportedReason(state.protocol);
   if (unsupported !== null) return unsupported;
   const hosts = secretFormHosts(state);
-  if (hosts.length === 0) return "Enter the destination host.";
+  if (hosts.length === 0) return "Enter the server address.";
   if (hosts.length > 16) return "A secret reaches at most 16 hosts.";
   const bad = hosts.find((host) => !HOSTNAME.test(host));
   if (bad !== undefined) {

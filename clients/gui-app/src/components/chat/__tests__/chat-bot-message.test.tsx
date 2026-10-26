@@ -14,7 +14,17 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostEntryFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotAnnouncement,
@@ -25,6 +35,7 @@ import type {
   AgentSender,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
@@ -35,6 +46,7 @@ import {
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -42,9 +54,27 @@ import {
 } from "@/stores/chats/rendered-messages";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
-const mocks = vi.hoisted(() => ({
-  openLink:
-    vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
+const mocks = vi.hoisted(
+  (): {
+    openLink: Mock<
+      (url: string, kind: string, event: unknown) => Promise<void>
+    >;
+    hostLabel: { current: string | null };
+  } => ({
+    openLink:
+      vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
+    hostLabel: { current: null },
+  }),
+);
+
+// The host directory is the boundary: which label a host id carries.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostDirectoryEntryForHostId: (
+    hostId: string | null,
+  ): HostDirectoryEntry | null =>
+    hostId === null || mocks.hostLabel.current === null
+      ? null
+      : { ...hostEntryFixture(hostId), label: mocks.hostLabel.current },
 }));
 
 vi.mock("@/lib/links/open-link", async (importOriginal) => ({
@@ -57,11 +87,13 @@ const POST_ID = "post-1";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.hostLabel.current = null;
   mocks.openLink.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   cleanup();
+  useRetrospectiveSheetStore.setState({ target: null, open: false });
 });
 
 function channelPresentation(
@@ -147,7 +179,7 @@ function botRow(announcement: BotAnnouncement | undefined): ChatMessageModel {
 const NO_THREAD_LINE = (): ChatBotThreadLine | null => null;
 
 describe("<ChatMessage /> in a bot channel", () => {
-  it("draws a member's post with the sender, a square picture, the text and the request state, and no jump to a reply", () => {
+  it("draws a member's post with the sender, a round picture, the text and the request state, and no jump to a reply", () => {
     renderRow(
       memberPost({
         requestId: "req-1",
@@ -160,9 +192,9 @@ describe("<ChatMessage /> in a bot channel", () => {
     const row = screen.getByTestId("bot-member-row");
     expect(within(row).getByText("Tess Teammate")).toBeTruthy();
     expect(within(row).getByText("Please review the release")).toBeTruthy();
-    expect(
-      within(row).getByTestId("chat-sender-avatar").getAttribute("data-shape"),
-    ).toBe("square");
+    expect(avatarShape(within(row).getByTestId("chat-sender-avatar"))).toBe(
+      "circle",
+    );
     const request = within(row).getByTestId("conversation-request");
     expect(request.getAttribute("data-request-state")).toBe("resolved");
     expect(within(request).getByText("Resolved")).toBeTruthy();
@@ -192,9 +224,11 @@ describe("<ChatMessage /> in a bot channel", () => {
       memberPost(undefined),
       channelPresentation(
         () => ({
+          participants: [],
           replyCount: 3,
           lastReplyAt: Date.now() - 5 * 60_000,
           unread: false,
+          replying: false,
         }),
         openThread,
       ),
@@ -215,7 +249,13 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 0, lastReplyAt: null, unread: false }),
+        () => ({
+          participants: [],
+          replyCount: 0,
+          lastReplyAt: null,
+          unread: false,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -237,11 +277,91 @@ describe("<ChatMessage /> in a bot channel", () => {
     ).toBeTruthy();
   });
 
+  it("stacks who is in the thread: the post's writer as a circle, the bot as a squircle", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [
+            {
+              kind: "person",
+              userId: "user-teammate",
+              name: "Tess Teammate",
+              avatarUrl: null,
+            },
+            { kind: "bot" },
+          ],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    const stack = within(screen.getByTestId("bot-thread-line")).getByTestId(
+      "bot-thread-participants",
+    );
+    expect(
+      Array.from(
+        stack.querySelectorAll<HTMLElement>('[data-slot="avatar"]'),
+        avatarShape,
+      ),
+    ).toEqual(["circle", "squircle"]);
+    expect(
+      within(stack).queryByTestId("bot-thread-participants-more"),
+    ).toBeNull();
+  });
+
+  it("draws the post's writer in one colour in its row and in its thread's stack", () => {
+    renderRow(
+      { ...memberPost(undefined), senderUserId: "user-teammate" },
+      channelPresentation(
+        () => ({
+          participants: [
+            {
+              kind: "person",
+              userId: "user-teammate",
+              name: "Tess Teammate",
+              avatarUrl: null,
+            },
+          ],
+          replyCount: 1,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    const swatchIn = (scope: HTMLElement): string | undefined =>
+      scope
+        .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
+        ?.style.getPropertyValue("--swatch");
+    const row = screen.getByTestId("bot-member-row");
+    const stack = within(row).getByTestId("bot-thread-participants");
+    const rowAvatar = within(row)
+      .getAllByTestId("chat-sender-avatar")
+      .find((avatar) => !stack.contains(avatar));
+    expect(rowAvatar).toBeDefined();
+    if (rowAvatar === undefined) return;
+    expect(swatchIn(rowAvatar)).toBeTruthy();
+    expect(swatchIn(rowAvatar)).toBe(swatchIn(stack));
+  });
+
   it("marks a thread line unread with a dot, and a read one with none", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 2, lastReplyAt: 1_000, unread: true }),
+        () => ({
+          participants: [],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: true,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -254,7 +374,13 @@ describe("<ChatMessage /> in a bot channel", () => {
     renderRow(
       memberPost(undefined),
       channelPresentation(
-        () => ({ replyCount: 2, lastReplyAt: 1_000, unread: false }),
+        () => ({
+          participants: [],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          replying: false,
+        }),
         vi.fn(),
       ),
     );
@@ -356,6 +482,9 @@ describe("<ChatMessage /> bot rows", () => {
 
     const link = screen.getByTestId("bot-announcement-link");
     expect(link.textContent).toBe("https://example.com/proposal/7");
+    expect(
+      within(screen.getByTestId("bot-announcement")).getByText("New proposal"),
+    ).toBeTruthy();
     expect(mocks.openLink).not.toHaveBeenCalled();
 
     await user.click(link);
@@ -365,6 +494,40 @@ describe("<ChatMessage /> bot rows", () => {
       "https://example.com/proposal/7",
     );
   });
+
+  it.each<readonly [string | null, string]>([
+    [null, "this computer"],
+    ["Office Mac", "Office Mac"],
+  ])(
+    "draws a retrospective sheet link as a Review action that opens that host's sheet (directory label %s)",
+    async (label, hostName) => {
+      const user = userEvent.setup();
+      const hostId = "host/a b";
+      mocks.hostLabel.current = label;
+      renderRow(
+        botRow({
+          kind: "proposal",
+          link: `environment/retrospective?host=${encodeURIComponent(hostId)}`,
+        }),
+        presentation,
+      );
+
+      expect(screen.queryByText(/environment\/retrospective/)).toBeNull();
+      const row = screen.getByTestId("bot-announcement");
+      expect(
+        within(row).getByText("Shared by an earlier version"),
+      ).toBeTruthy();
+      expect(within(row).queryByText("New proposal")).toBeNull();
+      expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+      expect(useRetrospectiveSheetStore.getState().open).toBe(false);
+
+      await user.click(screen.getByTestId("bot-announcement-review"));
+
+      const state = useRetrospectiveSheetStore.getState();
+      expect(state.open).toBe(true);
+      expect(state.target).toEqual({ hostId, hostName });
+    },
+  );
 
   it("shows an epic-relative path as the path it is, not as a link", () => {
     renderRow(
@@ -471,7 +634,13 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       const user = userEvent.setup();
       const threadLine = vi.fn<
         (postMessageId: string) => ChatBotThreadLine | null
-      >(() => ({ replyCount: 2, lastReplyAt: 1_000, unread: false }));
+      >(() => ({
+        participants: [],
+        replyCount: 2,
+        lastReplyAt: 1_000,
+        unread: false,
+        replying: false,
+      }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
       renderRow(
         announcementRow(kind),

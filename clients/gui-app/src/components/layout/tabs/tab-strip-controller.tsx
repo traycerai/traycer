@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
@@ -20,6 +20,13 @@ import {
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  rebindUnreachableBotTab,
+  useBotTabsStore,
+} from "@/stores/bots/bot-tabs-store";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { useHostClient } from "@/lib/host";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -63,7 +70,19 @@ import {
  * (the scroller, the trailing drop slot, overflow measurement, wheel and
  * reveal) belongs to the presentation.
  */
+/** The fixed Tracy entry as a strip presentation draws it beside Home. */
+export interface TracyStripEntry {
+  readonly tab: HeaderTab;
+  readonly isActive: boolean;
+  readonly onActivate: () => void;
+}
+
 export interface TabStripController {
+  /**
+   * The strip's items, its tabs and its layout, all without the fixed Tracy
+   * entry, which `tracy` carries instead: it is drawn in its own slot, never
+   * counted, numbered or dropped among the tabs.
+   */
   readonly headerItemIds: ReadonlyArray<string>;
   readonly layoutItems: ReadonlyArray<StripItem>;
   readonly groups: TabGroups | undefined;
@@ -72,6 +91,7 @@ export interface TabStripController {
   readonly activeItemId: string | null;
   readonly homeTabDrawn: boolean;
   readonly homeIsActive: boolean;
+  readonly tracy: TracyStripEntry | null;
   /** Home off, no tabs, on the landing route: the strip has nothing to draw. */
   readonly isEmptyLanding: boolean;
   readonly dropIndicatorIndex: number | null;
@@ -104,12 +124,10 @@ export interface TabStripController {
 }
 
 export function useTabStripController(): TabStripController {
-  const headerItemIds = useHeaderStripItemIds();
-  const layoutItems = useTabsStore((state) => state.items);
+  const navigate = useNavigate();
+  const { headerItemIds, layoutItems, allTabs, tracy } = useStripWithoutTracy();
   const groups = useTabsStore((state) => state.groups);
   const customizations = useTabsStore((state) => state.customizations);
-  const allTabs = useHeaderTabs();
-  const navigate = useNavigate();
   const openInNewWindowFlow = useTabOpenInNewWindowFlow();
   const closeTabFlow = useCloseTabFlow();
   const { close: closeModal } = useSystemTabModalActions();
@@ -264,11 +282,15 @@ export function useTabStripController(): TabStripController {
     activeItemId,
     homeTabDrawn,
     homeIsActive,
+    tracy,
     // Home is a fixed tab, so with it drawn there is always something to
     // render: the one control that gets the user back to Home must not
     // disappear exactly when it is the only surface open.
     isEmptyLanding:
-      !homeTabDrawn && allTabs.length === 0 && activePathname === "/",
+      !homeTabDrawn &&
+      tracy === null &&
+      allTabs.length === 0 &&
+      activePathname === "/",
     dropIndicatorIndex,
     dropGroupId,
     dragSourceItemId,
@@ -295,6 +317,80 @@ export function useTabStripController(): TabStripController {
       </>
     ),
   };
+}
+
+/**
+ * The strip split into its tabs and the fixed Tracy entry. The entry's item
+ * is taken out of the ids and the layout alike, which are index-aligned, so
+ * every row, drop slot and Alt-digit badge counts the tabs alone.
+ */
+function useStripWithoutTracy(): {
+  readonly headerItemIds: ReadonlyArray<string>;
+  readonly layoutItems: ReadonlyArray<StripItem>;
+  readonly allTabs: ReadonlyArray<HeaderTab>;
+  readonly tracy: TracyStripEntry | null;
+} {
+  const headerItemIds = useHeaderStripItemIds();
+  const layoutItems = useTabsStore((state) => state.items);
+  const activeItemId = useTabsStore((state) => state.activeItemId);
+  const headerTabs = useHeaderTabs();
+  const fixedBotId = useBotTabsStore((state) => state.fixedBotId);
+  const tracyItemId = useTracyEntryItemId();
+  const tracyTab = useMemo(
+    () =>
+      tracyItemId === null
+        ? null
+        : (headerTabs.find(
+            (tab) => tab.kind === "bot" && tab.id === fixedBotId,
+          ) ?? null),
+    [fixedBotId, headerTabs, tracyItemId],
+  );
+  const tracyIsActive = tracyItemId !== null && activeItemId === tracyItemId;
+  const onActivateTracy = useOpenTracyEntry(tracyTab);
+  return useMemo(() => {
+    if (tracyItemId === null || tracyTab === null) {
+      return { headerItemIds, layoutItems, allTabs: headerTabs, tracy: null };
+    }
+    return {
+      headerItemIds: headerItemIds.filter((id) => id !== tracyItemId),
+      layoutItems: layoutItems.filter((item) => item.id !== tracyItemId),
+      allTabs: headerTabs.filter((tab) => tab !== tracyTab),
+      tracy: {
+        tab: tracyTab,
+        isActive: tracyIsActive,
+        onActivate: onActivateTracy,
+      },
+    };
+  }, [
+    headerItemIds,
+    headerTabs,
+    layoutItems,
+    onActivateTracy,
+    tracyIsActive,
+    tracyItemId,
+    tracyTab,
+  ]);
+}
+
+/**
+ * Opens the entry's tab as Home's bots list opens a bot: a restored tab whose
+ * host this client can no longer dial first moves to this window's host.
+ */
+function useOpenTracyEntry(tab: HeaderTab | null): () => void {
+  const navigate = useNavigate();
+  const hostId = useEffectiveHostId();
+  const connectable = useConnectableHostIds();
+  return useCallback(() => {
+    if (tab === null) return;
+    if (hostId !== null) {
+      rebindUnreachableBotTab(
+        tab.id,
+        hostId,
+        connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
+      );
+    }
+    navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
+  }, [connectable.hostIds, connectable.resolved, hostId, navigate, tab]);
 }
 
 /** The one pin dispatch site for the whole tab tree, Undo included. */

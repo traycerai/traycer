@@ -13,6 +13,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 
 type ListSandboxes = () => Promise<SandboxListFetchResult>;
@@ -31,6 +32,11 @@ type OpenSandboxAutomation = (
   target: SandboxAutomationOpenTarget | null,
 ) => Promise<SandboxAutomationOpenFetchResult>;
 type DestroySandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
+type PatchSandbox = (
+  sandboxId: string,
+  request: SandboxPatchRequest,
+) => Promise<SandboxVerbFetchResult>;
+type KeepSandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
 
 /** The AuthService methods the sandbox mutations and the tab-open wake call. */
 export interface FakeSandboxAuth {
@@ -40,6 +46,8 @@ export interface FakeSandboxAuth {
   readonly createSandbox: Mock<CreateSandbox>;
   readonly runSandboxVerb: Mock<RunSandboxVerb>;
   readonly destroySandbox: Mock<DestroySandbox>;
+  readonly patchSandbox: Mock<PatchSandbox>;
+  readonly keepSandbox: Mock<KeepSandbox>;
   readonly getSandboxAutomation: Mock<GetSandboxAutomation>;
   readonly openSandboxAutomation: Mock<OpenSandboxAutomation>;
 }
@@ -70,6 +78,12 @@ export function createFakeSandboxBinding(): FakeSandboxBinding {
         Promise.resolve({ kind: "ok", settled: true, state: null }),
       ),
       destroySandbox: vi.fn<DestroySandbox>(() =>
+        Promise.resolve({ kind: "ok", settled: true }),
+      ),
+      patchSandbox: vi.fn<PatchSandbox>(() =>
+        Promise.resolve({ kind: "ok", settled: true }),
+      ),
+      keepSandbox: vi.fn<KeepSandbox>(() =>
         Promise.resolve({ kind: "ok", settled: true }),
       ),
       getSandboxAutomation: vi.fn<GetSandboxAutomation>(() =>

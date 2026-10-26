@@ -22,13 +22,20 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
-  EnvironmentSecretRemoval,
-  EnvironmentSecretsListResponseV11,
+  EnvironmentSecretRemovalV12,
+  EnvironmentSecretsListResponseV12,
   EnvironmentSecretsVersionsResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
@@ -40,15 +47,14 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const DAY = 24 * 60 * 60 * 1_000;
 
+// The Settings date rule itself is pinned in settings-date.test.ts.
 function formatted(at: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(at);
+  return formatSettingsDate(at, true);
 }
 
 beforeEach(() => {
@@ -104,8 +110,10 @@ function openDrawer(
     <SettingsDetailsDialog
       subject={{ environmentId: "env-a", ...subject }}
       title={title}
+      controls={null}
       open
       onOpenChange={() => undefined}
+      initialTab="status"
     />,
     { wrapper: harness.Wrapper },
   );
@@ -206,6 +214,37 @@ describe("the drawer's reader scopes", () => {
     expect(screen.getByText(`Traycer · ${formatted(AT - DAY)}`)).toBeTruthy();
   });
 
+  it("prints no Unknown or unknown for an actor or a time the app does not have", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            {
+              at: AT,
+              actor: null,
+              operation: "sync",
+              outcome: "applied",
+            },
+          ],
+          hostStates: [
+            {
+              ...brokenHost,
+              state: "applied",
+              reason: null,
+              at: null,
+              lastReportedAt: null,
+            },
+          ],
+        }),
+    });
+    openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
+
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.getByText(formatted(AT))).toBeTruthy();
+    expect(screen.getByText("Applied")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/unknown/i);
+  });
+
   it("offers Retry for a failed setup script, and only the reason for a failed setting", async () => {
     const failedHost = { ...brokenHost, reason: "apply_failed" };
     const harness = mountTeamPage(poolSource("admin"), {
@@ -240,7 +279,101 @@ describe("the drawer's reader scopes", () => {
   });
 });
 
+describe("the subject's own controls", () => {
+  function openWithControls(
+    harness: TeamPageHarness,
+    controls: ReactNode,
+  ): void {
+    render(
+      <SettingsDetailsDialog
+        subject={{ environmentId: "env-a", kind: "variable", key: "FOO" }}
+        title="FOO"
+        controls={controls}
+        open
+        onOpenChange={() => undefined}
+        initialTab="status"
+      />,
+      { wrapper: harness.Wrapper },
+    );
+  }
+
+  it("shows them under the status, in the Status tab", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [brokenHost] }),
+    });
+    openWithControls(harness, <p data-testid="own-controls">Verify here</p>);
+
+    // The controls show before the status is read; they sit under it once it is.
+    const repair = await screen.findByRole("button", {
+      name: "Repair on dev-box",
+    });
+    const controls = screen.getByTestId("own-controls");
+    expect(
+      repair.compareDocumentPosition(controls) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("shows them beside the failure line when the details cannot be read", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({}),
+      "environment.secrets.list": () => ({ removed: [], secrets: [] }),
+    });
+    render(
+      <SettingsDetailsDialog
+        subject={{
+          environmentId: "env-a",
+          kind: "secret",
+          key: "sec-unknown",
+        }}
+        title="Gone"
+        controls={<p data-testid="own-controls">Verify here</p>}
+        open
+        onOpenChange={() => undefined}
+        initialTab="status"
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't load details.Retry",
+    );
+    expect(screen.getByTestId("own-controls")).toBeTruthy();
+  });
+
+  it("shows nothing extra when the subject has none", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [brokenHost] }),
+    });
+    openWithControls(harness, null);
+
+    await screen.findByRole("button", { name: "Repair on dev-box" });
+    expect(screen.queryByTestId("own-controls")).toBeNull();
+  });
+});
+
 describe("Export diagnostics", () => {
+  it("keeps an export failure's own message, not the details-load line", async () => {
+    let reads = 0;
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () => {
+        reads += 1;
+        if (reads > 1) throw new Error("Couldn't reach the history.");
+        return history({ hostStates: [LEAKY_HOST] });
+      },
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
+    await user.click(
+      await screen.findByRole("tab", { name: "Export diagnostics" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't reach the history.");
+    expect(alert.textContent).not.toContain("Couldn't load details.");
+  });
+
   it("saves a sanitized export from a fresh, re-authorized read", async () => {
     let scope: EnvironmentHistoryResponse["readerScope"] = "full";
     const harness = mountTeamPage(poolSource("admin"), {
@@ -272,7 +405,7 @@ describe("Export diagnostics", () => {
       subject: { environmentId: "env-a", kind: "variable", key: "FOO" },
       title: "Settings",
       status: {
-        summary: "Current status",
+        summary: "1 not applied on dev-box",
         currentVersion: null,
         changedBy: null,
         changedAt: null,
@@ -332,8 +465,8 @@ describe("Export diagnostics", () => {
 });
 
 function removal(
-  overrides: Partial<EnvironmentSecretRemoval>,
-): EnvironmentSecretRemoval {
+  overrides: Partial<EnvironmentSecretRemovalV12>,
+): EnvironmentSecretRemovalV12 {
   return {
     outcome: "revoked",
     revokedAt: AT,
@@ -344,7 +477,7 @@ function removal(
 }
 
 describe("the Secrets header's Details", () => {
-  const secretsList: EnvironmentSecretsListResponseV11 = {
+  const secretsList: EnvironmentSecretsListResponseV12 = {
     secrets: [
       {
         secretId: "sec-live",
@@ -357,6 +490,8 @@ describe("the Secrets header's Details", () => {
         currentVersionId: "ver-1",
         revoked: false,
         updatedAt: AT,
+        variables: [],
+        providerVariables: [],
       },
       {
         secretId: "sec-revoked",
@@ -369,6 +504,8 @@ describe("the Secrets header's Details", () => {
         currentVersionId: null,
         revoked: true,
         updatedAt: AT,
+        variables: [],
+        providerVariables: [],
       },
     ],
     removed: [
@@ -404,7 +541,8 @@ describe("the Secrets header's Details", () => {
     });
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
 
-    expect(await screen.findByText("Secrets and recent removals")).toBeTruthy();
+    // No host has reported yet, so the page's Now says so.
+    expect(await screen.findByText("No hosts yet")).toBeTruthy();
     const items = screen.getAllByRole("listitem").map((row) => row.textContent);
     expect(items).toEqual([
       expect.stringContaining("STRIPE_KEY"),
@@ -415,6 +553,13 @@ describe("the Secrets header's Details", () => {
     expect(items[1]).toContain("Access revoked");
     expect(items[2]).toContain("Cleanup requested");
     expect(items[3]).toContain("Destroyed");
+    // Only a removal still under way can be retried.
+    expect(items.map((item) => item.includes("Retry"))).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
     expect(screen.queryByText("OLD_DESTROYED")).toBeNull();
     const call = harness.messenger.calls.find(
       (entry) => entry.method === "environment.secrets.list",
@@ -425,7 +570,7 @@ describe("the Secrets header's Details", () => {
     });
   });
 
-  it("opens one removed secret's own details from its row", async () => {
+  it("opens one removed secret's own details and retries its unfinished cleanup", async () => {
     const versions: EnvironmentSecretsVersionsResponseV11 = {
       versions: [
         {
@@ -447,6 +592,7 @@ describe("the Secrets header's Details", () => {
             hostName: "dev-box",
             state: "confirmed",
             at: AT,
+            failedAt: null,
           },
           {
             target: "broker_current",
@@ -454,23 +600,25 @@ describe("the Secrets header's Details", () => {
             hostName: null,
             state: "requested",
             at: AT,
+            failedAt: null,
           },
         ],
       }),
     };
-    const harness = mountTeamPage(poolSource("viewer"), {
+    const harness = mountTeamPage(poolSource("editor"), {
       "environment.history": () => history({}),
       "environment.secrets.list": () => secretsList,
       "environment.secrets.versions": () => versions,
+      "environment.secrets.destroy": () => ({ outcome: "revoked" as const }),
     });
     const user = userEvent.setup();
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
     const row = (await screen.findByText("CLEANUP_KEY")).closest("li");
     await user.click(
-      (row as HTMLElement).querySelector("button") as HTMLButtonElement,
+      within(row as HTMLElement).getByRole("button", { name: "Details" }),
     );
 
-    expect(await screen.findByText("Cleanup requested")).toBeTruthy();
+    expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
     expect(screen.getByText("Version 2")).toBeTruthy();
     expect(screen.getByText("1 of 2 copies removed")).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([
@@ -483,6 +631,50 @@ describe("the Secrets header's Details", () => {
       method: "environment.secrets.versions",
       version: { major: 1, minor: 1 },
     });
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.destroy")).toEqual([
+        { environmentId: "env-a", secretId: "sec-cleanup", versionId: "ver-2" },
+      ]);
+    });
+  });
+
+  it("retries a removal still under way by removing its current version again", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({}),
+      "environment.secrets.list": () => secretsList,
+      "environment.secrets.versions": () => ({
+        versions: [
+          {
+            versionId: "ver-2",
+            ordinal: 2,
+            createdAt: AT,
+            supersededAt: null,
+            destroyedAt: null,
+            current: true,
+            rotationState: null,
+          },
+        ],
+        removal: null,
+      }),
+      "environment.secrets.destroy": () => ({ outcome: "revoked" as const }),
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+    const row = (await screen.findByText("CLEANUP_KEY")).closest("li");
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: "Retry" }),
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.destroy")).toEqual([
+        { environmentId: "env-a", secretId: "sec-cleanup", versionId: "ver-2" },
+      ]);
+    });
+    expect(harness.paramsOf("environment.secrets.versions")).toEqual([
+      { environmentId: "env-a", secretId: "sec-cleanup" },
+    ]);
   });
 
   it("reads a destroyed secret from the list alone, without a versions read", async () => {
@@ -496,15 +688,22 @@ describe("the Secrets header's Details", () => {
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([]);
   });
 
-  it("explains a secret that is gone from both lists", async () => {
+  it("reads a details failure as one line with a Retry link, and re-reads on Retry", async () => {
     const harness = mountTeamPage(poolSource("viewer"), {
       "environment.history": () => history({}),
       "environment.secrets.list": () => secretsList,
     });
+    const user = userEvent.setup();
     openDrawer(harness, { kind: "secret", key: "sec-unknown" }, "Gone");
 
-    expect(
-      await screen.findByText("This secret is no longer available."),
-    ).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Couldn't load details.Retry");
+    const reads = harness.paramsOf("environment.secrets.list").length;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.secrets.list").length,
+      ).toBeGreaterThan(reads);
+    });
   });
 });

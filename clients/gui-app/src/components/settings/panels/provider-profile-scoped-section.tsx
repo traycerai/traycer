@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
@@ -28,14 +29,14 @@ import {
   providerSignInUnavailableReason,
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
+import { providersMutationKeys } from "@/lib/query-keys";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
-import {
-  EmbeddedProviderRateLimitForProvider,
-  ProviderProfilesRefreshButton,
-} from "./provider-rate-limit-section";
+import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
-import { ProfileSyncEntryButton } from "./profile-sync/profile-sync-entry-button";
-import { profileSyncWireProvider } from "@/lib/profile-sync/profile-sync-presentation";
+import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
@@ -91,12 +92,19 @@ interface ProviderProfileScopedSectionProps {
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
-  readonly profileStatusRefreshAvailable: boolean;
   readonly profileEnablementPending: (profileId: string | null) => boolean;
   readonly onSetProfileEnabled: (
     profileId: string | null,
     enabled: boolean,
   ) => void;
+}
+
+/**
+ * The terminal login's row label: the tool's own sign-in on the host this
+ * page reads, which Traycer neither made nor carries anywhere else.
+ */
+function ownLoginLabel(providerLabel: string, hostName: string | null): string {
+  return `${providerLabel}'s own login on ${hostName ?? "this computer"}`;
 }
 
 /**
@@ -112,7 +120,7 @@ interface ProviderProfileScopedSectionProps {
  * `managementHeldReason` holds every profile control while the provider is
  * off, whether or not the host could run its CLI: the sign-in controls fold
  * it into `canAddProfile`, and the ones that need no CLI (Manage profile,
- * refresh, usage) hold on this alone.
+ * usage) hold on this alone.
  */
 function profileControlsHold(
   state: ProviderCliState,
@@ -235,10 +243,18 @@ function ProfileScopedSectionMessages(props: {
  * even when there is only the terminal/default profile, so the page does not
  * switch visual languages after the first managed profile is added.
  * Everything below the header - the selected profile's details, usage limits,
- * and actions - is scoped to `selectedProfileId`. With zero profiles, only
- * the transferable provider's sync entry remains, so persistent rules are
- * still reachable. The caller keeps the plain unscoped
+ * and actions - is scoped to `selectedProfileId`. With zero profiles there
+ * is no section; the caller keeps the plain unscoped
  * `ProviderRateLimitForProvider` mounted for that case.
+ *
+ * The terminal login is a read-only row (design, Profiles & Limits): named as
+ * the tool's own login on this host, with one verb that starts a Settings
+ * sign-in - a new profile that follows you - and leaves that login untouched.
+ *
+ * The card's one verb is `Add a profile`: Personal carries every profile it
+ * holds to each computer running it. The page header's Refresh re-probes every
+ * profile's sign-in, and usage re-reads on open and after each turn, so the
+ * card carries no refresh of its own.
  */
 export function ProviderProfileScopedSection(
   props: ProviderProfileScopedSectionProps,
@@ -257,19 +273,21 @@ export function ProviderProfileScopedSection(
     selectedProfileId,
     onSelectedProfileIdChange,
     profileEnablementAvailable,
-    profileStatusRefreshAvailable,
     profileEnablementPending,
     onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
+  const pick = useEnvironmentPick();
+  const personalHostName = usePersonalHostName();
+  // A Local row reads its own computer; Personal names the window's host.
+  const hostName = pick.kind === "local" ? pick.hostName : personalHostName;
   const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
 
-  if (profiles.length === 0)
-    return <EmptyProviderProfiles state={state} hostId={hostId} />;
+  if (profiles.length === 0) return null;
 
   const selectedProfile =
     profiles.find(
@@ -285,6 +303,11 @@ export function ProviderProfileScopedSection(
     ? signInUnavailableHint
     : null;
   const duplicateLabel = duplicateProfileLabel(selectedProfile, profiles);
+  const ownLogin = ownLoginLabel(providerLabel, hostName);
+  // The dropdown names the terminal login the way its row does.
+  const labelledProfiles = profiles.map((profile) =>
+    profile.kind === "ambient" ? { ...profile, label: ownLogin } : profile,
+  );
 
   const openProfileEditor = (): void => {
     setEditIntent("manage");
@@ -304,10 +327,6 @@ export function ProviderProfileScopedSection(
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
           <div className="flex flex-wrap items-center gap-1">
-            <ProfileSyncEntryButton
-              hostId={hostId}
-              providerId={state.providerId}
-            />
             <TooltipWrapper
               label={addProfileDisabledReason}
               side="top"
@@ -326,34 +345,15 @@ export function ProviderProfileScopedSection(
                   onClick={onAddProfile}
                 >
                   <Plus className="size-3.5" />
-                  Add profile
+                  Add a profile
                 </Button>
               </span>
             </TooltipWrapper>
-            <span
-              className={cn(
-                "inline-flex",
-                managementHeldReason !== null &&
-                  "pointer-events-none opacity-50",
-              )}
-              {...(managementHeldReason !== null ? { inert: true } : {})}
-            >
-              <ProviderProfilesRefreshButton
-                providerId={state.providerId}
-                profileId={profileCommitId(selectedProfile)}
-                usageUpdatedAt={selectedProfile.usageUpdatedAt}
-                fetchEligible={profileRateLimitFetchEligible(
-                  state,
-                  selectedProfile,
-                )}
-                maintenanceAvailable={profileStatusRefreshAvailable}
-              />
-            </span>
           </div>
         </div>
         <ProfileDropdown
           providerLabel={providerLabel}
-          profiles={profiles}
+          profiles={labelledProfiles}
           activeProfileId={selectedProfileId}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
@@ -381,78 +381,88 @@ export function ProviderProfileScopedSection(
               : null
           }
           admissionByProfileId={null}
+          showTerminalBadge={false}
         />
         <ProviderOnHostOnlyLine
           hostId={hostId}
           providerId={state.providerId}
           profileId={selectedProfile.profileId}
         />
-        <div
-          data-slot="profile-summary-actions"
-          // Wraps because every item except the email is a fixed-width chip:
-          // in a single-line row a narrow viewport collapses the email to
-          // nothing and then pushes the chips into one another, since none of
-          // them can shrink. Wrapping drops the buttons onto their own line
-          // instead, keeping every chip whole.
-          className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-        >
-          <AppliedProviderItemDetails
-            kind="managed_profile"
-            itemKey={`${providerIdToGuiHarnessId(state.providerId)}:${selectedProfile.profileId}`}
-            title={selectedProfile.label}
-          />
-          <ProfileSummary
-            key={selectedProfile.profileId}
+        {selectedProfile.kind === "ambient" ? (
+          <OwnLoginSummary
             profile={selectedProfile}
+            addProfileDisabled={addProfileDisabled}
+            addProfileDisabledReason={addProfileDisabledReason}
+            onAddProfile={onAddProfile}
           />
-          {selectedProfile.auth.status === "unauthenticated" ? (
+        ) : (
+          <div
+            data-slot="profile-summary-actions"
+            // Wraps because every item except the email is a fixed-width chip:
+            // in a single-line row a narrow viewport collapses the email to
+            // nothing and then pushes the chips into one another, since none of
+            // them can shrink. Wrapping drops the buttons onto their own line
+            // instead, keeping every chip whole.
+            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+          >
+            <AppliedProviderItemDetails
+              kind="managed_profile"
+              itemKey={`${providerIdToGuiHarnessId(state.providerId)}:${selectedProfile.profileId}`}
+              title={selectedProfile.label}
+            />
+            <ProfileSummary
+              key={selectedProfile.profileId}
+              profile={selectedProfile}
+            />
+            {selectedProfile.auth.status === "unauthenticated" ? (
+              <TooltipWrapper
+                label={canAddProfile ? null : signInUnavailableHint}
+                side="top"
+                sideOffset={6}
+                align="start"
+              >
+                <span className="inline-flex">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="secondary"
+                    className="shrink-0"
+                    disabled={!canAddProfile}
+                    onClick={openProfileSignIn}
+                  >
+                    <LogIn data-icon="inline-start" />
+                    Sign in
+                  </Button>
+                </span>
+              </TooltipWrapper>
+            ) : null}
             <TooltipWrapper
-              label={canAddProfile ? null : signInUnavailableHint}
-              side="top"
+              label={
+                managementHeldReason ??
+                "Change the profile name and accent color, sign in again, or remove this profile."
+              }
+              side="bottom"
               sideOffset={6}
-              align="start"
+              align="end"
             >
+              {/* Span for the same reason as Add a profile above: a disabled
+                  button emits no pointer events for the tooltip to see. */}
               <span className="inline-flex">
                 <Button
                   type="button"
                   size="xs"
-                  variant="secondary"
+                  variant="outline"
                   className="shrink-0"
-                  disabled={!canAddProfile}
-                  onClick={openProfileSignIn}
+                  disabled={managementHeldReason !== null}
+                  onClick={openProfileEditor}
                 >
-                  <LogIn data-icon="inline-start" />
-                  Sign in
+                  <Settings2 data-icon="inline-start" />
+                  Manage profile
                 </Button>
               </span>
             </TooltipWrapper>
-          ) : null}
-          <TooltipWrapper
-            label={
-              managementHeldReason ??
-              "Change the profile name and accent color, sign in again, or remove this profile."
-            }
-            side="bottom"
-            sideOffset={6}
-            align="end"
-          >
-            {/* Span for the same reason as Add profile above: a disabled
-                button emits no pointer events for the tooltip to see. */}
-            <span className="inline-flex">
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                className="shrink-0"
-                disabled={managementHeldReason !== null}
-                onClick={openProfileEditor}
-              >
-                <Settings2 data-icon="inline-start" />
-                Manage profile
-              </Button>
-            </span>
-          </TooltipWrapper>
-        </div>
+          </div>
+        )}
 
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}
@@ -507,28 +517,93 @@ export function ProviderProfileScopedSection(
   );
 }
 
-function EmptyProviderProfiles(props: {
-  readonly state: ProviderCliState;
-  readonly hostId: string | null;
+/**
+ * What the terminal login's row says of its sign-in: `Signed in`, `Signed
+ * out`, or `null` when the host could not read it (`couldn't be checked`,
+ * with a Retry that probes again).
+ */
+function ownLoginStateText(profile: ProviderProfile): string | null {
+  switch (profile.auth.status) {
+    case "authenticated":
+    case "configured":
+      return "Signed in";
+    case "unauthenticated":
+      return "Signed out";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The terminal login's row under the dropdown that names it: where it works
+ * and whether it is signed in, with one verb. `Sign in to use everywhere` opens the same
+ * sign-in `Add a profile` does, so the tool's own login is never touched from
+ * here.
+ */
+function OwnLoginSummary(props: {
+  readonly profile: ProviderProfile;
+  readonly addProfileDisabled: boolean;
+  readonly addProfileDisabledReason: string | null;
+  readonly onAddProfile: () => void;
 }): ReactNode {
-  if (
-    props.hostId === null ||
-    profileSyncWireProvider(props.state.providerId) === null
-  )
-    return null;
+  const refreshProviders = useRefreshProviders();
+  const refreshing =
+    useIsMutating({ mutationKey: providersMutationKeys.refresh() }) > 0;
+  const stateText = ownLoginStateText(props.profile);
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-ui-sm font-medium text-foreground">Profiles</div>
-        <ProfileSyncEntryButton
-          hostId={props.hostId}
-          providerId={props.state.providerId}
-        />
+    <div
+      data-slot="profile-summary-actions"
+      className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+    >
+      <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
+        <span className="min-w-0">works on this computer only</span>
+        {stateText === null ? (
+          <span className="inline-flex shrink-0 items-center gap-1">
+            couldn&apos;t be checked
+            <Button
+              type="button"
+              variant="link"
+              size="inline-xs"
+              disabled={refreshing}
+              onClick={() => void refreshProviders()}
+            >
+              Retry
+              {refreshing ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+            </Button>
+          </span>
+        ) : (
+          <Badge variant="outline" className="h-5 shrink-0" size="xs">
+            {stateText}
+          </Badge>
+        )}
       </div>
-      <p className="text-ui-xs text-muted-foreground">
-        No profiles on this device.
-      </p>
-    </section>
+      <TooltipWrapper
+        label={props.addProfileDisabledReason}
+        side="top"
+        sideOffset={6}
+        align="start"
+      >
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="xs"
+            variant="secondary"
+            className="shrink-0"
+            disabled={props.addProfileDisabled}
+            onClick={props.onAddProfile}
+          >
+            <LogIn data-icon="inline-start" />
+            Sign in to use everywhere
+          </Button>
+        </span>
+      </TooltipWrapper>
+    </div>
   );
 }
 

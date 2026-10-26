@@ -13,8 +13,12 @@
  * floor, like every environment method (`environment/contracts.ts`).
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { SANDBOX_SECRET_NAME_PATTERN } from "@traycer/protocol/host/secret-intake-catalogue";
 import {
   environmentItemKindSchema,
   environmentOsSchema,
@@ -96,8 +100,122 @@ export const environmentMovePlanV10 = defineRpcContract({
 });
 
 /**
+ * `@1.1` adds `sameNameInPersonal`: rows that look like a key whose name
+ * Personal already holds as a secret. Secret values are never read back, so
+ * the two cannot be compared; the move leaves this computer's value here and
+ * uploads nothing for it. Such a row counts in no other list. It also adds
+ * `guideDiffers`: this computer's agent selection guide has the person's
+ * edits, which the move never puts over Personal's. Not a row: it counts in no
+ * list and has no choice. A `@1.0` answer upgrades with no such rows and
+ * `guideDiffers` false.
+ */
+export const environmentMovePlanResponseSchemaV11 = lazySchema(() =>
+  environmentMovePlanResponseSchema.extend({
+    rows: environmentMovePlanResponseSchema.shape.rows.extend({
+      sameNameInPersonal: z.array(environmentMoveRowSchema).default([]),
+    }),
+    guideDiffers: z.boolean().default(false),
+  }),
+);
+export type EnvironmentMovePlanResponseV11 = z.infer<
+  typeof environmentMovePlanResponseSchemaV11
+>;
+
+export const environmentMovePlanV11 = defineRpcContract({
+  method: "environment.move.plan",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentMovePlanRequestSchema,
+  responseSchema: environmentMovePlanResponseSchemaV11,
+});
+
+export const environmentMovePlanUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentMovePlanV10,
+  typeof environmentMovePlanV11
+>({
+  from: environmentMovePlanV10.schemaVersion,
+  to: environmentMovePlanV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    rows: { ...response.rows, sameNameInPersonal: [] },
+    guideDiffers: false,
+  }),
+});
+
+/**
+ * `@1.2` adds `personalHoldsSecrets`: Personal holds at least one key or
+ * secret, which reaches this computer as a readable value once it runs
+ * Personal, so the sheet discloses it even when this move stores none. It
+ * also adds `itemChoices`: this host honours a choice on a `moves` row
+ * (`environmentMoveItemChoiceKey`). A host that does not drops such a
+ * choice and would upload the row, so a client offers them only when this
+ * is true. A `@1.1` answer upgrades with both false.
+ */
+export const environmentMovePlanResponseSchemaV12 = lazySchema(() =>
+  environmentMovePlanResponseSchemaV11.extend({
+    personalHoldsSecrets: z.boolean().default(false),
+    itemChoices: z.boolean().default(false),
+  }),
+);
+export type EnvironmentMovePlanResponseV12 = z.infer<
+  typeof environmentMovePlanResponseSchemaV12
+>;
+
+export const environmentMovePlanV12 = defineRpcContract({
+  method: "environment.move.plan",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentMovePlanRequestSchema,
+  responseSchema: environmentMovePlanResponseSchemaV12,
+});
+
+export const environmentMovePlanUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentMovePlanV11,
+  typeof environmentMovePlanV12
+>({
+  from: environmentMovePlanV11.schemaVersion,
+  to: environmentMovePlanV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    personalHoldsSecrets: false,
+    itemChoices: false,
+  }),
+});
+
+/** What every `environmentMoveItemChoiceKey` starts with. */
+export const ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX = "item:";
+
+/**
+ * The key a choice on one `moves` row is sent under, beside the
+ * `looksLikeAKey` rows' own keys: `item:<kind>:<key>`. A row's kind has no
+ * `:`, so the separator after it splits the key back out. Only a host whose plan
+ * says `itemChoices` reads it: `secret` stores a variable or provider
+ * override as a secret, `stays` leaves the row on this computer only.
+ */
+export function environmentMoveItemChoiceKey(
+  kind: string,
+  key: string,
+): string {
+  return `${ENVIRONMENT_MOVE_ITEM_CHOICE_PREFIX}${kind}:${key}`;
+}
+
+/** A variable row's secret name, or null when intake cannot store it. */
+export function environmentMoveSecretName(
+  kind: string,
+  key: string,
+): string | null {
+  if (kind !== "variable" && kind !== "env_override") return null;
+  const separator = key.indexOf(":");
+  if (kind === "env_override" && separator <= 0) return null;
+  const name = kind === "variable" ? key : key.slice(separator + 1);
+  return SANDBOX_SECRET_NAME_PATTERN.test(name) ? name : null;
+}
+
+/**
  * The person's answer to one `looksLikeAKey` row, by its key: move it as a
  * `secret`, move it as a `variable`, or leave it on this computer (`stays`).
+ * On a host whose plan says `itemChoices`, also one `moves` row's, under
+ * `environmentMoveItemChoiceKey`; the request's shape is the same.
  */
 export const environmentMoveKeyChoiceSchema = lazySchema(() =>
   z.object({
@@ -177,6 +295,64 @@ export const environmentMoveStopPreviewV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMoveStopPreviewRequestSchema,
   responseSchema: environmentMoveStopPreviewResponseSchema,
+});
+
+/**
+ * `@1.1` adds, on each `needsChoice` row, why it needs a choice (`origin`)
+ * and what depends on it (`usedBy`):
+ *
+ * - `from_this_computer`: its value was on this computer before Personal
+ *   wrote it there, or the host cannot tell where it came from;
+ * - `changed_here`: this computer holds its own value over it;
+ * - `depended_on`: other items depend on it, named in `usedBy` (empty for
+ *   every other origin).
+ *
+ * `reason` keeps its `@1.0` meaning for older clients: `edited_here` for the
+ * first two origins. A `@1.0` answer upgrades `edited_here` to
+ * `changed_here`, which is all a `@1.0` host meant by it, and `depended_on`
+ * with no `usedBy`, since it never named them.
+ */
+export const environmentMoveStopPreviewResponseSchemaV11 = lazySchema(() =>
+  environmentMoveStopPreviewResponseSchema.extend({
+    needsChoice: z.array(
+      z.object({
+        row: environmentMoveRowSchema,
+        reason: z.enum(["edited_here", "depended_on"]),
+        origin: z.enum(["from_this_computer", "changed_here", "depended_on"]),
+        usedBy: z.array(environmentMoveRowSchema),
+      }),
+    ),
+  }),
+);
+export type EnvironmentMoveStopPreviewResponseV11 = z.infer<
+  typeof environmentMoveStopPreviewResponseSchemaV11
+>;
+
+export const environmentMoveStopPreviewV11 = defineRpcContract({
+  method: "environment.move.stopPreview",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentMoveStopPreviewRequestSchema,
+  responseSchema: environmentMoveStopPreviewResponseSchemaV11,
+});
+
+export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentMoveStopPreviewV10,
+  typeof environmentMoveStopPreviewV11
+>({
+  from: environmentMoveStopPreviewV10.schemaVersion,
+  to: environmentMoveStopPreviewV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    needsChoice: response.needsChoice.map((entry) => ({
+      ...entry,
+      origin:
+        entry.reason === "edited_here"
+          ? ("changed_here" as const)
+          : ("depended_on" as const),
+      usedBy: [],
+    })),
+  }),
 });
 
 /**

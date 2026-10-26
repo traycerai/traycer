@@ -17,7 +17,6 @@ import type {
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
-import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import {
   DesktopRunnerHost,
@@ -149,6 +148,14 @@ function buildFakeBridge(
       detail: "test",
     }),
     destroySandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    patchSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    keepSandbox: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
@@ -461,6 +468,7 @@ function buildFakeBridge(
           pid: null,
           hostId: null,
           layer0: null,
+          ensureFailure: null,
         },
         logs: [],
         links: [],
@@ -907,15 +915,10 @@ describe("DesktopRunnerHost.sandboxControlUnavailableReason", () => {
     deployment.environment = "dev";
   });
 
-  it("is the staging line on a staging build, because staging's server only accepts calls from hosts", () => {
-    expect(hostFor("staging").sandboxControlUnavailableReason).toBe(
-      SANDBOXES_UNAVAILABLE_IN_STAGING,
-    );
-  });
-
-  it("is null on a production build and on the dev slot", () => {
-    expect(hostFor("production").sandboxControlUnavailableReason).toBeNull();
-    expect(hostFor("dev").sandboxControlUnavailableReason).toBeNull();
+  it("is null on every build, staging included, because main sends staging's calls through IAP", () => {
+    for (const environment of ["dev", "staging", "production"] as const) {
+      expect(hostFor(environment).sandboxControlUnavailableReason).toBeNull();
+    }
   });
 });
 

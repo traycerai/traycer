@@ -22,8 +22,9 @@ import { cn } from "@/lib/utils";
  * differ is this: three pickers each inventing their own icon set and their own
  * word for "offline" is exactly what this replaced.
  *
- * Single-line by design. Healthy hosts stay quiet; only exception states get a
- * status word. The interaction container owns the trailing selection check so
+ * Single-line by design, with one exception: a second line saying why this
+ * machine's host is left alone (`terminalRunNote`). Healthy hosts stay quiet;
+ * only exception states get a status word. The interaction container owns the trailing selection check so
  * the row does not reserve two competing selection columns.
  */
 export function HostOptionRow(props: {
@@ -111,9 +112,25 @@ export function HostOptionRow(props: {
         className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
-      <span ref={nameRef} className="min-w-0 flex-1 truncate text-start">
-        {host.name}
-      </span>
+      {host.terminalRunNote === null ? (
+        <span ref={nameRef} className="min-w-0 flex-1 truncate text-start">
+          {host.name}
+        </span>
+      ) : (
+        // The one second line a row carries: why this machine's host is left
+        // alone, where "setting up" read while the app tried to start one.
+        <span className="flex min-w-0 flex-1 flex-col text-start">
+          <span ref={nameRef} className="truncate">
+            {host.name}
+          </span>
+          <span
+            className="text-pretty text-ui-xs text-muted-foreground"
+            data-testid={`host-option-terminal-run-${host.hostId}`}
+          >
+            {host.terminalRunNote}
+          </span>
+        </span>
+      )}
       {picked && intent === "view" ? (
         <span className="sr-only">Currently viewing</span>
       ) : null}

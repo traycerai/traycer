@@ -235,6 +235,43 @@ interface SidebarBodyProps {
   readonly onPromptDraft: () => void;
 }
 
+interface SidebarLocationGroup {
+  readonly key: string;
+  readonly heading: string | null;
+  readonly threads: SortedThread[];
+}
+
+// Canvas threads read best by place: the board file an anchor lives in, the
+// pins dropped on the canvas itself, and the whole-canvas threads - in the
+// order the sorted list first visits them. Other artifact kinds keep the
+// flat list (`heading: null` renders no label).
+function groupThreadsByLocation(
+  sorted: ReadonlyArray<SortedThread>,
+  artifactType: CommentArtifactKind,
+): SidebarLocationGroup[] {
+  if (artifactType !== "canvas")
+    return [{ key: "all", heading: null, threads: [...sorted] }];
+  const groups = new Map<string, SidebarLocationGroup>();
+  for (const entry of sorted) {
+    const data = entry.thread.data;
+    let location: { key: string; heading: string };
+    if (data.anchorKind === "canvas-point")
+      location = { key: "points", heading: "Pinned on canvas" };
+    else if (data.artboard === undefined)
+      location = { key: "canvas", heading: "Whole canvas" };
+    else
+      location = {
+        key: `board:${data.artboard}`,
+        heading: data.artboard.split("/").at(-1) ?? data.artboard,
+      };
+    const group = groups.get(location.key);
+    if (group === undefined)
+      groups.set(location.key, { ...location, threads: [entry] });
+    else group.threads.push(entry);
+  }
+  return [...groups.values()];
+}
+
 function SidebarBody(props: SidebarBodyProps) {
   if (props.isLoading) {
     return (
@@ -266,27 +303,40 @@ function SidebarBody(props: SidebarBodyProps) {
     );
   }
   return (
-    <ul className="flex flex-col gap-2">
-      {props.sorted.map(({ thread, anchorPosition }) => (
-        <li key={thread.threadId}>
-          <CommentThreadCard
-            epicId={props.epicId}
-            hostClient={props.hostClient}
-            artifactType={props.artifactType}
-            artifactId={props.artifactId}
-            thread={thread}
-            currentUserId={props.currentUserId}
-            canModerate={props.canModerate}
-            isExpanded={props.activeThreadId === thread.threadId}
-            hasAnchor={anchorPosition !== null}
-            onExpandedChange={(next) =>
-              props.onExpandedChange(thread.threadId, next)
-            }
-            onActivateAnchor={() => props.onActivateThread(thread.threadId)}
-          />
-        </li>
+    <div className="flex flex-col gap-3">
+      {groupThreadsByLocation(props.sorted, props.artifactType).map((group) => (
+        <section key={group.key} className="flex flex-col gap-1.5">
+          {group.heading === null ? null : (
+            <h3 className="truncate text-ui-xs font-medium text-muted-foreground">
+              {group.heading}
+            </h3>
+          )}
+          <ul className="flex flex-col gap-2">
+            {group.threads.map(({ thread, anchorPosition }) => (
+              <li key={thread.threadId}>
+                <CommentThreadCard
+                  epicId={props.epicId}
+                  hostClient={props.hostClient}
+                  artifactType={props.artifactType}
+                  artifactId={props.artifactId}
+                  thread={thread}
+                  currentUserId={props.currentUserId}
+                  canModerate={props.canModerate}
+                  isExpanded={props.activeThreadId === thread.threadId}
+                  hasAnchor={anchorPosition !== null}
+                  onExpandedChange={(next) =>
+                    props.onExpandedChange(thread.threadId, next)
+                  }
+                  onActivateAnchor={() =>
+                    props.onActivateThread(thread.threadId)
+                  }
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
       ))}
-    </ul>
+    </div>
   );
 }
 

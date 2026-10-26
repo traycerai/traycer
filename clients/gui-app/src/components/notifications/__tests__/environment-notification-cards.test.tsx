@@ -7,6 +7,11 @@ import { SecretRemovedCard } from "@/components/notifications/secret-removed-car
 import { TeamHostReturnedCard } from "@/components/notifications/team-host-returned-card";
 import type { TeamRole } from "@/components/settings/members/types";
 import { TeamRoleChangedCard } from "@/components/notifications/team-role-changed-card";
+import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
+
+vi.mock("@/components/settings/details/settings-details-button", () => ({
+  SettingsDetailsButton: () => <button type="button">Details</button>,
+}));
 
 afterEach(cleanup);
 
@@ -46,7 +51,26 @@ describe("TeamRoleChangedCard", () => {
       />,
     );
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
-      "Read-only environment settings.",
+      "You can see Acme's settings but not change them.",
+    );
+    expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
+  });
+});
+
+describe("EnvironmentNotificationExtra", () => {
+  it("shows a newcomer the grant for the role they joined with", () => {
+    render(
+      <EnvironmentNotificationExtra
+        detail={{
+          kind: "team_member_welcome",
+          environmentId: "env-1",
+          teamName: "Acme",
+          role: "viewer",
+        }}
+      />,
+    );
+    expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
+      "You can see Acme's settings but not change them.",
     );
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
   });

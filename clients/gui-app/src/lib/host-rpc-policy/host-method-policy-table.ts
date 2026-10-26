@@ -1631,6 +1631,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "bot.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.list": { ...LATEST_SCHEDULING, poll: null },
   "bot.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.updateRunSettings": {
     mode: "fifo",
@@ -2504,9 +2510,21 @@ export const HOST_METHOD_POLL_TABLE = {
   "environment.configuration.items": { ...LATEST_SCHEDULING, poll: null },
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.seats": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.mcpServers.list": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  "environment.configuration.skills.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2533,6 +2551,26 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.configuration.skills.upload": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setProviders": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2608,6 +2646,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
   "config.visualization.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.sessionNames.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.sessionNames.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

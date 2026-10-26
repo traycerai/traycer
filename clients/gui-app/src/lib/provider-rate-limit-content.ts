@@ -97,10 +97,10 @@ export function resolveProviderRateLimitViewState(
 }
 
 /**
- * Whether `ProviderRateLimitBody` would render visible content for `props`.
- * Lets a caller that wraps the body in its own chrome (a border, padding)
- * skip that chrome when the body would render nothing, instead of always
- * painting an empty section. Kept out of `provider-rate-limit-views.tsx` (a
+ * Whether `ProviderRateLimitBody` has a reading (or its loading or error line)
+ * for `props`, rather than its "No rate limits reported." line. Lets a caller
+ * that wraps the body in its own chrome (a border, padding) skip that chrome
+ * when there is nothing to report. Kept out of `provider-rate-limit-views.tsx` (a
  * component-only file) since a plain function export there breaks React Fast
  * Refresh's component-boundary detection.
  */

@@ -763,8 +763,7 @@ describe("JudgeTab against the real query stack", () => {
       harnessId: "traycer",
       model: "traycer-fast",
     };
-    const FALLBACK_LINE =
-      "Now: each conversation's own model · on your account there";
+    const FALLBACK_LINE = "Now: each conversation's own model, on your account";
 
     /** The app's own reaction to a catalog change, run from the test. */
     function invalidateVerdict(fixture: JudgeFixture): Promise<void> {
@@ -871,7 +870,7 @@ describe("JudgeTab against the real query stack", () => {
       await pending;
       await waitFor(() =>
         expect(screen.getByTestId("auto-judge-warning").textContent).toContain(
-          "is turned off on this machine",
+          "is turned off on this host",
         ),
       );
     });
@@ -991,8 +990,7 @@ describe("JudgeTab against the real query stack", () => {
       profileId: null,
       reasoningEffort: null,
     };
-    const FALLBACK_LINE =
-      "Now: each conversation's own model · on your account there";
+    const FALLBACK_LINE = "Now: each conversation's own model, on your account";
 
     function focusWindow(): void {
       act(() => {

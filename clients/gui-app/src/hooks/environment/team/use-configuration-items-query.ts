@@ -1,3 +1,4 @@
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -6,7 +7,6 @@ import type {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import {
@@ -19,7 +19,11 @@ export type ConfigurationItem = ResponseOfMethod<
   "environment.configuration.items"
 >["items"][number];
 
-/** Page-specific projections share the configuration's pool read and CAS invalidation. */
+/**
+ * Page-specific projections share one configuration read and its CAS
+ * invalidation. The read uses the pool in a pool build and the surface's
+ * host otherwise, on the viewer's session.
+ */
 export function useConfigurationItemsQuery<Data>(
   page: string,
   mapItems: (items: readonly ConfigurationItem[]) => Data,

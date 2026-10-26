@@ -1279,7 +1279,7 @@ function ScopedPanelSearchInput(props: PanelSearchInputProps): ReactNode {
   const labels: Record<HistoryScope, string> = {
     all: "Search tasks and messages",
     tasks: "Search by title, repo, branch, or PR",
-    messages: `Search messages on ${hostEntry?.label ?? "this machine"}`,
+    messages: `Search messages on ${hostEntry?.label ?? "this computer"}`,
   };
   return (
     <PanelSearchInputBody

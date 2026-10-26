@@ -4,18 +4,19 @@ import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-s
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  BotAvatar,
-  BotMessageFrame,
-  MemberAvatar,
-} from "@/components/chat/chat-bot-message";
+import { BotMessageFrame } from "@/components/chat/chat-bot-message";
+import { BotAvatar, MemberAvatar } from "@/components/bots/bot-avatars";
 import { TextSegment } from "@/components/chat/segments/text-segment";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import { BotUnansweredNotice } from "@/components/bots/bot-channel-notices";
+import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { ChannelPostText } from "@/components/bots/bot-channel-post-text";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
@@ -139,26 +140,43 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   }
   if (thread.kind === "unopened") {
     return (
-      <>
-        <p
-          className="flex-1 px-4 py-3 text-ui-sm text-muted-foreground"
-          data-testid="bot-thread-unopened"
-        >
-          Reply to start a thread. The bot answers there.
-        </p>
-        <BotMessageComposer
-          botId={props.botId}
-          conversationId={thread.conversationId}
-          threadId={null}
-          announcementId={thread.announcementId}
-          placeholder="Reply…"
-          label="Reply in a new thread"
-          testId="bot-thread-composer"
-        />
-      </>
+      <UnopenedThread
+        botId={props.botId}
+        conversationId={thread.conversationId}
+        announcementId={thread.announcementId}
+      />
     );
   }
   return <UnlistedThread thread={thread} />;
+}
+
+/** A question, proposal or direct post nobody has replied under yet. */
+function UnopenedThread(props: {
+  readonly botId: string;
+  readonly conversationId: string;
+  readonly announcementId: string;
+}): ReactNode {
+  const sendFailure = useBotSendFailure();
+  return (
+    <>
+      <p
+        className="flex-1 px-4 py-3 text-ui-sm text-muted-foreground"
+        data-testid="bot-thread-unopened"
+      >
+        Reply to start a thread. The bot answers there.
+      </p>
+      <BotMessageComposer
+        botId={props.botId}
+        conversationId={props.conversationId}
+        threadId={null}
+        announcementId={props.announcementId}
+        placeholder="Reply…"
+        label="Reply in a new thread"
+        testId="bot-thread-composer"
+        failure={sendFailure}
+      />
+    </>
+  );
 }
 
 /** The anchor, the replies and the box of a listed thread. */
@@ -172,16 +190,19 @@ function ListedThread(
   const client = useTabHostClient();
   const { mutate: send, isPending: sending } =
     useBotConversationSendMutation(client);
-  const { threadId, conversationId } = thread;
+  const sendFailure = useBotSendFailure();
+  const { fail: failSend, clear: clearSendFailure } = sendFailure;
+  const { threadId, conversationId, anchor } = thread;
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent, and a pick that
-  // fails says so.
+  // fails says so where a failed message does.
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
       chooseOption: sending
         ? null
-        : (choice: string) =>
+        : (choice: string) => {
+            clearSendFailure();
             send(
               {
                 botId,
@@ -190,28 +211,49 @@ function ListedThread(
                 threadId,
                 announcementId: null,
               },
-              {
-                onError: (error) =>
-                  toastFromHostError(error, "Couldn't send your choice."),
-              },
-            ),
+              { onError: failSend },
+            );
+          },
     }),
-    [botId, conversationId, send, sending, threadId],
+    [
+      botId,
+      clearSendFailure,
+      conversationId,
+      failSend,
+      send,
+      sending,
+      threadId,
+    ],
   );
+  // The thread's own session answers in it; its running turn is the
+  // thread's typing line, and an answer it holds or fails the notice under
+  // the last row.
+  const activity = useBotActivity(botId)?.threads[threadId] ?? null;
   return (
     <>
       <div className="flex shrink-0 flex-col gap-2 px-2 pt-2">
-        {thread.anchor === null ? null : (
-          <ThreadAnchor
-            anchor={thread.anchor}
-            botTitle={botTitle}
-            senderLabel={anchorSenderLabel(thread.anchor.senderUserId)}
-            avatarUrl={
-              thread.anchor.senderUserId === null
-                ? null
-                : (resolveMember(thread.anchor.senderUserId)?.avatarUrl ?? null)
-            }
-          />
+        {anchor === null ? null : (
+          <ChannelPostText
+            botId={botId}
+            hostId={hostId}
+            conversationId={conversationId}
+            messageId={anchor.messageId}
+            fetchCold
+          >
+            {(text) => (
+              <ThreadAnchor
+                anchor={anchor}
+                text={text}
+                botTitle={botTitle}
+                senderLabel={anchorSenderLabel(anchor.senderUserId)}
+                avatarUrl={
+                  anchor.senderUserId === null
+                    ? null
+                    : (resolveMember(anchor.senderUserId)?.avatarUrl ?? null)
+                }
+              />
+            )}
+          </ChannelPostText>
         )}
         <div
           className="flex items-center gap-3 px-2 text-ui-xs text-muted-foreground"
@@ -234,6 +276,16 @@ function ListedThread(
         surface={surface}
         resolveMember={resolveMember}
       />
+      <BotReplyingStrip
+        botTitle={botTitle}
+        activity={activity}
+        testId="bot-thread-replying-strip"
+      />
+      <BotUnansweredNotice
+        botTitle={botTitle}
+        activity={activity}
+        testId="bot-thread-unanswered"
+      />
       <BotMessageComposer
         botId={botId}
         conversationId={thread.conversationId}
@@ -242,6 +294,7 @@ function ListedThread(
         placeholder="Reply…"
         label="Reply in the thread"
         testId="bot-thread-composer"
+        failure={sendFailure}
       />
     </>
   );
@@ -278,52 +331,66 @@ function UnlistedThread(props: {
 }
 
 /**
- * The post the thread answers, drawn as the channel draws it. A thread under
- * a question or proposal hangs off the bot's own row, which opened no
- * request: the reply that opened the thread carries it, in the thread.
+ * The post the thread answers, drawn as the channel draws it, its text read
+ * from the channel's row (`null` while the channel has not loaded it). A
+ * thread under a question or proposal hangs off the bot's own row, which
+ * opened no request: the reply that opened the thread carries it, in the
+ * thread.
  */
 function ThreadAnchor(props: {
   readonly anchor: NonNullable<BotThreadSummary["anchor"]>;
+  readonly text: string | null;
   readonly botTitle: string;
   readonly senderLabel: string;
   readonly avatarUrl: string | null;
 }): ReactNode {
-  const { anchor, botTitle, senderLabel, avatarUrl } = props;
+  const { anchor, text, botTitle, senderLabel, avatarUrl } = props;
   const open = anchor.resolvedAt === null;
   if (anchor.senderUserId === null) {
     return (
       <BotMessageFrame
-        avatar={<BotAvatar />}
+        avatar={<BotAvatar size="lg" />}
         name={botTitle}
         app
         sentAt={anchor.sentAt}
         instanceId={anchor.messageId}
         testId="bot-thread-anchor"
       >
-        <TextSegment
-          findUnitId={null}
-          markdown={anchor.text}
-          isStreaming={false}
-          nextStepActions={null}
-        />
+        {text === null ? null : (
+          <TextSegment
+            findUnitId={null}
+            markdown={text}
+            isStreaming={false}
+            nextStepActions={null}
+          />
+        )}
       </BotMessageFrame>
     );
   }
   return (
     <BotMessageFrame
-      avatar={<MemberAvatar name={senderLabel} avatarUrl={avatarUrl} />}
+      avatar={
+        <MemberAvatar
+          userId={anchor.senderUserId}
+          name={senderLabel}
+          avatarUrl={avatarUrl}
+          size="lg"
+        />
+      }
       name={senderLabel}
       app={false}
       sentAt={anchor.sentAt}
       instanceId={anchor.messageId}
       testId="bot-thread-anchor"
     >
-      <TextSegment
-        findUnitId={null}
-        markdown={anchor.text}
-        isStreaming={false}
-        nextStepActions={null}
-      />
+      {text === null ? null : (
+        <TextSegment
+          findUnitId={null}
+          markdown={text}
+          isStreaming={false}
+          nextStepActions={null}
+        />
+      )}
       <div
         className="flex items-center gap-2"
         data-testid="conversation-request"

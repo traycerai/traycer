@@ -11,10 +11,11 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
  */
 export function MembersSettingsPanel(): ReactNode {
   const pick = useEnvironmentPick();
+  // No shell subtitle: MembersView's own header line names the team, and a
+  // second, generic one above it only repeats it.
   return (
     <SettingsPanelShell
       title={MEMBERS.page.label}
-      description={MEMBERS.page.description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       {pick.kind === "team" ? (

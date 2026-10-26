@@ -6,7 +6,7 @@ import {
 import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
@@ -29,18 +29,11 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
-import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
 import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
 import { AutomationsHostEntry } from "@/components/hosts/automations-host-entry";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { Button } from "@/components/ui/button";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
-import {
-  hostOptionTeamOwner,
-  NO_HOST_OPTION_REFUSALS,
-} from "@/components/settings/host-scope/host-option-model";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 import { useHostEnvironmentLabelResolver } from "@/hooks/bots/use-host-environment-labels";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
@@ -49,7 +42,6 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { MoveSheet } from "@/components/settings/move-sheet";
 import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
@@ -78,8 +70,8 @@ export interface SettingsSidebarProps {
 /**
  * The sidebar carries the scope model.
  *
- * Getting started leads, followed by Application and Account, and the
- * host group goes last, headed by ONE picker with its scoped sections beneath.
+ * Getting started leads, followed by Application, Account and Environment,
+ * and the host group goes last, headed by ONE picker with its scoped sections beneath.
  * The picker is deliberately NOT a level of navigation: Providers already
  * spends the app's nesting budget on a rail plus a tab bar, so a host tier
  * here would have made the deepest page four levels down. See
@@ -185,8 +177,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           race its open state, and unmounting it while a search runs would tear
           down a dialog that is open. */}
       <AddHostDialog />
-      <SandboxCreateDialog />
-      <MoveSheet />
     </aside>
   );
 }
@@ -239,7 +229,6 @@ function SettingsSidebarHostPicker(props: {
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
-  const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const sandboxesUnavailable = useSandboxControlUnavailableReason();
   // THE one surface that badges update state (settled product decision: fleet
@@ -283,7 +272,7 @@ function SettingsSidebarHostPicker(props: {
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
-        offersAutomations={false}
+        composer={null}
         environmentLabelForHost={environmentLabelForHost}
       />
       {/* A sandbox is an account's machine: nothing to create signed out,
@@ -296,26 +285,6 @@ function SettingsSidebarHostPicker(props: {
         >
           {sandboxesUnavailable}
         </p>
-      ) : null}
-      {signedIn && sandboxesUnavailable === null ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="justify-start"
-          data-testid="settings-new-sandbox"
-          onClick={() =>
-            openCreateSandbox(
-              null,
-              // The host the person is working from: its team, if a team
-              // owns it, is where Belongs to starts.
-              workingHostTeamId(scope.hosts, scope.activeHostId),
-            )
-          }
-        >
-          <Plus className="size-3.5 shrink-0" aria-hidden />
-          New sandbox…
-        </Button>
       ) : null}
       {/* The Automations host before its row exists; the real row joins the
           list above once it does. */}
@@ -556,13 +525,4 @@ function GettingStartedProgress() {
       />
     </svg>
   );
-}
-
-/** The team owning the active host, or `null` for a personal one. */
-function workingHostTeamId(
-  hosts: readonly HostScopeOption[],
-  activeHostId: string | null,
-): string | null {
-  const active = hosts.find((host) => host.hostId === activeHostId) ?? null;
-  return active === null ? null : (hostOptionTeamOwner(active)?.teamId ?? null);
 }

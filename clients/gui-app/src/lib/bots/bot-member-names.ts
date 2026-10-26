@@ -66,6 +66,11 @@ export function botUserSenderAvatarUrl(
   return resolveMember(sender.userId)?.avatarUrl ?? null;
 }
 
+/** A user row's sender in a bot chat, the viewer included; null for an agent sender. */
+export function botUserSenderId(sender: OpenUserMessageSender): string | null {
+  return sender.type === "user" ? sender.userId : null;
+}
+
 /**
  * Who made a team bot, for its Home row: "Created by you" for the viewer,
  * "Created by <name>" for a member the directory names, and null - no line

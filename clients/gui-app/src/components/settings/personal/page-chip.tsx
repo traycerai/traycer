@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
-import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
-import {
-  isEnvironmentComputer,
-  localPickerRow,
-} from "@/components/settings/environment/environment-picker-model";
+import { usePersonalComputers } from "@/components/settings/personal/use-personal-computers";
 import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
-import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
+import {
+  APPLYING_BOUND_MS,
+  withUnconfirmedHosts,
+  type ConfigurationChipHost,
+} from "@/components/settings/environment/status-chip-model";
+import type {
+  HostsRunningConfiguration,
+  RunningHost,
+} from "@/components/settings/environment/hosts-running-configuration-model";
+import {
+  useHostsRunningConfiguration,
+  useHostsRunningPersonal,
+} from "@/components/settings/environment/use-hosts-running-configuration";
 import { hostConfigurationChip } from "@/components/settings/environment/status-chip-hosts";
 import {
   poolConfigurationChip,
@@ -37,10 +42,44 @@ export interface PageChipProps {
   readonly pick: EnvironmentPick;
 }
 
+const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * The hosts that have read `applying`, the same set of them without a
+ * break, for {@link APPLYING_BOUND_MS}. Any change to the set starts the
+ * wait again.
+ */
+function useUnconfirmedHosts(
+  hosts: readonly ConfigurationChipHost[],
+): ReadonlySet<string> {
+  const applying = hosts
+    .filter((host) => host.state === "applying")
+    .map((host) => host.hostId)
+    .join("\n");
+  const [expired, setExpired] = useState<string | null>(null);
+  useEffect(() => {
+    if (applying.length === 0) return undefined;
+    const timer = setTimeout(() => setExpired(applying), APPLYING_BOUND_MS);
+    return () => {
+      clearTimeout(timer);
+      setExpired(null);
+    };
+  }, [applying]);
+  return useMemo(
+    () =>
+      applying.length > 0 && expired === applying
+        ? new Set(applying.split("\n"))
+        : NONE,
+    [applying, expired],
+  );
+}
+
 function PageChipContent(props: {
   readonly section: SettingsSectionId;
   readonly environmentId: string;
   readonly hosts: readonly ConfigurationChipHost[];
+  /** The chip while no host runs the configuration. */
+  readonly emptyText: string;
 }): ReactNode {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const hostIds = useMemo(
@@ -52,10 +91,12 @@ function PageChipContent(props: {
     hostIds,
   );
   const recovery = useDetailsRecovery();
+  const unconfirmed = useUnconfirmedHosts(props.hosts);
   return (
     <>
       <ConfigurationStatusChip
-        hosts={props.hosts}
+        hosts={withUnconfirmedHosts(props.hosts, unconfirmed)}
+        emptyText={props.emptyText}
         savingOffline={savingOffline}
         local={false}
         onDetails={() => setDetailsOpen(true)}
@@ -69,13 +110,56 @@ function PageChipContent(props: {
           key: props.section,
         }}
         title="Settings delivery"
+        controls={null}
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
+        initialTab="status"
       />
     </>
   );
 }
 
+/** A running host's cloud report, as the pool chip reads one. */
+function cloudReport(host: RunningHost) {
+  return {
+    hostId: host.hostId,
+    hostLabel: host.name,
+    lastReportedAt: host.lastReportedAt,
+    applied: host.applied,
+  };
+}
+
+/**
+ * Rereads the host list while a host's cloud report still has an item on its
+ * way: the method is unpolled, and nothing else tells the page the host
+ * finished.
+ */
+function useRereadWhilePending(
+  running: HostsRunningConfiguration,
+  kinds: ReadonlySet<string> | null,
+  reported: (host: RunningHost) => boolean,
+): void {
+  const pending = running.hosts.some(
+    (host) => reported(host) && poolReportPending(cloudReport(host), kinds),
+  );
+  const { reread } = running;
+  useEffect(() => {
+    if (!pending) return;
+    return startVisibleInterval({
+      tick: reread,
+      intervalMs: REPORTS_PENDING_REFRESH_MS,
+      fireOnShow: true,
+    });
+  }, [pending, reread]);
+}
+
+/**
+ * Personal's chip over THE hosts running Personal
+ * (`useHostsRunningPersonal`). A host this window reads `environment.status`
+ * from is judged by that status, which is live; any other by its last report
+ * to the cloud. While the list has not answered, or cannot be read, the chip
+ * claims nothing: a failed read is not "no computer runs Personal".
+ */
 function PersonalPageChip(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
@@ -83,26 +167,16 @@ function PersonalPageChip(props: {
   const client = useHostClient();
   const environmentId = useDetailsEnvironmentId(client);
   const queryClient = useQueryClient();
-  const hosts = useMemo(
-    () => scope.hosts.filter(isEnvironmentComputer),
-    [scope.hosts],
-  );
-  const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);
-  const statuses = useRegisteredHostEnvironmentStatuses(hosts);
-  const versions = useHostNegotiatedMethodVersions(
-    hostIds,
-    "environment.status",
-  );
+  const running = useHostsRunningPersonal();
+  const { statuses, versions } = usePersonalComputers(true);
   const kinds = chipPageKinds(props.section);
-  const participants = hosts.filter((host) => {
-    const status = statuses.get(host.hostId) ?? null;
-    return (
-      status?.principal?.kind === "personal" &&
-      localPickerRow(host, status, versions.get(host.hostId) ?? null) === null
-    );
-  });
-  const chips = participants.map((host) => {
-    const status = statuses.get(host.hostId) ?? null;
+  const statusOf = (host: RunningHost) => statuses.get(host.hostId) ?? null;
+  useRereadWhilePending(running, kinds, (host) => statusOf(host) === null);
+  const chips = running.hosts.map((host) => {
+    const status = statusOf(host);
+    const version = versions.get(host.hostId) ?? null;
+    if (status === null)
+      return poolConfigurationChip(cloudReport(host), kinds, version);
     const readAt =
       queryClient.getQueryState(
         hostQueryKeys.method<HostRpcRegistry, "environment.status">(
@@ -112,22 +186,22 @@ function PersonalPageChip(props: {
         ),
       )?.dataUpdatedAt ?? null;
     const lastReportedAt =
-      readAt === null || status?.receiptAgeMs === null || status === null
+      readAt === null || status.receiptAgeMs === null
         ? null
         : readAt - status.receiptAgeMs;
     return hostConfigurationChip({
-      host,
+      host: { hostId: host.hostId, name: host.name },
       status,
-      version: versions.get(host.hostId) ?? null,
+      version,
       kinds,
       lastReportedAt,
     });
   });
-  if (environmentId === null || scope.listsFailed || scope.isLoading)
-    return null;
   if (
-    chips.length === 0 &&
-    hosts.some((host) => (statuses.get(host.hostId) ?? null) === null)
+    environmentId === null ||
+    scope.listsFailed ||
+    scope.isLoading ||
+    running.state !== "ready"
   )
     return null;
   return (
@@ -135,6 +209,7 @@ function PersonalPageChip(props: {
       section={props.section}
       environmentId={environmentId}
       hosts={chips}
+      emptyText="Not on any computer or sandbox"
     />
   );
 }
@@ -143,63 +218,40 @@ function TeamPageChip(props: {
   readonly section: SettingsSectionId;
   readonly environmentId: string;
 }): ReactNode {
-  const surfaceClient = useHostClient();
-  const client = useMemo(
-    () => resolvePoolTierHostClient(surfaceClient),
-    [surfaceClient],
-  );
-  const viewerUserId = useCloudChatViewerId();
-  const hosts = useHostQuery<HostRpcRegistry, "environment.host.list">({
-    client,
-    method: "environment.host.list",
-    params: { environmentId: props.environmentId },
-    cacheKeyIdentity: [viewerUserId],
-    options: { enabled: viewerUserId.length > 0 },
+  const running = useHostsRunningConfiguration({
+    kind: "team",
+    environmentId: props.environmentId,
   });
   const hostIds = useMemo(
-    () => hosts.data?.hosts.map((host) => host.hostId) ?? [],
-    [hosts.data],
+    () => running.hosts.map((host) => host.hostId),
+    [running.hosts],
   );
   const versions = useHostNegotiatedMethodVersions(
     hostIds,
     "environment.status",
   );
   const kinds = chipPageKinds(props.section);
-  // The method is unpolled; only an item still on its way needs a reread,
-  // since nothing else tells the page the host finished.
-  const pending =
-    hosts.data?.hosts.some((host) => poolReportPending(host, kinds)) === true;
-  const { refetch } = hosts;
-  useEffect(() => {
-    if (!pending) return;
-    return startVisibleInterval({
-      tick: () => {
-        void refetch({ cancelRefetch: false });
-      },
-      intervalMs: REPORTS_PENDING_REFRESH_MS,
-      fireOnShow: true,
-    });
-  }, [pending, refetch]);
-  if (hosts.isError)
+  useRereadWhilePending(running, kinds, () => true);
+  if (running.state === "failed")
     return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => void hosts.refetch()}
-      >
+      <Button type="button" variant="ghost" size="sm" onClick={running.retry}>
         Retry
       </Button>
     );
-  if (hosts.data === undefined) return null;
-  const chips = hosts.data.hosts.map((host) =>
-    poolConfigurationChip(host, kinds, versions.get(host.hostId) ?? null),
+  if (running.state === "loading") return null;
+  const chips = running.hosts.map((host) =>
+    poolConfigurationChip(
+      cloudReport(host),
+      kinds,
+      versions.get(host.hostId) ?? null,
+    ),
   );
   return (
     <PageChipContent
       section={props.section}
       environmentId={props.environmentId}
       hosts={chips}
+      emptyText="No hosts yet"
     />
   );
 }

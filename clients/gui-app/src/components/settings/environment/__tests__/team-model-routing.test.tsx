@@ -9,11 +9,12 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
-import type { EnvironmentHostRecordV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import { TeamModelRouting } from "@/components/settings/environment/team-model-routing";
 import {
   configurationItem,
   mountTeamPage,
+  personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -72,7 +73,7 @@ const routing = (enabled: boolean, revision: number) =>
     revision,
   });
 
-const host: EnvironmentHostRecordV11 = {
+const host: EnvironmentHostRecordV12 = {
   hostId: "host-a",
   hostLabel: "Mac mini",
   hostPlatform: "darwin",
@@ -81,6 +82,7 @@ const host: EnvironmentHostRecordV11 = {
   boundAt: 1,
   reachable: true,
   lastReportedAt: 1,
+  hasLocalRow: false,
   applied: [],
 };
 
@@ -118,6 +120,52 @@ describe("TeamModelRouting", () => {
       environmentId: "env-a",
     });
     expect(harness.paramsOf("providers.fallbackPolicy.get")).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "a team",
+      poolSource("viewer"),
+      "How agents recover when an account or model cannot continue.",
+    ],
+    [
+      "Personal",
+      personalPoolSource(),
+      "Applies to your agents on every computer and sandbox running Personal.",
+    ],
+  ])("describes routing for %s", async (_name, source, subtitle) => {
+    const harness = mountTeamPage(source, {
+      "environment.configuration.items": () => ({ items: [routing(true, 9)] }),
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "admin" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+          {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Me",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      }),
+    });
+    render(<TeamModelRouting />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText(subtitle)).toBeTruthy();
   });
 
   it("gives a viewer the policy with no routing mutation verbs", async () => {
@@ -286,7 +334,7 @@ describe("TeamModelRouting", () => {
     const line = await screen.findByText(/Model tiers need a host running/);
     await waitFor(() => {
       expect(line.closest("p")?.textContent).toBe(
-        "Model tiers need a host running Acme. Pick one.",
+        "Model tiers need a host running Acme.Start an Acme sandbox to see them.",
       );
     });
     expect(screen.queryByRole("switch")).toBeNull();
@@ -298,7 +346,7 @@ describe("TeamModelRouting", () => {
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(0);
     expect(
-      within(document.body).getByRole("button", { name: "Pick one." }),
-    ).toBeTruthy();
+      within(document.body).queryByRole("button", { name: "Pick one." }),
+    ).toBeNull();
   });
 });

@@ -1552,6 +1552,22 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
   });
 });
 
+describe("ProviderRateLimitBody (empty state)", () => {
+  it("says no rate limits were reported when there is no reading and nothing in flight", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={null}
+        codexResetAction={null}
+        openModelProvidersAction={null}
+      />,
+    );
+    expect(screen.getByText("No rate limits reported.")).toBeTruthy();
+  });
+});
+
 describe("ProviderRateLimitBody (Codex reset action)", () => {
   it("places the supplied action beside a positive manual-reset count", () => {
     render(

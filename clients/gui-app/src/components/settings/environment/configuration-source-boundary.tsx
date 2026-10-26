@@ -5,28 +5,37 @@ import {
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostClient } from "@/lib/host";
+import { TeamReadFailed } from "./team-read-failed";
 
-/** A team never mounts its page with the host source while its descriptor loads. */
+/** The configuration a cloud-read page shows: a team's, or Personal. */
+export type CloudConfigurationTarget =
+  | { readonly kind: "team"; readonly environmentId: string }
+  | { readonly kind: "personal" };
+
+/**
+ * Pages read `target` from the cloud. Nothing mounts with the host source
+ * while its descriptor loads, so a team or Personal page never falls through
+ * to the window host's own values.
+ */
 export function ConfigurationSourceBoundary(props: {
-  readonly environmentId: string | null;
+  readonly target: CloudConfigurationTarget;
   readonly children: ReactNode;
 }): ReactNode {
-  const list = useEnvironmentListQuery(
-    useHostClient(),
-    props.environmentId !== null,
-  );
-  const descriptor = list.data?.environments.find(
-    (entry) =>
-      entry.environmentId === props.environmentId &&
-      entry.ownerKind === "organization",
+  const { target } = props;
+  const list = useEnvironmentListQuery(useHostClient(), true);
+  const descriptor = list.data?.environments.find((entry) =>
+    target.kind === "team"
+      ? entry.environmentId === target.environmentId &&
+        entry.ownerKind === "organization"
+      : entry.ownerKind === "user",
   );
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
     return {
       kind: "pool",
+      configuration: descriptor.ownerKind === "user" ? "personal" : "team",
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
@@ -34,7 +43,7 @@ export function ConfigurationSourceBoundary(props: {
     };
   }, [descriptor]);
 
-  if (props.environmentId !== null && descriptor === undefined) {
+  if (descriptor === undefined) {
     if (list.isPending) {
       return (
         <AgentSpinningDots
@@ -46,23 +55,17 @@ export function ConfigurationSourceBoundary(props: {
       );
     }
     return (
-      <div className="flex flex-col items-start gap-3 p-5">
-        <p role="status" className="text-ui-sm text-muted-foreground">
-          {list.isError
-            ? "Couldn't read these settings."
-            : "These settings are no longer available."}
-        </p>
+      <div className="p-5">
         {list.isError ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={list.isFetching}
-            onClick={() => void list.refetch()}
-          >
-            Retry
-          </Button>
-        ) : null}
+          <TeamReadFailed
+            message="Couldn't read these settings."
+            onRetry={() => void list.refetch()}
+          />
+        ) : (
+          <p role="status" className="text-ui-sm text-muted-foreground">
+            These settings are no longer available.
+          </p>
+        )}
       </div>
     );
   }
