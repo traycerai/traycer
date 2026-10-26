@@ -177,7 +177,7 @@ function maybePlatform(byPlatform, key) {
 
 const DEFAULT_MANAGERS = ["homebrew", "winget", "scoop", "deb-rpm"];
 const HOMEBREW_LINUX_CASK_MIN_VERSION = "4.5.0";
-const WINGET_MANIFEST_VERSION = "1.10.0";
+const WINGET_MANIFEST_VERSION = "1.12.0";
 const DESKTOP_WINGET_ID = "Traycer.Desktop";
 // The host's per-user logon task, as `clients/desktop/uninstall-host-autostart.nsh`
 // names it for the production package.
@@ -402,15 +402,21 @@ function renderDesktopWingetManifests({
   releaseNotesUrl,
   winX64,
 }) {
-  const header = `PackageIdentifier: ${DESKTOP_WINGET_ID}
+  // winget's validator requires each file to open with the schema header of
+  // its own ManifestType and ManifestVersion, as wingetcreate writes it.
+  const header = (
+    type,
+  ) => `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.${WINGET_MANIFEST_VERSION}.schema.json
+
+PackageIdentifier: ${DESKTOP_WINGET_ID}
 PackageVersion: ${version}
 `;
   return {
-    [`${DESKTOP_WINGET_ID}.yaml`]: `${header}DefaultLocale: en-US
+    [`${DESKTOP_WINGET_ID}.yaml`]: `${header("version")}DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: ${WINGET_MANIFEST_VERSION}
 `,
-    [`${DESKTOP_WINGET_ID}.installer.yaml`]: `${header}MinimumOSVersion: 10.0.0.0
+    [`${DESKTOP_WINGET_ID}.installer.yaml`]: `${header("installer")}MinimumOSVersion: 10.0.0.0
 InstallerType: nullsoft
 Scope: user
 InstallModes:
@@ -425,7 +431,7 @@ Installers:
 ManifestType: installer
 ManifestVersion: ${WINGET_MANIFEST_VERSION}
 `,
-    [`${DESKTOP_WINGET_ID}.locale.en-US.yaml`]: `${header}PackageLocale: en-US
+    [`${DESKTOP_WINGET_ID}.locale.en-US.yaml`]: `${header("defaultLocale")}PackageLocale: en-US
 Publisher: Traycer AI
 PublisherUrl: ${homepage}
 PackageName: Traycer
