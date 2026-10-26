@@ -873,8 +873,18 @@ describe("<UserMessageBody /> agent messages", () => {
       </div>,
     );
     const scroller = screen.getByTestId("scroller");
+    // Mount focuses the editor over four animation frames, restoring the
+    // scroller's mount-time offset after each; let them finish before the
+    // offset is replaced so a late restore neither throws nor overwrites it.
+    await screen.findByRole("textbox", { name: "Edit message" });
+    for (let frame = 0; frame < 4; frame += 1) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    }
     Object.defineProperty(scroller, "scrollTop", {
       configurable: true,
+      writable: true,
       value: 300,
     });
     const scrollTo = vi.fn();
