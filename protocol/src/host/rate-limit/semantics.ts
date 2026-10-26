@@ -131,6 +131,13 @@ export function providerRateLimitWindows(
       return rateLimits.groups.flatMap((group) => group.windows);
     case "opencode":
       return [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly];
+    case "kimi":
+      // The windows Kimi's backend served; one it left out is null.
+      return [
+        rateLimits.fiveHour,
+        rateLimits.weekly,
+        rateLimits.monthly,
+      ].filter((window): window is ProviderRateLimitWindow => window !== null);
     case "openrouter":
     case "kilocode":
     case "huggingface":

@@ -87,6 +87,14 @@ function antigravity(
   };
 }
 
+function kimi(
+  fiveHour: ProviderRateLimitWindow | null,
+  weekly: ProviderRateLimitWindow | null,
+  monthly: ProviderRateLimitWindow | null,
+): ProviderRateLimits {
+  return { provider: "kimi", available: true, fiveHour, weekly, monthly };
+}
+
 describe("classifyProviderRateLimitWindow", () => {
   it("warns short windows at 80% and long or undated windows at 95%", () => {
     expect(classifyProviderRateLimitWindow(window(79, 300, null))).toBe(
@@ -304,6 +312,48 @@ describe("providerRateLimitWindows / classifyProviderRateLimits for antigravity"
         ]),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("providerRateLimitWindows / classifyProviderRateLimits for kimi", () => {
+  it("returns the served windows in 5-hour, weekly, monthly order and drops the null ones", () => {
+    const fiveHour = window(10, 300, NOW + 1);
+    const weekly = window(20, 10_080, NOW + 1);
+    const monthly = window(30, 43_200, NOW + 1);
+    expect(providerRateLimitWindows(kimi(fiveHour, weekly, monthly))).toEqual([
+      fiveHour,
+      weekly,
+      monthly,
+    ]);
+    expect(providerRateLimitWindows(kimi(null, weekly, null))).toEqual([
+      weekly,
+    ]);
+    expect(providerRateLimitWindows(kimi(null, null, null))).toEqual([]);
+  });
+
+  it("feeds only the live windows to the severity rollup", () => {
+    const live = window(40, 10_080, NOW + 1);
+    expect(
+      liveProviderRateLimitWindows(
+        kimi(window(100, 300, NOW - 1), live, null),
+        NOW,
+      ),
+    ).toEqual([live]);
+  });
+
+  it("is limited when a window other than the first is at 100%", () => {
+    expect(
+      classifyProviderRateLimits(
+        kimi(window(10, 300, NOW + 1), null, window(100, 43_200, NOW + 1)),
+        NOW,
+      ),
+    ).toBe("limited");
+  });
+
+  it("is Unknown, not Healthy, when the snapshot carries no window", () => {
+    expect(classifyProviderRateLimits(kimi(null, null, null), NOW)).toBe(
+      "unknown",
+    );
   });
 });
 

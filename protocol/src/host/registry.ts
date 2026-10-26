@@ -205,6 +205,15 @@ import {
   agentGetProviderProfileRateLimitsDowngradeV70ToV30,
   agentGetProviderProfileRateLimitsDowngradeV70ToV20,
   agentGetProviderProfileRateLimitsDowngradeV70ToV10,
+  agentGetProviderProfileRateLimitsV80,
+  agentGetProviderProfileRateLimitsUpgradeV70ToV80,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV70,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV60,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV50,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV40,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV80ToV10,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsUpgradeV30ToV40,
@@ -691,6 +700,7 @@ import {
   hostGetRateLimitUsageV30,
   hostGetRateLimitUsageV40,
   hostGetRateLimitUsageV50,
+  hostGetRateLimitUsageV60,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
@@ -698,6 +708,7 @@ import {
   hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageUpgradeV30ToV40,
   hostGetRateLimitUsageUpgradeV40ToV50,
+  hostGetRateLimitUsageUpgradeV50ToV60,
   hostGetRateLimitUsageDowngradeV2ToV1,
   hostGetRateLimitUsageDowngradeV3ToV2,
   hostGetRateLimitUsageDowngradeV3ToV1,
@@ -708,11 +719,21 @@ import {
   hostGetRateLimitUsageDowngradeV5ToV2,
   hostGetRateLimitUsageDowngradeV5ToV3,
   hostGetRateLimitUsageDowngradeV5ToV4,
+  hostGetRateLimitUsageDowngradeV6ToV1,
+  hostGetRateLimitUsageDowngradeV6ToV2,
+  hostGetRateLimitUsageDowngradeV6ToV3,
+  hostGetRateLimitUsageDowngradeV6ToV4,
+  hostGetRateLimitUsageDowngradeV6ToV5,
   providersConsumeRateLimitResetCreditV10,
   providersRefreshProfileStatusV10,
   providersRefreshProfileStatusV20,
   providersRefreshProfileStatusV30,
+  providersRefreshProfileStatusV40,
   providersRefreshProfileStatusUpgradeV20ToV30,
+  providersRefreshProfileStatusUpgradeV30ToV40,
+  providersRefreshProfileStatusDowngradeV40ToV30,
+  providersRefreshProfileStatusDowngradeV40ToV20,
+  providersRefreshProfileStatusDowngradeV40ToV10,
   providersRefreshProfileStatusDowngradeV30ToV20,
   providersRefreshProfileStatusDowngradeV30ToV10,
   providersRefreshProfileStatusUpgradeV10ToV20,
@@ -7248,82 +7269,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "host.getRateLimitUsage": {
-    1: {
-      latestMinor: 2,
-      versions: {
-        0: {
-          contract: hostGetRateLimitUsageV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: hostGetRateLimitUsageV11,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV10ToV11,
-        },
-        2: {
-          contract: hostGetRateLimitUsageV12,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV11ToV12,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: hostGetRateLimitUsageV20,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV12ToV20,
-        },
-        1: {
-          contract: hostGetRateLimitUsageV21,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV20ToV21,
-        },
-      },
-      downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
-    },
-    3: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostGetRateLimitUsageV30,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV21ToV30,
-        },
-      },
-      downgradePathsFromLatest: {
-        2: hostGetRateLimitUsageDowngradeV3ToV2,
-        1: hostGetRateLimitUsageDowngradeV3ToV1,
-      },
-    },
-    4: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostGetRateLimitUsageV40,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV30ToV40,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: hostGetRateLimitUsageDowngradeV4ToV1,
-        2: hostGetRateLimitUsageDowngradeV4ToV2,
-        3: hostGetRateLimitUsageDowngradeV4ToV3,
-      },
-    },
-    5: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostGetRateLimitUsageV50,
-          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV40ToV50,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: hostGetRateLimitUsageDowngradeV5ToV1,
-        2: hostGetRateLimitUsageDowngradeV5ToV2,
-        3: hostGetRateLimitUsageDowngradeV5ToV3,
-        4: hostGetRateLimitUsageDowngradeV5ToV4,
-      },
-    },
-  },
   "providers.consumeRateLimitResetCredit": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7335,50 +7280,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
-    },
-  },
-  "providers.refreshProfileStatus": {
-    degrade: { kind: "unsupported" },
-    // v1.0 is frozen at the twenty provider ids `1.3.0` shipped and v2.0 at
-    // the twenty-one `1.5.0` shipped; v3.0 carries the live union, and its
-    // bridges fail closed for an id the older line cannot represent (one
-    // provider per response, so there is nothing to filter).
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersRefreshProfileStatusV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersRefreshProfileStatusV20,
-          upgradeFromPreviousVersion:
-            providersRefreshProfileStatusUpgradeV10ToV20,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersRefreshProfileStatusDowngradeV20ToV10,
-      },
-    },
-    3: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: providersRefreshProfileStatusV30,
-          upgradeFromPreviousVersion:
-            providersRefreshProfileStatusUpgradeV20ToV30,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: providersRefreshProfileStatusDowngradeV30ToV10,
-        2: providersRefreshProfileStatusDowngradeV30ToV20,
-      },
     },
   },
   "host.notificationHooks.status": {
@@ -11805,112 +11706,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
   },
-  "agent.getProviderProfileRateLimits": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    2: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV20,
-          upgradeFromPreviousVersion:
-            agentGetProviderProfileRateLimitsUpgradeV10ToV20,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGetProviderProfileRateLimitsDowngradeV20ToV10,
-      },
-    },
-    3: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV30,
-          upgradeFromPreviousVersion:
-            agentGetProviderProfileRateLimitsUpgradeV20ToV30,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGetProviderProfileRateLimitsDowngradeV30ToV10,
-        2: agentGetProviderProfileRateLimitsDowngradeV30ToV20,
-      },
-    },
-    4: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV40,
-          upgradeFromPreviousVersion:
-            agentGetProviderProfileRateLimitsUpgradeV30ToV40,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGetProviderProfileRateLimitsDowngradeV40ToV10,
-        2: agentGetProviderProfileRateLimitsDowngradeV40ToV20,
-        3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
-      },
-    },
-    5: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV50,
-          upgradeFromPreviousVersion:
-            agentGetProviderProfileRateLimitsUpgradeV40ToV50,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGetProviderProfileRateLimitsDowngradeV50ToV10,
-        2: agentGetProviderProfileRateLimitsDowngradeV50ToV20,
-        3: agentGetProviderProfileRateLimitsDowngradeV50ToV30,
-        4: agentGetProviderProfileRateLimitsDowngradeV50ToV40,
-      },
-    },
-    6: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV60,
-          upgradeFromPreviousVersion:
-            agentGetProviderProfileRateLimitsUpgradeV50ToV60,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGetProviderProfileRateLimitsDowngradeV60ToV10,
-        2: agentGetProviderProfileRateLimitsDowngradeV60ToV20,
-        3: agentGetProviderProfileRateLimitsDowngradeV60ToV30,
-        4: agentGetProviderProfileRateLimitsDowngradeV60ToV40,
-        5: agentGetProviderProfileRateLimitsDowngradeV60ToV50,
-      },
-    },
-    7: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentGetProviderProfileRateLimitsV70,
-          upgradeFromPreviousVersion:
-            agentGetProviderProfileRateLimitsUpgradeV60ToV70,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: agentGetProviderProfileRateLimitsDowngradeV70ToV10,
-        2: agentGetProviderProfileRateLimitsDowngradeV70ToV20,
-        3: agentGetProviderProfileRateLimitsDowngradeV70ToV30,
-        4: agentGetProviderProfileRateLimitsDowngradeV70ToV40,
-        5: agentGetProviderProfileRateLimitsDowngradeV70ToV50,
-        6: agentGetProviderProfileRateLimitsDowngradeV70ToV60,
-      },
-    },
-  },
   "agent.configure": {
     degrade: { kind: "unsupported" },
     1: {
@@ -13965,6 +13760,294 @@ const HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION = {
   },
 } as const;
 
+/**
+ * A fourth cut for the TS7056 declaration-emit reason given on
+ * `HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION`: the base literal crossed the
+ * ceiling again when the Kimi rate-limit arm opened a new major on the three
+ * released lines that carry the provider rate-limit union. Where the cut falls
+ * carries no meaning; these are those three methods.
+ */
+const HOST_RPC_RATE_LIMIT_REGISTRY_DEFINITION = {
+  "host.getRateLimitUsage": {
+    1: {
+      latestMinor: 2,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostGetRateLimitUsageV11,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostGetRateLimitUsageV12,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV20,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV12ToV20,
+        },
+        1: {
+          contract: hostGetRateLimitUsageV21,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV20ToV21,
+        },
+      },
+      downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV30,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV21ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        2: hostGetRateLimitUsageDowngradeV3ToV2,
+        1: hostGetRateLimitUsageDowngradeV3ToV1,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV40,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostGetRateLimitUsageDowngradeV4ToV1,
+        2: hostGetRateLimitUsageDowngradeV4ToV2,
+        3: hostGetRateLimitUsageDowngradeV4ToV3,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV50,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostGetRateLimitUsageDowngradeV5ToV1,
+        2: hostGetRateLimitUsageDowngradeV5ToV2,
+        3: hostGetRateLimitUsageDowngradeV5ToV3,
+        4: hostGetRateLimitUsageDowngradeV5ToV4,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV60,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV50ToV60,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostGetRateLimitUsageDowngradeV6ToV1,
+        2: hostGetRateLimitUsageDowngradeV6ToV2,
+        3: hostGetRateLimitUsageDowngradeV6ToV3,
+        4: hostGetRateLimitUsageDowngradeV6ToV4,
+        5: hostGetRateLimitUsageDowngradeV6ToV5,
+      },
+    },
+  },
+  "providers.refreshProfileStatus": {
+    degrade: { kind: "unsupported" },
+    // v1.0 is frozen at the twenty provider ids `1.3.0` shipped, v2.0 at the
+    // twenty-one `1.5.0` shipped and v3.0 at the union `1.5.1` shipped; v4.0
+    // carries the live union (Kimi). Every 4.0 bridge degrades a Kimi reading
+    // to the `unsupported_provider` row and fails closed for any other
+    // snapshot the older line cannot represent (one provider per response, so
+    // there is nothing to filter).
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshProfileStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshProfileStatusV20,
+          upgradeFromPreviousVersion:
+            providersRefreshProfileStatusUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersRefreshProfileStatusDowngradeV20ToV10,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshProfileStatusV30,
+          upgradeFromPreviousVersion:
+            providersRefreshProfileStatusUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersRefreshProfileStatusDowngradeV30ToV10,
+        2: providersRefreshProfileStatusDowngradeV30ToV20,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshProfileStatusV40,
+          upgradeFromPreviousVersion:
+            providersRefreshProfileStatusUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersRefreshProfileStatusDowngradeV40ToV10,
+        2: providersRefreshProfileStatusDowngradeV40ToV20,
+        3: providersRefreshProfileStatusDowngradeV40ToV30,
+      },
+    },
+  },
+  "agent.getProviderProfileRateLimits": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV20,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV20ToV10,
+      },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV30,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV30ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV30ToV20,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV40,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV40ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV40ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV50,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV50ToV40,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV60,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV50ToV60,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV60ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV60ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV60ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV60ToV40,
+        5: agentGetProviderProfileRateLimitsDowngradeV60ToV50,
+      },
+    },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV70,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV60ToV70,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV70ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV70ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV70ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV70ToV40,
+        5: agentGetProviderProfileRateLimitsDowngradeV70ToV50,
+        6: agentGetProviderProfileRateLimitsDowngradeV70ToV60,
+      },
+    },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV80,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV70ToV80,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV80ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV80ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV80ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV80ToV40,
+        5: agentGetProviderProfileRateLimitsDowngradeV80ToV50,
+        6: agentGetProviderProfileRateLimitsDowngradeV80ToV60,
+        7: agentGetProviderProfileRateLimitsDowngradeV80ToV70,
+      },
+    },
+  },
+} as const;
+
 const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   // Additive, post-v1.0.0 optional method. Older hosts render the same file
   // surfaces read-only; newer hosts provide conflict-safe in-place saves.
@@ -14104,6 +14187,20 @@ type HostRpcEnvironmentRedesignMethods =
 
 type DuplicateHostRpcMethodNames =
   | Extract<
+      keyof typeof HOST_RPC_RATE_LIMIT_REGISTRY_DEFINITION,
+      | keyof HostRpcEnvironmentRedesignMethods
+      | keyof HostRpcEnvironmentMethods
+      | keyof HostRpcProfileMethods
+      | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
+      | keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_NOTIFICATION_METHODS
+      | keyof typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION
+    >
+  | Extract<
       keyof HostRpcEnvironmentRedesignMethods,
       | keyof HostRpcEnvironmentMethods
       | keyof HostRpcProfileMethods
@@ -14222,7 +14319,7 @@ type DuplicateHostRpcMethodNames =
 /**
  * The definition every consumer sees.
  *
- * Seven of the eight local literals, the profile sync family and the two
+ * Eight of the nine local literals, the profile sync family and the two
  * environment families contribute
  * their own precise `typeof`. The
  * notification literal contributes `HostRpcNotificationMethodMap` instead:
@@ -14248,6 +14345,7 @@ type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
   typeof HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION &
   typeof HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION &
+  typeof HOST_RPC_RATE_LIMIT_REGISTRY_DEFINITION &
   HostRpcNotificationMethodMap &
   Record<AssertNever<DuplicateHostRpcMethodNames>, never>;
 
@@ -14262,6 +14360,7 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_DRAFTS_REGISTRY_DEFINITION,
   ...HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION,
   ...HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION,
+  ...HOST_RPC_RATE_LIMIT_REGISTRY_DEFINITION,
   ...HOST_RPC_NOTIFICATION_METHODS,
 };
 

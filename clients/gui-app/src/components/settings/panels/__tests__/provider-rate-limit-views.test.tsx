@@ -56,6 +56,10 @@ type AntigravityRateLimits = Extract<
   ProviderRateLimits,
   { provider: "antigravity" }
 >;
+type KimiRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "kimi"; available: true }
+>;
 
 const NOW = Date.now();
 
@@ -1252,6 +1256,58 @@ describe("AntigravityRateLimitView", () => {
     render(<AntigravityRateLimitView data={noKind} variant="settings" />);
     expect(screen.getByText("gemini-mystery")).toBeTruthy();
     expect(screen.getByText("5% used")).toBeTruthy();
+  });
+});
+
+describe("ProviderRateLimitDetail (Kimi)", () => {
+  const kimi: KimiRateLimits = {
+    provider: "kimi",
+    available: true,
+    fiveHour: {
+      usedPercent: 12,
+      resetsAt: NOW + 60 * 60 * 1000,
+      durationMinutes: 300,
+    },
+    weekly: {
+      usedPercent: 20,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 10_080,
+    },
+    monthly: {
+      usedPercent: 30,
+      resetsAt: NOW + 20 * 24 * 60 * 60 * 1000,
+      durationMinutes: 43_200,
+    },
+  };
+
+  it("renders the 5-hour, Weekly, and Monthly rows", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={kimi}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("20% used")).toBeTruthy();
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.getByText("30% used")).toBeTruthy();
+  });
+
+  it("renders no row for a window the backend left out", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{ ...kimi, weekly: null }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.queryByText("Weekly")).toBeNull();
+    expect(screen.queryByText("20% used")).toBeNull();
   });
 });
 

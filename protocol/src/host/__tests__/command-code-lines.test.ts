@@ -64,6 +64,7 @@ import { providersChangedServerFrameSchemaV11 } from "@traycer/protocol/host/pro
 import {
   providersRefreshProfileStatusResponseSchema,
   providersRefreshProfileStatusResponseSchemaV20,
+  providersRefreshProfileStatusResponseSchemaV30,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   sessionImportRunServerFrameSchemaPreCommandCode,
@@ -260,9 +261,10 @@ describe("every new head is the registry's canonical line", () => {
     ["agent.list", 10],
     ["providers.list", 10],
     ["agent.listProviderProfiles", 7],
-    ["agent.getProviderProfileRateLimits", 7],
+    // The Kimi rate-limit arm opened 8 and 4 over the frozen 1.5.1 lines.
+    ["agent.getProviderProfileRateLimits", 8],
     ["agent.configure", 7],
-    ["providers.refreshProfileStatus", 3],
+    ["providers.refreshProfileStatus", 4],
     ["epic.getChatRunSettings", 4],
     ["epic.getChatRunSettingsBatch", 2],
     ["chat.fallback.listTargets", 2],
@@ -660,7 +662,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["providers.refreshProfileStatus"],
           3,
           2,
-          providersRefreshProfileStatusResponseSchema.parse({
+          providersRefreshProfileStatusResponseSchemaV30.parse({
             providerRateLimits: unavailableRateLimits(
               representable ? "codex" : NEW_ID,
             ),
