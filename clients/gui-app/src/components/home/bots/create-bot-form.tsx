@@ -372,8 +372,7 @@ export function CreateBotNoHost(props: {
       className="text-ui-xs text-muted-foreground"
       data-testid="create-bot-no-host"
     >
-      This bot needs a host that runs bots for {environmentLabel}. Set one
-      up in{" "}
+      This bot needs a host that runs bots for {environmentLabel}. Set one up in{" "}
       <Button
         type="button"
         variant="link"
